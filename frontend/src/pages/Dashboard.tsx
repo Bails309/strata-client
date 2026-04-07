@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getMyConnections, getConnectionInfo, Connection, updateCredential, getStatus, getFavorites, toggleFavorite } from '../api';
+import { getMyConnections, getConnectionInfo, Connection, getStatus, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile } from '../api';
 import { useSessionManager } from '../components/SessionManager';
 import Select from '../components/Select';
 
@@ -16,28 +16,50 @@ interface TiledCredPrompt {
 
 export default function Dashboard() {
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [showVault, setShowVault] = useState<string | null>(null);
-  const [password, setPassword] = useState('');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [page, setPage] = useState(1);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [tiledCredPrompt, setTiledCredPrompt] = useState<TiledCredPrompt | null>(null);
-  const [tiledCreds, setTiledCreds] = useState<Record<string, { username: string; password: string }>>({}); 
+  const [tiledCreds, setTiledCreds] = useState<Record<string, { username: string; password: string }>>({});
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [showFavorites, setShowFavorites] = useState(false);
   const [groupView, setGroupView] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [credProfiles, setCredProfiles] = useState<CredentialProfile[]>([]);
+  /** Map of connection_id → profile_id currently assigned */
+  const [connProfileMap, setConnProfileMap] = useState<Record<string, string>>({});
   const navigate = useNavigate();
   const { createSession, setTiledSessionIds, setFocusedSessionIds, setActiveSessionId } = useSessionManager();
   const selectAllRef = useRef<HTMLInputElement>(null);
+
+  const loadProfiles = useCallback(async () => {
+    try {
+      const profiles = await getCredentialProfiles();
+      setCredProfiles(profiles);
+      // Build reverse map: connection_id → profile_id
+      const map: Record<string, string> = {};
+      await Promise.all(
+        profiles.map(async (p) => {
+          try {
+            const mappings = await getProfileMappings(p.id);
+            for (const m of mappings) {
+              map[m.connection_id] = p.id;
+            }
+          } catch { /* ignore */ }
+        }),
+      );
+      setConnProfileMap(map);
+    } catch { /* vault may not be configured */ }
+  }, []);
 
   useEffect(() => {
     getMyConnections().then(setConnections).catch(() => {});
     getStatus().then((s) => setVaultConfigured(s.vault_configured)).catch(() => {});
     getFavorites().then((ids) => setFavorites(new Set(ids))).catch(() => {});
-  }, []);
+    loadProfiles();
+  }, [loadProfiles]);
 
   const filtered = useMemo(() => {
     let list = connections;
@@ -95,11 +117,21 @@ export default function Dashboard() {
     [connections]
   );
 
-  async function saveCredential(connectionId: string) {
-    await updateCredential(connectionId, password);
-    setPassword('');
-    setShowVault(null);
-  }
+  const handleProfileChange = useCallback(async (connectionId: string, profileId: string) => {
+    try {
+      if (profileId === '') {
+        await removeCredentialMapping(connectionId);
+        setConnProfileMap((prev) => {
+          const next = { ...prev };
+          delete next[connectionId];
+          return next;
+        });
+      } else {
+        await setCredentialMapping(profileId, connectionId);
+        setConnProfileMap((prev) => ({ ...prev, [connectionId]: profileId }));
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   useEffect(() => { setPage(1); }, [search, typeFilter, showFavorites]);
 
@@ -327,8 +359,9 @@ export default function Dashboard() {
                     favorites={favorites}
                     onToggleFavorite={handleToggleFavorite}
                     vaultConfigured={vaultConfigured}
-                    showVault={showVault}
-                    setShowVault={setShowVault}
+                    credProfiles={credProfiles}
+                    connProfileMap={connProfileMap}
+                    onProfileChange={handleProfileChange}
                     navigate={navigate}
                   />
                 ))}
@@ -345,8 +378,9 @@ export default function Dashboard() {
                     favorites={favorites}
                     onToggleFavorite={handleToggleFavorite}
                     vaultConfigured={vaultConfigured}
-                    showVault={showVault}
-                    setShowVault={setShowVault}
+                    credProfiles={credProfiles}
+                    connProfileMap={connProfileMap}
+                    onProfileChange={handleProfileChange}
                     navigate={navigate}
                   />
                 )}
@@ -361,8 +395,9 @@ export default function Dashboard() {
                   isFavorite={favorites.has(conn.id)}
                   onToggleFavorite={() => handleToggleFavorite(conn.id)}
                   vaultConfigured={vaultConfigured}
-                  showVault={showVault === conn.id}
-                  onToggleVault={() => setShowVault(showVault === conn.id ? null : conn.id)}
+                  credProfiles={credProfiles}
+                  assignedProfileId={connProfileMap[conn.id] || ''}
+                  onProfileChange={handleProfileChange}
                   onConnect={() => navigate(`/session/${conn.id}`)}
                 />
               ))
@@ -379,18 +414,6 @@ export default function Dashboard() {
           </tbody>
         </table>
       </div>
-
-      {/* ── Vault modal row ── */}
-      {showVault && (
-        <div className="card mt-4">
-          <h3>Update Credentials</h3>
-          <div className="form-group">
-            <label>RDP / SSH Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter new password" />
-          </div>
-          <button className="btn-primary" onClick={() => saveCredential(showVault)}>Save (Vault Encrypted)</button>
-        </div>
-      )}
 
       {/* ── Pagination ── */}
       {filtered.length > PAGE_SIZE && (
@@ -509,15 +532,16 @@ export default function Dashboard() {
 
 // ── Connection Row Component ────────────────────────────────────────
 
-function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFavorite, vaultConfigured, showVault: _showVault, onToggleVault, onConnect }: {
+function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFavorite, vaultConfigured, credProfiles, assignedProfileId, onProfileChange, onConnect }: {
   conn: Connection;
   checked: boolean;
   onToggleChecked: () => void;
   isFavorite: boolean;
   onToggleFavorite: () => void;
   vaultConfigured: boolean;
-  showVault: boolean;
-  onToggleVault: () => void;
+  credProfiles: CredentialProfile[];
+  assignedProfileId: string;
+  onProfileChange: (connectionId: string, profileId: string) => void;
   onConnect: () => void;
 }) {
   return (
@@ -559,12 +583,17 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
           </button>
           <button className="btn-sm-primary" onClick={onConnect}>Connect</button>
           {vaultConfigured && (
-            <button className="btn-sm" onClick={onToggleVault}>
-              Update
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="ml-1">
-                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-              </svg>
-            </button>
+            <div className="min-w-[140px]">
+              <Select
+                value={assignedProfileId}
+                onChange={(v) => onProfileChange(conn.id, v)}
+                placeholder="No profile"
+                options={[
+                  { value: '', label: 'None' },
+                  ...credProfiles.map(p => ({ value: p.id, label: p.expired ? `${p.label} (expired)` : p.label })),
+                ]}
+              />
+            </div>
           )}
         </div>
       </td>
@@ -574,7 +603,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
 
 // ── Connection Group Rows ───────────────────────────────────────────
 
-function ConnectionGroupRows({ groupId: _gid, groupName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, showVault, setShowVault, navigate }: {
+function ConnectionGroupRows({ groupId: _gid, groupName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, connProfileMap, onProfileChange, navigate }: {
   groupId: string;
   groupName: string;
   connections: Connection[];
@@ -585,8 +614,9 @@ function ConnectionGroupRows({ groupId: _gid, groupName, connections, collapsed,
   favorites: Set<string>;
   onToggleFavorite: (id: string) => void;
   vaultConfigured: boolean;
-  showVault: string | null;
-  setShowVault: (id: string | null) => void;
+  credProfiles: CredentialProfile[];
+  connProfileMap: Record<string, string>;
+  onProfileChange: (connectionId: string, profileId: string) => void;
   navigate: (path: string) => void;
 }) {
   return (
@@ -617,8 +647,9 @@ function ConnectionGroupRows({ groupId: _gid, groupName, connections, collapsed,
           isFavorite={favorites.has(conn.id)}
           onToggleFavorite={() => onToggleFavorite(conn.id)}
           vaultConfigured={vaultConfigured}
-          showVault={showVault === conn.id}
-          onToggleVault={() => setShowVault(showVault === conn.id ? null : conn.id)}
+          credProfiles={credProfiles}
+          assignedProfileId={connProfileMap[conn.id] || ''}
+          onProfileChange={onProfileChange}
           onConnect={() => navigate(`/session/${conn.id}`)}
         />
       ))}

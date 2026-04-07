@@ -16,7 +16,7 @@ RUN touch src/main.rs && cargo build --release
 # ── Runtime stage ─────────────────────────────────────────────────────
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates krb5 openldap-clients cyrus-sasl-gssapiv2
 
 COPY --from=builder /app/target/release/strata-backend /usr/local/bin/strata-backend
 

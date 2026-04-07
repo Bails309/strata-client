@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { createShareLink } from '../api';
 import { GuacSession } from './SessionManager';
 import FileBrowser from './FileBrowser';
+import Select from './Select';
 
 interface Props {
   session: GuacSession;
@@ -382,22 +383,11 @@ export default function SessionToolbar({ session, connectionId }: Props) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="text-[0.8125rem] font-semibold">Files</span>
               {session.filesystems.length > 1 && (
-                <select
-                  value={activeFsIndex}
-                  onChange={(e) => setActiveFsIndex(Number(e.target.value))}
-                  style={{
-                    fontSize: '0.7rem',
-                    padding: '2px 6px',
-                    borderRadius: 4,
-                    border: '1px solid var(--color-border)',
-                    background: 'var(--color-input-bg)',
-                    color: 'var(--color-txt-primary)',
-                  }}
-                >
-                  {session.filesystems.map((fs, i) => (
-                    <option key={i} value={i}>{fs.name}</option>
-                  ))}
-                </select>
+                <Select
+                  value={String(activeFsIndex)}
+                  onChange={(v) => setActiveFsIndex(Number(v))}
+                  options={session.filesystems.map((fs, i) => ({ value: String(i), label: fs.name }))}
+                />
               )}
             </div>
             <button

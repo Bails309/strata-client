@@ -7,6 +7,55 @@
 - (Optional) A Keycloak or other OIDC provider for SSO
 - (Optional) An external PostgreSQL 14+ instance
 
+## System Requirements
+
+### Minimum (up to 5 concurrent sessions)
+
+| Resource | Spec |
+|---|---|
+| CPU | 2 vCPUs |
+| RAM | 4 GB |
+| Disk | 20 GB (OS + Docker images + database) |
+| Network | 10 Mbps per concurrent RDP session |
+| OS | Any Docker-supported Linux, Windows, or macOS |
+
+### Recommended (10–25 concurrent sessions)
+
+| Resource | Spec |
+|---|---|
+| CPU | 4 vCPUs |
+| RAM | 8 GB |
+| Disk | 50 GB SSD (faster database queries and guacd I/O) |
+| Network | 100 Mbps+ |
+| OS | Linux (Debian/Ubuntu or Alpine-based) for best Docker performance |
+
+### Large Scale (25+ concurrent sessions)
+
+| Resource | Spec |
+|---|---|
+| CPU | 8+ vCPUs |
+| RAM | 16+ GB |
+| Disk | 100+ GB SSD |
+| Network | 1 Gbps |
+
+For large deployments, consider:
+- **guacd scaling** — add sidecar instances via `GUACD_INSTANCES` (each guacd instance handles ~10–15 concurrent RDP sessions with H.264)
+- **External PostgreSQL** — managed database with connection pooling
+- **Session recordings** — allocate additional disk proportional to session count and retention period (~50–200 MB/hour per session depending on activity)
+
+### Resource Breakdown by Container
+
+| Container | CPU | RAM | Notes |
+|---|---|---|---|
+| `guacd` | High | 200–500 MB | Heaviest consumer — FreeRDP + H.264 encoding per session |
+| `backend` | Low | 100–200 MB | Async Rust — very efficient; NVR buffers add ~50 MB per active session |
+| `frontend` | Minimal | 30 MB | Static file serving via nginx |
+| `caddy` | Minimal | 30 MB | Reverse proxy + TLS termination |
+| `postgres-local` | Low–Medium | 200–500 MB | Depends on audit log volume |
+| `vault` | Minimal | 50 MB | Transit encrypt/decrypt only |
+
+> **Note:** guacd is the primary bottleneck. Each concurrent RDP session with H.264 GFX uses approximately 1 CPU core at peak. SSH and VNC sessions are significantly lighter.
+
 ## Quick Start (Development / Evaluation)
 
 ```bash
@@ -16,7 +65,9 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open `http://localhost:3000` and complete the setup wizard. The bundled PostgreSQL and Vault containers handle all storage and encryption — no external dependencies required.
+Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL, Vault, and Caddy containers handle all storage, encryption, and routing — no external dependencies required.
+
+> **Note:** If `localhost` doesn't work, use `127.0.0.1` explicitly. WSL can bind to IPv6 `::1:80` on some systems, intercepting requests before they reach Docker.
 
 ## Production Deployment
 
@@ -25,42 +76,100 @@ Open `http://localhost:3000` and complete the setup wizard. The bundled PostgreS
 Edit `.env` or set environment variables:
 
 ```bash
-BACKEND_PORT=8080        # Rust API port (host mapping)
-FRONTEND_PORT=443        # Frontend port (host mapping)
+HTTP_PORT=80             # Caddy HTTP listener (host mapping)
+HTTPS_PORT=443           # Caddy HTTPS listener (host mapping)
 RUST_LOG=info            # Log level: trace, debug, info, warn, error
 ```
 
-### 2. TLS Termination
+### 2. Caddy Gateway
 
-#### Option A: Built-in Caddy (Recommended)
+All traffic flows through Caddy. No backend or frontend ports are exposed directly — Caddy is the single entry point.
 
-Strata Client includes a Caddy reverse proxy that provides automatic HTTPS via Let's Encrypt:
-
-```bash
-# Set your public domain
-export STRATA_DOMAIN=strata.example.com
-
-# Start with the HTTPS profile
-docker compose --profile https up -d
+```
+Browser → Caddy (:80/:443) → backend:8080 (/api/*)
+                            → frontend:80  (everything else)
 ```
 
-Caddy will:
-- Obtain and auto-renew TLS certificates from Let's Encrypt
-- Terminate HTTPS on ports 80 and 443
-- Support HTTP/3 (QUIC) via UDP port 443
-- Proxy `/api/*` to the Rust backend and serve the SPA for all other routes
-- Add security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
-- Apply gzip/zstd compression
+#### HTTP Mode (Default)
+
+With no additional configuration, Caddy serves plain HTTP on port 80:
+
+```bash
+docker compose up -d
+```
+
+Access the site at `http://your-server-ip` or `http://127.0.0.1`.
+
+No certificates are needed. This is suitable for:
+- Local development
+- Internal networks behind a corporate firewall
+- Environments where TLS is terminated upstream (e.g., a cloud load balancer)
+
+#### HTTPS Mode (Production)
+
+To enable automatic Let's Encrypt HTTPS, set `STRATA_DOMAIN` to your public domain:
+
+**Step 1 — DNS:** Point your domain's A record to your server's public IP.
+
+**Step 2 — `.env`:**
+
+```bash
+STRATA_DOMAIN=strata.example.com
+```
+
+**Step 3 — Start:**
+
+```bash
+docker compose up -d
+```
+
+Caddy will automatically:
+- Obtain a TLS certificate from Let's Encrypt
+- Redirect HTTP → HTTPS
+- Enable HTTP/2 and HTTP/3 (QUIC)
+- Add HSTS headers (`Strict-Transport-Security`)
+- Auto-renew the certificate before expiry
+
+**Step 4 — Firewall:** Ensure ports 80 and 443 are open. Caddy needs port 80 for ACME HTTP-01 challenges even when serving HTTPS.
 
 Certificate data is persisted in the `caddy-data` Docker volume.
 
-When using Caddy, the frontend nginx container still runs (Caddy proxies to it) but its port 3000 mapping can be removed from `.env` to avoid exposing the unencrypted port.
+#### Custom Ports
 
-#### Option B: External Reverse Proxy
+Override the default port bindings in `.env`:
 
-The frontend nginx container listens on port 80 (HTTP). Place a reverse proxy (e.g., Traefik, HAProxy, or a separate nginx instance) in front that handles TLS termination and proxies to the frontend container.
+```bash
+HTTP_PORT=8080
+HTTPS_PORT=8443
+```
 
-Or modify `frontend/nginx.conf` to include TLS certificates directly.
+> **Note:** Let's Encrypt HTTP-01 challenges require port 80. If `HTTP_PORT` is not 80, use the DNS-01 challenge method instead (requires Caddy DNS plugin — see the [Caddy docs](https://caddyserver.com/docs/automatic-https#dns-challenge)).
+
+#### Configuration Files
+
+| File | Purpose |
+|---|---|
+| `Caddyfile` | Routing rules, timeouts, compression, security headers |
+| `docker-compose.yml` | Caddy service definition, port mappings, volumes |
+| `.env` | `STRATA_DOMAIN`, `HTTP_PORT`, `HTTPS_PORT` |
+
+The [Caddyfile](../Caddyfile) uses `{$STRATA_DOMAIN:http://localhost}` as the site address:
+- When `STRATA_DOMAIN` is **unset or empty** → defaults to `http://localhost` (plain HTTP)
+- When `STRATA_DOMAIN` is a **domain name** → Caddy provisions a certificate and serves HTTPS
+
+Key performance settings in the Caddyfile:
+- `read_timeout 3600s` / `write_timeout 3600s` — keeps WebSocket tunnels alive for long RDP/SSH sessions
+- `flush_interval -1` — streams tunnel frames immediately with zero buffering
+- `encode gzip zstd` — compresses static assets and API responses
+
+#### Using an External Reverse Proxy Instead
+
+If you must use a different reverse proxy (e.g., Traefik, HAProxy, or nginx), you can modify `docker-compose.yml` to expose the backend and frontend ports directly and remove the Caddy service. Key requirements for your proxy:
+
+- Route `/api/*` to `backend:8080` with WebSocket upgrade support
+- Route everything else to `frontend:80`
+- Set `proxy_read_timeout` / `proxy_send_timeout` to at least 3600s for tunnel connections
+- Forward `X-Forwarded-For`, `X-Forwarded-Proto`, and `Host` headers
 
 ### 3. External Database
 
@@ -255,13 +364,30 @@ docker compose exec -i postgres-local psql -U strata strata < backup.sql
 
 ### Session Recordings
 
-Recordings are stored in the `guac-recordings` Docker volume:
+Recordings are stored in the `guac-recordings` Docker volume by default. You can optionally sync them to **Azure Blob Storage** for durable external storage.
+
+#### Local Storage (default)
 
 ```bash
 # Backup
 docker run --rm -v strata-client_guac-recordings:/data -v $(pwd):/backup \
   alpine tar czf /backup/recordings.tar.gz -C /data .
 ```
+
+#### Azure Blob Storage
+
+Configure via **Admin → Recordings** in the web UI:
+
+| Setting | Description |
+|---|---|
+| **Storage Backend** | Select "Azure Blob Storage" |
+| **Account Name** | Your Azure Storage account name |
+| **Container Name** | Blob container for recordings (default: `recordings`) |
+| **Access Key** | Base64-encoded storage account access key |
+
+Once configured, a background task syncs completed recording files to Azure Blob every 60 seconds. Recordings are always written locally first (guacd requirement), then uploaded. The download endpoint checks local storage first and falls back to Azure Blob, so recordings remain accessible even after local cleanup.
+
+> **Note:** The backend container must have outbound HTTPS access to `<account>.blob.core.windows.net`. Ensure your Docker network or firewall allows this.
 
 ### Configuration
 

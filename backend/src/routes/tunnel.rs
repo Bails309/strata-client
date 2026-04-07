@@ -85,25 +85,37 @@ pub async fn ws_tunnel(
         _ => std::collections::HashMap::new(),
     };
 
-    // Attempt to load and decrypt user credentials
-    let password = if let Some(vault_cfg) = &config.vault {
+    // Attempt to load and decrypt user credentials from credential profiles
+    let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {
         let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-            "SELECT encrypted_password, encrypted_dek, nonce
-             FROM user_credentials WHERE user_id = $1 AND connection_id = $2",
+            "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
+             FROM credential_mappings cm
+             JOIN credential_profiles cp ON cp.id = cm.credential_id
+             WHERE cm.connection_id = $1 AND cp.user_id = $2
+               AND cp.expires_at > now()",
         )
-        .bind(user.id)
         .bind(connection_id)
+        .bind(user.id)
         .fetch_optional(&db.pool)
         .await?;
 
-        if let Some((enc_pass, enc_dek, nonce)) = cred {
-            let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_pass, &nonce).await?;
-            Some(String::from_utf8(plaintext).unwrap_or_default())
+        if let Some((enc_payload, enc_dek, nonce)) = cred {
+            let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+            // Parse the combined JSON payload { "u": username, "p": password }
+            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+            let u = parsed["u"].as_str().unwrap_or("").to_string();
+            let p = parsed["p"].as_str().unwrap_or("").to_string();
+            (
+                if u.is_empty() { None } else { Some(u) },
+                if p.is_empty() { None } else { Some(p) },
+            )
         } else {
-            None
+            (None, None)
         }
     } else {
-        None
+        (None, None)
     };
 
     // Check recording config
@@ -125,10 +137,10 @@ pub async fn ws_tunnel(
         guacd_port = config.guacd_port.unwrap_or(4822);
     };
 
-    // Determine credentials: Vault first, then query-string fallback
-    let (final_username, final_password) = if password.is_some() {
-        // Vault-stored credentials – use the authenticated user's login name
-        (Some(user.username.clone()), password)
+    // Determine credentials: Vault profile first, then query-string fallback
+    let (final_username, final_password) = if vault_password.is_some() {
+        // Vault-stored credential profile – use stored username (or Strata login as fallback)
+        (vault_username.or_else(|| Some(user.username.clone())), vault_password)
     } else if query.password.is_some() {
         // Credentials supplied by the frontend credential form
         (query.username.or_else(|| Some(user.username.clone())), query.password)

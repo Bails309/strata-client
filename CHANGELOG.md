@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Azure Blob Storage for Session Recordings
+- Session recordings can now be synced to **Azure Blob Storage** as an external storage backend
+- New Admin UI controls in the Recordings tab: storage backend selector (Local / Azure Blob), account name, container name, and access key fields
+- Background sync task uploads completed recordings from the local volume to Azure Blob every 60 seconds
+- Recording download endpoint falls back to Azure Blob when a file is not found locally
+- Azure Blob REST API integration uses SharedKey authentication with HMAC-SHA256 (no extra SDK dependencies)
+- New DB settings: `recordings_storage_type`, `recordings_azure_account_name`, `recordings_azure_container_name`, `recordings_azure_access_key`
+
 #### Collaborative Control Mode Shares
 - Share links now support two modes: **View** (read-only, default) and **Control** (full keyboard and mouse input forwarding)
 - Share popover in the session toolbar presents two buttons — "View Only" and "Control" — with distinct icons and colour badges

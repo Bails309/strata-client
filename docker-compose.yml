@@ -52,8 +52,6 @@ services:
       dockerfile: Dockerfile
     image: strata/backend:latest
     restart: unless-stopped
-    ports:
-      - "${BACKEND_PORT:-8080}:8080"
     networks:
       - guac-internal
     volumes:
@@ -81,29 +79,24 @@ services:
       dockerfile: Dockerfile
     image: strata/frontend:latest
     restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-3000}:80"
     networks:
       - guac-internal
     depends_on:
       - backend
 
-  # ── 3b. Caddy Reverse Proxy (auto-HTTPS) ───────────────────────────
-  # Activate with:  docker compose --profile https up
-  # Set STRATA_DOMAIN=strata.example.com for Let's Encrypt auto-HTTPS.
+  # ── 4. Caddy Reverse Proxy (gateway) ────────────────────────────────
+  # All traffic flows through Caddy. Set STRATA_DOMAIN for auto-HTTPS.
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    profiles:
-      - https
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
     networks:
       - guac-internal
     environment:
-      - STRATA_DOMAIN=${STRATA_DOMAIN:-localhost}
+      - STRATA_DOMAIN
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -111,8 +104,13 @@ services:
     depends_on:
       - backend
       - frontend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
-  # ── 4. Local PostgreSQL ─────────────────────────────────────────────
+  # ── 5. Local PostgreSQL ─────────────────────────────────────────────
   postgres-local:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -130,7 +128,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── 5. Bundled HashiCorp Vault ──────────────────────────────────────
+  # ── 6. Bundled HashiCorp Vault ──────────────────────────────────────
   vault:
     image: hashicorp/vault:1.19
     restart: unless-stopped

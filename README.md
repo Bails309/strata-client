@@ -38,26 +38,34 @@ A high-performance, modernized client and proxy architecture for [Apache Guacamo
 
 ```
                           ┌──────────┐
-                          │  Caddy   │  (optional --profile https)
-                          │ auto-TLS │
-                          └────┬─────┘
-                               │ :80/:443
-┌────────────┐   HTTPS/WSS   ┌▼────────────────┐   TCP 4822   ┌────────────┐
-│            │ ◄────────────► │                 │ ◄───────────► │   guacd    │
-│  Frontend  │                │  Rust Backend   │               │ (FreeRDP3  │
-│  (React)   │                │  (Axum + Tokio) │               │  + H.264)  │
-│            │                │                 │               ├────────────┤
-└────────────┘                └────────┬────────┘               │  guacd-2…  │
-       :80                         :8080│                       │  (scale)   │
-                                       │                       └────────────┘
-                          ┌────────────┴────────────┐
-                          │                         │
-                    ┌─────▼─────┐           ┌───────▼───────┐
-                    │ PostgreSQL│           │  Vault 1.19   │
-                    │ (local or │           │  Transit      │
-                    │  external)│           │  (bundled or  │
-                    └───────────┘           │   external)   │
-                                           └───────────────┘
+              :80/:443    │  Caddy   │
+         ◄───────────────►│ Gateway  │
+              HTTP(S)     └────┬─────┘
+                               │
+                  ┌────────────┴────────────┐
+                  │ /api/*          /* (SPA) │
+           ┌──────▼──────────┐   ┌──────────▼───┐
+           │  Rust Backend   │   │   Frontend   │
+           │  (Axum + Tokio) │   │   (nginx)    │
+           └────────┬────────┘   └──────────────┘
+                    │
+         TCP 4822   │               ┌────────────┐
+                    ├──────────────►│   guacd     │
+                    │               │ (FreeRDP3   │
+                    │               │  + H.264)   │
+                    │               ├─────────────┤
+                    │               │  guacd-2…   │
+                    │               │  (scale)    │
+                    │               └─────────────┘
+                    │
+       ┌────────────┴────────────┐
+       │                         │
+ ┌─────▼─────┐           ┌──────▼────────┐
+ │ PostgreSQL│           │  Vault 1.19   │
+ │ (local or │           │  Transit      │
+ │  external)│           │  (bundled or  │
+ └───────────┘           │   external)   │
+                         └───────────────┘
 ```
 
 See [docs/architecture.md](docs/architecture.md) for a detailed breakdown.
@@ -83,29 +91,33 @@ cp .env.example .env        # review and edit as needed
 docker compose up -d --build
 ```
 
-This starts the core services:
+This starts all services behind Caddy:
 
 | Service | Port | Purpose |
 |---|---|---|
-| `frontend` | `3000` | React SPA (nginx) |
-| `backend` | `8080` | Rust API / WebSocket proxy |
+| `caddy` | `80`, `443` | Reverse proxy — single entry point for all traffic |
+| `frontend` | — (internal) | React SPA (nginx) |
+| `backend` | — (internal) | Rust API / WebSocket proxy |
 | `guacd` | — (internal) | Guacamole protocol daemon (FreeRDP 3 + H.264) |
 | `postgres-local` | — (internal) | Bundled PostgreSQL 16 |
 | `vault` | — (internal) | Bundled HashiCorp Vault 1.19 |
 
-Optional profiles:
+For HTTPS, set your domain in `.env`:
 
 ```bash
-# Auto-HTTPS via Caddy with Let's Encrypt
-STRATA_DOMAIN=strata.example.com docker compose --profile https up -d
+STRATA_DOMAIN=strata.example.com
+docker compose up -d
+```
 
-# Additional guacd instance for load distribution
+For additional guacd instances:
+
+```bash
 GUACD_INSTANCES=guacd-2:4822 docker compose --profile scale up -d
 ```
 
 ### 3. First-boot setup
 
-Open `http://localhost:3000`. The setup wizard will guide you through:
+Open `http://127.0.0.1` (or `https://your-domain` if STRATA_DOMAIN is set). The setup wizard will guide you through:
 
 1. **Database** — choose the bundled local DB or provide an external PostgreSQL connection string
 2. **Vault** — select a vault mode:

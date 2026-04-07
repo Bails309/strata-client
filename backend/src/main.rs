@@ -110,6 +110,12 @@ async fn main() -> anyhow::Result<()> {
     cfg.save(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to save config: {e}"))?;
 
+    // ── Spawn recording sync background task ──
+    services::recordings::spawn_sync_task(db.pool.clone());
+
+    // ── Spawn AD sync scheduler ──
+    services::ad_sync::spawn_sync_scheduler(db.pool.clone());
+
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
         phase: BootPhase::Running,

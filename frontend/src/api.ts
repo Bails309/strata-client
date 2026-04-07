@@ -85,10 +85,122 @@ export const updateSso = (data: { issuer_url: string; client_id: string; client_
 export const updateKerberos = (data: { realm: string; kdc: string[]; admin_server: string; ticket_lifetime: string; renew_lifetime: string }) =>
   request('/admin/settings/kerberos', { method: 'PUT', body: JSON.stringify(data) });
 
+// ── Kerberos Realms (multi-domain) ──────────────────────────────────
+
+export interface KerberosRealm {
+  id: string;
+  realm: string;
+  kdc_servers: string;
+  admin_server: string;
+  ticket_lifetime: string;
+  renew_lifetime: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export const getKerberosRealms = () =>
+  request<KerberosRealm[]>('/admin/kerberos-realms');
+
+export const createKerberosRealm = (data: {
+  realm: string;
+  kdc_servers: string[];
+  admin_server: string;
+  ticket_lifetime?: string;
+  renew_lifetime?: string;
+  is_default?: boolean;
+}) =>
+  request<{ id: string; status: string }>('/admin/kerberos-realms', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const updateKerberosRealm = (id: string, data: {
+  realm?: string;
+  kdc_servers?: string[];
+  admin_server?: string;
+  ticket_lifetime?: string;
+  renew_lifetime?: string;
+  is_default?: boolean;
+}) =>
+  request<{ status: string }>(`/admin/kerberos-realms/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const deleteKerberosRealm = (id: string) =>
+  request<{ status: string }>(`/admin/kerberos-realms/${id}`, { method: 'DELETE' });
+
+// ── AD Sync ─────────────────────────────────────────────────────────
+
+export interface AdSyncConfig {
+  id: string;
+  label: string;
+  ldap_url: string;
+  bind_dn: string;
+  bind_password: string;
+  search_bases: string[];
+  search_filter: string;
+  search_scope: string;
+  protocol: string;
+  default_port: number;
+  domain_override?: string;
+  group_id?: string;
+  tls_skip_verify: boolean;
+  sync_interval_minutes: number;
+  enabled: boolean;
+  auth_method: string;
+  keytab_path?: string;
+  krb5_principal?: string;
+  ca_cert_pem?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdSyncRun {
+  id: string;
+  config_id: string;
+  started_at: string;
+  finished_at?: string;
+  status: string;
+  created: number;
+  updated: number;
+  soft_deleted: number;
+  hard_deleted: number;
+  error_message?: string;
+}
+
+export const getAdSyncConfigs = () => request<AdSyncConfig[]>('/admin/ad-sync-configs');
+
+export const createAdSyncConfig = (data: Partial<AdSyncConfig>) =>
+  request<{ id: string; status: string }>('/admin/ad-sync-configs', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateAdSyncConfig = (id: string, data: Partial<AdSyncConfig>) =>
+  request<{ status: string }>(`/admin/ad-sync-configs/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const deleteAdSyncConfig = (id: string) =>
+  request<{ status: string }>(`/admin/ad-sync-configs/${id}`, { method: 'DELETE' });
+
+export const triggerAdSync = (id: string) =>
+  request<{ run_id: string; status: string }>(`/admin/ad-sync-configs/${id}/sync`, { method: 'POST' });
+
+export const testAdSyncConnection = (data: Partial<AdSyncConfig>) =>
+  request<{ status: string; message: string; count?: number; sample?: string[] }>('/admin/ad-sync-configs/test', { method: 'POST', body: JSON.stringify(data) });
+
+export const getAdSyncRuns = (configId: string) =>
+  request<AdSyncRun[]>(`/admin/ad-sync-configs/${configId}/runs`);
+
 export const updateVault = (data: { mode: string; address?: string; token?: string; transit_key?: string }) =>
   request('/admin/settings/vault', { method: 'PUT', body: JSON.stringify(data) });
 
-export const updateRecordings = (data: { enabled: boolean; retention_days?: number }) =>
+export const updateRecordings = (data: {
+  enabled: boolean;
+  retention_days?: number;
+  storage_type?: string;
+  azure_account_name?: string;
+  azure_container_name?: string;
+  azure_access_key?: string;
+}) =>
   request('/admin/settings/recordings', { method: 'PUT', body: JSON.stringify(data) });
 
 // ── Service Health ──────────────────────────────────────────────────
@@ -203,6 +315,54 @@ export const updateCredential = (connection_id: string, password: string) =>
     body: JSON.stringify({ connection_id, password }),
   });
 
+// ── Credential Profiles ─────────────────────────────────────────────
+
+export interface CredentialProfile {
+  id: string;
+  label: string;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  expired: boolean;
+  ttl_hours: number;
+}
+
+export interface CredentialMapping {
+  connection_id: string;
+  connection_name: string;
+  protocol: string;
+}
+
+export const getCredentialProfiles = () =>
+  request<CredentialProfile[]>('/user/credential-profiles');
+
+export const createCredentialProfile = (label: string, username: string, password: string, ttl_hours?: number) =>
+  request<{ id: string; status: string }>('/user/credential-profiles', {
+    method: 'POST',
+    body: JSON.stringify({ label, username, password, ttl_hours }),
+  });
+
+export const updateCredentialProfile = (profileId: string, data: { label?: string; username?: string; password?: string; ttl_hours?: number }) =>
+  request<{ status: string }>(`/user/credential-profiles/${profileId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const deleteCredentialProfile = (profileId: string) =>
+  request<{ status: string }>(`/user/credential-profiles/${profileId}`, { method: 'DELETE' });
+
+export const getProfileMappings = (profileId: string) =>
+  request<CredentialMapping[]>(`/user/credential-profiles/${profileId}/mappings`);
+
+export const setCredentialMapping = (profile_id: string, connection_id: string) =>
+  request<{ status: string }>('/user/credential-mappings', {
+    method: 'PUT',
+    body: JSON.stringify({ profile_id, connection_id }),
+  });
+
+export const removeCredentialMapping = (connectionId: string) =>
+  request<{ status: string }>(`/user/credential-mappings/${connectionId}`, { method: 'DELETE' });
+
 // ── Connection info (pre-connect credential check) ──────────────────
 
 export interface ConnectionInfo {
@@ -301,6 +461,7 @@ export interface MetricsSummary {
   total_bytes_from_guacd: number;
   total_bytes_to_guacd: number;
   sessions_by_protocol: Record<string, number>;
+  guacd_pool_size: number;
 }
 
 export const getMetrics = () => request<MetricsSummary>('/admin/metrics');

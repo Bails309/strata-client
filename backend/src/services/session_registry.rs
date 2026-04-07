@@ -107,11 +107,6 @@ impl SessionBuffer {
             .collect()
     }
 
-    /// Return all frames currently in the buffer.
-    pub fn all_frames(&self) -> Vec<String> {
-        self.frames.iter().map(|f| f.data.clone()).collect()
-    }
-
     /// How many seconds of data the buffer currently holds.
     pub fn buffer_depth_secs(&self) -> u64 {
         match (self.frames.front(), self.frames.back()) {
@@ -257,6 +252,7 @@ impl SessionRegistry {
             total_bytes_from_guacd: total_bytes_in,
             total_bytes_to_guacd: total_bytes_out,
             sessions_by_protocol: by_protocol,
+            guacd_pool_size: 0, // placeholder — overridden by admin handler
         }
     }
 }
@@ -268,4 +264,5 @@ pub struct MetricsSummary {
     pub total_bytes_from_guacd: u64,
     pub total_bytes_to_guacd: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
+    pub guacd_pool_size: u32,
 }

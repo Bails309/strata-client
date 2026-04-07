@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Credentials from './pages/Credentials';
 import AdminSettings from './pages/AdminSettings';
 import SessionClient from './pages/SessionClient';
 import TiledView from './pages/TiledView';
@@ -82,6 +83,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout onLogout={handleLogout} />}>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/credentials" element={<Credentials />} />
           <Route path="/admin" element={<AdminSettings />} />
           <Route path="/session/:connectionId" element={<SessionClient />} />
           <Route path="/tiled" element={<TiledView />} />

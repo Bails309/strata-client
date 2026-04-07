@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Select from '../components/Select';
 import {
   getSettings,
+  updateSettings,
   updateSso,
-  updateKerberos,
+  getKerberosRealms,
+  createKerberosRealm,
+  updateKerberosRealm,
+  deleteKerberosRealm,
+  KerberosRealm,
   updateRecordings,
   updateVault,
   getServiceHealth,
+  getMetrics,
   getRoles,
   createRole,
   getConnections,
@@ -20,15 +26,25 @@ import {
   deleteConnectionGroup,
   getUsers,
   getActiveSessions,
+  getAdSyncConfigs,
+  createAdSyncConfig,
+  updateAdSyncConfig,
+  deleteAdSyncConfig,
+  triggerAdSync,
+  testAdSyncConnection,
+  getAdSyncRuns,
+  AdSyncConfig,
+  AdSyncRun,
   Role,
   Connection,
   ConnectionGroup,
   User,
   ServiceHealth,
   ActiveSession,
+  MetricsSummary,
 } from '../api';
 
-type Tab = 'health' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'sessions';
+type Tab = 'health' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'ad-sync' | 'sessions';
 
 export default function AdminSettings() {
   const [tab, setTab] = useState<Tab>('health');
@@ -63,9 +79,9 @@ export default function AdminSettings() {
       )}
 
       <div className="tabs">
-        {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'sessions'] as Tab[]).map((t) => (
+        {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'ad-sync', 'sessions'] as Tab[]).map((t) => (
           <button key={t} className={`tab ${tab === t ? 'tab-active' : ''}`} onClick={() => setTab(t)}>
-            {t === 'sso' ? 'SSO / OIDC' : t === 'health' ? 'Health' : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === 'sso' ? 'SSO / OIDC' : t === 'health' ? 'Health' : t === 'ad-sync' ? 'AD Sync' : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -82,7 +98,7 @@ export default function AdminSettings() {
 
       {/* ── Kerberos ── */}
       {tab === 'kerberos' && (
-        <KerberosTab settings={settings} onSave={() => flash('Kerberos updated')} />
+        <KerberosTab onSave={() => flash('Kerberos updated')} />
       )}
 
       {/* ── Recordings ── */}
@@ -92,7 +108,7 @@ export default function AdminSettings() {
 
       {/* ── Vault ── */}
       {tab === 'vault' && (
-        <VaultTab onSave={() => flash('Vault updated')} />
+        <VaultTab settings={settings} onSave={() => { flash('Vault updated'); getSettings().then(setSettings).catch(() => {}); }} />
       )}
 
       {/* ── Access Control ── */}
@@ -110,6 +126,11 @@ export default function AdminSettings() {
         />
       )}
 
+      {/* ── AD Sync ── */}
+      {tab === 'ad-sync' && (
+        <AdSyncTab groups={groups} onSave={() => flash('AD Sync updated')} />
+      )}
+
       {/* ── Active Sessions (NVR) ── */}
       {tab === 'sessions' && <SessionsTab />}
     </div>
@@ -120,13 +141,16 @@ export default function AdminSettings() {
 
 function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
+  const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   function refresh() {
     setLoading(true);
-    getServiceHealth()
-      .then(setHealth)
-      .catch(() => setHealth(null))
+    Promise.all([
+      getServiceHealth().catch(() => null),
+      getMetrics().catch(() => null),
+    ])
+      .then(([h, m]) => { setHealth(h); setMetrics(m); })
       .finally(() => setLoading(false));
   }
 
@@ -203,6 +227,17 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
               <td className="text-txt-secondary">Port</td>
               <td className="font-mono text-[0.8rem]">{health.guacd.port}</td>
             </tr>
+            {metrics && (
+              <tr>
+                <td className="text-txt-secondary">Pool Size</td>
+                <td>
+                  <span className="font-mono text-[0.8rem]">{metrics.guacd_pool_size}</span>
+                  <span className="text-txt-tertiary text-xs ml-2">
+                    {metrics.guacd_pool_size > 1 ? `instance${metrics.guacd_pool_size > 2 ? 's' : ''} (round-robin)` : '(single instance)'}
+                  </span>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
         <p className="text-txt-tertiary text-xs mt-3">
@@ -281,74 +316,254 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
   );
 }
 
-function KerberosTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
-  const [realm, setRealm] = useState(settings.kerberos_realm || '');
-  const [kdcs, setKdcs] = useState<string[]>((settings.kerberos_kdc || '').split(',').filter(Boolean));
-  const [admin, setAdmin] = useState(settings.kerberos_admin_server || '');
-  const [ticketLifetime, setTicketLifetime] = useState(settings.kerberos_ticket_lifetime || '10h');
-  const [renewLifetime, setRenewLifetime] = useState(settings.kerberos_renew_lifetime || '7d');
+function KerberosTab({ onSave }: { onSave: () => void }) {
+  const [realms, setRealms] = useState<KerberosRealm[]>([]);
+  const [editing, setEditing] = useState<{
+    id?: string;
+    realm: string;
+    kdcs: string[];
+    admin_server: string;
+    ticket_lifetime: string;
+    renew_lifetime: string;
+    is_default: boolean;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    setRealm(settings.kerberos_realm || '');
-    setKdcs((settings.kerberos_kdc || '').split(',').filter(Boolean));
-    setAdmin(settings.kerberos_admin_server || '');
-    setTicketLifetime(settings.kerberos_ticket_lifetime || '10h');
-    setRenewLifetime(settings.kerberos_renew_lifetime || '7d');
-  }, [settings]);
+  const load = useCallback(async () => {
+    try {
+      const list = await getKerberosRealms();
+      setRealms(list);
+    } catch {
+      setError('Failed to load Kerberos realms');
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const updateKdc = (i: number, val: string) => {
-    const next = [...kdcs];
+    if (!editing) return;
+    const next = [...editing.kdcs];
     next[i] = val;
-    setKdcs(next);
+    setEditing({ ...editing, kdcs: next });
   };
 
-  return (
-    <div className="card">
-      <h2>Kerberos Configuration</h2>
-      <div className="form-group">
-        <label>Default Realm</label>
-        <input value={realm} onChange={(e) => setRealm(e.target.value)} placeholder="EXAMPLE.COM" />
-      </div>
-      <div className="form-group">
-        <label>KDC Servers</label>
-        {kdcs.map((k, i) => (
-          <div key={i} className="flex gap-2 mb-[0.4rem]">
-            <input value={k} onChange={(e) => updateKdc(i, e.target.value)} placeholder={`KDC ${i + 1} (e.g. 10.0.0.${5 + i})`} />
-            {kdcs.length > 1 && (
-              <button type="button" className="btn !w-auto px-[0.7rem] py-[0.4rem] shrink-0"
-                onClick={() => setKdcs(kdcs.filter((_, j) => j !== i))}>✕</button>
-            )}
-          </div>
-        ))}
-        <button type="button" className="btn !w-auto mt-1 text-[0.8rem]"
-          onClick={() => setKdcs([...kdcs, ''])}>+ Add KDC</button>
-      </div>
-      <div className="form-group">
-        <label>Admin Server</label>
-        <input value={admin} onChange={(e) => setAdmin(e.target.value)} placeholder="10.0.0.5" />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="form-group">
-          <label>Ticket Lifetime</label>
-          <input value={ticketLifetime} onChange={(e) => setTicketLifetime(e.target.value)} placeholder="10h" />
-        </div>
-        <div className="form-group">
-          <label>Renew Lifetime</label>
-          <input value={renewLifetime} onChange={(e) => setRenewLifetime(e.target.value)} placeholder="7d" />
-        </div>
-      </div>
-      <button className="btn-primary" onClick={async () => {
-        await updateKerberos({
-          realm,
-          kdc: kdcs.filter(Boolean),
-          admin_server: admin,
-          ticket_lifetime: ticketLifetime,
-          renew_lifetime: renewLifetime,
+  async function handleSave() {
+    if (!editing) return;
+    setSaving(true);
+    setError('');
+    try {
+      if (editing.id) {
+        await updateKerberosRealm(editing.id, {
+          realm: editing.realm,
+          kdc_servers: editing.kdcs.filter(Boolean),
+          admin_server: editing.admin_server,
+          ticket_lifetime: editing.ticket_lifetime,
+          renew_lifetime: editing.renew_lifetime,
+          is_default: editing.is_default,
         });
-        onSave();
-      }}>
-        Save Kerberos Settings
-      </button>
+      } else {
+        if (!editing.realm) {
+          setError('Realm name is required');
+          setSaving(false);
+          return;
+        }
+        await createKerberosRealm({
+          realm: editing.realm,
+          kdc_servers: editing.kdcs.filter(Boolean),
+          admin_server: editing.admin_server,
+          ticket_lifetime: editing.ticket_lifetime,
+          renew_lifetime: editing.renew_lifetime,
+          is_default: editing.is_default,
+        });
+      }
+      setEditing(null);
+      await load();
+      onSave();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setError('');
+    try {
+      await deleteKerberosRealm(id);
+      await load();
+      onSave();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    }
+  }
+
+  function openNew() {
+    setEditing({
+      realm: '',
+      kdcs: [''],
+      admin_server: '',
+      ticket_lifetime: '10h',
+      renew_lifetime: '7d',
+      is_default: realms.length === 0,
+    });
+  }
+
+  function openEdit(r: KerberosRealm) {
+    setEditing({
+      id: r.id,
+      realm: r.realm,
+      kdcs: r.kdc_servers.split(',').filter(Boolean),
+      admin_server: r.admin_server,
+      ticket_lifetime: r.ticket_lifetime,
+      renew_lifetime: r.renew_lifetime,
+      is_default: r.is_default,
+    });
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="!mb-0">Kerberos Realms</h2>
+          <p className="text-txt-secondary text-sm mt-1">
+            Configure one or more Active Directory domains / Kerberos realms. Each realm gets its own KDC configuration in the shared krb5.conf.
+          </p>
+        </div>
+        <button className="btn-primary" onClick={openNew}>
+          <span className="flex items-center gap-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            Add Realm
+          </span>
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-sm mb-4 px-4 py-2 text-[0.8125rem] bg-danger-dim text-danger">
+          {error}
+        </div>
+      )}
+
+      {/* ── Create / Edit form ── */}
+      {editing && (
+        <div className="card mb-4" style={{ border: '1px solid var(--color-accent)', boxShadow: 'var(--shadow-accent)' }}>
+          <h3 className="!mb-4">{editing.id ? 'Edit Realm' : 'New Kerberos Realm'}</h3>
+          <div className="form-group">
+            <label>Realm Name</label>
+            <input
+              value={editing.realm}
+              onChange={(e) => setEditing({ ...editing, realm: e.target.value })}
+              placeholder="EXAMPLE.COM"
+              autoFocus
+            />
+          </div>
+          <div className="form-group">
+            <label>KDC Servers</label>
+            {editing.kdcs.map((k, i) => (
+              <div key={i} className="flex gap-2 mb-[0.4rem]">
+                <input value={k} onChange={(e) => updateKdc(i, e.target.value)} placeholder={`KDC ${i + 1} (e.g. dc${i + 1}.example.com)`} />
+                {editing.kdcs.length > 1 && (
+                  <button type="button" className="btn !w-auto px-[0.7rem] py-[0.4rem] shrink-0"
+                    onClick={() => setEditing({ ...editing, kdcs: editing.kdcs.filter((_, j) => j !== i) })}>✕</button>
+                )}
+              </div>
+            ))}
+            <button type="button" className="btn !w-auto mt-1 text-[0.8rem]"
+              onClick={() => setEditing({ ...editing, kdcs: [...editing.kdcs, ''] })}>+ Add KDC</button>
+          </div>
+          <div className="form-group">
+            <label>Admin Server</label>
+            <input value={editing.admin_server} onChange={(e) => setEditing({ ...editing, admin_server: e.target.value })} placeholder="dc1.example.com" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="form-group">
+              <label>Ticket Lifetime</label>
+              <input value={editing.ticket_lifetime} onChange={(e) => setEditing({ ...editing, ticket_lifetime: e.target.value })} placeholder="10h" />
+            </div>
+            <div className="form-group">
+              <label>Renew Lifetime</label>
+              <input value={editing.renew_lifetime} onChange={(e) => setEditing({ ...editing, renew_lifetime: e.target.value })} placeholder="7d" />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer !mb-0">
+              <input
+                type="checkbox"
+                className="checkbox"
+                checked={editing.is_default}
+                onChange={(e) => setEditing({ ...editing, is_default: e.target.checked })}
+              />
+              <span className="text-sm">Default realm</span>
+            </label>
+          </div>
+          <div className="flex items-center gap-3 mt-4">
+            <button className="btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : editing.id ? 'Update Realm' : 'Create Realm'}
+            </button>
+            <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Realms list ── */}
+      {realms.length === 0 && !editing ? (
+        <div className="card text-center py-12">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-4 text-txt-tertiary">
+            <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
+          </svg>
+          <p className="text-txt-secondary text-sm">
+            No Kerberos realms configured. Add a realm to enable Kerberos / NLA authentication for your connections.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {realms.map((r) => (
+            <div key={r.id} className="card !p-0 !overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-8 h-8 rounded-md flex items-center justify-center shrink-0"
+                    style={{ background: 'var(--color-accent-dim)', color: 'var(--color-accent-light)' }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <span className="font-semibold text-[0.9rem] text-txt-primary">{r.realm.toUpperCase()}</span>
+                    {r.is_default && (
+                      <span className="ml-2 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: 'var(--color-accent-dim)', color: 'var(--color-accent-light)' }}>
+                        Default
+                      </span>
+                    )}
+                    <div className="text-txt-tertiary text-xs mt-0.5">
+                      {r.kdc_servers.split(',').filter(Boolean).length} KDC{r.kdc_servers.split(',').filter(Boolean).length !== 1 ? 's' : ''}
+                      {' · '}{r.admin_server || 'No admin server'}
+                      {' · '}Ticket {r.ticket_lifetime} / Renew {r.renew_lifetime}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="btn !px-2 !py-1 text-xs"
+                    onClick={() => openEdit(r)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="btn !px-2 !py-1 text-xs text-danger"
+                    onClick={() => handleDelete(r.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -356,18 +571,26 @@ function KerberosTab({ settings, onSave }: { settings: Record<string, string>; o
 function RecordingsTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
   const [enabled, setEnabled] = useState(settings.recordings_enabled === 'true');
   const [days, setDays] = useState(settings.recordings_retention_days || '30');
+  const [storageType, setStorageType] = useState(settings.recordings_storage_type || 'local');
+  const [azureAccount, setAzureAccount] = useState(settings.recordings_azure_account_name || '');
+  const [azureContainer, setAzureContainer] = useState(settings.recordings_azure_container_name || 'recordings');
+  const [azureKey, setAzureKey] = useState(settings.recordings_azure_access_key || '');
 
   useEffect(() => {
     setEnabled(settings.recordings_enabled === 'true');
     setDays(settings.recordings_retention_days || '30');
+    setStorageType(settings.recordings_storage_type || 'local');
+    setAzureAccount(settings.recordings_azure_account_name || '');
+    setAzureContainer(settings.recordings_azure_container_name || 'recordings');
+    setAzureKey(settings.recordings_azure_access_key || '');
   }, [settings]);
 
   return (
     <div className="card">
       <h2>Session Recordings</h2>
       <div className="form-group">
-        <label>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="!w-auto mr-2" />
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="checkbox" />
           Enable session recording
         </label>
       </div>
@@ -375,20 +598,59 @@ function RecordingsTab({ settings, onSave }: { settings: Record<string, string>;
         <label>Retention (days)</label>
         <input type="number" value={days} onChange={(e) => setDays(e.target.value)} />
       </div>
-      <button className="btn-primary" onClick={async () => { await updateRecordings({ enabled, retention_days: parseInt(days) }); onSave(); }}>
+      <div className="form-group">
+        <label>Storage Backend</label>
+        <Select
+          value={storageType}
+          onChange={(v) => setStorageType(v)}
+          options={[
+            { value: 'local', label: 'Local (Docker Volume)' },
+            { value: 'azure_blob', label: 'Azure Blob Storage' },
+          ]}
+        />
+      </div>
+      {storageType === 'azure_blob' && (
+        <>
+          <div className="form-group">
+            <label>Account Name</label>
+            <input value={azureAccount} onChange={(e) => setAzureAccount(e.target.value)} placeholder="mystorageaccount" />
+          </div>
+          <div className="form-group">
+            <label>Container Name</label>
+            <input value={azureContainer} onChange={(e) => setAzureContainer(e.target.value)} placeholder="recordings" />
+          </div>
+          <div className="form-group">
+            <label>Access Key</label>
+            <input type="password" value={azureKey} onChange={(e) => setAzureKey(e.target.value)} placeholder="Base64-encoded storage account key" />
+          </div>
+        </>
+      )}
+      <button className="btn-primary" onClick={async () => {
+        await updateRecordings({
+          enabled,
+          retention_days: parseInt(days),
+          storage_type: storageType,
+          azure_account_name: storageType === 'azure_blob' ? azureAccount : undefined,
+          azure_container_name: storageType === 'azure_blob' ? azureContainer : undefined,
+          azure_access_key: storageType === 'azure_blob' ? azureKey : undefined,
+        });
+        onSave();
+      }}>
         Save Recording Settings
       </button>
     </div>
   );
 }
 
-function VaultTab({ onSave }: { onSave: () => void }) {
+function VaultTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
   const [mode, setMode] = useState<'local' | 'external'>('local');
   const [address, setAddress] = useState('');
   const [token, setToken] = useState('');
   const [transitKey, setTransitKey] = useState('guac-master-key');
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [saving, setSaving] = useState(false);
+  const [credTtl, setCredTtl] = useState(12);
+  const [ttlSaving, setTtlSaving] = useState(false);
 
   useEffect(() => {
     getServiceHealth().then((h) => {
@@ -399,6 +661,11 @@ function VaultTab({ onSave }: { onSave: () => void }) {
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const v = parseInt(settings.credential_ttl_hours || '12', 10);
+    setCredTtl(Math.max(1, Math.min(12, isNaN(v) ? 12 : v)));
+  }, [settings]);
 
   async function handleSave() {
     setSaving(true);
@@ -473,6 +740,45 @@ function VaultTab({ onSave }: { onSave: () => void }) {
       <button className="btn-primary" onClick={handleSave} disabled={saving}>
         {saving ? 'Saving…' : 'Save Vault Settings'}
       </button>
+
+      {/* ── Credential Password Expiry ── */}
+      <div style={{ borderTop: '1px solid var(--color-border)', marginTop: '2rem', paddingTop: '1.5rem' }}>
+        <h3 className="!mb-1">Credential Password Expiry</h3>
+        <p className="text-txt-secondary text-sm mb-4">
+          Stored credentials automatically expire after this duration. Users must update their password before expired credentials will be used.
+          Maximum allowed TTL is 12 hours.
+        </p>
+        <div className="form-group">
+          <label>Time-to-Live (hours)</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={1}
+              max={12}
+              step={1}
+              value={credTtl}
+              onChange={(e) => setCredTtl(Number(e.target.value))}
+              className="flex-1"
+              style={{ accentColor: 'var(--color-accent)' }}
+            />
+            <span className="text-txt-primary font-semibold tabular-nums w-10 text-right">{credTtl}h</span>
+          </div>
+        </div>
+        <button
+          className="btn-primary"
+          disabled={ttlSaving}
+          onClick={async () => {
+            setTtlSaving(true);
+            try {
+              await updateSettings([{ key: 'credential_ttl_hours', value: String(credTtl) }]);
+              onSave();
+            } catch { /* ignore */ }
+            finally { setTtlSaving(false); }
+          }}
+        >
+          {ttlSaving ? 'Saving…' : 'Save Expiry Setting'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -811,7 +1117,7 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2 mt-1">
-              <input type="checkbox" checked={ex('ignore-cert') !== 'false'} onChange={(e) => setEx('ignore-cert', e.target.checked ? 'true' : 'false')} className="!w-auto" />
+              <input type="checkbox" checked={ex('ignore-cert') !== 'false'} onChange={(e) => setEx('ignore-cert', e.target.checked ? 'true' : 'false')} className="checkbox" />
               Ignore server certificate
             </label>
           </div>
@@ -891,14 +1197,14 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('console') === 'true'} onChange={(e) => setEx('console', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('console') === 'true'} onChange={(e) => setEx('console', e.target.checked ? 'true' : '')} className="checkbox" />
               Administrator console
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-touch') === 'true'} onChange={(e) => setEx('enable-touch', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-touch') === 'true'} onChange={(e) => setEx('enable-touch', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable multi-touch
             </label>
           </div>
@@ -936,14 +1242,14 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('force-lossless') === 'true'} onChange={(e) => setEx('force-lossless', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('force-lossless') === 'true'} onChange={(e) => setEx('force-lossless', e.target.checked ? 'true' : '')} className="checkbox" />
               Force lossless compression
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('read-only') === 'true'} onChange={(e) => setEx('read-only', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('read-only') === 'true'} onChange={(e) => setEx('read-only', e.target.checked ? 'true' : '')} className="checkbox" />
               Read-only (view only)
             </label>
           </div>
@@ -970,14 +1276,14 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-copy') === 'true'} onChange={(e) => setEx('disable-copy', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-copy') === 'true'} onChange={(e) => setEx('disable-copy', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable copy from remote
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-paste') === 'true'} onChange={(e) => setEx('disable-paste', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-paste') === 'true'} onChange={(e) => setEx('disable-paste', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable paste to remote
             </label>
           </div>
@@ -989,21 +1295,21 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-audio') === 'true'} onChange={(e) => setEx('disable-audio', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-audio') === 'true'} onChange={(e) => setEx('disable-audio', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable audio playback
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-audio-input') === 'true'} onChange={(e) => setEx('enable-audio-input', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-audio-input') === 'true'} onChange={(e) => setEx('enable-audio-input', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable audio input (microphone)
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-printing') === 'true'} onChange={(e) => setEx('enable-printing', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-printing') === 'true'} onChange={(e) => setEx('enable-printing', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable printing
             </label>
           </div>
@@ -1017,7 +1323,7 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-drive') === 'true'} onChange={(e) => setEx('enable-drive', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-drive') === 'true'} onChange={(e) => setEx('enable-drive', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable drive / file transfer
             </label>
           </div>
@@ -1032,21 +1338,21 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('create-drive-path') === 'true'} onChange={(e) => setEx('create-drive-path', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('create-drive-path') === 'true'} onChange={(e) => setEx('create-drive-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create drive path
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-download') === 'true'} onChange={(e) => setEx('disable-download', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-download') === 'true'} onChange={(e) => setEx('disable-download', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable file download
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-upload') === 'true'} onChange={(e) => setEx('disable-upload', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-upload') === 'true'} onChange={(e) => setEx('disable-upload', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable file upload
             </label>
           </div>
@@ -1058,70 +1364,70 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-wallpaper') === 'true'} onChange={(e) => setEx('enable-wallpaper', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-wallpaper') === 'true'} onChange={(e) => setEx('enable-wallpaper', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable wallpaper
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-theming') === 'true'} onChange={(e) => setEx('enable-theming', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-theming') === 'true'} onChange={(e) => setEx('enable-theming', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable theming
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-font-smoothing') === 'true'} onChange={(e) => setEx('enable-font-smoothing', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-font-smoothing') === 'true'} onChange={(e) => setEx('enable-font-smoothing', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable font smoothing (ClearType)
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-full-window-drag') === 'true'} onChange={(e) => setEx('enable-full-window-drag', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-full-window-drag') === 'true'} onChange={(e) => setEx('enable-full-window-drag', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable full-window drag
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-desktop-composition') === 'true'} onChange={(e) => setEx('enable-desktop-composition', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-desktop-composition') === 'true'} onChange={(e) => setEx('enable-desktop-composition', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable desktop composition (Aero)
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-menu-animations') === 'true'} onChange={(e) => setEx('enable-menu-animations', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-menu-animations') === 'true'} onChange={(e) => setEx('enable-menu-animations', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable menu animations
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-bitmap-caching') === 'true'} onChange={(e) => setEx('disable-bitmap-caching', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-bitmap-caching') === 'true'} onChange={(e) => setEx('disable-bitmap-caching', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable bitmap caching
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-offscreen-caching') === 'true'} onChange={(e) => setEx('disable-offscreen-caching', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-offscreen-caching') === 'true'} onChange={(e) => setEx('disable-offscreen-caching', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable offscreen caching
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-glyph-caching') === 'true'} onChange={(e) => setEx('disable-glyph-caching', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-glyph-caching') === 'true'} onChange={(e) => setEx('disable-glyph-caching', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable glyph caching
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('disable-gfx') === 'true'} onChange={(e) => setEx('disable-gfx', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('disable-gfx') === 'true'} onChange={(e) => setEx('disable-gfx', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable graphics pipeline (GFX)
             </label>
           </div>
@@ -1175,35 +1481,35 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create recording path
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('recording-exclude-output') === 'true'} onChange={(e) => setEx('recording-exclude-output', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('recording-exclude-output') === 'true'} onChange={(e) => setEx('recording-exclude-output', e.target.checked ? 'true' : '')} className="checkbox" />
               Exclude graphical output
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('recording-exclude-mouse') === 'true'} onChange={(e) => setEx('recording-exclude-mouse', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('recording-exclude-mouse') === 'true'} onChange={(e) => setEx('recording-exclude-mouse', e.target.checked ? 'true' : '')} className="checkbox" />
               Exclude mouse events
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('recording-exclude-touch') === 'true'} onChange={(e) => setEx('recording-exclude-touch', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('recording-exclude-touch') === 'true'} onChange={(e) => setEx('recording-exclude-touch', e.target.checked ? 'true' : '')} className="checkbox" />
               Exclude touch events
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="checkbox" />
               Include key events
             </label>
           </div>
@@ -1215,7 +1521,7 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-sftp') === 'true'} onChange={(e) => setEx('enable-sftp', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-sftp') === 'true'} onChange={(e) => setEx('enable-sftp', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable SFTP file transfer
             </label>
           </div>
@@ -1260,7 +1566,7 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('wol-send-packet') === 'true'} onChange={(e) => setEx('wol-send-packet', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('wol-send-packet') === 'true'} onChange={(e) => setEx('wol-send-packet', e.target.checked ? 'true' : '')} className="checkbox" />
               Send WoL packet before connecting
             </label>
           </div>
@@ -1366,7 +1672,7 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('read-only') === 'true'} onChange={(e) => setEx('read-only', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('read-only') === 'true'} onChange={(e) => setEx('read-only', e.target.checked ? 'true' : '')} className="checkbox" />
               Read-only
             </label>
           </div>
@@ -1403,7 +1709,7 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('enable-sftp') === 'true'} onChange={(e) => setEx('enable-sftp', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('enable-sftp') === 'true'} onChange={(e) => setEx('enable-sftp', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable SFTP
             </label>
           </div>
@@ -1414,14 +1720,14 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('sftp-disable-download') === 'true'} onChange={(e) => setEx('sftp-disable-download', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('sftp-disable-download') === 'true'} onChange={(e) => setEx('sftp-disable-download', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable file download
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('sftp-disable-upload') === 'true'} onChange={(e) => setEx('sftp-disable-upload', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('sftp-disable-upload') === 'true'} onChange={(e) => setEx('sftp-disable-upload', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable file upload
             </label>
           </div>
@@ -1441,14 +1747,14 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create recording path
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="checkbox" />
               Include key events
             </label>
           </div>
@@ -1460,7 +1766,7 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={ex('wol-send-packet') === 'true'} onChange={(e) => setEx('wol-send-packet', e.target.checked ? 'true' : '')} className="!w-auto" />
+              <input type="checkbox" checked={ex('wol-send-packet') === 'true'} onChange={(e) => setEx('wol-send-packet', e.target.checked ? 'true' : '')} className="checkbox" />
               Send WoL packet
             </label>
           </div>
@@ -1520,14 +1826,14 @@ function VncSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>&nbsp;</label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={ex('read-only') === 'true'} onChange={(e) => setEx('read-only', e.target.checked ? 'true' : '')} style={{ width: 'auto' }} />
+              <input type="checkbox" checked={ex('read-only') === 'true'} onChange={(e) => setEx('read-only', e.target.checked ? 'true' : '')} className="checkbox" />
               Read-only
             </label>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>&nbsp;</label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={ex('swap-red-blue') === 'true'} onChange={(e) => setEx('swap-red-blue', e.target.checked ? 'true' : '')} style={{ width: 'auto' }} />
+              <input type="checkbox" checked={ex('swap-red-blue') === 'true'} onChange={(e) => setEx('swap-red-blue', e.target.checked ? 'true' : '')} className="checkbox" />
               Swap red/blue
             </label>
           </div>
@@ -1539,14 +1845,14 @@ function VncSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>&nbsp;</label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={ex('disable-copy') === 'true'} onChange={(e) => setEx('disable-copy', e.target.checked ? 'true' : '')} style={{ width: 'auto' }} />
+              <input type="checkbox" checked={ex('disable-copy') === 'true'} onChange={(e) => setEx('disable-copy', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable copy from remote
             </label>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>&nbsp;</label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={ex('disable-paste') === 'true'} onChange={(e) => setEx('disable-paste', e.target.checked ? 'true' : '')} style={{ width: 'auto' }} />
+              <input type="checkbox" checked={ex('disable-paste') === 'true'} onChange={(e) => setEx('disable-paste', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable paste to remote
             </label>
           </div>
@@ -1566,7 +1872,7 @@ function VncSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>&nbsp;</label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} style={{ width: 'auto' }} />
+              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create recording path
             </label>
           </div>
@@ -1695,6 +2001,400 @@ function SessionsTab() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── AD Sync Tab ──────────────────────────────────────────────────────
+
+function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () => void }) {
+  const [configs, setConfigs] = useState<AdSyncConfig[]>([]);
+  const [editing, setEditing] = useState<Partial<AdSyncConfig> | null>(null);
+  const [selectedRuns, setSelectedRuns] = useState<{ configId: string; runs: AdSyncRun[] } | null>(null);
+  const [syncing, setSyncing] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ status: string; message: string; sample?: string[]; count?: number } | null>(null);
+  const certFileRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(() => {
+    getAdSyncConfigs().then(setConfigs).catch(() => {});
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async () => {
+    if (!editing) return;
+    try {
+      if (editing.id) {
+        await updateAdSyncConfig(editing.id, editing);
+      } else {
+        await createAdSyncConfig(editing);
+      }
+      setEditing(null);
+      load();
+      onSave();
+    } catch { /* ignore */ }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this AD sync source? Imported connections will remain but will no longer sync.')) return;
+    await deleteAdSyncConfig(id);
+    load();
+  };
+
+  const handleSync = async (id: string) => {
+    setSyncing(id);
+    try {
+      await triggerAdSync(id);
+      load();
+      onSave();
+    } finally {
+      setSyncing(null);
+    }
+  };
+
+  const handleViewRuns = async (configId: string) => {
+    const runs = await getAdSyncRuns(configId);
+    setSelectedRuns({ configId, runs });
+  };
+
+  const handleTestConnection = async (config: Partial<AdSyncConfig>) => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testAdSyncConnection(config);
+      setTestResult(result);
+    } catch (e: any) {
+      setTestResult({ status: 'error', message: e.message || 'Test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const groupOptions = [
+    { value: '', label: '— No group —' },
+    ...groups.map((g) => ({ value: g.id, label: g.name })),
+  ];
+
+  const presetFilters = [
+    '(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))',
+    '(&(objectClass=computer)(operatingSystem=*Server*)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))',
+    '(&(objectClass=computer)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))',
+    '(&(objectClass=computer)(operatingSystem=*Server*)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))',
+  ];
+
+  const isPresetFilter = (f: string) => presetFilters.includes(f);
+
+  // ── Edit / Create form ──
+  if (editing) {
+    return (
+      <div className="card">
+        <h3 className="text-lg font-semibold mb-4">{editing.id ? 'Edit AD Source' : 'Add AD Source'}</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="block">
+            <span className="text-sm font-medium">Label</span>
+            <input className="input mt-1" value={editing.label || ''} onChange={(e) => setEditing({ ...editing, label: e.target.value })} placeholder="Production AD" />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">LDAP URL</span>
+            <input className="input mt-1" value={editing.ldap_url || ''} onChange={(e) => setEditing({ ...editing, ldap_url: e.target.value })} placeholder="ldaps://dc1.contoso.com:636" />
+          </label>
+          <label className="block col-span-2">
+            <span className="text-sm font-medium">Authentication Method</span>
+            <Select
+              value={editing.auth_method || 'simple'}
+              onChange={(v) => setEditing({ ...editing, auth_method: v })}
+              options={[
+                { value: 'simple', label: 'Simple Bind (DN + Password)' },
+                { value: 'kerberos', label: 'Kerberos Keytab' },
+              ]}
+            />
+          </label>
+          {(editing.auth_method || 'simple') === 'simple' ? (
+            <>
+              <label className="block">
+                <span className="text-sm font-medium">Bind DN</span>
+                <input className="input mt-1" value={editing.bind_dn || ''} onChange={(e) => setEditing({ ...editing, bind_dn: e.target.value })} placeholder="CN=svc-strata,OU=Service Accounts,DC=contoso,DC=com" />
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium">Bind Password</span>
+                <input type="password" className="input mt-1" value={editing.bind_password || ''} onChange={(e) => setEditing({ ...editing, bind_password: e.target.value })} />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="block">
+                <span className="text-sm font-medium">Keytab Path</span>
+                <input className="input mt-1" value={editing.keytab_path || ''} onChange={(e) => setEditing({ ...editing, keytab_path: e.target.value })} placeholder="/etc/krb5/strata.keytab" />
+                <span className="text-xs opacity-50">Path inside the container — mount via Docker volume</span>
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium">Kerberos Principal</span>
+                <input className="input mt-1" value={editing.krb5_principal || ''} onChange={(e) => setEditing({ ...editing, krb5_principal: e.target.value })} placeholder="svc-strata@CONTOSO.COM" />
+              </label>
+            </>
+          )}
+          <div className="block col-span-2">
+            <span className="text-sm font-medium">Search Bases (OU scopes)</span>
+            {(editing.search_bases || ['']).map((base, i) => (
+              <div key={i} className="flex items-center gap-2 mt-1">
+                <input
+                  className="input flex-1"
+                  value={base}
+                  onChange={(e) => {
+                    const next = [...(editing.search_bases || [''])];
+                    next[i] = e.target.value;
+                    setEditing({ ...editing, search_bases: next });
+                  }}
+                  placeholder="OU=Servers,DC=contoso,DC=com"
+                />
+                {(editing.search_bases || ['']).length > 1 && (
+                  <button type="button" className="text-red-400 hover:text-red-300 text-sm px-1"
+                    onClick={() => setEditing({ ...editing, search_bases: (editing.search_bases || ['']).filter((_, j) => j !== i) })}>✕</button>
+                )}
+              </div>
+            ))}
+            <button type="button" className="text-xs text-blue-400 hover:underline mt-1"
+              onClick={() => setEditing({ ...editing, search_bases: [...(editing.search_bases || ['']), ''] })}>+ Add Search Base</button>
+          </div>
+          <label className="block">
+            <span className="text-sm font-medium">Search Filter</span>
+            <Select
+              value={isPresetFilter(editing.search_filter || '') ? (editing.search_filter || '(objectClass=computer)') : '_custom'}
+              onChange={(v) => {
+                if (v === '_custom') {
+                  setEditing({ ...editing, search_filter: editing.search_filter || '' });
+                } else {
+                  setEditing({ ...editing, search_filter: v });
+                }
+              }}
+              options={[
+                { value: '(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'All Computers' },
+                { value: '(&(objectClass=computer)(operatingSystem=*Server*)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'Servers Only' },
+                { value: '(&(objectClass=computer)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'Enabled Computers Only' },
+                { value: '(&(objectClass=computer)(operatingSystem=*Server*)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'Enabled Servers Only' },
+                { value: '_custom', label: 'Custom Filter…' },
+              ]}
+            />
+            {!isPresetFilter(editing.search_filter || '') && (
+              <input className="input mt-1" value={editing.search_filter || ''} onChange={(e) => setEditing({ ...editing, search_filter: e.target.value })} placeholder="(&(objectClass=computer)(name=SRV*))" />
+            )}
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">Search Scope</span>
+            <Select
+              value={editing.search_scope || 'subtree'}
+              onChange={(v) => setEditing({ ...editing, search_scope: v })}
+              options={[
+                { value: 'subtree', label: 'Subtree' },
+                { value: 'onelevel', label: 'One Level' },
+                { value: 'base', label: 'Base' },
+              ]}
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">Protocol</span>
+            <Select
+              value={editing.protocol || 'rdp'}
+              onChange={(v) => setEditing({ ...editing, protocol: v })}
+              options={[
+                { value: 'rdp', label: 'RDP' },
+                { value: 'ssh', label: 'SSH' },
+                { value: 'vnc', label: 'VNC' },
+              ]}
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">Default Port</span>
+            <input type="number" className="input mt-1" value={editing.default_port ?? 3389} onChange={(e) => setEditing({ ...editing, default_port: Number(e.target.value) })} />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">Domain Override</span>
+            <input className="input mt-1" value={editing.domain_override || ''} onChange={(e) => setEditing({ ...editing, domain_override: e.target.value || undefined })} placeholder="Optional — force domain on connections" />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">Connection Group</span>
+            <Select
+              value={editing.group_id || ''}
+              onChange={(v) => setEditing({ ...editing, group_id: v || undefined })}
+              options={groupOptions}
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-medium">Sync Interval (minutes)</span>
+            <input type="number" className="input mt-1" min={5} value={editing.sync_interval_minutes ?? 60} onChange={(e) => setEditing({ ...editing, sync_interval_minutes: Math.max(5, Number(e.target.value)) })} />
+          </label>
+          <label className="flex items-center gap-2 mt-6">
+            <input type="checkbox" className="checkbox" checked={editing.tls_skip_verify ?? false} onChange={(e) => setEditing({ ...editing, tls_skip_verify: e.target.checked })} />
+            <span className="text-sm">Skip TLS verification</span>
+          </label>
+          <label className="flex items-center gap-2 mt-6">
+            <input type="checkbox" className="checkbox" checked={editing.enabled ?? true} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
+            <span className="text-sm">Enabled</span>
+          </label>
+          {!(editing.tls_skip_verify) && (
+            <div className="block col-span-2">
+              <span className="text-sm font-medium">CA Certificate (PEM)</span>
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  ref={certFileRef}
+                  type="file"
+                  accept=".pem,.crt,.cer"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = () => setEditing({ ...editing, ca_cert_pem: reader.result as string });
+                      reader.readAsText(file);
+                    }
+                    if (certFileRef.current) certFileRef.current.value = '';
+                  }}
+                />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => certFileRef.current?.click()}>
+                  {editing.ca_cert_pem ? '↻ Replace Certificate' : 'Upload Certificate'}
+                </button>
+                {editing.ca_cert_pem && (
+                  <>
+                    <span className="text-sm text-green-400">✓ Certificate loaded</span>
+                    <button type="button" className="text-sm text-red-400 hover:underline" onClick={() => setEditing({ ...editing, ca_cert_pem: '' })}>
+                      Remove
+                    </button>
+                  </>
+                )}
+              </div>
+              <span className="text-xs opacity-50">Optional — upload your internal CA certificate for LDAPS with self-signed certificates</span>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 mt-6">
+          <button className="btn btn-primary" onClick={handleSave}>Save</button>
+          <button
+            className="btn btn-secondary"
+            disabled={testing}
+            onClick={() => handleTestConnection(editing)}
+          >
+            {testing ? 'Testing…' : '⚡ Test Connection'}
+          </button>
+          <button className="btn btn-secondary" onClick={() => { setEditing(null); setTestResult(null); }}>Cancel</button>
+        </div>
+        {testResult && (
+          <div className={`mt-3 p-3 rounded text-sm ${testResult.status === 'success' ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30'}`}>
+            <div>{testResult.message}</div>
+            {testResult.sample && testResult.sample.length > 0 && (
+              <div className="mt-2 text-xs opacity-80">
+                <div className="font-medium mb-1">Preview (first {testResult.sample.length}{testResult.count && testResult.count > testResult.sample.length ? ` of ${testResult.count}` : ''}):</div>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {testResult.sample.map((name, i) => <li key={i}>{name}</li>)}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Sync history overlay ──
+  if (selectedRuns) {
+    const cfg = configs.find((c) => c.id === selectedRuns.configId);
+    return (
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Sync History — {cfg?.label}</h3>
+          <button className="btn btn-secondary btn-sm" onClick={() => setSelectedRuns(null)}>← Back</button>
+        </div>
+        {selectedRuns.runs.length === 0 ? (
+          <p className="text-sm opacity-60">No sync runs yet</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="table w-full text-sm">
+              <thead>
+                <tr>
+                  <th>Started</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Updated</th>
+                  <th>Soft-Deleted</th>
+                  <th>Hard-Deleted</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedRuns.runs.map((r) => (
+                  <tr key={r.id}>
+                    <td>{new Date(r.started_at).toLocaleString()}</td>
+                    <td>
+                      <span className={`badge ${r.status === 'success' ? 'badge-success' : r.status === 'error' ? 'badge-error' : 'badge-warning'}`}>
+                        {r.status}
+                      </span>
+                    </td>
+                    <td>{r.created}</td>
+                    <td>{r.updated}</td>
+                    <td>{r.soft_deleted}</td>
+                    <td>{r.hard_deleted}</td>
+                    <td className="max-w-xs truncate">{r.error_message || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Config list ──
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm opacity-70">
+          Import connections from Active Directory via LDAP. Objects that disappear from AD are soft-deleted for 7 days before permanent removal.
+        </p>
+        <button className="btn btn-primary btn-sm" onClick={() => setEditing({ search_bases: [''], search_filter: '(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', search_scope: 'subtree', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, enabled: true, auth_method: 'simple' })}>
+          + Add Source
+        </button>
+      </div>
+
+      {configs.length === 0 ? (
+        <div className="card text-center py-12 opacity-60">
+          <p className="text-lg mb-2">No AD sync sources configured</p>
+          <p className="text-sm">Add an Active Directory source to start importing connections automatically.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {configs.map((c) => (
+            <div key={c.id} className="card">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-semibold">{c.label}</h4>
+                    <span className={`badge text-xs ${c.enabled ? 'badge-success' : 'badge-error'}`}>
+                      {c.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                  <p className="text-sm opacity-70 mt-1">{c.ldap_url}</p>
+                  <p className="text-xs opacity-50 mt-1">
+                    Auth: {c.auth_method === 'kerberos' ? 'Kerberos Keytab' : 'Simple Bind'}{c.ca_cert_pem ? ' · CA Cert ✓' : c.tls_skip_verify ? ' · TLS Skip Verify' : ''} · Base: <code>{(c.search_bases || []).join(', ') || '—'}</code> · Filter: <code>{c.search_filter}</code> · Protocol: {c.protocol.toUpperCase()} · Every {c.sync_interval_minutes}m
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0 ml-4">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={syncing === c.id}
+                    onClick={() => handleSync(c.id)}
+                  >
+                    {syncing === c.id ? 'Syncing…' : '⟳ Sync Now'}
+                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => handleViewRuns(c.id)}>History</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => setEditing(c)}>Edit</button>
+                  <button className="btn btn-secondary btn-sm text-red-500" onClick={() => handleDelete(c.id)}>Delete</button>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

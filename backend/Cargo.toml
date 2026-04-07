@@ -43,6 +43,7 @@ aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 argon2 = "0.5"
@@ -54,6 +55,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Streaming
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
+
+# LDAP (Active Directory sync)
+ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
+rustls = { version = "0.21", default-features = false }
+rustls-pemfile = "1"
+rustls-native-certs = "0.6"
 
 # Misc
 uuid = { version = "1", features = ["v4", "serde"] }

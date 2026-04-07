@@ -1,3 +1,4 @@
+pub mod ad_sync;
 pub mod app_state;
 pub mod audit;
 pub mod auth;

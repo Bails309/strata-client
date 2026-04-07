@@ -1,0 +1,192 @@
+services:
+  # ── 1. Custom guacd (FreeRDP 3 + Kerberos) ──────────────────────────
+  guacd:
+    build:
+      context: ./guacd
+      dockerfile: Dockerfile
+    image: strata/custom-guacd:latest
+    restart: unless-stopped
+    networks:
+      - guac-internal
+    volumes:
+      - guac-recordings:/var/lib/guacamole/recordings
+      - guac-drive:/var/lib/guacamole/drive
+      - krb5-config:/etc/krb5
+    environment:
+      - KRB5_CONFIG=/etc/krb5/krb5.conf
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── 1b. Additional guacd sidecar (activate with --profile scale) ────
+  # To use, set GUACD_INSTANCES=guacd-2:4822 in your .env file.
+  # You can duplicate this block for guacd-3, guacd-4, etc.
+  guacd-2:
+    build:
+      context: ./guacd
+      dockerfile: Dockerfile
+    image: strata/custom-guacd:latest
+    restart: unless-stopped
+    profiles:
+      - scale
+    networks:
+      - guac-internal
+    volumes:
+      - guac-recordings:/var/lib/guacamole/recordings
+      - guac-drive:/var/lib/guacamole/drive
+      - krb5-config:/etc/krb5
+    environment:
+      - KRB5_CONFIG=/etc/krb5/krb5.conf
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── 2. Rust Backend (Proxy / API) ───────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: strata/backend:latest
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    networks:
+      - guac-internal
+    volumes:
+      - backend-config:/app/config
+      - guac-recordings:/var/lib/guacamole/recordings:ro
+      - guac-drive:/var/lib/guacamole/drive
+      - krb5-config:/etc/krb5
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - DATABASE_URL=postgresql://strata:strata_default@postgres-local:5432/strata
+      - GUACD_HOST=guacd
+      - GUACD_PORT=4822
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin}
+    depends_on:
+      postgres-local:
+        condition: service_healthy
+      guacd:
+        condition: service_healthy
+
+  # ── 3. Frontend SPA ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: strata/frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    networks:
+      - guac-internal
+    depends_on:
+      - backend
+
+  # ── 3b. Caddy Reverse Proxy (auto-HTTPS) ───────────────────────────
+  # Activate with:  docker compose --profile https up
+  # Set STRATA_DOMAIN=strata.example.com for Let's Encrypt auto-HTTPS.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles:
+      - https
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    networks:
+      - guac-internal
+    environment:
+      - STRATA_DOMAIN=${STRATA_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+      - frontend
+
+  # ── 4. Local PostgreSQL ─────────────────────────────────────────────
+  postgres-local:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks:
+      - guac-internal
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: strata
+      POSTGRES_PASSWORD: strata_default
+      POSTGRES_DB: strata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U strata -d strata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 5. Bundled HashiCorp Vault ──────────────────────────────────────
+  vault:
+    image: hashicorp/vault:1.19
+    restart: unless-stopped
+    networks:
+      - guac-internal
+    volumes:
+      - vault-data:/vault/data
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+      VAULT_API_ADDR: "http://vault:8200"
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        mkdir -p /vault/config
+        cat > /vault/config/vault.hcl <<'EOF'
+        storage "file" {
+          path = "/vault/data"
+        }
+        listener "tcp" {
+          address     = "0.0.0.0:8200"
+          tls_disable = 1
+        }
+        api_addr     = "http://vault:8200"
+        cluster_addr = "http://vault:8201"
+        ui           = false
+        disable_mlock = true
+        EOF
+        vault server -config=/vault/config/vault.hcl
+    healthcheck:
+      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200 2>&1 | grep -qE 'Sealed|initialized' || wget -qO- http://127.0.0.1:8200/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres-data:
+    driver: local
+  guac-recordings:
+    driver: local
+  guac-drive:
+    driver: local
+  krb5-config:
+    driver: local
+  backend-config:
+    driver: local
+  vault-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local
+
+networks:
+  guac-internal:
+    driver: bridge

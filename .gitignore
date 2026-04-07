@@ -1,0 +1,22 @@
+# Build artifacts
+target/
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+*.pem
+*.key
+
+# Docker
+postgres-data/
+
+# OS
+.DS_Store
+Thumbs.db

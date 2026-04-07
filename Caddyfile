@@ -1,0 +1,35 @@
+# ─── Strata Client – Caddy Reverse Proxy ───────────────────────────
+# Auto-HTTPS via Let's Encrypt when STRATA_DOMAIN is set.
+# Falls back to HTTP on :80 when no domain is configured (dev mode).
+#
+# Usage:
+#   STRATA_DOMAIN=strata.example.com docker compose --profile https up
+# ───────────────────────────────────────────────────────────────────
+
+{$STRATA_DOMAIN:localhost} {
+	# API and WebSocket traffic → Rust backend
+	handle /api/* {
+		reverse_proxy backend:8080 {
+			transport http {
+				read_timeout 3600s
+				write_timeout 3600s
+			}
+		}
+	}
+
+	# Everything else → nginx frontend container (SPA)
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	# Compression
+	encode gzip zstd
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

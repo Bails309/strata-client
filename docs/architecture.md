@@ -1,0 +1,257 @@
+# Architecture
+
+## Overview
+
+Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs five containers; optional profiles add a Caddy reverse proxy (auto-HTTPS) and additional guacd sidecar instances.
+
+```
+                          ┌─────────────────────────────────────────────┐
+                          │           Docker Compose Network            │
+                          │           (guac-internal bridge)            │
+                          │                                             │
+                          │  ┌─────────┐ (opt)                          │
+                          │  │  Caddy  │──:80/:443 auto-TLS             │
+                          │  └────┬────┘                                │
+                          │       │                                     │
+  Browser ────HTTPS/WSS──►│  ┌───▼───────┐        ┌──────────────────┐  │
+                          │  │  frontend  │──/api─►│     backend      │  │
+                          │  │  (nginx)   │        │  (Rust / Axum)   │  │
+                          │  │   :80      │        │   :8080          │  │
+                          │  └───────────┘        └────────┬─────────┘  │
+                          │                           │         │        │
+                          │                     TCP 4822    SQL / HTTP   │
+                          │                           │         │        │
+                          │                    ┌──────▼───┐  ┌──▼─────┐  │
+                          │                    │  guacd   │  │Postgres│  │
+                          │                    │(FreeRDP3 │  │  :5432 │  │
+                          │                    │ +H.264) │  └────────┘  │
+                          │                    ├──────────┤              │
+                          │                    │ guacd-2… │ (opt)        │
+                          │                    └──────────┘              │
+                          │                                             │
+                          │                    ┌──────────┐              │
+                          │                    │  Vault   │              │
+                          │                    │  1.19    │              │
+                          │                    │ (Transit)│              │
+                          │                    └──────────┘              │
+                          │                                             │
+                          └─────────────────────────────────────────────┘
+```
+
+## Containers
+
+### 0. Caddy (Optional)
+
+| Item | Value |
+|---|---|
+| Image | `caddy:2-alpine` |
+| Profile | `https` |
+| Source | `Caddyfile` |
+| Ports | 80, 443 (TCP + UDP/QUIC) |
+
+Optional reverse proxy activated with `--profile https`. Routes `/api/*` to the backend and all other traffic to the frontend nginx. When `STRATA_DOMAIN` is set, Caddy automatically obtains and renews Let's Encrypt TLS certificates. Adds security headers and gzip/zstd compression.
+
+### 1. Custom guacd
+
+| Item | Value |
+|---|---|
+| Base image | Alpine 3.19 (multi-stage) |
+| Source | `guacd/Dockerfile` |
+| Network | `guac-internal` (internal only) |
+| Port | 4822 (not exposed externally) |
+
+The official Apache Guacamole server daemon, custom-compiled with:
+- **FreeRDP 3** (`ARG FREERDP_VERSION=3`) for modern RDP support
+- **Kerberos** (`krb5-dev` at build, `krb5` + `krb5-libs` at runtime) for GSSAPI/NLA authentication
+- **H.264 GFX** — `ffmpeg-dev` / `ffmpeg-libs` for FreeRDP 3 GFX pipeline with H.264 encoding, dramatically lowering bandwidth for RDP sessions
+
+Multiple guacd instances can be deployed using the `--profile scale` Docker Compose profile (e.g. `guacd-2`). The backend distributes connections across instances using a round-robin `GuacdPool`.
+
+Volumes:
+- `guac-recordings` → `/var/lib/guacamole/recordings` — session recording storage
+- `krb5-config` → `/etc/krb5` — dynamically generated `krb5.conf`
+
+### 2. Rust Backend
+
+| Item | Value |
+|---|---|
+| Language | Rust (2021 edition) |
+| Framework | Axum 0.7 + Tokio |
+| Source | `backend/` |
+| Port | 8080 |
+
+The central orchestrator. Responsibilities:
+
+- **Bootstrap & config** — detects `config.toml` on startup; enters setup mode if missing
+- **Database** — connects to local or external PostgreSQL; runs advisory-lock-protected migrations
+- **Auth** — validates OIDC tokens via JWKS, maps to local users, enforces role-based access
+- **Vault** — envelope encryption for stored credentials via Vault Transit
+- **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
+- **guacd pool** — round-robin connection distribution across multiple guacd instances (`GuacdPool`)
+- **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
+- **Config push** — generates `krb5.conf`, toggles recordings, manages SSO settings
+- **Audit** — SHA-256 hash-chained append-only log
+
+### 3. Frontend SPA
+
+| Item | Value |
+|---|---|
+| Language | TypeScript |
+| Framework | React 18 + Vite |
+| Styling | Tailwind CSS v4 |
+| Runtime | nginx (production) |
+| Source | `frontend/` |
+| Port | 80 (mapped to 3000 on host) |
+
+Pages:
+- **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
+- **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, and group view toggle (flat list or collapsible group headers)
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync, file transfer, session toolbar, and touch toolbar for tablet special keys
+- **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
+- **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
+- **Admin Settings** — tabbed UI for health, SSO, Kerberos, vault, recordings, access control, connection group management, active session monitoring, and metrics
+- **Audit Logs** — paginated, hash-chained log viewer
+- **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
+- **PWA** — installable Progressive Web App with offline shell caching via service worker; standalone display mode on mobile and tablet
+
+### 4. PostgreSQL
+
+| Item | Value |
+|---|---|
+| Image | `postgres:16-alpine` |
+| Port | 5432 (internal only) |
+| Volume | `postgres-data` |
+
+Bundled for zero-configuration first boot. Can be replaced with an external database at any time through the Admin UI.
+
+### 5. HashiCorp Vault
+
+| Item | Value |
+|---|---|
+| Image | `hashicorp/vault:1.19` |
+| Storage | File backend (`/vault/data`) |
+| Port | 8200 (internal only) |
+| Volume | `vault-data` |
+| Mode | Bundled (auto-provisioned) or External (user-provided) |
+
+Bundled in Docker Compose for zero-configuration credential encryption. On first boot, the backend automatically:
+1. Initializes the Vault (single unseal key, single key share)
+2. Unseals the Vault
+3. Enables the Transit Secrets Engine
+4. Creates the encryption key (`guac-master-key` by default)
+5. Stores the root token and unseal key in `config.toml`
+
+On subsequent startups, the backend auto-unseals using the stored unseal key.
+
+Alternatively, users can connect to an **external Vault instance** by selecting "External" mode during setup or in Admin Settings, providing their own address, token, and transit key name.
+
+## Data Flow
+
+### Connection Tunnel
+
+```
+Browser                    Backend                   guacd              Target
+  │                          │                         │                  │
+  │──── WS upgrade ─────────►│                         │                  │
+  │                          │── TCP connect ──────────►│                  │
+  │                          │── Guac handshake ───────►│                  │
+  │                          │   (select + connect     │── RDP/SSH/VNC ──►│
+  │                          │    with injected         │                  │
+  │                          │    credentials)          │                  │
+  │◄─── binary frames ──────►│◄── binary frames ──────►│◄────────────────►│
+  │     (bidirectional)      │    (bidirectional)       │                  │
+```
+
+### Envelope Encryption (Credential Save)
+
+```
+1. Rust generates random 32-byte DEK
+2. Rust encrypts password with DEK (AES-256-GCM) → ciphertext + nonce
+3. Rust sends plaintext DEK to Vault POST /transit/encrypt/guac-master-key
+4. Vault returns wrapped DEK (vault:v1:base64...)
+5. Rust stores (ciphertext, wrapped_dek, nonce) in PostgreSQL
+6. Rust zeroizes plaintext DEK from memory
+```
+
+### Envelope Decryption (Tunnel Handshake)
+
+```
+1. Rust fetches (ciphertext, wrapped_dek, nonce) from PostgreSQL
+2. Rust sends wrapped DEK to Vault POST /transit/decrypt/guac-master-key
+3. Vault returns plaintext DEK
+4. Rust decrypts password with DEK (AES-256-GCM)
+5. Rust injects plaintext password into guacd handshake
+6. Rust zeroizes DEK and password from memory
+```
+
+## Database Schema
+
+```
+system_settings ──── key/value config store
+users ──────────────── OIDC subject, username, role FK
+roles ──────────────── admin, user (extensible)
+connections ──────── target host, protocol, port, domain, description, group FK
+connection_groups ── folder hierarchy with parent_id self-reference
+role_connections ──── many-to-many role ↔ connection
+user_credentials ──── encrypted password + DEK + nonce per user/connection
+user_favorites ────── user ↔ connection favorites (composite PK)
+connection_shares ── temporary share links with mode (view/control)
+audit_logs ─────── hash-chained append-only event log
+```
+
+See `backend/migrations/001_initial_schema.sql` through `007_share_mode.sql` for the full DDL.
+
+## Directory Structure
+
+```
+strata-client/
+├── .github/workflows/     CI/CD pipelines
+│   └── build-guacd.yml    Automated guacd image build
+├── backend/               Rust backend
+│   ├── Cargo.toml
+│   ├── Dockerfile
+│   ├── migrations/        SQL migration scripts
+│   └── src/
+│       ├── main.rs        Entry point, bootstrap
+│       ├── config.rs      config.toml model
+│       ├── error.rs       Unified error type
+│       ├── tunnel.rs      Guacamole protocol + WS↔TCP proxy
+│       ├── db/            Database pool, migrations
+│       ├── routes/        HTTP & WebSocket handlers
+│       │   ├── admin.rs   Admin CRUD endpoints
+│       │   ├── health.rs  Health & status
+│       │   ├── setup.rs   First-boot initialisation
+│       │   ├── tunnel.rs  WebSocket tunnel upgrade
+│       │   ├── share.rs    Connection sharing (view/control modes)
+│       │   ├── tunnel.rs  WebSocket tunnel upgrade
+│       │   └── user.rs    User-facing endpoints
+│       └── services/      Business logic
+│           ├── app_state.rs   Shared state + boot phase
+│           ├── audit.rs       Hash-chained audit logging
+│           ├── auth.rs        OIDC token validation
+│           ├── guacd_pool.rs  Round-robin guacd pool
+│           ├── kerberos.rs    krb5.conf generation
+│           ├── middleware.rs   JWT auth + admin middleware
+│           ├── recordings.rs  Recording config
+│           ├── settings.rs    system_settings CRUD
+│           ├── vault.rs       Envelope encryption
+│           └── vault_provisioning.rs  Bundled Vault lifecycle
+├── frontend/              React SPA
+│   ├── Dockerfile
+│   ├── nginx.conf
+│   ├── package.json
+│   └── src/
+│       ├── api.ts         Typed API client
+│       ├── App.tsx        Router + boot detection
+│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, SessionToolbar, ThemeProvider, TouchToolbar)
+│       └── pages/         Page components (Dashboard, SessionClient, AdminSettings, AuditLogs, Login, SetupWizard, SharedViewer)
+├── guacd/                 Custom guacd build
+│   └── Dockerfile
+├── Caddyfile              Caddy reverse proxy config (optional)
+├── docker-compose.yml     Full stack orchestration
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE                Apache 2.0
+├── NOTICE                 Third-party attributions
+└── README.md
+```

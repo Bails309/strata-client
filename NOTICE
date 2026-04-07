@@ -1,0 +1,82 @@
+Strata Client
+Copyright 2026 Strata Client Contributors
+
+This product is licensed under the Apache License, Version 2.0.
+A copy of the license is available in the LICENSE file at the root of this
+repository, or online at: https://www.apache.org/licenses/LICENSE-2.0
+
+
+THIRD-PARTY SOFTWARE NOTICES
+=============================
+
+This project incorporates, depends on, or is derived from the following
+open-source software. Each component retains its original license.
+
+
+1. Apache Guacamole Server (guacd)
+   - Source:  https://github.com/apache/guacamole-server
+   - License: Apache License 2.0
+   - Usage:   The `guacd/Dockerfile` builds a custom image from the official
+              Apache Guacamole server source code. The Dockerfile modifies
+              build arguments (FreeRDP version) and adds Kerberos system
+              packages. No source code of guacamole-server is committed to
+              this repository; it is cloned at build time.
+
+2. guacamole-common-js
+   - Source:  https://www.npmjs.com/package/guacamole-common-js
+   - License: Apache License 2.0
+   - Usage:   Frontend npm dependency for HTML5 Canvas rendering of
+              Guacamole protocol streams and session recording playback.
+
+3. FreeRDP
+   - Source:  https://github.com/FreeRDP/FreeRDP
+   - License: Apache License 2.0
+   - Usage:   Linked at compile time inside the custom guacd image as the
+              RDP protocol backend (version 3).
+
+4. MIT Kerberos (krb5)
+   - Source:  https://web.mit.edu/kerberos/
+   - License: MIT License
+   - Usage:   Runtime library installed in the guacd and backend containers
+              for GSSAPI/Kerberos authentication.
+
+
+Rust Backend Dependencies (selected — full list in backend/Cargo.toml)
+----------------------------------------------------------------------
+
+5.  tokio          — MIT License          — https://github.com/tokio-rs/tokio
+6.  axum           — MIT License          — https://github.com/tokio-rs/axum
+7.  sqlx           — MIT OR Apache-2.0    — https://github.com/launchbadge/sqlx
+8.  reqwest        — MIT OR Apache-2.0    — https://github.com/seanmonstar/reqwest
+9.  jsonwebtoken   — MIT License          — https://github.com/Keats/jsonwebtoken
+10. aes-gcm        — MIT OR Apache-2.0    — https://github.com/RustCrypto/AEADs
+11. serde          — MIT OR Apache-2.0    — https://github.com/serde-rs/serde
+12. tracing        — MIT License          — https://github.com/tokio-rs/tracing
+13. thiserror      — MIT OR Apache-2.0    — https://github.com/dtolnay/thiserror
+14. anyhow         — MIT OR Apache-2.0    — https://github.com/dtolnay/anyhow
+15. uuid           — MIT OR Apache-2.0    — https://github.com/uuid-rs/uuid
+16. chrono         — MIT OR Apache-2.0    — https://github.com/chronotope/chrono
+17. zeroize        — MIT OR Apache-2.0    — https://github.com/RustCrypto/utils
+18. sha2           — MIT OR Apache-2.0    — https://github.com/RustCrypto/hashes
+19. tower-http     — MIT License          — https://github.com/tower-rs/tower-http
+20. tokio-util     — MIT License          — https://github.com/tokio-rs/tokio
+
+
+Frontend Dependencies (selected — full list in frontend/package.json)
+---------------------------------------------------------------------
+
+21. React          — MIT License          — https://github.com/facebook/react
+22. React DOM      — MIT License          — https://github.com/facebook/react
+23. React Router   — MIT License          — https://github.com/remix-run/react-router
+24. Vite           — MIT License          — https://github.com/vitejs/vite
+25. TypeScript     — Apache License 2.0   — https://github.com/microsoft/TypeScript
+
+
+Container Base Images
+---------------------
+
+26. Alpine Linux   — MIT License          — https://alpinelinux.org/
+27. PostgreSQL     — PostgreSQL License   — https://www.postgresql.org/
+28. nginx          — BSD 2-Clause License — https://nginx.org/
+29. Node.js        — MIT License          — https://nodejs.org/
+30. Rust (official)— MIT OR Apache-2.0    — https://www.rust-lang.org/

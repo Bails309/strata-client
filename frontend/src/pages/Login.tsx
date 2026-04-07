@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { login } from '../api';
+import { useTheme } from '../components/ThemeProvider';
 
 interface Props {
   onLogin: () => void;
@@ -10,6 +11,7 @@ export default function Login({ onLogin }: Props) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { theme } = useTheme();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -32,11 +34,12 @@ export default function Login({ onLogin }: Props) {
       <div className="w-full max-w-[400px] animate-fade-up">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-[14px] text-xl font-extrabold text-white tracking-tighter mb-4"
-            style={{ background: 'var(--color-accent)', boxShadow: 'var(--shadow-accent)' }}>
-            S
-          </div>
-          <h1 className="!mb-1">Strata Client</h1>
+          <img
+            src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'}
+            alt="Strata Client"
+            className="mx-auto mb-4"
+            style={{ maxWidth: 200 }}
+          />
           <p className="text-txt-secondary text-sm">Sign in to manage your connections</p>
         </div>
 

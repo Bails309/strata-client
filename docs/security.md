@@ -123,6 +123,36 @@ The `audit_logs` table is designed as an append-only, tamper-evident log:
 | `credential.updated` | User saved/updated an encrypted credential |
 | `tunnel.connected` | User opened a remote desktop session |
 | `share.created` | User generated a session share link |
+| `ad_sync.config_created` | AD sync source configuration created |
+| `ad_sync.config_updated` | AD sync source configuration updated |
+| `ad_sync.config_deleted` | AD sync source configuration deleted |
+| `ad_sync.completed` | AD sync run finished (includes created/updated/deleted counts) |
+| `kerberos_realm.created` | Kerberos realm added |
+| `kerberos_realm.updated` | Kerberos realm settings changed |
+| `kerberos_realm.deleted` | Kerberos realm removed |
+
+---
+
+## AD Sync Security
+
+### LDAP Credentials
+
+AD sync bind passwords are stored in the `ad_sync_configs` table in plaintext. This is within the same trust boundary as the admin API (only admin users can create/view configs, and the password is never returned in API responses). Future enhancement: Vault envelope encryption for bind passwords.
+
+### TLS / Certificate Handling
+
+- Custom CA certificates are stored in the database (`ca_cert_pem` column) and loaded per-query — no global mutable TLS state
+- When a CA cert is provided, the backend builds a per-query `rustls::ClientConfig` with system roots plus the custom CA
+- For Kerberos auth, the CA cert is written to a temporary file and set via `LDAPTLS_CACERT`; the file is cleaned up after the query
+- The `tls_skip_verify` option disables certificate validation entirely — use only for testing
+
+### Kerberos Credential Isolation
+
+Each AD sync source uses a unique credential cache (`KRB5CCNAME=FILE:/tmp/krb5cc_adsync_{config_id}`) to prevent cross-config credential leakage during concurrent syncs. Cache files are cleaned up after each query.
+
+### Filter Security
+
+All preset LDAP filters exclude gMSA (`msDS-GroupManagedServiceAccount`) and MSA (`msDS-ManagedServiceAccount`) accounts to prevent service accounts from being imported as connectable machines. Custom filters bypass this exclusion — administrators are responsible for ensuring appropriate filtering.
 
 ---
 

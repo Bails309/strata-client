@@ -803,12 +803,30 @@ function AccessTab({
   const [formExtra, setFormExtra] = useState<Record<string, string>>({});
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupParent, setNewGroupParent] = useState('');
+  const [connSearch, setConnSearch] = useState('');
+  const [connPage, setConnPage] = useState(1);
+  const connPerPage = 20;
+  const connFormRef = useRef<HTMLDivElement>(null);
+
+  const filteredConnections = connections.filter((c) => {
+    if (!connSearch) return true;
+    const q = connSearch.toLowerCase();
+    return c.name.toLowerCase().includes(q)
+      || c.hostname.toLowerCase().includes(q)
+      || c.protocol.toLowerCase().includes(q)
+      || (c.description || '').toLowerCase().includes(q)
+      || (groups.find(g => g.id === c.group_id)?.name || '').toLowerCase().includes(q);
+  });
+  const connTotalPages = Math.max(1, Math.ceil(filteredConnections.length / connPerPage));
+  const safeConnPage = Math.min(connPage, connTotalPages);
+  const pagedConnections = filteredConnections.slice((safeConnPage - 1) * connPerPage, safeConnPage * connPerPage);
 
   function openAdd() {
     setFormMode('add');
     setFormId(null);
     setFormCore({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', group_id: '' });
     setFormExtra({ 'server-layout': 'en-gb-qwerty', 'timezone': 'Europe/London' });
+    setTimeout(() => connFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
 
   function openEdit(c: Connection) {
@@ -816,6 +834,7 @@ function AccessTab({
     setFormId(c.id);
     setFormCore({ name: c.name, protocol: c.protocol, hostname: c.hostname, port: c.port, domain: c.domain || '', description: c.description || '', group_id: c.group_id || '' });
     setFormExtra(c.extra ? { ...c.extra } : {});
+    setTimeout(() => connFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
 
   function closeForm() {
@@ -885,10 +904,21 @@ function AccessTab({
             + Add Connection
           </button>
         </div>
+        <div className="mb-3">
+          <input
+            value={connSearch}
+            onChange={(e) => { setConnSearch(e.target.value); setConnPage(1); }}
+            placeholder="Search connections by name, host, protocol, description, or group…"
+            className="input w-full"
+          />
+        </div>
+        <p className="text-sm text-txt-secondary mb-2">
+          Showing {filteredConnections.length === connections.length ? connections.length : `${filteredConnections.length} of ${connections.length}`} connection{connections.length !== 1 ? 's' : ''}
+        </p>
         <table>
           <thead><tr><th>Name</th><th>Protocol</th><th>Host</th><th>Port</th><th>Group</th><th className="w-[140px]">Actions</th></tr></thead>
           <tbody>
-            {connections.map((c) => (
+            {pagedConnections.map((c) => (
               <tr key={c.id} className={formId === c.id ? 'bg-surface-secondary' : ''}>
                 <td>
                   <div>{c.name}</div>
@@ -908,11 +938,20 @@ function AccessTab({
             ))}
           </tbody>
         </table>
+        {connTotalPages > 1 && (
+          <div className="flex items-center justify-between mt-3">
+            <span className="text-sm text-txt-secondary">Page {safeConnPage} of {connTotalPages}</span>
+            <div className="flex gap-1">
+              <button className="btn text-[0.8rem] px-2 py-1" disabled={safeConnPage <= 1} onClick={() => setConnPage(safeConnPage - 1)}>← Prev</button>
+              <button className="btn text-[0.8rem] px-2 py-1" disabled={safeConnPage >= connTotalPages} onClick={() => setConnPage(safeConnPage + 1)}>Next →</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Connection Editor Form */}
       {formMode !== 'closed' && (
-        <div className="card">
+        <div className="card" ref={connFormRef}>
           <div className="flex justify-between items-center mb-4">
             <h2 className="!mb-0">{formMode === 'add' ? 'Add Connection' : 'Edit Connection'}</h2>
             <button className="btn text-[0.8rem] px-2 py-1" onClick={closeForm}>Cancel</button>

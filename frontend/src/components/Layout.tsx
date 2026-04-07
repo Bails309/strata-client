@@ -54,16 +54,11 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
           <div className="flex flex-col gap-6">
             {/* Brand */}
             <Link to="/" className={`flex items-center gap-2 no-underline p-1 ${collapsed ? 'justify-center' : ''}`}>
-              <div className="w-7 h-7 rounded-lg shrink-0 flex items-center justify-center text-white text-xs font-extrabold tracking-tighter"
-                style={{ background: 'var(--color-accent)' }}>
-                S
-              </div>
-              {!collapsed && <span className="text-base font-bold tracking-tight text-txt-primary">Strata</span>}
-              {!collapsed && (
-                <span className="text-[0.55rem] font-semibold text-accent-light bg-accent-dim px-1.5 py-0.5 rounded-full uppercase tracking-wide">
-                  Client
-                </span>
-              )}
+              <img
+                src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'}
+                alt="Strata Client"
+                className="shrink-0 w-full"
+              />
             </Link>
 
             {/* Navigation */}

@@ -53,6 +53,7 @@ struct DiscoveredComputer {
     dn: String,
     name: String,
     dns_host_name: Option<String>,
+    description: Option<String>,
 }
 
 // ── Execute a full sync for one config ─────────────────────────────────
@@ -123,18 +124,33 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         let hostname = computer
             .dns_host_name
             .as_deref()
-            .unwrap_or(&computer.name);
+            .unwrap_or(&computer.name)
+            .to_lowercase();
+        let name = computer.name.to_lowercase();
+
+        let desc = computer
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .to_string();
+        let description = if desc.is_empty() {
+            format!("Imported from AD: {}", config.label)
+        } else {
+            desc
+        };
 
         if existing_dns.contains(&computer.dn) {
-            // Update hostname if changed
+            // Update hostname, name, description, domain if changed
             let changed = sqlx::query(
-                "UPDATE connections SET hostname = $1, name = $2, soft_deleted_at = NULL, updated_at = now()
-                 WHERE ad_source_id = $3 AND ad_dn = $4 AND (hostname != $1 OR name != $2 OR soft_deleted_at IS NOT NULL)",
+                "UPDATE connections SET hostname = $1, name = $2, description = $5, domain = $6, soft_deleted_at = NULL, updated_at = now()
+                 WHERE ad_source_id = $3 AND ad_dn = $4 AND (hostname != $1 OR name != $2 OR description IS DISTINCT FROM $5 OR domain IS DISTINCT FROM $6 OR soft_deleted_at IS NOT NULL)",
             )
-            .bind(hostname)
-            .bind(&computer.name)
+            .bind(&hostname)
+            .bind(&name)
             .bind(config.id)
             .bind(&computer.dn)
+            .bind(&description)
+            .bind(&config.domain_override)
             .execute(pool)
             .await?;
             if changed.rows_affected() > 0 {
@@ -143,13 +159,15 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         } else {
             // Check if soft-deleted — resurrect
             let resurrected = sqlx::query(
-                "UPDATE connections SET soft_deleted_at = NULL, hostname = $1, name = $2, updated_at = now()
+                "UPDATE connections SET soft_deleted_at = NULL, hostname = $1, name = $2, description = $5, domain = $6, updated_at = now()
                  WHERE ad_source_id = $3 AND ad_dn = $4 AND soft_deleted_at IS NOT NULL",
             )
-            .bind(hostname)
-            .bind(&computer.name)
+            .bind(&hostname)
+            .bind(&name)
             .bind(config.id)
             .bind(&computer.dn)
+            .bind(&description)
+            .bind(&config.domain_override)
             .execute(pool)
             .await?;
 
@@ -159,12 +177,12 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
                     "INSERT INTO connections (name, protocol, hostname, port, domain, description, group_id, ad_source_id, ad_dn, extra)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}'::jsonb)",
                 )
-                .bind(&computer.name)
+                .bind(&name)
                 .bind(&config.protocol)
-                .bind(hostname)
+                .bind(&hostname)
                 .bind(config.default_port)
                 .bind(&config.domain_override)
-                .bind(format!("Imported from AD: {}", config.label))
+                .bind(&description)
                 .bind(config.group_id)
                 .bind(config.id)
                 .bind(&computer.dn)
@@ -343,7 +361,7 @@ async fn ldap_query_simple(config: &AdSyncConfig, search_base: &str) -> anyhow::
             search_base,
             scope,
             filter,
-            vec!["cn", "dNSHostName", "distinguishedName", "name"],
+            vec!["cn", "dNSHostName", "distinguishedName", "name", "description"],
         )
         .await?
         .success()?;
@@ -367,10 +385,17 @@ async fn ldap_query_simple(config: &AdSyncConfig, search_base: &str) -> anyhow::
             .and_then(|v| v.first())
             .cloned();
 
+        let description = se
+            .attrs
+            .get("description")
+            .and_then(|v| v.first())
+            .cloned();
+
         computers.push(DiscoveredComputer {
             dn,
             name,
             dns_host_name,
+            description,
         });
     }
 
@@ -438,6 +463,7 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         "dNSHostName",
         "distinguishedName",
         "name",
+        "description",
     ]);
     cmd.env("KRB5CCNAME", &ccache);
 
@@ -502,6 +528,7 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
             dn: dn.to_string(),
             name,
             dns_host_name: attrs.get("dNSHostName").cloned(),
+            description: attrs.get("description").cloned(),
         })
     };
 

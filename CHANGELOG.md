@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-04-07
+
+### Added
+
+#### Active Directory LDAP Sync
+- Automatic computer account import from Active Directory via LDAP/LDAPS
+- AD sync config CRUD API: `GET/POST/PUT/DELETE /api/admin/ad-sync-configs`
+- `POST /api/admin/ad-sync-configs/test` — test connection endpoint that validates connectivity and returns a preview of first 10 discovered objects with DNS hostnames
+- Manual sync trigger: `POST /api/admin/ad-sync-configs/:id/sync`
+- Sync run history: `GET /api/admin/ad-sync-configs/:id/runs` with per-run stats (created, updated, soft-deleted, hard-deleted)
+- Background scheduled sync — configurable interval per source (default: 60 minutes)
+- Soft-delete lifecycle — objects that disappear from AD are soft-deleted for 7 days before permanent hard-deletion
+- Multiple search bases per config — query multiple OU scopes in a single source, results deduplicated by DN (`015_multi_search_base.sql` migration)
+- Search filter presets dropdown: All Computers, Servers Only, Enabled Computers Only, Enabled Servers Only, Custom Filter
+- Automatic exclusion of gMSA (`msDS-GroupManagedServiceAccount`) and MSA (`msDS-ManagedServiceAccount`) accounts from all preset filters
+- Connection group assignment — imported connections can be placed into a specific connection group
+- Domain override — optional domain suffix forced onto all imported connections
+- Full admin UI in the "AD Sync" tab: source cards with label, URL, auth method, bases, filter, protocol, interval; inline edit form; sync history table
+
+#### AD Sync Authentication Methods
+- **Simple Bind** — bind DN + password with LDAP/LDAPS
+- **Kerberos Keytab** — `kinit` + `ldapsearch` with GSSAPI via keytab file and configurable principal
+- Per-config credential cache (`KRB5CCNAME`) to avoid races between concurrent syncs
+
+#### CA Certificate Upload for LDAPS
+- Upload internal CA certificates (PEM/CRT/CER) for LDAPS connections with self-signed or internal CAs
+- Custom `rustls` `ClientConfig` built at query time with system roots + uploaded CA (bypasses ldap3's static `CACERTS`)
+- Kerberos path writes PEM to temp file and sets `LDAPTLS_CACERT` env var for `ldapsearch`
+- UI: file upload button hidden when "Skip TLS verification" is checked; shows "✓ Certificate loaded" with replace/remove actions
+- `ca_cert_pem` TEXT column added to `ad_sync_configs` (`014_ca_cert.sql` migration)
+
+#### Multi-Realm Kerberos
+- Support for multiple Kerberos realms, each with its own KDCs, admin server, ticket/renew lifetimes, and default flag
+- Full CRUD API for Kerberos realms: `GET/POST/PUT/DELETE /api/admin/kerberos-realms`
+- Dynamic `krb5.conf` generation aggregating all realms with correct `[realms]` and `[domain_realm]` sections
+- Realm management UI with inline edit form in the Kerberos admin tab
+- `011_multi_kerberos.sql` migration: `kerberos_realms` table with `id`, `realm`, `kdcs`, `admin_server`, `ticket_lifetime`, `renew_lifetime`, `is_default`
+
+#### Credential Profiles
+- Saved credential profiles with optional TTL expiry (`credential_profiles` table)
+- Profile selector dropdown on the Dashboard connection card — pick a saved profile or enter credentials inline
+- `008_credential_profiles.sql`, `009_credential_expiry.sql`, `010_profile_ttl.sql` migrations
+
+#### Kerberos Keytab Auth for AD Sync
+- `auth_method` column on `ad_sync_configs`: `simple` or `kerberos` (`013_keytab_auth.sql` migration)
+- `keytab_path` and `krb5_principal` fields for keytab-based authentication
+- Auth method selector in the AD sync edit form toggles between Simple Bind and Kerberos Keytab fields
+
+### Changed
+- `AdSyncConfig` struct: `search_base: String` replaced with `search_bases: Vec<String>` (Postgres `TEXT[]`)
+- LDAP query functions accept individual search base parameter; `ldap_query()` iterates over all bases and deduplicates by DN
+- All LDAP filter defaults and presets now include `(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount))` to exclude service accounts
+- Backend dependencies: added `rustls 0.21`, `rustls-pemfile 1`, `rustls-native-certs 0.6` for custom TLS config
+- Architecture docs updated with AD sync, multi-realm Kerberos, credential profiles, and CA cert sections
+- Database schema docs updated through migration 015
+
+### Fixed
+- Empty `search_filter` in DB caused ldap3 filter parse error — now falls back to the default exclusion filter
+- ldap3 `UnknownIssuer` TLS error with internal CAs — bypassed static `CACERTS` with per-query custom `ClientConfig`
+
+### Security
+- CA certificates stored in database (not filesystem) and loaded per-query — no global mutable state
+- Keytab-based authentication uses per-config `KRB5CCNAME` credential cache to prevent cross-config credential leakage
+- Bind passwords stored as-is in `ad_sync_configs` (same trust boundary as the admin API) — future: Vault envelope encryption
+
 ## [0.4.0] — 2026-04-07
 
 ### Added

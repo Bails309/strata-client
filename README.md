@@ -1,8 +1,16 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="frontend/public/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="frontend/public/logo-light.png">
+    <img alt="Strata Client" src="frontend/public/logo-light.png" width="400">
+  </picture>
+</p>
+
 # Strata Client
 
 A high-performance, modernized client and proxy architecture for [Apache Guacamole](https://guacamole.apache.org/). Built with a Rust backend and a modern TypeScript SPA, featuring enterprise-grade security via HashiCorp Vault envelope encryption, OIDC SSO, and native FreeRDP 3 / Kerberos support.
 
-> **Version:** 0.4.0 — see the [CHANGELOG](CHANGELOG.md) for current progress.
+> **Version:** 0.5.0 — see the [CHANGELOG](CHANGELOG.md) for current progress.
 
 ---
 
@@ -14,7 +22,10 @@ A high-performance, modernized client and proxy architecture for [Apache Guacamo
 - **Envelope encryption** — User credentials encrypted with AES-256-GCM; Data Encryption Keys wrapped via HashiCorp Vault Transit
 - **OIDC / SSO** — Full OpenID Connect flow with dynamic JWKS validation (Keycloak, Entra ID, etc.)
 - **Local authentication** — Built-in username/password auth for environments without an OIDC provider
-- **Kerberos / NLA** — Dynamic `krb5.conf` generation pushed to the `guacd` container at runtime
+- **Kerberos / NLA** — Dynamic `krb5.conf` generation pushed to the `guacd` container at runtime; multi-realm support with per-realm KDCs and lifetimes
+- **Active Directory LDAP sync** — Automatic computer account import from AD via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, multiple search bases per source, filter presets, and gMSA/MSA exclusion
+- **AD auth methods** — Simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI) per AD source; custom CA certificate upload for internal LDAPS
+- **Credential profiles** — Saved per-user credential profiles with optional TTL expiry and profile selector on the Dashboard
 - **Session recording** — Toggleable Guacamole-native session capture with configurable retention
 - **Immutable audit log** — SHA-256 hash-chained, append-only audit trail
 - **Tiled multi-session view** — Open multiple connections side-by-side in a responsive grid with per-tile focus control and keyboard broadcast

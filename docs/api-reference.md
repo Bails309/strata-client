@@ -693,3 +693,189 @@ All errors follow this format:
 | `tunnel.connected` | User opens a remote session |
 | `connection.shared` | User generates a connection share link (includes mode) |
 | `share.revoked` | User revokes a connection share link |
+| `ad_sync.config_created` | AD sync source config created |
+| `ad_sync.config_updated` | AD sync source config updated |
+| `ad_sync.config_deleted` | AD sync source config deleted |
+| `ad_sync.completed` | AD sync run finished (includes created/updated/deleted counts) |
+
+---
+
+## AD Sync Endpoints
+
+All AD sync endpoints require authentication and the `admin` role.
+
+### `GET /api/admin/ad-sync-configs`
+
+List all AD sync source configurations.
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "label": "Production AD",
+    "ldap_url": "ldaps://dc1.contoso.com:636",
+    "bind_dn": "CN=svc-strata,OU=Service Accounts,DC=contoso,DC=com",
+    "search_bases": ["OU=Servers,DC=contoso,DC=com", "OU=Workstations,DC=contoso,DC=com"],
+    "search_filter": "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))",
+    "search_scope": "subtree",
+    "protocol": "rdp",
+    "default_port": 3389,
+    "auth_method": "simple",
+    "tls_skip_verify": false,
+    "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+    "sync_interval_minutes": 60,
+    "enabled": true,
+    "created_at": "2026-04-07T10:00:00Z",
+    "updated_at": "2026-04-07T10:00:00Z"
+  }
+]
+```
+
+### `POST /api/admin/ad-sync-configs`
+
+Create a new AD sync source.
+
+**Request Body**
+```json
+{
+  "label": "Production AD",
+  "ldap_url": "ldaps://dc1.contoso.com:636",
+  "bind_dn": "CN=svc-strata,OU=Service Accounts,DC=contoso,DC=com",
+  "bind_password": "secret",
+  "search_bases": ["OU=Servers,DC=contoso,DC=com"],
+  "search_filter": "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))",
+  "auth_method": "simple",
+  "protocol": "rdp",
+  "default_port": 3389,
+  "sync_interval_minutes": 60,
+  "enabled": true,
+  "group_id": "uuid-or-null",
+  "tls_skip_verify": false,
+  "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n..."
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `label` | string | Yes | — | Display name for this source |
+| `ldap_url` | string | Yes | — | LDAP/LDAPS URL (e.g. `ldaps://dc1:636`) |
+| `bind_dn` | string | No | `""` | Bind DN for simple auth |
+| `bind_password` | string | No | `""` | Bind password for simple auth |
+| `search_bases` | string[] | Yes | — | OU scopes to search (multiple supported) |
+| `search_filter` | string | No | All computers (excluding gMSA/MSA) | LDAP search filter |
+| `search_scope` | `"subtree"` \| `"onelevel"` \| `"base"` | No | `"subtree"` | LDAP search scope |
+| `protocol` | `"rdp"` \| `"ssh"` \| `"vnc"` | No | `"rdp"` | Protocol for imported connections |
+| `default_port` | integer | No | 3389 | Default port for imported connections |
+| `auth_method` | `"simple"` \| `"kerberos"` | No | `"simple"` | LDAP authentication method |
+| `keytab_path` | string | No | — | Path to keytab file (kerberos auth) |
+| `krb5_principal` | string | No | — | Kerberos principal (kerberos auth) |
+| `group_id` | UUID | No | null | Connection group for imported connections |
+| `domain_override` | string | No | null | Force domain on imported connections |
+| `tls_skip_verify` | boolean | No | false | Skip TLS certificate verification |
+| `ca_cert_pem` | string | No | null | Custom CA certificate in PEM format |
+| `sync_interval_minutes` | integer | No | 60 | Background sync interval (minimum 5) |
+| `enabled` | boolean | No | true | Enable/disable this source |
+
+### `PUT /api/admin/ad-sync-configs/:id`
+
+Partial update of an AD sync source. Only provided fields are updated.
+
+### `DELETE /api/admin/ad-sync-configs/:id`
+
+Delete an AD sync source. Imported connections remain but will no longer sync.
+
+### `POST /api/admin/ad-sync-configs/test`
+
+Test an AD sync connection without persisting. Validates connectivity, bind, and search — returns a count and preview of the first 10 discovered objects.
+
+**Request Body**: Same as the create endpoint.
+
+**Response** `200 OK`
+```json
+{
+  "status": "success",
+  "message": "Connection successful — found 42 object(s)",
+  "count": 42,
+  "sample": [
+    "SRV-WEB01 (srv-web01.contoso.com)",
+    "SRV-DB01 (srv-db01.contoso.com)"
+  ]
+}
+```
+
+### `POST /api/admin/ad-sync-configs/:id/sync`
+
+Trigger an immediate sync for a specific source.
+
+**Response** `200 OK`
+```json
+{ "run_id": "uuid", "status": "started" }
+```
+
+### `GET /api/admin/ad-sync-configs/:id/runs`
+
+List sync run history for a source (newest first, limit 50).
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "config_id": "uuid",
+    "started_at": "2026-04-07T12:00:00Z",
+    "finished_at": "2026-04-07T12:00:05Z",
+    "status": "success",
+    "created": 5,
+    "updated": 2,
+    "soft_deleted": 1,
+    "hard_deleted": 0,
+    "error_message": null
+  }
+]
+```
+
+### Kerberos Realms
+
+#### `GET /api/admin/kerberos-realms`
+
+List all Kerberos realm configurations.
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "realm": "CONTOSO.COM",
+    "kdcs": ["dc1.contoso.com", "dc2.contoso.com"],
+    "admin_server": "dc1.contoso.com",
+    "ticket_lifetime": "10h",
+    "renew_lifetime": "7d",
+    "is_default": true
+  }
+]
+```
+
+#### `POST /api/admin/kerberos-realms`
+
+Create a Kerberos realm. Triggers `krb5.conf` regeneration.
+
+**Request Body**
+```json
+{
+  "realm": "CONTOSO.COM",
+  "kdcs": ["dc1.contoso.com"],
+  "admin_server": "dc1.contoso.com",
+  "ticket_lifetime": "10h",
+  "renew_lifetime": "7d",
+  "is_default": true
+}
+```
+
+#### `PUT /api/admin/kerberos-realms/:id`
+
+Update a Kerberos realm. Triggers `krb5.conf` regeneration.
+
+#### `DELETE /api/admin/kerberos-realms/:id`
+
+Delete a Kerberos realm. Triggers `krb5.conf` regeneration.

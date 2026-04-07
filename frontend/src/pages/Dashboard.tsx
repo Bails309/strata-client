@@ -68,7 +68,7 @@ export default function Dashboard() {
     }
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(c => c.name.toLowerCase().includes(q) || c.hostname.toLowerCase().includes(q));
+      list = list.filter(c => c.name.toLowerCase().includes(q) || c.hostname.toLowerCase().includes(q) || (c.description || '').toLowerCase().includes(q));
     }
     if (typeFilter) {
       list = list.filter(c => c.protocol.toLowerCase() === typeFilter.toLowerCase());

@@ -249,10 +249,41 @@ You can switch between Bundled and External vault modes at any time via **Admin 
 If your target RDP hosts require Kerberos/NLA authentication:
 
 1. Navigate to **Admin → Kerberos**
-2. Enter the realm, KDC server, and admin server
-3. Save — the backend generates `krb5.conf` and writes it to the shared volume
+2. Add one or more Kerberos realms with KDCs, admin server, and ticket lifetime settings
+3. Mark one realm as the default
+4. Save — the backend generates `krb5.conf` aggregating all realms and writes it to the shared volume
 
-The `guacd` container reads `KRB5_CONFIG=/etc/krb5/krb5.conf` at runtime.
+The `guacd` container reads `KRB5_CONFIG=/etc/krb5/krb5.conf` at runtime. Multiple realms are supported for cross-forest or multi-domain environments.
+
+### 7. Active Directory LDAP Sync
+
+To automatically import computer accounts from Active Directory:
+
+1. Navigate to **Admin → AD Sync**
+2. Click **+ Add Source**
+3. Configure the source:
+   - **Label** — display name for this source
+   - **LDAP URL** — e.g. `ldaps://dc1.contoso.com:636`
+   - **Authentication** — Simple Bind (DN + password) or Kerberos Keytab
+   - **Search Bases** — one or more OU scopes (click "+ Add Search Base" for multiple)
+   - **Search Filter** — choose a preset (All Computers, Servers Only, Enabled Only, etc.) or enter a custom LDAP filter
+   - **Protocol / Port** — default protocol and port for imported connections (e.g. RDP/3389)
+   - **Group** — optional connection group for imported connections
+   - **CA Certificate** — upload an internal CA cert (PEM) if using LDAPS with self-signed certificates
+4. Click **⚡ Test Connection** to validate connectivity and preview discovered objects
+5. Click **Save** to create the source
+6. Click **⟳ Sync Now** to trigger the initial import, or wait for the scheduled sync interval
+
+**Sync lifecycle:**
+- New objects discovered in AD are created as connections
+- Objects that change hostname or name are updated
+- Objects that disappear from AD are soft-deleted (hidden from users) for 7 days
+- After 7 days, soft-deleted objects are permanently removed
+- gMSA and MSA service accounts are excluded from all preset filters
+
+**Authentication methods:**
+- **Simple Bind** — provide a bind DN and password with appropriate LDAP read permissions
+- **Kerberos Keytab** — provide a keytab file path (mounted into the backend container) and principal; the backend uses `kinit` + `ldapsearch` with GSSAPI
 
 ---
 
@@ -266,7 +297,7 @@ git pull
 docker compose up -d --build
 ```
 
-The backend automatically runs any new SQL migrations on startup using advisory locks, so it is safe to scale horizontally. Migrations `001` through `007` are applied in order (initial schema, local auth, session sharing, last-accessed tracking, user favorites, connection groups and description, share mode).
+The backend automatically runs any new SQL migrations on startup using advisory locks, so it is safe to scale horizontally. Migrations `001` through `015` are applied in order (initial schema, local auth, session sharing, last-accessed tracking, user favorites, connection groups, share mode, credential profiles, credential expiry, profile TTL, multi-realm Kerberos, AD sync, keytab auth, CA cert, multi search base).
 
 ### Custom guacd
 

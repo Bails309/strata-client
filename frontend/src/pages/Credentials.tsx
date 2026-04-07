@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   getCredentialProfiles,
   createCredentialProfile,
@@ -13,7 +14,6 @@ import {
   CredentialMapping,
   Connection,
 } from '../api';
-import Select from '../components/Select';
 
 interface EditingProfile {
   id?: string;
@@ -33,7 +33,12 @@ export default function Credentials() {
   const [error, setError] = useState('');
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [mappingProfileId, setMappingProfileId] = useState<string | null>(null);
-  const [mappingConnectionId, setMappingConnectionId] = useState('');
+  const [mappingConnectionIds, setMappingConnectionIds] = useState<string[]>([]);
+  const [mappingSearch, setMappingSearch] = useState('');
+  const [mappingDropdownOpen, setMappingDropdownOpen] = useState(false);
+  const mappingDropdownRef = useRef<HTMLDivElement>(null);
+  const mappingTriggerRef = useRef<HTMLDivElement>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
 
   const load = useCallback(async () => {
     try {
@@ -106,17 +111,59 @@ export default function Credentials() {
   }
 
   async function handleAddMapping() {
-    if (!mappingProfileId || !mappingConnectionId) return;
+    if (!mappingProfileId || mappingConnectionIds.length === 0) return;
     setError('');
     try {
-      await setCredentialMapping(mappingProfileId, mappingConnectionId);
-      setMappingConnectionId('');
+      for (const cid of mappingConnectionIds) {
+        await setCredentialMapping(mappingProfileId, cid);
+      }
+      setMappingConnectionIds([]);
+      setMappingSearch('');
       setMappingProfileId(null);
       await load();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Mapping failed');
     }
   }
+
+  // Close multi-select dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (mappingTriggerRef.current?.contains(t)) return;
+      if (mappingDropdownRef.current?.contains(t)) return;
+      setMappingDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Position the portal dropdown below the trigger
+  useEffect(() => {
+    if (!mappingDropdownOpen || !mappingTriggerRef.current) return;
+    const positionMenu = () => {
+      const rect = mappingTriggerRef.current!.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const menuHeight = 280;
+      const placeAbove = spaceBelow < menuHeight && rect.top > menuHeight;
+      setMenuStyle({
+        position: 'fixed',
+        left: rect.left,
+        width: rect.width,
+        zIndex: 9999,
+        ...(placeAbove
+          ? { bottom: window.innerHeight - rect.top + 4 }
+          : { top: rect.bottom + 4 }),
+      });
+    };
+    positionMenu();
+    window.addEventListener('scroll', positionMenu, true);
+    window.addEventListener('resize', positionMenu);
+    return () => {
+      window.removeEventListener('scroll', positionMenu, true);
+      window.removeEventListener('resize', positionMenu);
+    };
+  }, [mappingDropdownOpen]);
 
   async function handleRemoveMapping(connectionId: string) {
     setError('');
@@ -134,6 +181,15 @@ export default function Credentials() {
   );
 
   const availableConnections = connections.filter((c) => !mappedConnectionIds.has(c.id));
+
+  const filteredAvailable = availableConnections.filter((c) => {
+    if (!mappingSearch) return true;
+    const q = mappingSearch.toLowerCase();
+    return c.name.toLowerCase().includes(q)
+      || c.hostname.toLowerCase().includes(q)
+      || (c.description || '').toLowerCase().includes(q)
+      || c.protocol.toLowerCase().includes(q);
+  });
 
   if (!vaultConfigured) {
     return (
@@ -372,36 +428,110 @@ export default function Credentials() {
 
                     {/* Add mapping */}
                     {isAddingMapping ? (
-                      <div className="flex items-end gap-3 mt-4" style={{ borderTop: profileMappings.length > 0 ? '1px solid var(--color-border)' : 'none', paddingTop: profileMappings.length > 0 ? '1rem' : 0 }}>
-                        <div className="flex-1">
-                          <label className="text-xs font-medium text-txt-secondary mb-1 block">Connection</label>
-                          <Select
-                            value={mappingConnectionId}
-                            onChange={setMappingConnectionId}
-                            options={availableConnections.map((c) => ({
-                              value: c.id,
-                              label: `${c.name} (${c.protocol.toUpperCase()})`,
-                            }))}
-                            placeholder="Select a connection…"
-                          />
+                      <div className="mt-4" style={{ borderTop: profileMappings.length > 0 ? '1px solid var(--color-border)' : 'none', paddingTop: profileMappings.length > 0 ? '1rem' : 0 }}>
+                        <label className="text-xs font-medium text-txt-secondary mb-1 block">Connections</label>
+                        <div className="relative">
+                          <div
+                            ref={mappingTriggerRef}
+                            className="cs-trigger cursor-pointer min-h-[2.5rem] flex flex-wrap items-center gap-1.5 !py-1.5"
+                            onClick={() => setMappingDropdownOpen(!mappingDropdownOpen)}
+                          >
+                            {mappingConnectionIds.map((cid) => {
+                              const conn = connections.find((c) => c.id === cid);
+                              return conn ? (
+                                <span key={cid} className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: 'var(--color-accent-dim)', color: 'var(--color-accent-light)' }}>
+                                  {conn.name}
+                                  <button
+                                    type="button"
+                                    className="hover:text-danger ml-0.5"
+                                    onClick={(e) => { e.stopPropagation(); setMappingConnectionIds(mappingConnectionIds.filter((id) => id !== cid)); }}
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              ) : null;
+                            })}
+                            {mappingConnectionIds.length === 0 && (
+                              <span className="text-txt-tertiary text-sm">Select connections…</span>
+                            )}
+                            <svg
+                              className={`shrink-0 ml-auto text-txt-tertiary transition-transform duration-250 ${mappingDropdownOpen ? 'rotate-180 text-accent' : ''}`}
+                              width="16" height="16" viewBox="0 0 16 16" fill="none"
+                            >
+                              <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </div>
+                          {mappingDropdownOpen && createPortal(
+                            <div ref={mappingDropdownRef} className="rounded-md shadow-lg" style={{ ...menuStyle, background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)' }}>
+                              <div className="p-2 pb-0">
+                                <input
+                                  className="input w-full !text-sm"
+                                  placeholder="Search connections…"
+                                  value={mappingSearch}
+                                  onChange={(e) => setMappingSearch(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                />
+                              </div>
+                              <ul className="max-h-52 overflow-y-auto list-none m-0 p-1" role="listbox">
+                                {filteredAvailable.length === 0 && (
+                                  <li className="px-3 py-2 text-sm text-txt-tertiary">No matching connections</li>
+                                )}
+                                {filteredAvailable.map((c) => {
+                                  const isSelected = mappingConnectionIds.includes(c.id);
+                                  return (
+                                    <li
+                                      key={c.id}
+                                      role="option"
+                                      aria-selected={isSelected}
+                                      className="cs-option flex items-center gap-2 cursor-pointer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMappingConnectionIds(
+                                          isSelected
+                                            ? mappingConnectionIds.filter((id) => id !== c.id)
+                                            : [...mappingConnectionIds, c.id]
+                                        );
+                                      }}
+                                    >
+                                      <span className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 ${isSelected ? 'bg-accent border-accent' : 'border-txt-tertiary'}`} style={isSelected ? { background: 'var(--color-accent)', borderColor: 'var(--color-accent)' } : undefined}>
+                                        {isSelected && (
+                                          <svg width="10" height="10" viewBox="0 0 14 14" fill="none">
+                                            <path d="M3 7L6 10L11 4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                          </svg>
+                                        )}
+                                      </span>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-sm truncate">{c.name} <span className="text-txt-tertiary">({c.protocol.toUpperCase()})</span></div>
+                                        {c.description && <div className="text-xs text-txt-tertiary truncate">{c.description}</div>}
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>,
+                            document.body
+                          )}
                         </div>
-                        <button className="btn-primary !py-[0.55rem]" onClick={handleAddMapping} disabled={!mappingConnectionId}>
-                          Map
-                        </button>
-                        <button className="btn !py-[0.55rem]" onClick={() => { setMappingProfileId(null); setMappingConnectionId(''); }}>
-                          Cancel
-                        </button>
+                        <div className="flex items-center gap-3 mt-3">
+                          <button className="btn-primary !py-[0.55rem]" onClick={handleAddMapping} disabled={mappingConnectionIds.length === 0}>
+                            Map {mappingConnectionIds.length > 0 ? `(${mappingConnectionIds.length})` : ''}
+                          </button>
+                          <button className="btn !py-[0.55rem]" onClick={() => { setMappingProfileId(null); setMappingConnectionIds([]); setMappingSearch(''); }}>
+                            Cancel
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <button
                         className="btn text-xs mt-3"
-                        onClick={() => { setMappingProfileId(profile.id); setMappingConnectionId(''); }}
+                        onClick={() => { setMappingProfileId(profile.id); setMappingConnectionIds([]); setMappingSearch(''); }}
                       >
                         <span className="flex items-center gap-1.5">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
                           </svg>
-                          Add Connection
+                          Add Connections
                         </span>
                       </button>
                     )}

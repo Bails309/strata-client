@@ -89,7 +89,8 @@ The central orchestrator. Responsibilities:
 - **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
 - **guacd pool** — round-robin connection distribution across multiple guacd instances (`GuacdPool`)
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
-- **Config push** — generates `krb5.conf`, toggles recordings, manages SSO settings
+- **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
+- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, and gMSA/MSA exclusion filters
 - **Audit** — SHA-256 hash-chained append-only log
 
 ### 3. Frontend SPA
@@ -109,7 +110,7 @@ Pages:
 - **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync, file transfer, session toolbar, and touch toolbar for tablet special keys
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
-- **Admin Settings** — tabbed UI for health, SSO, Kerberos, vault, recordings, access control, connection group management, active session monitoring, and metrics
+- **Admin Settings** — tabbed UI for health, SSO, Kerberos (multi-realm), vault, recordings, access control, connection group management, AD sync sources, active session monitoring, and metrics
 - **Audit Logs** — paginated, hash-chained log viewer
 - **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
 - **PWA** — installable Progressive Web App with offline shell caching via service worker; standalone display mode on mobile and tablet
@@ -190,16 +191,20 @@ Browser                    Backend                   guacd              Target
 system_settings ──── key/value config store
 users ──────────────── OIDC subject, username, role FK
 roles ──────────────── admin, user (extensible)
-connections ──────── target host, protocol, port, domain, description, group FK
+connections ──────── target host, protocol, port, domain, description, group FK, ad_source FK
 connection_groups ── folder hierarchy with parent_id self-reference
 role_connections ──── many-to-many role ↔ connection
 user_credentials ──── encrypted password + DEK + nonce per user/connection
+credential_profiles ─ saved credential profiles with optional TTL expiry
 user_favorites ────── user ↔ connection favorites (composite PK)
 connection_shares ── temporary share links with mode (view/control)
+kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
+ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert)
+ad_sync_runs ─────── per-config sync run history with stats
 audit_logs ─────── hash-chained append-only event log
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `007_share_mode.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `015_multi_search_base.sql` for the full DDL.
 
 ## Directory Structure
 
@@ -227,12 +232,14 @@ strata-client/
 │       │   └── user.rs    User-facing endpoints
 │       └── services/      Business logic
 │           ├── app_state.rs   Shared state + boot phase
+│           ├── ad_sync.rs     AD LDAP sync engine (multi-base, multi-auth)
 │           ├── audit.rs       Hash-chained audit logging
 │           ├── auth.rs        OIDC token validation
 │           ├── guacd_pool.rs  Round-robin guacd pool
-│           ├── kerberos.rs    krb5.conf generation
+│           ├── kerberos.rs    Multi-realm krb5.conf generation
 │           ├── middleware.rs   JWT auth + admin middleware
 │           ├── recordings.rs  Recording config
+│           ├── session_registry.rs  NVR ring buffer + live session tracking
 │           ├── settings.rs    system_settings CRUD
 │           ├── vault.rs       Envelope encryption
 │           └── vault_provisioning.rs  Bundled Vault lifecycle

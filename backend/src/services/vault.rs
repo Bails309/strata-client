@@ -93,7 +93,9 @@ pub async fn seal(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::Vault(format!("Vault encrypt failed ({status}): {body}")));
+        return Err(AppError::Vault(format!(
+            "Vault encrypt failed ({status}): {body}"
+        )));
     }
 
     let vault_resp: VaultEncryptResponse = resp
@@ -148,7 +150,9 @@ pub async fn unseal(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::Vault(format!("Vault decrypt failed ({status}): {body}")));
+        return Err(AppError::Vault(format!(
+            "Vault decrypt failed ({status}): {body}"
+        )));
     }
 
     let vault_resp: VaultDecryptResponse = resp

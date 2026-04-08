@@ -26,11 +26,13 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
     let s = state.read().await;
 
     let (sso, local) = if let Some(ref db) = s.db {
-        let sso = settings::get(&db.pool, "sso_enabled").await
+        let sso = settings::get(&db.pool, "sso_enabled")
+            .await
             .unwrap_or(None)
             .map(|v| v == "true")
             .unwrap_or(false);
-        let local = settings::get(&db.pool, "local_auth_enabled").await
+        let local = settings::get(&db.pool, "local_auth_enabled")
+            .await
             .unwrap_or(None)
             .map(|v| v == "true")
             .unwrap_or(true); // Default to local auth enabled
@@ -127,9 +129,21 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
     };
 
     Json(ServiceHealth {
-        database: DatabaseHealth { connected: db_connected, mode: db_mode, host: db_host },
-        guacd: GuacdHealth { reachable: guacd_reachable, host: guacd_host, port: guacd_port },
-        vault: VaultHealth { configured: vault_configured, address: vault_addr, mode: vault_mode },
+        database: DatabaseHealth {
+            connected: db_connected,
+            mode: db_mode,
+            host: db_host,
+        },
+        guacd: GuacdHealth {
+            reachable: guacd_reachable,
+            host: guacd_host,
+            port: guacd_port,
+        },
+        vault: VaultHealth {
+            configured: vault_configured,
+            address: vault_addr,
+            mode: vault_mode,
+        },
     })
 }
 

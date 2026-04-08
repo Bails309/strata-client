@@ -115,7 +115,11 @@ pub async fn create_share(
         &db.pool,
         Some(user.id),
         "connection.shared",
-        &serde_json::json!({ "connection_id": connection_id.to_string(), "share_token": &share_token, "mode": &mode }),
+        &serde_json::json!({
+            "connection_id": connection_id.to_string(),
+            "share_token": &share_token,
+            "mode": &mode
+        }),
     )
     .await?;
 
@@ -206,19 +210,20 @@ pub async fn ws_shared_tunnel(
     .fetch_optional(&db.pool)
     .await?;
 
-    let (_share_id, connection_id, owner_user_id, mode) = share
-        .ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+    let (_share_id, connection_id, owner_user_id, mode) =
+        share.ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
 
     let read_only = mode == "view";
 
     // Fetch connection details
-    let conn: (String, String, i32, Option<String>, String, serde_json::Value) = sqlx::query_as(
-        "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1",
-    )
-    .bind(connection_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let conn: (String, String, i32, Option<String>, String, serde_json::Value) =
+        sqlx::query_as(
+            "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1",
+        )
+        .bind(connection_id)
+        .fetch_optional(&db.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     let (protocol, hostname, port, domain, _name, extra_json) = conn;
 
@@ -323,7 +328,9 @@ pub async fn ws_shared_tunnel(
             user_id: owner_user_id,
             username: nvr_username,
         };
-        if let Err(e) = tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await {
+        if let Err(e) =
+            tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+        {
             tracing::error!("Shared tunnel error: {e}");
         }
     }))

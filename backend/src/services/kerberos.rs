@@ -12,8 +12,14 @@ pub struct RealmConfig {
 
 /// Reject values that could inject krb5.conf directives (newlines, braces, etc.).
 fn sanitize_krb5_value(val: &str, field: &str) -> anyhow::Result<()> {
-    if val.contains('\n') || val.contains('\r') || val.contains('{') || val.contains('}')
-        || val.contains('[') || val.contains(']') || val.contains('#') || val.contains(';')
+    if val.contains('\n')
+        || val.contains('\r')
+        || val.contains('{')
+        || val.contains('}')
+        || val.contains('[')
+        || val.contains(']')
+        || val.contains('#')
+        || val.contains(';')
     {
         anyhow::bail!("Invalid character in Kerberos {field}: {val:?}");
     }
@@ -41,10 +47,7 @@ pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyho
     }
 
     // The default realm is whichever is flagged, or the first one
-    let default = realms
-        .iter()
-        .find(|r| r.is_default)
-        .unwrap_or(&realms[0]);
+    let default = realms.iter().find(|r| r.is_default).unwrap_or(&realms[0]);
 
     let default_upper = default.realm.to_uppercase();
 

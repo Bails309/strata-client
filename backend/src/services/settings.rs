@@ -2,12 +2,11 @@ use sqlx::{Pool, Postgres};
 
 /// Read a setting value from the `system_settings` table.
 pub async fn get(pool: &Pool<Postgres>, key: &str) -> anyhow::Result<Option<String>> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT value FROM system_settings WHERE key = $1")
-            .bind(key)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|r| r.0))
+    let row: Option<String> = sqlx::query_scalar("SELECT value FROM system_settings WHERE key = $1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
 }
 
 /// Upsert a setting value.

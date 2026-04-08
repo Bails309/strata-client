@@ -236,10 +236,14 @@ pub async fn provision(
     } else {
         // Already initialized — use stored credentials
         let token = existing_token
-            .ok_or_else(|| AppError::Vault("Vault is initialized but no token is stored".into()))?
+            .ok_or_else(|| {
+                AppError::Vault("Vault is initialized but no token is stored".into())
+            })?
             .to_string();
         let key = existing_unseal_key
-            .ok_or_else(|| AppError::Vault("Vault is sealed but no unseal key is stored".into()))?
+            .ok_or_else(|| {
+                AppError::Vault("Vault is sealed but no unseal key is stored".into())
+            })?
             .to_string();
         (token, key, None)
     };

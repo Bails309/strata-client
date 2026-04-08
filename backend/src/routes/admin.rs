@@ -137,7 +137,8 @@ pub async fn update_sso(
         s.config.as_ref().and_then(|c| c.vault.clone())
     };
     if let Some(ref vc) = vault_cfg {
-        let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes()).await
+        let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes())
+            .await
             .map_err(|e| AppError::Vault(format!("Failed to encrypt SSO secret: {e}")))?;
         use base64::Engine;
         let encoded = serde_json::json!({
@@ -676,10 +677,9 @@ pub async fn list_roles(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<RoleRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<RoleRow> =
-        sqlx::query_as("SELECT id, name FROM roles ORDER BY name")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows: Vec<RoleRow> = sqlx::query_as("SELECT id, name FROM roles ORDER BY name")
+        .fetch_all(&db.pool)
+        .await?;
     Ok(Json(rows))
 }
 

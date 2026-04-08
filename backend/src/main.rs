@@ -45,6 +45,13 @@ async fn main() -> anyhow::Result<()> {
         DatabaseMode::External
     };
 
+    let db_ssl_mode = std::env::var("DATABASE_SSL_MODE")
+        .ok()
+        .or_else(|| persisted.as_ref().and_then(|c| c.database_ssl_mode.clone()));
+    let db_ca_cert = std::env::var("DATABASE_CA_CERT")
+        .ok()
+        .or_else(|| persisted.as_ref().and_then(|c| c.database_ca_cert.clone()));
+
     let vault = resolve_vault_config(&persisted);
 
     let guacd_host = std::env::var("GUACD_HOST")
@@ -59,7 +66,12 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Connect to database ──
     tracing::info!("Connecting to database …");
-    let db = Database::connect(&db_url).await?;
+    let db = Database::connect(
+        &db_url,
+        db_ssl_mode.as_deref(),
+        db_ca_cert.as_deref(),
+    )
+    .await?;
     db.migrate().await?;
     tracing::info!("Database connected and migrations applied");
 
@@ -68,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Resolve JWT signing secret ──
     // Priority: JWT_SECRET env → persisted config → generate new random secret.
-    let jwt_secret = std::env::var("JWT_SECRET").ok()
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .ok()
         .or_else(|| persisted.as_ref().and_then(|c| c.jwt_secret.clone()))
         .unwrap_or_else(|| {
             use base64::Engine;
@@ -79,7 +92,8 @@ async fn main() -> anyhow::Result<()> {
             secret
         });
     // Publish to process-wide OnceLock so auth/middleware can read it
-    config::JWT_SECRET.set(jwt_secret.clone())
+    config::JWT_SECRET
+        .set(jwt_secret.clone())
         .expect("JWT_SECRET already initialized");
 
     // ── Auto-unseal bundled Vault on startup ──
@@ -105,11 +119,17 @@ async fn main() -> anyhow::Result<()> {
     // ── Parse additional guacd instances ──
     let guacd_instances: Vec<String> = std::env::var("GUACD_INSTANCES")
         .ok()
-        .map(|s| s.split(',').map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect())
+        .map(|s| {
+            s.split(',')
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())
+                .collect()
+        })
         .or_else(|| persisted.as_ref().map(|c| c.guacd_instances.clone()))
         .unwrap_or_default();
 
-    let guacd_pool = services::guacd_pool::GuacdPool::new(&guacd_host, guacd_port, &guacd_instances);
+    let guacd_pool =
+        services::guacd_pool::GuacdPool::new(&guacd_host, guacd_port, &guacd_instances);
     if guacd_pool.len() > 1 {
         tracing::info!("guacd pool: {} instances configured", guacd_pool.len());
     }
@@ -118,6 +138,8 @@ async fn main() -> anyhow::Result<()> {
     let cfg = AppConfig {
         database_url: db_url,
         database_mode: db_mode,
+        database_ssl_mode: db_ssl_mode,
+        database_ca_cert: db_ca_cert,
         vault: vault.clone(),
         guacd_host: Some(guacd_host),
         guacd_port: Some(guacd_port),
@@ -169,31 +191,35 @@ fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
         }),
         _ => {
             // Fall back to persisted config for address/transit_key/mode.
-            persisted.as_ref().and_then(|c| c.vault.clone()).map(|mut v| {
-                // Env vars take highest priority
-                if let Ok(t) = std::env::var("VAULT_TOKEN") {
-                    v.token = t;
-                }
-                if let Ok(uk) = std::env::var("VAULT_UNSEAL_KEY") {
-                    v.unseal_key = Some(uk);
-                }
-
-                // For local vault mode, fill in missing token/unseal_key from
-                // the persisted secrets file (written during setup).
-                if v.mode == VaultMode::Local && (v.token.is_empty() || v.unseal_key.is_none()) {
-                    if let Some(secrets) = LocalVaultSecrets::load() {
-                        if v.token.is_empty() {
-                            v.token = secrets.token;
-                        }
-                        if v.unseal_key.is_none() {
-                            v.unseal_key = Some(secrets.unseal_key);
-                        }
-                        tracing::info!("Loaded local vault secrets from persisted file");
+            persisted
+                .as_ref()
+                .and_then(|c| c.vault.clone())
+                .map(|mut v| {
+                    // Env vars take highest priority
+                    if let Ok(t) = std::env::var("VAULT_TOKEN") {
+                        v.token = t;
                     }
-                }
+                    if let Ok(uk) = std::env::var("VAULT_UNSEAL_KEY") {
+                        v.unseal_key = Some(uk);
+                    }
 
-                v
-            })
+                    // For local vault mode, fill in missing token/unseal_key from
+                    // the persisted secrets file (written during setup).
+                    if v.mode == VaultMode::Local && (v.token.is_empty() || v.unseal_key.is_none())
+                    {
+                        if let Some(secrets) = LocalVaultSecrets::load() {
+                            if v.token.is_empty() {
+                                v.token = secrets.token;
+                            }
+                            if v.unseal_key.is_none() {
+                                v.unseal_key = Some(secrets.unseal_key);
+                            }
+                            tracing::info!("Loaded local vault secrets from persisted file");
+                        }
+                    }
+
+                    v
+                })
         }
     }
 }
@@ -222,17 +248,17 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
     });
 
     // Hash the password with Argon2
-    let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let salt =
+        argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
     let hash = argon2::Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| anyhow::anyhow!("Password hashing failed: {e}"))?
         .to_string();
 
     // Get the admin role ID
-    let admin_role: (uuid::Uuid,) =
-        sqlx::query_as("SELECT id FROM roles WHERE name = 'admin'")
-            .fetch_one(&db.pool)
-            .await?;
+    let admin_role: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE name = 'admin'")
+        .fetch_one(&db.pool)
+        .await?;
 
     sqlx::query(
         "INSERT INTO users (username, password_hash, role_id)

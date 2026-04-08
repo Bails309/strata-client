@@ -138,8 +138,8 @@ async fn try_local_jwt(
     .await
     .map_err(AppError::Database)?;
 
-    let (id, username, role) = row
-        .ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
+    let (id, username, role) =
+        row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
 
     Ok(Some(AuthUser {
         id,

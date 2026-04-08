@@ -409,7 +409,8 @@ pub async fn update_credential_profile(
             .unwrap_or(12)
             .min(12)
             .max(1);
-        let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
+        let ttl_hours =
+            (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
 
         sqlx::query(
             "UPDATE credential_profiles
@@ -446,7 +447,8 @@ pub async fn update_credential_profile(
             .unwrap_or(12)
             .min(12)
             .max(1);
-        let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
+        let ttl_hours =
+            (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
         sqlx::query(
             "UPDATE credential_profiles SET ttl_hours = $1, expires_at = now() + make_interval(hours => $1), updated_at = now() WHERE id = $2",
         )
@@ -500,13 +502,12 @@ pub async fn delete_credential_profile(
     .execute(&db.pool)
     .await?;
 
-    let deleted = sqlx::query(
-        "DELETE FROM credential_profiles WHERE id = $1 AND user_id = $2",
-    )
-    .bind(profile_id)
-    .bind(user.id)
-    .execute(&db.pool)
-    .await?;
+    let deleted =
+        sqlx::query("DELETE FROM credential_profiles WHERE id = $1 AND user_id = $2")
+            .bind(profile_id)
+            .bind(user.id)
+            .execute(&db.pool)
+            .await?;
 
     if deleted.rows_affected() == 0 {
         return Err(AppError::NotFound("Credential profile not found".into()));
@@ -596,10 +597,12 @@ pub async fn set_credential_mapping(
 
     // Verify user has access to this connection via their role (or is admin)
     let has_access: bool = if user.role == "admin" {
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)")
-            .bind(body.connection_id)
-            .fetch_one(&db.pool)
-            .await?
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)",
+        )
+        .bind(body.connection_id)
+        .fetch_one(&db.pool)
+        .await?
     } else {
         sqlx::query_scalar(
             "SELECT EXISTS(
@@ -672,13 +675,12 @@ pub async fn connection_info(
     let db = require_running(&state).await?;
 
     // Fetch protocol for this connection
-    let protocol: String = sqlx::query_scalar(
-        "SELECT protocol FROM connections WHERE id = $1",
-    )
-    .bind(connection_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let protocol: String =
+        sqlx::query_scalar("SELECT protocol FROM connections WHERE id = $1")
+            .bind(connection_id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Check if a credential profile is mapped to this user+connection
     let has_vault_creds: bool = {

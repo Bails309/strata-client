@@ -37,7 +37,10 @@ pub async fn initialize(
     }
 
     // Atomic compare-and-swap to prevent concurrent initialization
-    if INITIALIZING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if INITIALIZING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err(AppError::Config("Initialization already in progress".into()));
     }
 
@@ -56,8 +59,11 @@ pub async fn initialize(
         DatabaseMode::External
     };
 
+    let db_ssl_mode = std::env::var("DATABASE_SSL_MODE").ok();
+    let db_ca_cert = std::env::var("DATABASE_CA_CERT").ok();
+
     // Test connection
-    let db = Database::connect(&db_url)
+    let db = Database::connect(&db_url, db_ssl_mode.as_deref(), db_ca_cert.as_deref())
         .await
         .map_err(|e| AppError::Config(format!("Database connection failed: {e}")))?;
 
@@ -146,6 +152,8 @@ pub async fn initialize(
     let cfg = AppConfig {
         database_url: db_url,
         database_mode: db_mode,
+        database_ssl_mode: db_ssl_mode,
+        database_ca_cert: db_ca_cert,
         vault,
         guacd_host: Some(guacd_host),
         guacd_port: Some(guacd_port),

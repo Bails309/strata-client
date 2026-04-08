@@ -12,7 +12,11 @@ use crate::tunnel::{self, HandshakeParams, NvrContext};
 
 /// Clamp display dimensions to safe bounds.
 fn clamp_dimension(val: u32, min: u32, max: u32, default: u32) -> u32 {
-    if val == 0 { default } else { val.clamp(min, max) }
+    if val == 0 {
+        default
+    } else {
+        val.clamp(min, max)
+    }
 }
 const MIN_DIM: u32 = 64;
 const MAX_WIDTH: u32 = 7680;  // 8K
@@ -54,6 +58,7 @@ pub async fn create_tunnel_ticket(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
+    let admin_max = 24;
     let ticket = tunnel_tickets::TunnelTicket {
         user_id: user.id,
         connection_id: body.connection_id,
@@ -62,6 +67,9 @@ pub async fn create_tunnel_ticket(
         width: body.width.unwrap_or(1920),
         height: body.height.unwrap_or(1080),
         dpi: body.dpi.unwrap_or(96),
+        ttl_hours: (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
+            .min(admin_max)
+            .max(1) as i32,
         created_at: std::time::Instant::now(),
     };
 
@@ -109,13 +117,14 @@ pub async fn ws_tunnel(
     }
 
     // Fetch connection details
-    let conn: (String, String, i32, Option<String>, String, serde_json::Value) = sqlx::query_as(
-        "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1",
-    )
-    .bind(connection_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let conn: (String, String, i32, Option<String>, String, serde_json::Value) =
+        sqlx::query_as(
+            "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1",
+        )
+        .bind(connection_id)
+        .fetch_optional(&db.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     let (protocol, hostname, port, domain, connection_name, extra_json) = conn;
 
@@ -195,27 +204,54 @@ pub async fn ws_tunnel(
     let ticket_creds = query.ticket.as_deref().and_then(tunnel_tickets::consume);
     // If ticket provided dimensions, use them
     let effective_width = clamp_dimension(
-        ticket_creds.as_ref().map(|t| t.width).or(query.width).unwrap_or(1920),
-        MIN_DIM, MAX_WIDTH, 1920,
+        ticket_creds
+            .as_ref()
+            .map(|t| t.width)
+            .or(query.width)
+            .unwrap_or(1920),
+        MIN_DIM,
+        MAX_WIDTH,
+        1920,
     );
     let effective_height = clamp_dimension(
-        ticket_creds.as_ref().map(|t| t.height).or(query.height).unwrap_or(1080),
-        MIN_DIM, MAX_HEIGHT, 1080,
+        ticket_creds
+            .as_ref()
+            .map(|t| t.height)
+            .or(query.height)
+            .unwrap_or(1080),
+        MIN_DIM,
+        MAX_HEIGHT,
+        1080,
     );
     let effective_dpi = clamp_dimension(
-        ticket_creds.as_ref().map(|t| t.dpi).or(query.dpi).unwrap_or(96),
-        MIN_DIM, MAX_DPI, 96,
+        ticket_creds
+            .as_ref()
+            .map(|t| t.dpi)
+            .or(query.dpi)
+            .unwrap_or(96),
+        MIN_DIM,
+        MAX_DPI,
+        96,
     );
 
     let (final_username, final_password) = if vault_password.is_some() {
         // Vault-stored credential profile – use stored username (or Strata login as fallback)
-        (vault_username.or_else(|| Some(user.username.clone())), vault_password)
+        (
+            vault_username.or_else(|| Some(user.username.clone())),
+            vault_password,
+        )
     } else if let Some(ref tc) = ticket_creds {
         // Credentials from one-time ticket
-        (tc.username.clone().or_else(|| Some(user.username.clone())), tc.password.clone())
+        (
+            tc.username.clone().or_else(|| Some(user.username.clone())),
+            tc.password.clone(),
+        )
     } else if query.password.is_some() {
         // Legacy: credentials supplied as query params (kept for backward compat)
-        (query.username.clone().or_else(|| Some(user.username.clone())), query.password.clone())
+        (
+            query.username.clone().or_else(|| Some(user.username.clone())),
+            query.password.clone(),
+        )
     } else {
         (None, None)
     };
@@ -232,7 +268,9 @@ pub async fn ws_tunnel(
     let security = extra.get("security").cloned().or(Some("any".into()));
     let ignore_cert = extra.get("ignore-cert").map(|v| v == "true").unwrap_or(false);
 
-    let safe_port: u16 = port.try_into().map_err(|_| AppError::Validation("Invalid port number".into()))?;
+    let safe_port: u16 = port
+        .try_into()
+        .map_err(|_| AppError::Validation("Invalid port number".into()))?;
 
     let handshake = HandshakeParams {
         protocol,
@@ -297,7 +335,10 @@ pub async fn ws_tunnel(
                 &audit_pool,
                 Some(user_id),
                 "tunnel.failed",
-                &serde_json::json!({ "connection_id": connection_id.to_string(), "error": e.to_string() }),
+                &serde_json::json!({
+                    "connection_id": connection_id.to_string(),
+                    "error": e.to_string()
+                }),
             )
             .await;
         }

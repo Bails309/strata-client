@@ -379,7 +379,13 @@ mod tests {
             access_key: B64.encode(key_bytes),
         };
         let sig = cfg
-            .sign("PUT", 1024, "application/octet-stream", "x-ms-date:Thu, 01 Jan 2026 00:00:00 GMT\nx-ms-version:2023-11-03", "/testacct/recordings/test.bin")
+            .sign(
+                "PUT",
+                1024,
+                "application/octet-stream",
+                "x-ms-date:Thu, 01 Jan 2026 00:00:00 GMT\nx-ms-version:2023-11-03",
+                "/testacct/recordings/test.bin",
+            )
             .unwrap();
         assert!(sig.starts_with("SharedKey testacct:"));
     }

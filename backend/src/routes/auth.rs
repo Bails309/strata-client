@@ -64,7 +64,8 @@ pub async fn login(
     {
         let s = state.read().await;
         if let Some(ref db) = s.db {
-            let local_enabled = settings::get(&db.pool, "local_auth_enabled").await
+            let local_enabled = settings::get(&db.pool, "local_auth_enabled")
+                .await
                 .unwrap_or(None)
                 .map(|v| v == "true")
                 .unwrap_or(true);
@@ -139,7 +140,11 @@ pub async fn login(
     };
 
     // Verify local authentication is enabled
-    let local_auth_enabled = crate::services::settings::get(&db.pool, "local_auth_enabled").await?.unwrap_or_else(|| "true".into()) == "true";
+    let local_auth_enabled =
+        crate::services::settings::get(&db.pool, "local_auth_enabled")
+            .await?
+            .unwrap_or_else(|| "true".into())
+            == "true";
     if !local_auth_enabled {
         return Err(AppError::Auth("Local authentication is disabled".into()));
     }
@@ -155,8 +160,8 @@ pub async fn login(
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, role, password_hash) = row
-        .ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
+    let (user_id, username, role, password_hash) =
+        row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
     let hash = password_hash
         .ok_or_else(|| AppError::Auth("This account does not support local login".into()))?;
@@ -221,7 +226,8 @@ fn create_local_jwt(user_id: Uuid, username: &str, role: &str) -> Result<String,
         jti: String,
     }
 
-    let secret = crate::config::JWT_SECRET.get()
+    let secret = crate::config::JWT_SECRET
+        .get()
         .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?
         .clone();
 

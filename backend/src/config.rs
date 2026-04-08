@@ -13,6 +13,17 @@ pub struct AppConfig {
     pub database_url: String,
     pub database_mode: DatabaseMode,
 
+    /// SSL mode for the PostgreSQL connection (disable, allow, prefer, require,
+    /// verify-ca, verify-full).  Overrides any sslmode query parameter in
+    /// `database_url`.
+    #[serde(default)]
+    pub database_ssl_mode: Option<String>,
+
+    /// Path to a PEM-encoded CA certificate used to verify the PostgreSQL
+    /// server when `database_ssl_mode` is verify-ca or verify-full.
+    #[serde(default)]
+    pub database_ca_cert: Option<String>,
+
     #[serde(default)]
     pub vault: Option<VaultConfig>,
 
@@ -107,7 +118,9 @@ impl LocalVaultSecrets {
         let dir = Path::new(&config)
             .parent()
             .unwrap_or_else(|| Path::new("/app/config"));
-        dir.join("vault-secrets.json").to_string_lossy().into_owned()
+        dir.join("vault-secrets.json")
+            .to_string_lossy()
+            .into_owned()
     }
 
     /// Persist the local vault secrets to disk (restrictive permissions on Unix).
@@ -149,6 +162,8 @@ mod tests {
         let cfg = AppConfig {
             database_url: "postgresql://localhost/test".into(),
             database_mode: DatabaseMode::Local,
+            database_ssl_mode: None,
+            database_ca_cert: None,
             vault: Some(VaultConfig {
                 address: "http://vault:8200".into(),
                 token: "secret-token-value".into(),
@@ -181,6 +196,8 @@ mod tests {
         let cfg = AppConfig {
             database_url: "postgresql://localhost/test".into(),
             database_mode: DatabaseMode::Local,
+            database_ssl_mode: None,
+            database_ca_cert: None,
             vault: Some(VaultConfig {
                 address: "http://vault:8200".into(),
                 token: "super-secret".into(),
@@ -198,9 +215,18 @@ mod tests {
         let raw = std::fs::read_to_string(path_str).unwrap();
 
         // Token, unseal_key, and jwt_secret must NOT appear in serialized output
-        assert!(!raw.contains("super-secret"), "vault token leaked to config file");
-        assert!(!raw.contains("unseal-key"), "unseal key leaked to config file");
-        assert!(!raw.contains("jwt-secret"), "jwt secret leaked to config file");
+        assert!(
+            !raw.contains("super-secret"),
+            "vault token leaked to config file"
+        );
+        assert!(
+            !raw.contains("unseal-key"),
+            "unseal key leaked to config file"
+        );
+        assert!(
+            !raw.contains("jwt-secret"),
+            "jwt secret leaked to config file"
+        );
     }
 
     #[test]
@@ -220,6 +246,8 @@ mod tests {
         let cfg = AppConfig {
             database_url: "postgresql://localhost/test".into(),
             database_mode: DatabaseMode::Local,
+            database_ssl_mode: None,
+            database_ca_cert: None,
             vault: None,
             guacd_host: None,
             guacd_port: None,

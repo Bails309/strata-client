@@ -165,6 +165,21 @@ All preset LDAP filters exclude gMSA (`msDS-GroupManagedServiceAccount`) and MSA
 
 ## Network Security
 
+### Database Connection TLS
+
+When connecting to an external PostgreSQL instance, the backend supports TLS encryption via `DATABASE_SSL_MODE` and `DATABASE_CA_CERT` environment variables:
+
+| Mode | Behaviour |
+|---|---|
+| `disable` | No TLS — plaintext only |
+| `allow` | Try non-TLS first, fall back to TLS |
+| `prefer` | Try TLS first, fall back to non-TLS (default for most drivers) |
+| `require` | TLS required — reject if the server does not support it. Does **not** verify the server certificate. |
+| `verify-ca` | TLS required + verify the server certificate against the CA in `DATABASE_CA_CERT` |
+| `verify-full` | Same as `verify-ca` plus hostname verification against the certificate CN/SAN |
+
+For production external databases, use `require` at minimum. Use `verify-full` with a `DATABASE_CA_CERT` for full protection against man-in-the-middle attacks. The bundled local PostgreSQL container communicates over the internal Docker network and does not require TLS.
+
 ### Container Isolation
 
 All containers communicate over an internal Docker bridge network (`guac-internal`). Only the frontend (port 3000) and backend (port 8080) expose host-mapped ports.

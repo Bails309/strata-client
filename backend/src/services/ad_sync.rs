@@ -71,12 +71,11 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
     }
 
     // Create run record
-    let run_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO ad_sync_runs (config_id) VALUES ($1) RETURNING id",
-    )
-    .bind(config.id)
-    .fetch_one(pool)
-    .await?;
+    let run_id: Uuid =
+        sqlx::query_scalar("INSERT INTO ad_sync_runs (config_id) VALUES ($1) RETURNING id")
+            .bind(config.id)
+            .fetch_one(pool)
+            .await?;
 
     let result = do_sync(pool, config, run_id).await;
 
@@ -534,22 +533,23 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
     let mut current_dn = String::new();
     let mut attrs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    let flush = |dn: &str, attrs: &std::collections::HashMap<String, String>| -> Option<DiscoveredComputer> {
-        if dn.is_empty() {
-            return None;
-        }
-        let name = attrs
-            .get("cn")
-            .or_else(|| attrs.get("name"))
-            .cloned()
-            .unwrap_or_else(|| dn.to_string());
-        Some(DiscoveredComputer {
-            dn: dn.to_string(),
-            name,
-            dns_host_name: attrs.get("dNSHostName").cloned(),
-            description: attrs.get("description").cloned(),
-        })
-    };
+    let flush =
+        |dn: &str, attrs: &std::collections::HashMap<String, String>| -> Option<DiscoveredComputer> {
+            if dn.is_empty() {
+                return None;
+            }
+            let name = attrs
+                .get("cn")
+                .or_else(|| attrs.get("name"))
+                .cloned()
+                .unwrap_or_else(|| dn.to_string());
+            Some(DiscoveredComputer {
+                dn: dn.to_string(),
+                name,
+                dns_host_name: attrs.get("dNSHostName").cloned(),
+                description: attrs.get("description").cloned(),
+            })
+        };
 
     // Track the last key seen so continuation lines can append to it
     let mut last_key = String::new();

@@ -1,7 +1,8 @@
 pub mod pool;
 
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{Pool, Postgres};
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -9,11 +10,44 @@ pub struct Database {
 }
 
 impl Database {
-    /// Connect to PostgreSQL with a connection string.
-    pub async fn connect(url: &str) -> anyhow::Result<Self> {
+    /// Connect to PostgreSQL with a connection string and optional SSL settings.
+    ///
+    /// * `ssl_mode` — overrides the sslmode in the URL. Valid values:
+    ///   disable, allow, prefer, require, verify-ca, verify-full.
+    /// * `ca_cert` — path to a PEM-encoded CA certificate file (used with
+    ///   verify-ca / verify-full to validate the server certificate).
+    pub async fn connect(
+        url: &str,
+        ssl_mode: Option<&str>,
+        ca_cert: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let mut opts = PgConnectOptions::from_str(url)?;
+
+        if let Some(mode) = ssl_mode {
+            let pg_mode = match mode.to_lowercase().as_str() {
+                "disable" => PgSslMode::Disable,
+                "allow" => PgSslMode::Allow,
+                "prefer" => PgSslMode::Prefer,
+                "require" => PgSslMode::Require,
+                "verify-ca" => PgSslMode::VerifyCa,
+                "verify-full" => PgSslMode::VerifyFull,
+                _ => anyhow::bail!(
+                    "Invalid DATABASE_SSL_MODE: {mode}. \
+                     Valid values: disable, allow, prefer, require, verify-ca, verify-full"
+                ),
+            };
+            opts = opts.ssl_mode(pg_mode);
+        }
+
+        if let Some(cert_path) = ca_cert {
+            if !cert_path.is_empty() {
+                opts = opts.ssl_root_cert(cert_path);
+            }
+        }
+
         let pool = PgPoolOptions::new()
             .max_connections(20)
-            .connect(url)
+            .connect_with(opts)
             .await?;
         Ok(Self { pool })
     }

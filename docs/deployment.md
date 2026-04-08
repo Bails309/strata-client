@@ -200,6 +200,41 @@ The backend will:
 
 Alternatively, configure the external database during the first-boot setup wizard.
 
+#### Database SSL / TLS
+
+To encrypt the connection between the backend and an external PostgreSQL server, set the following environment variables in `.env`:
+
+| Variable | Description |
+|---|---|
+| `DATABASE_SSL_MODE` | SSL mode for the connection. Overrides any `sslmode` query parameter in `DATABASE_URL`. Valid values: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. |
+| `DATABASE_CA_CERT` | Absolute path (inside the backend container) to a PEM-encoded CA certificate file. Required when `DATABASE_SSL_MODE` is `verify-ca` or `verify-full`. |
+
+**Example — require encrypted connection without CA verification:**
+
+```bash
+DATABASE_URL=postgresql://user:password@db.example.com:5432/strata
+DATABASE_SSL_MODE=require
+```
+
+**Example — full server certificate verification:**
+
+```bash
+DATABASE_URL=postgresql://user:password@db.example.com:5432/strata
+DATABASE_SSL_MODE=verify-full
+DATABASE_CA_CERT=/app/config/db-ca.pem
+```
+
+To make the CA certificate available inside the container, mount it via `docker-compose.yml`:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - ./certs/db-ca.pem:/app/config/db-ca.pem:ro
+```
+
+> **Note:** The `sslmode` query parameter in `DATABASE_URL` (e.g., `?sslmode=require`) also works but `DATABASE_SSL_MODE` takes precedence when set.
+
 ### 4. HashiCorp Vault
 
 #### Bundled Mode (Recommended)

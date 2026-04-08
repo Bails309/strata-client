@@ -23,7 +23,8 @@ impl GuacdPool {
         for entry in extras {
             let parts: Vec<&str> = entry.splitn(2, ':').collect();
             let host = parts[0].to_string();
-            let port = parts.get(1)
+            let port = parts
+                .get(1)
                 .and_then(|p| p.parse::<u16>().ok())
                 .unwrap_or(4822);
             instances.push((host, port));

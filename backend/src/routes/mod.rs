@@ -55,7 +55,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/connection-groups", post(admin::create_connection_group))
         .route("/api/admin/connection-groups/:id", put(admin::update_connection_group))
         .route("/api/admin/connection-groups/:id", delete(admin::delete_connection_group))
-        .route("/api/admin/role-connections", put(admin::update_role_connections))
+        .route(
+            "/api/admin/role-connections",
+            put(admin::update_role_connections),
+        )
         .route("/api/admin/users", get(admin::list_users))
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
         .route("/api/admin/sessions", get(admin::list_active_sessions))

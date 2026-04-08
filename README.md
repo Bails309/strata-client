@@ -96,17 +96,7 @@ cd strata-client
 cp .env.example .env        # review and edit as needed
 ```
 
-### 2. Build & run (Quick Start)
-
-For local evaluation:
-
-```bash
-docker compose up -d --build
-```
-
-For a detailed production-ready setup on an Ubuntu server, follow the [Ubuntu VM Deployment Guide](docs/ubuntu-vm-deployment.md).
-
-### 3. Setup Wizard
+### 2. Build & run
 
 ```bash
 docker compose up -d --build
@@ -136,9 +126,11 @@ For additional guacd instances:
 GUACD_INSTANCES=guacd-2:4822 docker compose --profile scale up -d
 ```
 
+For a detailed production-ready setup on an Ubuntu server, follow the [Ubuntu VM Deployment Guide](docs/ubuntu-vm-deployment.md).
+
 ### 3. First-boot setup
 
-Open `http://127.0.0.1` (or `https://your-domain` if STRATA_DOMAIN is set). The setup wizard will guide you through:
+Open `http://127.0.0.1` (or `https://your-domain` if STRATA_DOMAIN is set). On first launch you will be prompted to configure:
 
 1. **Database** — choose the bundled local DB or provide an external PostgreSQL connection string
 2. **Vault** — select a vault mode:

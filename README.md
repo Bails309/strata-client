@@ -6,15 +6,35 @@
   </picture>
 </p>
 
-# Strata Client
+<p align="center">
+  <strong>A high-performance, modernized client and proxy architecture for <a href="https://guacamole.apache.org/">Apache Guacamole</a>.</strong><br>
+  <sub>Rust backend · React SPA · Vault envelope encryption · OIDC SSO · FreeRDP 3 · Kerberos NLA · H.264 streaming</sub>
+</p>
 
-A high-performance, modernized client and proxy architecture for [Apache Guacamole](https://guacamole.apache.org/). Built with a Rust backend and a modern TypeScript SPA, featuring enterprise-grade security via HashiCorp Vault envelope encryption, OIDC SSO, and native FreeRDP 3 / Kerberos support.
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.6.1-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/typescript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/postgresql-16-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/vault-1.19-FFEC6E?style=flat-square&logo=vault&logoColor=black" alt="Vault">
+  <img src="https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
+</p>
 
-> **Version:** 0.6.1 — see the [CHANGELOG](CHANGELOG.md) for current progress.
+<p align="center">
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/api-reference.md">API Reference</a> ·
+  <a href="docs/deployment.md">Deployment</a> ·
+  <a href="docs/security.md">Security</a>
+</p>
 
 ---
 
-## Features
+# Strata Client
+
+## ✨ Features
 
 - **Custom `guacd` daemon** — Apache Guacamole server compiled with FreeRDP 3 and Kerberos (GSSAPI) support
 - **Rust proxy / API** — High-performance middle tier (Tokio + Axum) handling WebSocket tunnelling, OIDC auth, and dynamic configuration
@@ -45,7 +65,7 @@ A high-performance, modernized client and proxy architecture for [Apache Guacamo
 - **Zero-config first boot** — Bundled PostgreSQL and Vault containers; upgrade to external services at any time through the UI
 - **CI/CD** — GitHub Actions workflow for automated weekly upstream `guacd` rebuilds
 
-## Architecture
+## 🏗️ Architecture
 
 ```
                           ┌──────────┐
@@ -81,7 +101,7 @@ A high-performance, modernized client and proxy architecture for [Apache Guacamo
 
 See [docs/architecture.md](docs/architecture.md) for a detailed breakdown.
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
@@ -142,7 +162,7 @@ Open `http://127.0.0.1` (or `https://your-domain` if STRATA_DOMAIN is set). On f
 
 After setup, log in and navigate to **Admin → SSO / OIDC** to configure your identity provider, then add remote desktop connections under **Admin → Access**.
 
-## Development
+## 🛠️ Development
 
 ### Backend (Rust)
 
@@ -172,7 +192,7 @@ docker build -t custom-guacd:latest ./guacd
 
 See [docs/deployment.md](docs/deployment.md) for production deployment and upgrade procedures.
 
-## Documentation
+## 📚 Documentation
 
 | Document | Description |
 |---|---|
@@ -184,7 +204,7 @@ See [docs/deployment.md](docs/deployment.md) for production deployment and upgra
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
 | [NOTICE](NOTICE) | Third-party software notices |
 
-## License
+## 📄 License
 
 This project is licensed under the [Apache License 2.0](LICENSE).
 

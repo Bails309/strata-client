@@ -436,7 +436,7 @@ async fn ldap_query_kerberos(
 
     // Use a per-config credential cache to avoid races between concurrent syncs.
     // NamedTempFile ensures the file is created with secure permissions and is unique.
-    let mut ccache_file = tempfile::NamedTempFile::new()
+    let ccache_file = tempfile::NamedTempFile::new()
         .map_err(|e| anyhow::anyhow!("Failed to create Kerberos ccache: {e}"))?;
     let ccache = format!("FILE:{}", ccache_file.path().display());
 

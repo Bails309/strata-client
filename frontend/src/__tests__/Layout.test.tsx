@@ -2,6 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
+// Mock the api module
+vi.mock('../api', () => ({
+  getMe: vi.fn().mockResolvedValue({
+    username: 'testadmin',
+    role: 'admin',
+    client_ip: '10.0.0.1',
+    watermark_enabled: false,
+  }),
+}));
+
 // Mock the ThemeProvider
 vi.mock('../components/ThemeProvider', () => ({
   useTheme: () => ({ theme: 'dark', preference: 'dark', setPreference: vi.fn(), cycle: vi.fn() }),
@@ -49,5 +59,17 @@ describe('Layout', () => {
     renderLayout();
     const logo = screen.getByAltText('Strata Client');
     expect(logo).toBeInTheDocument();
+  });
+
+  it('shows username and role after loading', async () => {
+    renderLayout();
+    expect(await screen.findByText('testadmin')).toBeInTheDocument();
+    expect(await screen.findByText('admin')).toBeInTheDocument();
+  });
+
+  it('highlights active nav item based on route', () => {
+    renderLayout('/admin');
+    const adminLink = screen.getByText('Admin').closest('a');
+    expect(adminLink?.className).toContain('font-semibold');
   });
 });

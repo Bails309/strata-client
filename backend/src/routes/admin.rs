@@ -117,6 +117,60 @@ pub async fn update_settings(
 // ── SSO ────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+pub struct SsoTestRequest {
+    pub issuer_url: String,
+}
+
+pub async fn test_sso_connection(
+    State(_state): State<SharedState>,
+    Json(body): Json<SsoTestRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate issuer URL uses HTTPS
+    if !body.issuer_url.starts_with("https://") {
+        return Err(AppError::Validation(
+            "SSO issuer URL must use HTTPS".into(),
+        ));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let discovery_url = if body.issuer_url.ends_with('/') {
+        format!("{}.well-known/openid-configuration", body.issuer_url)
+    } else {
+        format!("{}/.well-known/openid-configuration", body.issuer_url)
+    };
+
+    let resp = client.get(&discovery_url).send().await?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::Validation(format!(
+            "Failed to fetch OIDC configuration: HTTP {}",
+            resp.status()
+        )));
+    }
+
+    let config: serde_json::Value = resp.json().await?;
+
+    // Basic validation of the OIDC configuration
+    let has_auth = config.get("authorization_endpoint").is_some();
+    let has_token = config.get("token_endpoint").is_some();
+    let has_jwks = config.get("jwks_uri").is_some();
+
+    if has_auth && has_token && has_jwks {
+        Ok(Json(json!({
+            "success": true,
+            "msg": "Successfully connected to OIDC issuer and validated configuration."
+        })))
+    } else {
+        Err(AppError::Validation(
+            "OIDC configuration is missing required endpoints (authorization, token, or jwks).".into(),
+        ))
+    }
+}
+
+#[derive(Deserialize)]
 pub struct SsoUpdateRequest {
     pub issuer_url: String,
     pub client_id: String,
@@ -759,19 +813,16 @@ pub async fn update_recordings(
     )
     .await?;
     if let Some(days) = body.retention_days {
-        settings::set(&db.pool, "recordings_retention_days", &days.to_string())
-            .await?;
+        settings::set(&db.pool, "recordings_retention_days", &days.to_string()).await?;
     }
     if let Some(ref st) = body.storage_type {
         settings::set(&db.pool, "recordings_storage_type", st).await?;
     }
     if let Some(ref name) = body.azure_account_name {
-        settings::set(&db.pool, "recordings_azure_account_name", name)
-            .await?;
+        settings::set(&db.pool, "recordings_azure_account_name", name).await?;
     }
     if let Some(ref container) = body.azure_container_name {
-        settings::set(&db.pool, "recordings_azure_container_name", container)
-            .await?;
+        settings::set(&db.pool, "recordings_azure_container_name", container).await?;
     }
     if let Some(ref key) = body.azure_access_key {
         // Encrypt access key via Vault if configured
@@ -1019,8 +1070,19 @@ pub async fn update_role_connections(
 pub struct UserRow {
     pub id: Uuid,
     pub username: String,
+    pub email: String,
+    pub full_name: Option<String>,
+    pub auth_type: String,
     pub sub: Option<String>,
     pub role_name: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub email: String,
+    pub full_name: Option<String>,
+    pub role_id: Uuid,
+    pub auth_type: String, // "local" or "sso"
 }
 
 pub async fn list_users(
@@ -1028,13 +1090,85 @@ pub async fn list_users(
 ) -> Result<Json<Vec<UserRow>>, AppError> {
     let db = require_running(&state).await?;
     let rows: Vec<UserRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.sub, r.name as role_name
+        "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name
          FROM users u JOIN roles r ON u.role_id = r.id
-         ORDER BY u.username",
+         ORDER BY u.email",
     )
     .fetch_all(&db.pool)
     .await?;
     Ok(Json(rows))
+}
+
+pub async fn create_user(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateUserRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Check if user already exists
+    let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+        .bind(&body.email)
+        .fetch_optional(&db.pool)
+        .await?;
+
+    if existing.is_some() {
+        return Err(AppError::Validation(format!("User with email {} already exists", body.email)));
+    }
+
+    let username = body.email.split('@').next().unwrap_or(&body.email).to_string();
+
+    let (password_hash, plaintext_password) = if body.auth_type == "local" {
+        use rand::{distributions::Alphanumeric, Rng};
+        let plain: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(16)
+            .map(char::from)
+            .collect();
+        
+        use argon2::{PasswordHasher, password_hash::SaltString};
+        let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+        let hash = argon2::Argon2::default()
+            .hash_password(plain.as_bytes(), &salt)
+            .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
+            .to_string();
+        
+        (Some(hash), Some(plain))
+    } else {
+        (None, None)
+    };
+
+    let user_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, username, email, full_name, password_hash, auth_type, role_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)"
+    )
+    .bind(user_id)
+    .bind(&username)
+    .bind(&body.email)
+    .bind(&body.full_name)
+    .bind(&password_hash)
+    .bind(&body.auth_type)
+    .bind(body.role_id)
+    .execute(&db.pool)
+    .await?;
+
+    audit::log(
+        &db.pool,
+        None,
+        "user.created",
+        &json!({
+            "user_id": user_id,
+            "email": body.email,
+            "auth_type": body.auth_type
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "id": user_id,
+        "username": username,
+        "password": plaintext_password // Returned only once for local users
+    })))
 }
 
 // ── Audit Logs ─────────────────────────────────────────────────────────
@@ -1227,8 +1361,9 @@ pub async fn observe_session(
         (frames, rx)
     };
 
-    Ok(ws.protocols(["guacamole"]).on_upgrade(
-        move |mut socket| async move {
+    Ok(ws
+        .protocols(["guacamole"])
+        .on_upgrade(move |mut socket| async move {
             use axum::extract::ws::Message;
 
             // Phase 1: Replay buffered frames as fast as possible
@@ -1252,8 +1387,7 @@ pub async fn observe_session(
                     Err(_) => break, // channel closed (session ended)
                 }
             }
-        },
-    ))
+        }))
 }
 
 // ── Metrics ────────────────────────────────────────────────────────────
@@ -1323,7 +1457,9 @@ pub async fn create_ad_sync_config(
 
     // Validate LDAP URL uses a safe scheme
     if !body.ldap_url.starts_with("ldap://") && !body.ldap_url.starts_with("ldaps://") {
-        return Err(AppError::Validation("LDAP URL must use ldap:// or ldaps://".into()));
+        return Err(AppError::Validation(
+            "LDAP URL must use ldap:// or ldaps://".into(),
+        ));
     }
 
     // Validate search filter has balanced parentheses (basic LDAP filter sanity)
@@ -1331,7 +1467,9 @@ pub async fn create_ad_sync_config(
         let opens = filter.chars().filter(|c| *c == '(').count();
         let closes = filter.chars().filter(|c| *c == ')').count();
         if opens != closes || opens == 0 {
-            return Err(AppError::Validation("Invalid LDAP search filter — unbalanced parentheses".into()));
+            return Err(AppError::Validation(
+                "Invalid LDAP search filter — unbalanced parentheses".into(),
+            ));
         }
     }
 
@@ -1429,7 +1567,9 @@ pub async fn update_ad_sync_config(
     // Validate ldap_url if being updated (parity with create)
     if let Some(ref v) = body.ldap_url {
         if !v.starts_with("ldap://") && !v.starts_with("ldaps://") {
-            return Err(AppError::Validation("LDAP URL must use ldap:// or ldaps://".into()));
+            return Err(AppError::Validation(
+                "LDAP URL must use ldap:// or ldaps://".into(),
+            ));
         }
     }
 
@@ -1438,7 +1578,9 @@ pub async fn update_ad_sync_config(
         let opens = filter.chars().filter(|c| *c == '(').count();
         let closes = filter.chars().filter(|c| *c == ')').count();
         if opens != closes || opens == 0 {
-            return Err(AppError::Validation("Invalid LDAP search filter — unbalanced parentheses".into()));
+            return Err(AppError::Validation(
+                "Invalid LDAP search filter — unbalanced parentheses".into(),
+            ));
         }
     }
 
@@ -1661,12 +1803,11 @@ pub async fn trigger_ad_sync(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let mut config: AdSyncConfig =
-        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&db.pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    let mut config: AdSyncConfig = sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&db.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
     // Decrypt bind_password if vault-encrypted
     if config.bind_password.starts_with("vault:") {
@@ -1837,7 +1978,8 @@ mod tests {
 
     #[test]
     fn kerberos_update_request_deser() {
-        let json = r#"{"realm":"CORP.LOCAL","kdc":["kdc1.corp.local"],"admin_server":"admin.corp.local"}"#;
+        let json =
+            r#"{"realm":"CORP.LOCAL","kdc":["kdc1.corp.local"],"admin_server":"admin.corp.local"}"#;
         let r: KerberosUpdateRequest = serde_json::from_str(json).unwrap();
         assert_eq!(r.realm, "CORP.LOCAL");
         assert_eq!(r.kdc.len(), 1);
@@ -1941,7 +2083,8 @@ mod tests {
 
     #[test]
     fn settings_update_request_deser() {
-        let json = r#"{"settings":[{"key":"theme","value":"dark"},{"key":"timeout","value":"30"}]}"#;
+        let json =
+            r#"{"settings":[{"key":"theme","value":"dark"},{"key":"timeout","value":"30"}]}"#;
         let r: SettingsUpdateRequest = serde_json::from_str(json).unwrap();
         assert_eq!(r.settings.len(), 2);
         assert_eq!(r.settings[0].key, "theme");

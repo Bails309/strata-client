@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] — 2026-04-09
+
+### Changed
+
+#### Frontend Test Coverage Expansion
+- **Branch coverage raised from ~55% to 70%** across 605 tests (up from ~366), significantly improving regression safety.
+- **Coverage thresholds enforced** in `vitest.config.ts`: statements 74%, branches 69%, functions 62%, lines 75% (previously 25/25/15/25).
+- Expanded test suites for **AdminSettings** (133→145 tests), **Credentials** (28→42), **SessionMenu** (14→20), **FileBrowser** (13→20), **NvrPlayer** (17→23), **SharedViewer** (16→26), **SessionClient** (26→28), **SessionToolbar** (25→27), **SessionBar** (9→13), **SessionManager** (32→35), **TiledView** (16→22), **SessionWatermark** (4→7), **usePopOut** (15→20).
+- Added new test files for **Layout** and **Login** components.
+
+#### Backend Security & Reliability Hardening
+- **Guacamole protocol parsing**: Improved Unicode character length handling to prevent connection failures with UTF-8 hostnames/credentials.
+- **NVR instruction filtering**: Protocol-level opcode matching prevents false positives while blocking credentials in recordings.
+- **Kerberos authentication**: Secure unique temporary files via `tempfile` for credential cache and CA certificate handling.
+- **Tunnel soft-delete bypass**: Added `soft_deleted_at IS NULL` guard to WebSocket tunnel endpoint.
+- **OIDC issuer validation**: Discovery endpoint now verifies returned issuer matches configured provider.
+- **Content-Disposition header injection**: Recording download filename properly escaped.
+- **Shared tunnel pool bypass**: Shared tunnel endpoint now uses `GuacdPool` for round-robin load distribution.
+- **AD sync transaction safety**: Sync operations wrapped in database transactions.
+- **`per_page` unbounded**: Pagination parameter now clamped to prevent arbitrarily large result sets.
+- **Soft-delete leak fixes**: `connection_info`, `update_connection`, share list, and `revoke_share` endpoints now properly handle soft-deleted connections.
+- **AD sync bulk operations**: High-performance bulk upsert/soft-delete query pattern replaces individual updates.
+- **Database schema**: Added unique index on `connections(ad_source_id, ad_dn)` for sync integrity.
+
+### Fixed
+- Fixed `SessionManager.test.tsx` unused `afterEach` import (should have been `beforeEach`).
+- Fixed portal duplicate text rendering in `Credentials` tests by using `aria-selected` attribute matching.
+- Fixed canvas painting tests in `SessionWatermark` by mocking `HTMLCanvasElement` `clientWidth`/`clientHeight`.
+
 ## [0.6.1] — 2026-04-08
 
 ### Fixed

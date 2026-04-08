@@ -336,11 +336,31 @@ export const updateRoleConnections = (role_id: string, connection_ids: string[])
 export interface User {
   id: string;
   username: string;
+  email: string;
+  full_name?: string;
+  auth_type: 'local' | 'sso';
   sub?: string;
   role_name: string;
 }
 
+export interface CreateUserRequest {
+  username: string;
+  email: string;
+  full_name?: string;
+  role_name: string;
+  auth_type: 'local' | 'sso';
+}
+
+export interface CreateUserResponse {
+  id: string;
+  username: string;
+  password?: string; // Only for local users
+}
+
 export const getUsers = () => request<User[]>('/admin/users');
+
+export const createUser = (data: CreateUserRequest) =>
+  request<CreateUserResponse>('/admin/users', { method: 'POST', body: JSON.stringify(data) });
 
 // ── Credentials ─────────────────────────────────────────────────────
 

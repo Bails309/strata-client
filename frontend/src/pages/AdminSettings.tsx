@@ -26,6 +26,7 @@ import {
   updateConnectionGroup as _updateConnectionGroup,
   deleteConnectionGroup,
   getUsers,
+  createUser,
   getActiveSessions,
   getAdSyncConfigs,
   createAdSyncConfig,
@@ -135,6 +136,7 @@ export default function AdminSettings() {
           onConnectionUpdated={(c) => setConnections(connections.map((x) => x.id === c.id ? c : x))}
           onConnectionDeleted={(id) => setConnections(connections.filter((x) => x.id !== id))}
           onGroupsChanged={(g) => setGroups(g)}
+          onUsersChanged={(u) => setUsers(u)}
         />
       )}
 
@@ -867,7 +869,7 @@ function VaultTab({ settings, onSave }: { settings: Record<string, string>; onSa
 }
 
 function AccessTab({
-  roles, connections, groups, users, onRoleCreated, onConnectionCreated, onConnectionUpdated, onConnectionDeleted, onGroupsChanged,
+  roles, connections, groups, users, onRoleCreated, onConnectionCreated, onConnectionUpdated, onConnectionDeleted, onGroupsChanged, onUsersChanged,
 }: {
   roles: Role[];
   connections: Connection[];
@@ -878,6 +880,7 @@ function AccessTab({
   onConnectionUpdated: (c: Connection) => void;
   onConnectionDeleted: (id: string) => void;
   onGroupsChanged: (g: ConnectionGroup[]) => void;
+  onUsersChanged: (u: User[]) => void;
 }) {
   const [newRoleName, setNewRoleName] = useState('');
   const [formMode, setFormMode] = useState<'closed' | 'add' | 'edit'>('closed');
@@ -890,6 +893,19 @@ function AccessTab({
   const [connPage, setConnPage] = useState(1);
   const connPerPage = 20;
   const connFormRef = useRef<HTMLDivElement>(null);
+  
+  // User Management
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [userForm, setUserForm] = useState<{
+    username: string;
+    email: string;
+    full_name: string;
+    role_name: string;
+    auth_type: 'local' | 'sso';
+  }>({ username: '', email: '', full_name: '', role_name: 'user', auth_type: 'local' });
+  const [createdPassword, setCreatedPassword] = useState<string | null>(null);
+  const [userError, setUserError] = useState('');
+  const [userSaving, setUserSaving] = useState(false);
 
   const filteredConnections = connections.filter((c) => {
     if (!connSearch) return true;
@@ -1219,20 +1235,196 @@ function AccessTab({
 
       {/* Users */}
       <div className="card">
-        <h2>Users</h2>
-        <table>
-          <thead><tr><th>Username</th><th>Role</th><th>OIDC Sub</th></tr></thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id}>
-                <td>{u.username}</td>
-                <td>{u.role_name}</td>
-                <td className="font-mono text-[0.8rem]">{u.sub || '—'}</td>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="!mb-0">Users</h2>
+          <button 
+            className="btn-primary text-xs py-1 px-3 shadow-sm"
+            onClick={() => {
+              setUserForm({ username: '', email: '', full_name: '', role_name: 'user', auth_type: 'local' });
+              setCreatedPassword(null);
+              setUserError('');
+              setUserModalOpen(true);
+            }}
+          >
+            + New User
+          </button>
+        </div>
+        
+        <div className="table-responsive">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Username / Name</th>
+                <th>Email</th>
+                <th>Auth Type</th>
+                <th>Role</th>
+                <th>OIDC Sub</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id}>
+                  <td>
+                    <div className="font-medium text-txt-primary">{u.username}</div>
+                    {u.full_name && <div className="text-[10px] text-txt-tertiary uppercase tracking-tighter">{u.full_name}</div>}
+                  </td>
+                  <td className="text-sm">{u.email}</td>
+                  <td>
+                    <span className={`badge text-[10px] uppercase font-bold ${u.auth_type === 'sso' ? 'badge-accent' : 'badge-secondary'}`}>
+                      {u.auth_type}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="text-sm font-medium opacity-80">{u.role_name}</span>
+                  </td>
+                  <td className="font-mono text-[0.7rem] text-txt-tertiary">
+                    {u.sub || <span className="opacity-30">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {/* Create User Modal */}
+      {userModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="card w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold text-txt-primary">Provision New User</h3>
+              {!createdPassword && (
+                <button className="text-txt-tertiary hover:text-txt-primary" onClick={() => setUserModalOpen(false)}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              )}
+            </div>
+
+            {createdPassword ? (
+              <div className="space-y-4">
+                <div className="p-4 bg-success-dim/20 border border-success/30 rounded-lg text-center">
+                  <div className="w-12 h-12 rounded-full bg-success/20 text-success flex items-center justify-center mx-auto mb-3">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                  <h4 className="font-bold text-success mb-1">User Created Successfully</h4>
+                  <p className="text-sm text-txt-secondary">Local account ready for login.</p>
+                </div>
+                
+                <div className="p-4 bg-surface-tertiary rounded-lg border border-border text-center">
+                  <span className="text-[10px] uppercase tracking-widest text-txt-tertiary font-bold block mb-2">Temporary Password</span>
+                  <div className="text-2xl font-mono tracking-tighter text-accent bg-surface-secondary py-3 rounded border border-accent/20 select-all">
+                    {createdPassword}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs flex gap-3">
+                  <svg className="shrink-0 mt-0.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <span>This password will <strong>never be shown again</strong>. Please securely share it with the user now.</span>
+                </div>
+
+                <button className="btn-primary w-full py-3" onClick={() => { setUserModalOpen(false); getUsers().then(onUsersChanged); }}>
+                  Done
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="form-group !mb-0">
+                    <label>Username</label>
+                    <input 
+                      value={userForm.username} 
+                      onChange={e => setUserForm({...userForm, username: e.target.value})}
+                      placeholder="jsmith"
+                    />
+                  </div>
+                  <div className="form-group !mb-0">
+                    <label>Auth Type</label>
+                    <Select 
+                      value={userForm.auth_type}
+                      onChange={v => setUserForm({...userForm, auth_type: v as 'local' | 'sso'})}
+                      options={[
+                        { value: 'local', label: 'Local (Password)' },
+                        { value: 'sso', label: 'SSO (OIDC)' },
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group !mb-0">
+                  <label>Email Address</label>
+                  <input 
+                    type="email"
+                    value={userForm.email} 
+                    onChange={e => setUserForm({...userForm, email: e.target.value})}
+                    placeholder="john.smith@example.com"
+                  />
+                </div>
+
+                <div className="form-group !mb-0">
+                  <label>Full Name <span className="text-[10px] text-txt-tertiary font-normal ml-1">(Optional)</span></label>
+                  <input 
+                    value={userForm.full_name} 
+                    onChange={e => setUserForm({...userForm, full_name: e.target.value})}
+                    placeholder="John Smith"
+                  />
+                  {userForm.auth_type === 'sso' && (
+                    <p className="text-[10px] text-txt-tertiary mt-1 italic">Will be updated from SSO provider on login if left blank.</p>
+                  )}
+                </div>
+
+                <div className="form-group !mb-0">
+                  <label>Initial Role</label>
+                  <Select 
+                    value={userForm.role_name}
+                    onChange={v => setUserForm({...userForm, role_name: v})}
+                    options={roles.map(r => ({ value: r.name, label: r.name }))}
+                  />
+                </div>
+
+                {userError && (
+                  <div className="p-3 bg-danger-dim text-danger text-sm rounded border border-danger/20 flex gap-2">
+                    <svg className="shrink-0 mt-1" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    {userError}
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <button className="btn w-full" onClick={() => setUserModalOpen(false)}>Cancel</button>
+                  <button 
+                    className="btn-primary w-full" 
+                    disabled={userSaving || !userForm.username || !userForm.email}
+                    onClick={async () => {
+                      setUserSaving(true);
+                      setUserError('');
+                      try {
+                        const res = await createUser({
+                          username: userForm.username,
+                          email: userForm.email,
+                          full_name: userForm.full_name || undefined,
+                          role_name: userForm.role_name,
+                          auth_type: userForm.auth_type,
+                        });
+                        if (res.password) {
+                          setCreatedPassword(res.password);
+                        } else {
+                          setUserModalOpen(false);
+                          getUsers().then(onUsersChanged);
+                        }
+                      } catch (err: any) {
+                        setUserError(err.message || 'Failed to create user');
+                      } finally {
+                        setUserSaving(false);
+                      }
+                    }}
+                  >
+                    {userSaving ? 'Creating…' : 'Create User'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

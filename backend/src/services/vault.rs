@@ -50,10 +50,7 @@ struct VaultDecryptData {
 /// 1. Generate random DEK
 /// 2. Encrypt plaintext with DEK (AES-256-GCM)
 /// 3. Wrap DEK via Vault Transit
-pub async fn seal(
-    vault: &VaultConfig,
-    plaintext: &[u8],
-) -> Result<SealedCredential, AppError> {
+pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredential, AppError> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
     // 1. Generate random DEK (32 bytes for AES-256)
@@ -115,7 +112,7 @@ pub async fn seal(
     })
 }
 
-/// Decrypt a credential using envelope decryption:
+/// Decrypt a credential using envelope encryption:
 /// 1. Unwrap DEK via Vault Transit
 /// 2. Decrypt ciphertext with DEK (AES-256-GCM)
 pub async fn unseal(
@@ -181,10 +178,7 @@ pub async fn unseal(
 
 /// Encrypt a string value for storage using the `vault:{json}` envelope format.
 /// Used for settings, AD sync bind passwords, and other secrets stored as TEXT.
-pub async fn seal_setting(
-    vault: &VaultConfig,
-    plaintext: &str,
-) -> Result<String, AppError> {
+pub async fn seal_setting(vault: &VaultConfig, plaintext: &str) -> Result<String, AppError> {
     let sealed = seal(vault, plaintext.as_bytes()).await?;
     let b64 = base64::engine::general_purpose::STANDARD;
     let encoded = serde_json::json!({
@@ -197,10 +191,7 @@ pub async fn seal_setting(
 
 /// Decrypt a `vault:{json}` envelope string. If the value does not start with
 /// `vault:`, it is returned as-is (legacy plaintext).
-pub async fn unseal_setting(
-    vault: &VaultConfig,
-    value: &str,
-) -> Result<String, AppError> {
+pub async fn unseal_setting(vault: &VaultConfig, value: &str) -> Result<String, AppError> {
     let json_str = match value.strip_prefix("vault:") {
         Some(j) => j,
         None => return Ok(value.to_string()),

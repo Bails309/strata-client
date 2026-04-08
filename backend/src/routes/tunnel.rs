@@ -317,34 +317,35 @@ pub async fn ws_tunnel(
     let nvr_username = user.username.clone();
 
     let audit_pool = db.pool.clone();
-
-    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| async move {
-        let nvr = NvrContext {
-            registry: session_registry,
-            session_id: nvr_session_id,
-            connection_id,
-            connection_name: nvr_connection_name,
-            protocol: nvr_protocol,
-            user_id: nvr_user_id,
-            username: nvr_username,
-        };
-        if let Err(e) =
-            tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
-        {
-            tracing::error!("Tunnel error: {e}");
-            // Audit log the tunnel failure
-            let _ = crate::services::audit::log(
-                &audit_pool,
-                Some(user_id),
-                "tunnel.failed",
-                &serde_json::json!({
-                    "connection_id": connection_id.to_string(),
-                    "error": e.to_string()
-                }),
-            )
-            .await;
-        }
-    }))
+    Ok(ws
+        .protocols(["guacamole"])
+        .on_upgrade(move |socket| async move {
+            let nvr = NvrContext {
+                registry: session_registry,
+                session_id: nvr_session_id,
+                connection_id,
+                connection_name: nvr_connection_name,
+                protocol: nvr_protocol,
+                user_id: nvr_user_id,
+                username: nvr_username,
+            };
+            if let Err(e) =
+                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+            {
+                tracing::error!("Tunnel error: {e}");
+                // Audit log the tunnel failure
+                let _ = crate::services::audit::log(
+                    &audit_pool,
+                    Some(user_id),
+                    "tunnel.failed",
+                    &serde_json::json!({
+                        "connection_id": connection_id.to_string(),
+                        "error": e.to_string()
+                    }),
+                )
+                .await;
+            }
+        }))
 }
 
 #[cfg(test)]

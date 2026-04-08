@@ -210,18 +210,17 @@ pub async fn login(
         s.db.clone().ok_or(AppError::Internal("Database not available".into()))?
     };
 
-    // Look up user by username
-    let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name, u.password_hash
+    let row: Option<(Uuid, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT u.id, u.username, u.password_hash, r.name
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.username = $1",
+         WHERE (u.username = $1 OR u.email = $1) AND u.auth_type = 'local'",
     )
     .bind(&body.username)
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, role, password_hash) =
+    let (user_id, username, password_hash, role) =
         row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
     let hash = password_hash
@@ -488,49 +487,34 @@ pub async fn sso_callback(
     // Validate token and get claims
     let claims = crate::services::auth::validate_token(&issuer_url, &client_id, access_token).await?;
 
-    // Find user by OIDC subject first, then fall back to username match.
-    // We intentionally do NOT match by email to prevent account takeover
-    // via email claim manipulation.
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name
+    // Extract email from claims
+    let user_email = claims.email.as_ref().ok_or_else(|| {
+        AppError::Auth("OIDC identity missing email claim. SSO requires an email address.".into())
+    })?;
+
+    // Find user by email. We match by email to link pre-created SSO users.
+    let row: Option<(Uuid, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT u.id, u.username, r.name as role_name, u.sub, u.full_name
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.sub = $1",
+         WHERE u.email = $1",
     )
-    .bind(&claims.sub)
+    .bind(user_email)
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
 
-    // If no match by sub, try matching by preferred_username for initial linking
-    let row = if row.is_none() {
-        if let Some(ref preferred) = claims.preferred_username {
-            sqlx::query_as(
-                "SELECT u.id, u.username, r.name
-                 FROM users u JOIN roles r ON u.role_id = r.id
-                 WHERE u.username = $1 AND u.sub IS NULL",
-            )
-            .bind(preferred)
-            .fetch_optional(&db.pool)
-            .await
-            .map_err(AppError::Database)?
-        } else {
-            None
-        }
-    } else {
-        row
-    };
-
-    let (user_id, username, role) = row.ok_or_else(|| {
-        AppError::Auth(format!("No Strata user found for OIDC identity (sub: {}). Registration via SSO is not enabled.", claims.sub))
+    let (user_id, username, role, existing_sub, existing_full_name) = row.ok_or_else(|| {
+        AppError::Auth(format!("No Strata user found for email {}. Registration via SSO is not enabled. Please contact your administrator.", user_email))
     })?;
 
-    // Link the OIDC subject to this user if it was matched by username
-    sqlx::query("UPDATE users SET sub = $1 WHERE id = $2 AND sub IS NULL")
-        .bind(&claims.sub)
-        .bind(user_id)
-        .execute(&db.pool)
-        .await
-        .map_err(AppError::Database)?;
+    // Link the OIDC subject to this user and update name if it was pre-created without one
+    if existing_sub.is_none() || existing_full_name.is_none() {
+        sqlx::query("UPDATE users SET sub = COALESCE(sub, $1), full_name = COALESCE(full_name, $2) WHERE id = $3")
+            .bind(&claims.sub)
+            .bind(&claims.name)
+            .bind(user_id)
+            .execute(&db.pool).await.map_err(AppError::Database)?;
+    }
 
     // Create local JWT
     let token = create_local_jwt(user_id, &username, &role)?;

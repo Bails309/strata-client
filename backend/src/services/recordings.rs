@@ -23,12 +23,11 @@ pub async fn get_config(
         .unwrap_or_else(|| "false".into())
         == "true";
 
-    let retention_days: u32 =
-        crate::services::settings::get(pool, "recordings_retention_days")
-            .await?
-            .unwrap_or_else(|| "30".into())
-            .parse()
-            .unwrap_or(30);
+    let retention_days: u32 = crate::services::settings::get(pool, "recordings_retention_days")
+        .await?
+        .unwrap_or_else(|| "30".into())
+        .parse()
+        .unwrap_or(30);
 
     let storage_type = match crate::services::settings::get(pool, "recordings_storage_type")
         .await?
@@ -123,9 +122,8 @@ impl AzureBlobConfig {
         } else {
             String::new()
         };
-        let string_to_sign = format!(
-            "{verb}\n\n\n{cl}\n\n{content_type}\n\n\n\n\n\n\n{x_headers}\n{resource}"
-        );
+        let string_to_sign =
+            format!("{verb}\n\n\n{cl}\n\n{content_type}\n\n\n\n\n\n\n{x_headers}\n{resource}");
 
         let key_bytes = B64
             .decode(&self.access_key)

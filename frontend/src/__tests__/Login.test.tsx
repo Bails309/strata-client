@@ -117,4 +117,41 @@ describe('Login page', () => {
 
     expect(await screen.findByText(/signing in/i)).toBeInTheDocument();
   });
+
+  it('extracts SSO token from URL fragment and calls onLogin', async () => {
+    const onLogin = vi.fn();
+    window.location.hash = '#token=sso-jwt-token-123';
+
+    renderLogin(onLogin);
+
+    await vi.waitFor(() => {
+      expect(onLogin).toHaveBeenCalled();
+    });
+    expect(localStorage.getItem('access_token')).toBe('sso-jwt-token-123');
+    // Fragment should be cleared
+    expect(window.location.hash).toBe('');
+  });
+
+  it('shows SSO button when sso_enabled is true', async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      phase: 'running',
+      sso_enabled: true,
+      local_auth_enabled: true,
+    });
+
+    renderLogin();
+    expect(await screen.findByText(/sign in with sso/i)).toBeInTheDocument();
+  });
+
+  it('hides local login when local_auth_enabled is false', async () => {
+    vi.mocked(getStatus).mockResolvedValue({
+      phase: 'running',
+      sso_enabled: true,
+      local_auth_enabled: false,
+    });
+
+    renderLogin();
+    await screen.findByText(/sign in with sso/i);
+    expect(screen.queryByPlaceholderText('admin')).not.toBeInTheDocument();
+  });
 });

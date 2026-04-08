@@ -81,10 +81,7 @@ pub async fn initialize(
                 .unwrap_or_else(|| "guac-master-key".into());
 
             // Provision the bundled Vault: init → unseal → transit → key
-            let result = vault_provisioning::provision(
-                &address, &transit_key, None, None,
-            )
-            .await?;
+            let result = vault_provisioning::provision(&address, &transit_key, None, None).await?;
 
             let (token, unseal_key) = match result {
                 Some(init_result) => (init_result.root_token, Some(init_result.unseal_key)),
@@ -161,8 +158,9 @@ pub async fn initialize(
         jwt_secret: std::env::var("JWT_SECRET").ok(),
     };
 
-    cfg.save(&AppConfig::config_path())
-        .map_err(|e| AppError::Config(format!("Failed to save config.toml: {e}")))?;
+    cfg.save(&AppConfig::config_path()).map_err(|e| {
+        AppError::Config(format!("Failed to save config.toml: {e}"))
+    })?;
 
     // Transition to Running
     {

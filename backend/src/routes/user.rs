@@ -684,12 +684,13 @@ pub async fn connection_info(
     };
 
     // Fetch protocol for this connection
-    let protocol: String =
-        sqlx::query_scalar("SELECT protocol FROM connections WHERE id = $1 AND soft_deleted_at IS NULL")
-            .bind(connection_id)
-            .fetch_optional(&db.pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let protocol: String = sqlx::query_scalar(
+        "SELECT protocol FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(connection_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Check if a credential profile is mapped to this user+connection
     let has_vault_creds: bool = if !has_vault {
@@ -754,7 +755,10 @@ pub async fn get_recording(
         let body = Body::from_stream(stream);
         return Ok(axum::response::Response::builder()
             .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{safe_filename}\""))
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{safe_filename}\""),
+            )
             .body(body)
             .unwrap());
     }
@@ -781,7 +785,10 @@ pub async fn get_recording(
             let body = Body::from(data);
             return Ok(axum::response::Response::builder()
                 .header(header::CONTENT_TYPE, "application/octet-stream")
-                .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{safe_filename}\""))
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{safe_filename}\""),
+                )
                 .body(body)
                 .unwrap());
         }

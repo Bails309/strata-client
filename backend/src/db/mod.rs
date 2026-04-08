@@ -72,9 +72,7 @@ impl Database {
         // `conn`.  The lock prevents other instances from running migrations
         // concurrently.  The migrator may use any pool connection for DDL,
         // which is safe because only one process reaches this point.
-        let result = sqlx::migrate!("./migrations")
-            .run(&self.pool)
-            .await;
+        let result = sqlx::migrate!("./migrations").run(&self.pool).await;
 
         // Always release the lock, even if migrations failed
         let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")

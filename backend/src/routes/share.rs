@@ -63,10 +63,12 @@ pub async fn create_share(
     // Verify user has access to this connection
     let has_access: bool = if user.role == "admin" {
         // Admins can share any connection
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)")
-            .bind(connection_id)
-            .fetch_one(&db.pool)
-            .await?
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)",
+        )
+        .bind(connection_id)
+        .fetch_one(&db.pool)
+        .await?
     } else {
         // Non-admins must have a role assignment to the connection
         sqlx::query_scalar(
@@ -368,10 +370,14 @@ pub async fn ws_shared_tunnel(
     let nvr_session_id =
         format!("shared-{}-{}", connection_id, chrono::Utc::now().timestamp_millis());
     let nvr_username =
-        format!("shared:{}", owner_username.unwrap_or_else(|| "unknown".into()));
+        format!(
+        "shared:{}",
+        owner_username.unwrap_or_else(|| "unknown".into())
+    );
 
-    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| {
-        async move {
+    Ok(ws
+        .protocols(["guacamole"])
+        .on_upgrade(move |socket| async move {
             let nvr = NvrContext {
                 registry: session_registry,
                 session_id: nvr_session_id,
@@ -385,8 +391,8 @@ pub async fn ws_shared_tunnel(
             {
                 tracing::error!("Shared tunnel error: {e}");
             }
-        }
-    }))
+        })
+    )
 }
 
 #[cfg(test)]

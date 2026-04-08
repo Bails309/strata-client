@@ -19,13 +19,12 @@ pub async fn log(
     // If the table is empty (first entry), no row is locked and there is
     // no contention.  FOR UPDATE ensures only one transaction can read
     // the tail at a time — others block until this transaction commits.
-    let previous_hash: String =
-        sqlx::query_scalar(
-            "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1 FOR UPDATE"
-        )
-            .fetch_optional(&mut *tx)
-            .await?
-            .unwrap_or_default();
+    let previous_hash: String = sqlx::query_scalar(
+        "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1 FOR UPDATE",
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or_default();
 
     // Compute current_hash = SHA-256(previous_hash || action_type || details)
     let mut hasher = Sha256::new();

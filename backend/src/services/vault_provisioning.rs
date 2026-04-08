@@ -173,11 +173,7 @@ pub async fn enable_transit(address: &str, token: &str) -> Result<(), AppError> 
 }
 
 /// Create a Transit encryption key (idempotent — does not error if key exists).
-pub async fn create_transit_key(
-    address: &str,
-    token: &str,
-    key_name: &str,
-) -> Result<(), AppError> {
+pub async fn create_transit_key(address: &str, token: &str, key_name: &str) -> Result<(), AppError> {
     let url = format!(
         "{}/v1/transit/keys/{}",
         address.trim_end_matches('/'),

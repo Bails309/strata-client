@@ -58,10 +58,7 @@ pub(crate) struct DiscoveredComputer {
 
 // ── Execute a full sync for one config ─────────────────────────────────
 
-pub async fn run_sync(
-    pool: &Pool<Postgres>,
-    config: &AdSyncConfig,
-) -> anyhow::Result<Uuid> {
+pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::Result<Uuid> {
     // Advisory lock keyed on config UUID to prevent concurrent syncs for the same config.
     // Use a dedicated connection so the session-level lock is held on the same session.
     let mut conn = pool.acquire().await?;
@@ -262,9 +259,7 @@ async fn do_sync(
 
 // ── Build custom rustls config with CA cert ────────────────────────────
 
-fn build_tls_config_with_ca(
-    pem: &str,
-) -> anyhow::Result<std::sync::Arc<rustls::ClientConfig>> {
+fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::ClientConfig>> {
     let mut root_store = rustls::RootCertStore::empty();
 
     // Load system root certificates

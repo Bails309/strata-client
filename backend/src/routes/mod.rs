@@ -37,6 +37,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/settings", put(admin::update_settings))
         .route("/api/admin/settings/auth-methods", put(admin::update_auth_methods))
         .route("/api/admin/settings/sso", put(admin::update_sso))
+        .route("/api/admin/settings/sso/test", post(admin::test_sso_connection))
         .route("/api/admin/settings/kerberos", put(admin::update_kerberos))
         .route("/api/admin/kerberos-realms", get(admin::list_kerberos_realms))
         .route("/api/admin/kerberos-realms", post(admin::create_kerberos_realm))
@@ -59,7 +60,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/role-connections",
             put(admin::update_role_connections),
         )
-        .route("/api/admin/users", get(admin::list_users))
+        .route("/api/admin/users", get(admin::list_users).post(admin::create_user))
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
         .route("/api/admin/sessions", get(admin::list_active_sessions))
         .route("/api/admin/sessions/:session_id/observe", get(admin::observe_session))
@@ -73,7 +74,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/ad-sync-configs/:id/runs", get(admin::list_ad_sync_runs))
         .route("/api/recordings/:filename", get(user::get_recording))
         .layer(middleware::from_fn(require_admin))
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
 
     // ── Authenticated user routes ────────────────────────────────────
     let user_routes = Router::new()
@@ -94,7 +98,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/tunnel/ticket", post(tunnel::create_tunnel_ticket))
         .route("/api/user/connections/:connection_id/share", post(share::create_share))
         .route("/api/user/shares/:share_id", delete(share::revoke_share))
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_auth,
+        ));
 
     public
         .merge(admin)

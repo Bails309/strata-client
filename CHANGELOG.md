@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-04-08
+
+### Fixed
+
+#### Security Hardening
+- **Tunnel soft-delete bypass**: WebSocket tunnel endpoint could connect users to soft-deleted connections — added `soft_deleted_at IS NULL` guard
+- **OIDC issuer validation**: OIDC discovery endpoint did not verify that the returned issuer matched the configured provider, allowing potential token substitution
+- **Content-Disposition header injection**: Recording download filename was not escaped, allowing header injection via crafted connection names
+- **Shared tunnel pool bypass**: Shared tunnel endpoint created a direct guacd connection instead of using the `GuacdPool`, bypassing round-robin load distribution
+
+#### Data Integrity
+- **`connection_info` soft-delete leak**: `/api/user/connections/:id/info` returned protocol info for soft-deleted connections
+- **`update_connection` soft-delete gap**: Update endpoint did not include a soft-delete filter, allowing edits to deleted connections
+- **`update_connection` missing `updated_at`**: Updating a connection did not set `updated_at = now()`, leaving the timestamp stale
+- **Share list stale data**: Share list query did not filter out soft-deleted connections
+- **`revoke_share` silent no-op**: Revoking a non-existent or already-revoked share returned 200 OK — now returns 404 and checks `NOT revoked`
+- **AD sync transaction safety**: AD sync update operations were not wrapped in a database transaction, risking partial updates on failure
+- **`per_page` unbounded**: Pagination `per_page` parameter was not clamped, allowing arbitrarily large result sets
+
+#### Reliability
+- **SSO email claim crash**: SSO callback panicked when the OIDC provider omitted the `email` claim — now handled gracefully
+- **Stale Vault config in background tasks**: Recording sync and AD sync scheduler cloned Vault configuration at startup — now reads fresh config from `SharedState` on each tick
+- **Azure blob URL encoding**: Azure Blob Storage blob names were not URL-encoded, causing 404s for names with spaces or special characters
+- **Frontend SSO token handling**: Login component did not extract the JWT from the URL fragment after SSO redirect
+
+### Build
+- Fixed unused `afterEach` import in `SessionManager.test.tsx` (should have been `beforeEach`)
+
 ## [0.6.0] — 2026-04-08
 
 ### Added

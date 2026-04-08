@@ -23,11 +23,12 @@ pub async fn get_config(
         .unwrap_or_else(|| "false".into())
         == "true";
 
-    let retention_days: u32 = crate::services::settings::get(pool, "recordings_retention_days")
-        .await?
-        .unwrap_or_else(|| "30".into())
-        .parse()
-        .unwrap_or(30);
+    let retention_days: u32 =
+        crate::services::settings::get(pool, "recordings_retention_days")
+            .await?
+            .unwrap_or_else(|| "30".into())
+            .parse()
+            .unwrap_or(30);
 
     let storage_type = match crate::services::settings::get(pool, "recordings_storage_type")
         .await?
@@ -58,9 +59,12 @@ pub async fn get_azure_config(
     pool: &sqlx::Pool<sqlx::Postgres>,
     vault: Option<&crate::config::VaultConfig>,
 ) -> anyhow::Result<Option<AzureBlobConfig>> {
-    let account_name = crate::services::settings::get(pool, "recordings_azure_account_name").await?;
-    let access_key_raw = crate::services::settings::get(pool, "recordings_azure_access_key").await?;
-    let container_name = crate::services::settings::get(pool, "recordings_azure_container_name").await?;
+    let account_name =
+        crate::services::settings::get(pool, "recordings_azure_account_name").await?;
+    let access_key_raw =
+        crate::services::settings::get(pool, "recordings_azure_access_key").await?;
+    let container_name =
+        crate::services::settings::get(pool, "recordings_azure_container_name").await?;
 
     // Decrypt access key if vault-encrypted
     let access_key = match access_key_raw {
@@ -95,9 +99,10 @@ pub async fn get_azure_config(
 
 impl AzureBlobConfig {
     fn blob_url(&self, blob: &str) -> String {
+        let encoded = urlencoding::encode(blob);
         format!(
             "https://{}.blob.core.windows.net/{}/{}",
-            self.account_name, self.container_name, blob
+            self.account_name, self.container_name, encoded
         )
     }
 
@@ -177,7 +182,8 @@ pub async fn upload_file_to_azure(
     blob: &str,
     file_path: &str,
 ) -> anyhow::Result<()> {
-    let meta = tokio::fs::metadata(file_path).await
+    let meta = tokio::fs::metadata(file_path)
+        .await
         .map_err(|e| anyhow::anyhow!("Cannot stat {file_path}: {e}"))?;
     let file_len = meta.len() as usize;
 
@@ -192,7 +198,8 @@ pub async fn upload_file_to_azure(
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("PUT", file_len, ct, &x_headers, &resource)?;
 
-    let file = tokio::fs::File::open(file_path).await
+    let file = tokio::fs::File::open(file_path)
+        .await
         .map_err(|e| anyhow::anyhow!("Cannot open {file_path}: {e}"))?;
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = reqwest::Body::wrap_stream(stream);
@@ -249,12 +256,21 @@ pub async fn download_from_azure(
 
 // ── Background sync task ───────────────────────────────────────────────
 
-pub fn spawn_sync_task(pool: sqlx::Pool<sqlx::Postgres>, vault: Option<crate::config::VaultConfig>) {
+pub fn spawn_sync_task(state: crate::services::app_state::SharedState) {
     tokio::spawn(async move {
         let mut synced: HashSet<String> = HashSet::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
+            let (pool, vault) = {
+                let s = state.read().await;
+                let pool = match s.db.as_ref() {
+                    Some(db) => db.pool.clone(),
+                    None => continue,
+                };
+                let vault = s.config.as_ref().and_then(|c| c.vault.clone());
+                (pool, vault)
+            };
             if let Err(e) = sync_pass(&pool, &mut synced, vault.as_ref()).await {
                 tracing::warn!("Recording sync error: {e}");
             }
@@ -304,6 +320,10 @@ async fn sync_pass(
         match upload_file_to_azure(&azure, &name, &path).await {
             Ok(_) => {
                 synced.insert(name.clone());
+                // Delete local file after successful upload to prevent disk growth
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    tracing::warn!("Failed to delete local recording after upload: {name}: {e}");
+                }
                 tracing::info!("Synced recording to Azure Blob: {name}");
             }
             Err(e) => tracing::warn!("Azure Blob upload failed for {name}: {e}"),

@@ -24,7 +24,8 @@ async fn require_running(state: &SharedState) -> Result<crate::db::Database, App
 fn is_safe_hostname(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 255
-        && s.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == ':' || c == '_')
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == ':' || c == '_')
 }
 
 // ── Settings ───────────────────────────────────────────────────────────
@@ -103,7 +104,13 @@ pub async fn update_settings(
     for kv in &body.settings {
         settings::set(&db.pool, &kv.key, &kv.value).await?;
     }
-    audit::log(&db.pool, None, "settings.updated", &json!({ "count": body.settings.len() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "settings.updated",
+        &json!({ "count": body.settings.len() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -124,7 +131,9 @@ pub async fn update_sso(
 
     // Validate issuer URL uses HTTPS
     if !body.issuer_url.starts_with("https://") {
-        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
+        return Err(AppError::Validation(
+            "SSO issuer URL must use HTTPS".into(),
+        ));
     }
 
     settings::set(&db.pool, "sso_enabled", "true").await?;
@@ -146,7 +155,12 @@ pub async fn update_sso(
             "dek": base64::engine::general_purpose::STANDARD.encode(&sealed.encrypted_dek),
             "n": base64::engine::general_purpose::STANDARD.encode(&sealed.nonce),
         });
-        settings::set(&db.pool, "sso_client_secret", &format!("vault:{}", encoded.to_string())).await?;
+        settings::set(
+            &db.pool,
+            "sso_client_secret",
+            &format!("vault:{}", encoded.to_string()),
+        )
+        .await?;
     } else {
         return Err(AppError::Config(
             "Vault must be configured before enabling SSO. Client secrets require encrypted storage.".into(),
@@ -180,8 +194,12 @@ pub async fn update_auth_methods(
 
     // If enabling SSO, verify it has been configured (issuer_url and client_id exist)
     if body.sso_enabled {
-        let issuer = settings::get(&db.pool, "sso_issuer_url").await?.unwrap_or_default();
-        let client_id = settings::get(&db.pool, "sso_client_id").await?.unwrap_or_default();
+        let issuer = settings::get(&db.pool, "sso_issuer_url")
+            .await?
+            .unwrap_or_default();
+        let client_id = settings::get(&db.pool, "sso_client_id")
+            .await?
+            .unwrap_or_default();
         if issuer.is_empty() || client_id.is_empty() {
             return Err(AppError::Validation(
                 "SSO cannot be enabled until it is configured in the SSO tab.".into(),
@@ -189,8 +207,22 @@ pub async fn update_auth_methods(
         }
     }
 
-    settings::set(&db.pool, "sso_enabled", if body.sso_enabled { "true" } else { "false" }).await?;
-    settings::set(&db.pool, "local_auth_enabled", if body.local_auth_enabled { "true" } else { "false" }).await?;
+    settings::set(
+        &db.pool,
+        "sso_enabled",
+        if body.sso_enabled { "true" } else { "false" },
+    )
+    .await?;
+    settings::set(
+        &db.pool,
+        "local_auth_enabled",
+        if body.local_auth_enabled {
+            "true"
+        } else {
+            "false"
+        },
+    )
+    .await?;
 
     audit::log(
         &db.pool,
@@ -228,10 +260,9 @@ pub async fn update_vault(
 
     let vault_cfg = match body.mode.as_str() {
         "local" => {
-            let address = std::env::var("VAULT_ADDR")
-                .unwrap_or_else(|_| "http://vault:8200".into());
-            let transit_key = body.transit_key
-                .unwrap_or_else(|| "guac-master-key".into());
+            let address =
+                std::env::var("VAULT_ADDR").unwrap_or_else(|_| "http://vault:8200".into());
+            let transit_key = body.transit_key.unwrap_or_else(|| "guac-master-key".into());
 
             // Check if we already have local vault credentials stored
             let existing = {
@@ -253,14 +284,17 @@ pub async fn update_vault(
                 } else {
                     // Switching from external to local — fresh init
                     let result = crate::services::vault_provisioning::provision(
-                        &address, &transit_key, None, None,
+                        &address,
+                        &transit_key,
+                        None,
+                        None,
                     )
                     .await?;
                     match result {
                         Some(init_result) => (init_result.root_token, Some(init_result.unseal_key)),
                         None => {
                             return Err(AppError::Vault(
-                                "Bundled Vault already initialized. Provide stored credentials or reset vault-data volume.".into(),
+                                "Bundled Vault is already initialized. Provide stored credentials or reset vault-data volume.".into(),
                             ));
                         }
                     }
@@ -290,12 +324,12 @@ pub async fn update_vault(
             }
         }
         "external" => {
-            let address = body.address.ok_or_else(|| {
-                AppError::Config("External vault requires an address".into())
-            })?;
-            let token = body.token.ok_or_else(|| {
-                AppError::Config("External vault requires a token".into())
-            })?;
+            let address = body
+                .address
+                .ok_or_else(|| AppError::Config("External vault requires an address".into()))?;
+            let token = body
+                .token
+                .ok_or_else(|| AppError::Config("External vault requires a token".into()))?;
             let transit_key = body.transit_key.ok_or_else(|| {
                 AppError::Config("External vault requires a transit key name".into())
             })?;
@@ -309,7 +343,9 @@ pub async fn update_vault(
             }
         }
         _ => {
-            return Err(AppError::Config("vault mode must be 'local' or 'external'".into()));
+            return Err(AppError::Config(
+                "vault mode must be 'local' or 'external'".into(),
+            ));
         }
     };
 
@@ -340,7 +376,13 @@ pub async fn update_vault(
     }
 
     let db = require_running(&state).await?;
-    audit::log(&db.pool, None, "vault.configured", &json!({ "address": audit_address })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "vault.configured",
+        &json!({ "address": audit_address }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "vault_updated" })))
 }
 
@@ -392,7 +434,13 @@ pub async fn update_kerberos(
     )
     .map_err(|e| AppError::Internal(format!("krb5.conf write failed: {e}")))?;
 
-    audit::log(&db.pool, None, "kerberos.configured", &json!({ "realm": body.realm })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "kerberos.configured",
+        &json!({ "realm": body.realm }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "kerberos_updated" })))
 }
 
@@ -484,7 +532,13 @@ pub async fn create_kerberos_realm(
     settings::set(&db.pool, "kerberos_enabled", "true").await?;
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(&db.pool, None, "kerberos.realm_created", &json!({ "realm": body.realm })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "kerberos.realm_created",
+        &json!({ "realm": body.realm }),
+    )
+    .await?;
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -505,13 +559,35 @@ pub async fn update_kerberos_realm(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM kerberos_realms WHERE id = $1)",
-    )
-    .bind(realm_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
+    // Validate hostname-like values (parity with create)
+    if let Some(ref realm) = body.realm {
+        if !is_safe_hostname(realm) {
+            return Err(AppError::Validation(
+                "Kerberos realm must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+            ));
+        }
+    }
+    if let Some(ref kdcs) = body.kdc_servers {
+        if kdcs.iter().any(|k| !is_safe_hostname(k)) {
+            return Err(AppError::Validation(
+                "Kerberos KDC hostnames must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+            ));
+        }
+    }
+    if let Some(ref admin) = body.admin_server {
+        if !is_safe_hostname(admin) {
+            return Err(AppError::Validation(
+                "Kerberos admin server must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+            ));
+        }
+    }
+
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kerberos_realms WHERE id = $1)")
+            .bind(realm_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or(false);
     if !exists {
         return Err(AppError::NotFound("Kerberos realm not found".into()));
     }
@@ -521,41 +597,75 @@ pub async fn update_kerberos_realm(
 
     // If marking as default, unset other defaults
     if body.is_default == Some(true) {
-        sqlx::query("UPDATE kerberos_realms SET is_default = false WHERE is_default = true AND id != $1")
+        sqlx::query(
+            "UPDATE kerberos_realms SET is_default = false WHERE is_default = true AND id != $1",
+        )
+        .bind(realm_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if let Some(ref realm) = body.realm {
+        sqlx::query("UPDATE kerberos_realms SET realm = $1, updated_at = now() WHERE id = $2")
+            .bind(realm)
+            .bind(realm_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(ref kdc) = body.kdc_servers {
+        sqlx::query(
+            "UPDATE kerberos_realms SET kdc_servers = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(kdc.join(","))
+        .bind(realm_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if let Some(ref admin) = body.admin_server {
+        sqlx::query(
+            "UPDATE kerberos_realms SET admin_server = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(admin)
+        .bind(realm_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if let Some(ref tl) = body.ticket_lifetime {
+        sqlx::query(
+            "UPDATE kerberos_realms SET ticket_lifetime = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(tl)
+        .bind(realm_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if let Some(ref rl) = body.renew_lifetime {
+        sqlx::query(
+            "UPDATE kerberos_realms SET renew_lifetime = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(rl)
+        .bind(realm_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if let Some(d) = body.is_default {
+        sqlx::query("UPDATE kerberos_realms SET is_default = $1, updated_at = now() WHERE id = $2")
+            .bind(d)
             .bind(realm_id)
             .execute(&mut *tx)
             .await?;
     }
 
-    if let Some(ref realm) = body.realm {
-        sqlx::query("UPDATE kerberos_realms SET realm = $1, updated_at = now() WHERE id = $2")
-            .bind(realm).bind(realm_id).execute(&mut *tx).await?;
-    }
-    if let Some(ref kdc) = body.kdc_servers {
-        sqlx::query("UPDATE kerberos_realms SET kdc_servers = $1, updated_at = now() WHERE id = $2")
-            .bind(kdc.join(",")).bind(realm_id).execute(&mut *tx).await?;
-    }
-    if let Some(ref admin) = body.admin_server {
-        sqlx::query("UPDATE kerberos_realms SET admin_server = $1, updated_at = now() WHERE id = $2")
-            .bind(admin).bind(realm_id).execute(&mut *tx).await?;
-    }
-    if let Some(ref tl) = body.ticket_lifetime {
-        sqlx::query("UPDATE kerberos_realms SET ticket_lifetime = $1, updated_at = now() WHERE id = $2")
-            .bind(tl).bind(realm_id).execute(&mut *tx).await?;
-    }
-    if let Some(ref rl) = body.renew_lifetime {
-        sqlx::query("UPDATE kerberos_realms SET renew_lifetime = $1, updated_at = now() WHERE id = $2")
-            .bind(rl).bind(realm_id).execute(&mut *tx).await?;
-    }
-    if let Some(d) = body.is_default {
-        sqlx::query("UPDATE kerberos_realms SET is_default = $1, updated_at = now() WHERE id = $2")
-            .bind(d).bind(realm_id).execute(&mut *tx).await?;
-    }
-
     tx.commit().await?;
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(&db.pool, None, "kerberos.realm_updated", &json!({ "realm_id": realm_id.to_string() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "kerberos.realm_updated",
+        &json!({ "realm_id": realm_id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -583,7 +693,13 @@ pub async fn delete_kerberos_realm(
     }
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(&db.pool, None, "kerberos.realm_deleted", &json!({ "realm_id": realm_id.to_string() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "kerberos.realm_deleted",
+        &json!({ "realm_id": realm_id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -600,7 +716,12 @@ async fn regenerate_krb5_conf(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), A
         .iter()
         .map(|r| kerberos::RealmConfig {
             realm: r.realm.clone(),
-            kdcs: r.kdc_servers.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            kdcs: r
+                .kdc_servers
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
             admin_server: r.admin_server.clone(),
             ticket_lifetime: r.ticket_lifetime.clone(),
             renew_lifetime: r.renew_lifetime.clone(),
@@ -631,18 +752,26 @@ pub async fn update_recordings(
     Json(body): Json<RecordingsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    settings::set(&db.pool, "recordings_enabled", if body.enabled { "true" } else { "false" }).await?;
+    settings::set(
+        &db.pool,
+        "recordings_enabled",
+        if body.enabled { "true" } else { "false" },
+    )
+    .await?;
     if let Some(days) = body.retention_days {
-        settings::set(&db.pool, "recordings_retention_days", &days.to_string()).await?;
+        settings::set(&db.pool, "recordings_retention_days", &days.to_string())
+            .await?;
     }
     if let Some(ref st) = body.storage_type {
         settings::set(&db.pool, "recordings_storage_type", st).await?;
     }
     if let Some(ref name) = body.azure_account_name {
-        settings::set(&db.pool, "recordings_azure_account_name", name).await?;
+        settings::set(&db.pool, "recordings_azure_account_name", name)
+            .await?;
     }
     if let Some(ref container) = body.azure_container_name {
-        settings::set(&db.pool, "recordings_azure_container_name", container).await?;
+        settings::set(&db.pool, "recordings_azure_container_name", container)
+            .await?;
     }
     if let Some(ref key) = body.azure_access_key {
         // Encrypt access key via Vault if configured
@@ -661,7 +790,13 @@ pub async fn update_recordings(
         };
         settings::set(&db.pool, "recordings_azure_access_key", &stored).await?;
     }
-    audit::log(&db.pool, None, "recordings.configured", &json!({ "enabled": body.enabled })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "recordings.configured",
+        &json!({ "enabled": body.enabled }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "recordings_updated" })))
 }
 
@@ -693,13 +828,17 @@ pub async fn create_role(
     Json(body): Json<CreateRoleRequest>,
 ) -> Result<Json<RoleRow>, AppError> {
     let db = require_running(&state).await?;
-    let row: RoleRow = sqlx::query_as(
-        "INSERT INTO roles (name) VALUES ($1) RETURNING id, name",
+    let row: RoleRow = sqlx::query_as("INSERT INTO roles (name) VALUES ($1) RETURNING id, name")
+        .bind(&body.name)
+        .fetch_one(&db.pool)
+        .await?;
+    audit::log(
+        &db.pool,
+        None,
+        "role.created",
+        &json!({ "name": body.name }),
     )
-    .bind(&body.name)
-    .fetch_one(&db.pool)
     .await?;
-    audit::log(&db.pool, None, "role.created", &json!({ "name": body.name })).await?;
     Ok(Json(row))
 }
 
@@ -767,7 +906,13 @@ pub async fn create_connection(
     .bind(&extra)
     .fetch_one(&db.pool)
     .await?;
-    audit::log(&db.pool, None, "connection.created", &json!({ "name": body.name })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "connection.created",
+        &json!({ "name": body.name }),
+    )
+    .await?;
     Ok(Json(row))
 }
 
@@ -780,8 +925,8 @@ pub async fn update_connection(
     let port = body.port.unwrap_or(3389);
     let extra = if body.extra.is_null() { serde_json::json!({}) } else { body.extra.clone() };
     let row: ConnectionRow = sqlx::query_as(
-        "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, group_id = $7, extra = $8
-         WHERE id = $9
+        "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, group_id = $7, extra = $8, updated_at = now()
+         WHERE id = $9 AND soft_deleted_at IS NULL
          RETURNING id, name, protocol, hostname, port, domain, description, group_id, extra, last_accessed",
     )
     .bind(&body.name)
@@ -796,7 +941,13 @@ pub async fn update_connection(
     .fetch_optional(&db.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
-    audit::log(&db.pool, None, "connection.updated", &json!({ "id": id.to_string(), "name": body.name })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "connection.updated",
+        &json!({ "id": id.to_string(), "name": body.name }),
+    )
+    .await?;
     Ok(Json(row))
 }
 
@@ -805,14 +956,22 @@ pub async fn delete_connection(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let result = sqlx::query("DELETE FROM connections WHERE id = $1")
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE connections SET soft_deleted_at = now() WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(&db.pool)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Connection not found".into()));
     }
-    audit::log(&db.pool, None, "connection.deleted", &json!({ "id": id.to_string() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "connection.deleted",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -844,7 +1003,13 @@ pub async fn update_role_connections(
             .await?;
     }
     tx.commit().await?;
-    audit::log(&db.pool, None, "role_connections.updated", &json!({ "role_id": body.role_id.to_string() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "role_connections.updated",
+        &json!({ "role_id": body.role_id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -896,8 +1061,8 @@ pub async fn list_audit_logs(
     axum::extract::Query(query): axum::extract::Query<AuditLogQuery>,
 ) -> Result<Json<Vec<AuditLogRow>>, AppError> {
     let db = require_running(&state).await?;
-    let per_page = query.per_page.unwrap_or(50).min(200);
-    let offset = (query.page.unwrap_or(1) - 1).max(0) * per_page;
+    let per_page = query.per_page.unwrap_or(50).clamp(1, 200);
+    let offset = (query.page.unwrap_or(1).max(1) - 1) * per_page;
 
     let rows: Vec<AuditLogRow> = sqlx::query_as(
         "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash
@@ -949,7 +1114,13 @@ pub async fn create_connection_group(
     .bind(body.parent_id)
     .fetch_one(&db.pool)
     .await?;
-    audit::log(&db.pool, None, "connection_group.created", &json!({ "name": body.name })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "connection_group.created",
+        &json!({ "name": body.name }),
+    )
+    .await?;
     Ok(Json(row))
 }
 
@@ -989,7 +1160,13 @@ pub async fn delete_connection_group(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Group not found".into()));
     }
-    audit::log(&db.pool, None, "connection_group.deleted", &json!({ "id": id.to_string() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "connection_group.deleted",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -1024,7 +1201,9 @@ pub async fn observe_session(
         s.session_registry.clone()
     };
 
-    let session = registry.get(&session_id).await
+    let session = registry
+        .get(&session_id)
+        .await
         .ok_or_else(|| AppError::NotFound("Active session not found".into()))?;
 
     let offset = query.offset.unwrap_or(300); // default: replay full buffer
@@ -1048,31 +1227,33 @@ pub async fn observe_session(
         (frames, rx)
     };
 
-    Ok(ws.protocols(["guacamole"]).on_upgrade(move |mut socket| async move {
-        use axum::extract::ws::Message;
+    Ok(ws.protocols(["guacamole"]).on_upgrade(
+        move |mut socket| async move {
+            use axum::extract::ws::Message;
 
-        // Phase 1: Replay buffered frames as fast as possible
-        for frame in buffered_frames {
-            if socket.send(Message::Text(frame)).await.is_err() {
-                return;
+            // Phase 1: Replay buffered frames as fast as possible
+            for frame in buffered_frames {
+                if socket.send(Message::Text(frame)).await.is_err() {
+                    return;
+                }
             }
-        }
 
-        // Phase 2: Forward live frames from the broadcast channel
-        loop {
-            match rx.recv().await {
-                Ok(frame) => {
-                    if socket.send(Message::Text((*frame).clone())).await.is_err() {
-                        break;
+            // Phase 2: Forward live frames from the broadcast channel
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => {
+                        if socket.send(Message::Text((*frame).clone())).await.is_err() {
+                            break;
+                        }
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("NVR observer lagged {n} frames, skipping");
+                    }
+                    Err(_) => break, // channel closed (session ended)
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("NVR observer lagged {n} frames, skipping");
-                }
-                Err(_) => break, // channel closed (session ended)
             }
-        }
-    }))
+        },
+    ))
 }
 
 // ── Metrics ────────────────────────────────────────────────────────────
@@ -1099,11 +1280,10 @@ pub async fn list_ad_sync_configs(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<AdSyncConfig>>, AppError> {
     let db = require_running(&state).await?;
-    let mut rows: Vec<AdSyncConfig> = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs ORDER BY label",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let mut rows: Vec<AdSyncConfig> =
+        sqlx::query_as("SELECT * FROM ad_sync_configs ORDER BY label")
+            .fetch_all(&db.pool)
+            .await?;
     // Redact bind_password — never expose encrypted or plaintext secrets to clients
     for r in &mut rows {
         if !r.bind_password.is_empty() {
@@ -1197,7 +1377,13 @@ pub async fn create_ad_sync_config(
     .await?;
 
     settings::set(&db.pool, "ad_sync_enabled", "true").await?;
-    audit::log(&db.pool, None, "ad_sync.config_created", &json!({ "label": body.label })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "ad_sync.config_created",
+        &json!({ "label": body.label }),
+    )
+    .await?;
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -1231,26 +1417,54 @@ pub async fn update_ad_sync_config(
     let db = require_running(&state).await?;
 
     // Verify exists
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ad_sync_configs WHERE id = $1)")
-        .bind(id)
-        .fetch_one(&db.pool)
-        .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ad_sync_configs WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
     if !exists {
         return Err(AppError::NotFound("AD sync config not found".into()));
     }
 
-    // Apply partial updates
+    // Validate ldap_url if being updated (parity with create)
+    if let Some(ref v) = body.ldap_url {
+        if !v.starts_with("ldap://") && !v.starts_with("ldaps://") {
+            return Err(AppError::Validation("LDAP URL must use ldap:// or ldaps://".into()));
+        }
+    }
+
+    // Validate search_filter if being updated (parity with create)
+    if let Some(ref filter) = body.search_filter {
+        let opens = filter.chars().filter(|c| *c == '(').count();
+        let closes = filter.chars().filter(|c| *c == ')').count();
+        if opens != closes || opens == 0 {
+            return Err(AppError::Validation("Invalid LDAP search filter — unbalanced parentheses".into()));
+        }
+    }
+
+    // Apply partial updates within a transaction for atomicity
+    let mut tx = db.pool.begin().await?;
+
     if let Some(ref v) = body.label {
         sqlx::query("UPDATE ad_sync_configs SET label = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(ref v) = body.ldap_url {
         sqlx::query("UPDATE ad_sync_configs SET ldap_url = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(ref v) = body.bind_dn {
         sqlx::query("UPDATE ad_sync_configs SET bind_dn = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(ref v) = body.bind_password {
         // Encrypt bind_password via Vault if configured
@@ -1267,68 +1481,145 @@ pub async fn update_ad_sync_config(
         } else {
             String::new()
         };
-        sqlx::query("UPDATE ad_sync_configs SET bind_password = $1, updated_at = now() WHERE id = $2")
-            .bind(&stored).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET bind_password = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(&stored)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.search_bases {
-        sqlx::query("UPDATE ad_sync_configs SET search_bases = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET search_bases = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.search_filter {
-        sqlx::query("UPDATE ad_sync_configs SET search_filter = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET search_filter = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.search_scope {
-        sqlx::query("UPDATE ad_sync_configs SET search_scope = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET search_scope = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.protocol {
         sqlx::query("UPDATE ad_sync_configs SET protocol = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(v) = body.default_port {
-        sqlx::query("UPDATE ad_sync_configs SET default_port = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET default_port = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.domain_override {
-        sqlx::query("UPDATE ad_sync_configs SET domain_override = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET domain_override = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(v) = body.group_id {
         sqlx::query("UPDATE ad_sync_configs SET group_id = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(v) = body.tls_skip_verify {
-        sqlx::query("UPDATE ad_sync_configs SET tls_skip_verify = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET tls_skip_verify = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(v) = body.sync_interval_minutes {
-        sqlx::query("UPDATE ad_sync_configs SET sync_interval_minutes = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET sync_interval_minutes = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(v) = body.enabled {
         sqlx::query("UPDATE ad_sync_configs SET enabled = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     if let Some(ref v) = body.auth_method {
-        sqlx::query("UPDATE ad_sync_configs SET auth_method = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET auth_method = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.keytab_path {
-        sqlx::query("UPDATE ad_sync_configs SET keytab_path = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET keytab_path = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.krb5_principal {
-        sqlx::query("UPDATE ad_sync_configs SET krb5_principal = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET krb5_principal = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
     if let Some(ref v) = body.ca_cert_pem {
         let val = if v.is_empty() { None } else { Some(v.as_str()) };
-        sqlx::query("UPDATE ad_sync_configs SET ca_cert_pem = $1, updated_at = now() WHERE id = $2")
-            .bind(val).bind(id).execute(&db.pool).await?;
+        sqlx::query(
+            "UPDATE ad_sync_configs SET ca_cert_pem = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(val)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     }
 
-    audit::log(&db.pool, None, "ad_sync.config_updated", &json!({ "id": id.to_string() })).await?;
+    tx.commit().await?;
+
+    audit::log(
+        &db.pool,
+        None,
+        "ad_sync.config_updated",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -1353,7 +1644,13 @@ pub async fn delete_ad_sync_config(
         settings::set(&db.pool, "ad_sync_enabled", "false").await?;
     }
 
-    audit::log(&db.pool, None, "ad_sync.config_deleted", &json!({ "id": id.to_string() })).await?;
+    audit::log(
+        &db.pool,
+        None,
+        "ad_sync.config_deleted",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -1364,13 +1661,12 @@ pub async fn trigger_ad_sync(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let mut config: AdSyncConfig = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    let mut config: AdSyncConfig =
+        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
     // Decrypt bind_password if vault-encrypted
     if config.bind_password.starts_with("vault:") {
@@ -1379,11 +1675,13 @@ pub async fn trigger_ad_sync(
             s.config.as_ref().and_then(|c| c.vault.clone())
         };
         if let Some(ref vc) = vault_cfg {
-            config.bind_password = crate::services::vault::unseal_setting(vc, &config.bind_password).await?;
+            config.bind_password =
+                crate::services::vault::unseal_setting(vc, &config.bind_password).await?;
         }
     }
 
-    let run_id = crate::services::ad_sync::run_sync(&db.pool, &config).await
+    let run_id = crate::services::ad_sync::run_sync(&db.pool, &config)
+        .await
         .map_err(|e| AppError::Internal(format!("Sync failed: {e}")))?;
 
     Ok(Json(json!({ "run_id": run_id, "status": "completed" })))
@@ -1405,7 +1703,9 @@ pub async fn test_ad_sync_connection(
         bind_dn: body.bind_dn.clone().unwrap_or_default(),
         bind_password: body.bind_password.clone().unwrap_or_default(),
         search_bases: body.search_bases.clone(),
-        search_filter: body.search_filter.clone().unwrap_or_else(|| "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))".into()),
+        search_filter: body.search_filter.clone().unwrap_or_else(|| {
+            "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))".into()
+        }),
         search_scope: body.search_scope.clone().unwrap_or_else(|| "subtree".into()),
         protocol: body.protocol.clone().unwrap_or_else(|| "rdp".into()),
         default_port: body.default_port.unwrap_or(3389),
@@ -1520,7 +1820,8 @@ mod tests {
     // ── Struct deserialization ──────────────────────────────────────
     #[test]
     fn sso_update_request_deser() {
-        let json = r#"{"issuer_url":"https://sso.example.com","client_id":"id","client_secret":"s"}"#;
+        let json =
+            r#"{"issuer_url":"https://sso.example.com","client_id":"id","client_secret":"s"}"#;
         let r: SsoUpdateRequest = serde_json::from_str(json).unwrap();
         assert_eq!(r.issuer_url, "https://sso.example.com");
         assert_eq!(r.client_id, "id");

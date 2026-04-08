@@ -66,12 +66,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Connect to database ──
     tracing::info!("Connecting to database …");
-    let db = Database::connect(
-        &db_url,
-        db_ssl_mode.as_deref(),
-        db_ca_cert.as_deref(),
-    )
-    .await?;
+    let db = Database::connect(&db_url, db_ssl_mode.as_deref(), db_ca_cert.as_deref()).await?;
     db.migrate().await?;
     tracing::info!("Database connected and migrations applied");
 
@@ -149,12 +144,6 @@ async fn main() -> anyhow::Result<()> {
     cfg.save(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to save config: {e}"))?;
 
-    // ── Spawn recording sync background task ──
-    services::recordings::spawn_sync_task(db.pool.clone(), vault.clone());
-
-    // ── Spawn AD sync scheduler ──
-    services::ad_sync::spawn_sync_scheduler(db.pool.clone(), vault.clone());
-
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
         phase: BootPhase::Running,
@@ -163,6 +152,12 @@ async fn main() -> anyhow::Result<()> {
         session_registry: services::session_registry::SessionRegistry::new(),
         guacd_pool: Some(guacd_pool),
     }));
+
+    // ── Spawn recording sync background task ──
+    services::recordings::spawn_sync_task(state.clone());
+
+    // ── Spawn AD sync scheduler ──
+    services::ad_sync::spawn_sync_scheduler(state.clone());
 
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());

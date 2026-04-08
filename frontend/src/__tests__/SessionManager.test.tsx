@@ -1,49 +1,71 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, renderHook } from '@testing-library/react';
 import { SessionManagerProvider, useSessionManager } from '../components/SessionManager';
+
+// Polyfill ResizeObserver for jsdom
+const resizeObserverMock = vi.fn(function() {
+  return {
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  };
+});
 
 // Mock guacamole-common-js
 vi.mock('guacamole-common-js', () => ({
   default: {
-    Client: vi.fn(() => ({
-      getDisplay: () => ({
-        getElement: () => document.createElement('div'),
-        getWidth: () => 1920,
-        getHeight: () => 1080,
-        scale: vi.fn(),
-        onresize: null,
-      }),
-      sendMouseState: vi.fn(),
-      sendSize: vi.fn(),
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      createClipboardStream: vi.fn(() => ({})),
-      onclipboard: null,
-      onfilesystem: null,
-      onfile: null,
-      onstatechange: null,
-      onerror: null,
-    })),
-    WebSocketTunnel: vi.fn(() => ({
-      onerror: null,
-    })),
-    Mouse: Object.assign(vi.fn(() => ({
-      onEach: vi.fn(),
-    })), {
-      Touchscreen: vi.fn(() => ({
+    Client: vi.fn(function() {
+      return {
+        getDisplay: () => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: vi.fn(),
+          onresize: null,
+        }),
+        sendMouseState: vi.fn(),
+        sendSize: vi.fn(),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        createClipboardStream: vi.fn(() => ({})),
+        onclipboard: null,
+        onfilesystem: null,
+        onfile: null,
+        onstatechange: null,
+        onerror: null,
+      };
+    }),
+    WebSocketTunnel: vi.fn(function() {
+      return {
+        onerror: null,
+      };
+    }),
+    Mouse: Object.assign(vi.fn(function() {
+      return {
         onEach: vi.fn(),
-      })),
+      };
+    }), {
+      Touchscreen: vi.fn(function() {
+        return {
+          onEach: vi.fn(),
+        };
+      }),
       Event: vi.fn(),
     }),
-    Keyboard: vi.fn(() => ({
-      onkeydown: null,
-      onkeyup: null,
-    })),
+    Keyboard: vi.fn(function() {
+      return {
+        onkeydown: null,
+        onkeyup: null,
+        reset: vi.fn(),
+      };
+    }),
     StringReader: vi.fn(),
-    StringWriter: vi.fn(() => ({
-      sendText: vi.fn(),
-      sendEnd: vi.fn(),
-    })),
+    StringWriter: vi.fn(function() {
+      return {
+        sendText: vi.fn(),
+        sendEnd: vi.fn(),
+      };
+    }),
     BlobReader: vi.fn(),
     GuacObject: vi.fn(),
     InputStream: vi.fn(),
@@ -52,8 +74,9 @@ vi.mock('guacamole-common-js', () => ({
 }));
 
 describe('SessionManager', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('ResizeObserver', resizeObserverMock);
   });
 
   it('throws when useSessionManager is used outside provider', () => {

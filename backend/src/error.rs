@@ -40,11 +40,17 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::Database(e) => {
                 tracing::error!("Database error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".into(),
+                )
             }
             AppError::Config(msg) => {
                 tracing::error!("Config error: {msg}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".into(),
+                )
             }
             AppError::Vault(msg) => {
                 tracing::error!("Vault error: {msg}");
@@ -61,7 +67,10 @@ impl IntoResponse for AppError {
             AppError::SetupRequired => (StatusCode::SERVICE_UNAVAILABLE, "Setup required".into()),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {msg}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".into(),
+                )
             }
         };
 

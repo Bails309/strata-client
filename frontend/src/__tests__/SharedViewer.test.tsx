@@ -4,36 +4,46 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 vi.mock('guacamole-common-js', () => ({
   default: {
-    Client: vi.fn(() => ({
-      getDisplay: () => ({
-        getElement: () => document.createElement('div'),
-        getWidth: () => 1920,
-        getHeight: () => 1080,
-        scale: vi.fn(),
-        onresize: null,
-      }),
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      sendSize: vi.fn(),
-      sendMouseState: vi.fn(),
-      sendKeyEvent: vi.fn(),
-      onstatechange: null,
-      onerror: null,
-    })),
-    WebSocketTunnel: vi.fn(() => ({
-      onerror: null,
-    })),
-    Mouse: Object.assign(vi.fn(() => ({
-      onEach: vi.fn(),
-    })), {
-      Touchscreen: vi.fn(() => ({
-        onEach: vi.fn(),
-      })),
+    Client: vi.fn(function() {
+      return {
+        getDisplay: () => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: vi.fn(),
+          onresize: null,
+        }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        sendSize: vi.fn(),
+        sendMouseState: vi.fn(),
+        sendKeyEvent: vi.fn(),
+        onstatechange: null,
+        onerror: null,
+      };
     }),
-    Keyboard: vi.fn(() => ({
-      onkeydown: null,
-      onkeyup: null,
-    })),
+    WebSocketTunnel: vi.fn(function() {
+      return {
+        onerror: null,
+      };
+    }),
+    Mouse: Object.assign(vi.fn(function() {
+      return {
+        onEach: vi.fn(),
+      };
+    }), {
+      Touchscreen: vi.fn(function() {
+        return {
+          onEach: vi.fn(),
+        };
+      }),
+    }),
+    Keyboard: vi.fn(function() {
+      return {
+        onkeydown: null,
+        onkeyup: null,
+      };
+    }),
   },
 }));
 

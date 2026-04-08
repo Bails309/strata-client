@@ -63,7 +63,7 @@ pub async fn create_share(
     // Verify user has access to this connection
     let has_access: bool = if user.role == "admin" {
         // Admins can share any connection
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1)")
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)")
             .bind(connection_id)
             .fetch_one(&db.pool)
             .await?
@@ -74,7 +74,7 @@ pub async fn create_share(
                 SELECT 1 FROM connections c
                 JOIN role_connections rc ON rc.connection_id = c.id
                 JOIN users u ON u.role_id = rc.role_id
-                WHERE c.id = $1 AND u.id = $2
+                WHERE c.id = $1 AND u.id = $2 AND c.soft_deleted_at IS NULL
             )",
         )
         .bind(connection_id)
@@ -146,13 +146,17 @@ pub async fn revoke_share(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
-    sqlx::query(
-        "UPDATE connection_shares SET revoked = true WHERE id = $1 AND owner_user_id = $2",
+    let result = sqlx::query(
+        "UPDATE connection_shares SET revoked = true WHERE id = $1 AND owner_user_id = $2 AND NOT revoked",
     )
     .bind(share_id)
     .bind(user.id)
     .execute(&db.pool)
     .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Share not found or already revoked".into()));
+    }
 
     Ok(Json(serde_json::json!({ "status": "revoked" })))
 }
@@ -183,19 +187,22 @@ pub async fn ws_shared_tunnel(
         let cutoff = Instant::now() - std::time::Duration::from_secs(SHARE_WINDOW_SECS);
         attempts.retain(|t| *t > cutoff);
         if attempts.len() >= MAX_SHARE_ATTEMPTS {
-            return Err(AppError::Auth("Too many connection attempts. Please try again later.".into()));
+            return Err(AppError::Auth(
+                "Too many connection attempts. Please try again later.".into(),
+            ));
         }
         attempts.push(Instant::now());
     }
 
-    let (db, config) = {
+    let (db, config, guacd_pool) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
         }
         let db = s.db.clone().ok_or(AppError::SetupRequired)?;
         let cfg = s.config.clone().ok_or(AppError::SetupRequired)?;
-        (db, cfg)
+        let pool = s.guacd_pool.clone();
+        (db, cfg, pool)
     };
 
     // Look up the share and verify it's valid
@@ -218,7 +225,7 @@ pub async fn ws_shared_tunnel(
     // Fetch connection details
     let conn: (String, String, i32, Option<String>, String, serde_json::Value) =
         sqlx::query_as(
-            "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1",
+            "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
         )
         .bind(connection_id)
         .fetch_optional(&db.pool)
@@ -243,25 +250,58 @@ pub async fn ws_shared_tunnel(
         _ => std::collections::HashMap::new(),
     };
 
-    // Load the OWNER's credentials (the person who shared)
-    let password = if let Some(vault_cfg) = &config.vault {
-        let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-            "SELECT encrypted_password, encrypted_dek, nonce
-             FROM user_credentials WHERE user_id = $1 AND connection_id = $2",
+    // Load the OWNER's credentials (the person who shared).
+    // First try the newer credential_profiles system, then fall back to
+    // the legacy user_credentials table for backwards compatibility.
+    let (cred_username, cred_password) = if let Some(vault_cfg) = &config.vault {
+        // Try credential_profiles + credential_mappings first
+        let profile_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+            "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
+             FROM credential_mappings cm
+             JOIN credential_profiles cp ON cp.id = cm.credential_id
+             WHERE cm.connection_id = $1 AND cp.user_id = $2
+               AND cp.expires_at > now()",
         )
-        .bind(owner_user_id)
         .bind(connection_id)
+        .bind(owner_user_id)
         .fetch_optional(&db.pool)
         .await?;
 
-        if let Some((enc_pass, enc_dek, nonce)) = cred {
-            let plaintext = crate::services::vault::unseal(vault_cfg, &enc_dek, &enc_pass, &nonce).await?;
-            Some(String::from_utf8(plaintext).unwrap_or_default())
+        if let Some((enc_payload, enc_dek, nonce)) = profile_cred {
+            let plaintext =
+                crate::services::vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+            // Parse combined JSON payload { "u": username, "p": password }
+            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+            let u = parsed["u"].as_str().unwrap_or("").to_string();
+            let p = parsed["p"].as_str().unwrap_or("").to_string();
+            (
+                if u.is_empty() { None } else { Some(u) },
+                if p.is_empty() { None } else { Some(p) },
+            )
         } else {
-            None
+            // Fall back to legacy user_credentials table
+            let legacy_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+                "SELECT encrypted_password, encrypted_dek, nonce
+                 FROM user_credentials WHERE user_id = $1 AND connection_id = $2",
+            )
+            .bind(owner_user_id)
+            .bind(connection_id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            if let Some((enc_pass, enc_dek, nonce)) = legacy_cred {
+                let plaintext =
+                    crate::services::vault::unseal(vault_cfg, &enc_dek, &enc_pass, &nonce).await?;
+                let pwd = String::from_utf8(plaintext).unwrap_or_default();
+                (None, if pwd.is_empty() { None } else { Some(pwd) })
+            } else {
+                (None, None)
+            }
         }
     } else {
-        None
+        (None, None)
     };
 
     // Get the owner username for credential fallback
@@ -272,19 +312,29 @@ pub async fn ws_shared_tunnel(
     .fetch_optional(&db.pool)
     .await?;
 
-    let (final_username, final_password) = if password.is_some() {
-        (owner_username.clone(), password)
-    } else {
-        (None, None)
+    let (final_username, final_password) = match (cred_username, cred_password) {
+        (Some(u), Some(p)) => (Some(u), Some(p)),
+        (None, Some(p)) => (owner_username.clone(), Some(p)),
+        _ => (None, None),
     };
 
-    let guacd_host = config.guacd_host.unwrap_or_else(|| "guacd".into());
-    let guacd_port = config.guacd_port.unwrap_or(4822);
+    let guacd_host: String;
+    let guacd_port: u16;
+    if let Some(ref pool) = guacd_pool {
+        let (h, p) = pool.next();
+        guacd_host = h.to_string();
+        guacd_port = p;
+    } else {
+        guacd_host = config.guacd_host.unwrap_or_else(|| "guacd".into());
+        guacd_port = config.guacd_port.unwrap_or(4822);
+    };
 
     let security = extra.get("security").cloned().or(Some("any".into()));
     let ignore_cert = extra.get("ignore-cert").map(|v| v == "true").unwrap_or(false);
 
-    let safe_port: u16 = port.try_into().map_err(|_| AppError::Validation("Invalid port number".into()))?;
+    let safe_port: u16 = port
+        .try_into()
+        .map_err(|_| AppError::Validation("Invalid port number".into()))?;
 
     let connection_name = _name.clone();
 
@@ -315,23 +365,26 @@ pub async fn ws_shared_tunnel(
         let s = state.read().await;
         s.session_registry.clone()
     };
-    let nvr_session_id = format!("shared-{}-{}", connection_id, chrono::Utc::now().timestamp_millis());
-    let nvr_username = format!("shared:{}", owner_username.unwrap_or_else(|| "unknown".into()));
+    let nvr_session_id =
+        format!("shared-{}-{}", connection_id, chrono::Utc::now().timestamp_millis());
+    let nvr_username =
+        format!("shared:{}", owner_username.unwrap_or_else(|| "unknown".into()));
 
-    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| async move {
-        let nvr = NvrContext {
-            registry: session_registry,
-            session_id: nvr_session_id,
-            connection_id,
-            connection_name,
-            protocol,
-            user_id: owner_user_id,
-            username: nvr_username,
-        };
-        if let Err(e) =
-            tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
-        {
-            tracing::error!("Shared tunnel error: {e}");
+    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| {
+        async move {
+            let nvr = NvrContext {
+                registry: session_registry,
+                session_id: nvr_session_id,
+                connection_id,
+                connection_name,
+                protocol,
+                user_id: owner_user_id,
+                username: nvr_username,
+            };
+            if let Err(e) = tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+            {
+                tracing::error!("Shared tunnel error: {e}");
+            }
         }
     }))
 }

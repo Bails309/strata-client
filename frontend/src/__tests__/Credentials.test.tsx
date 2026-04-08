@@ -64,9 +64,9 @@ describe('Credentials', () => {
     renderCredentials();
 
     await waitFor(() => {
-      expect(screen.getByText('Credentials')).toBeInTheDocument();
+      expect(screen.getByText('New Profile')).toBeInTheDocument();
     });
-    expect(screen.getByText('New Profile')).toBeInTheDocument();
+    expect(screen.getByText('Credentials')).toBeInTheDocument();
   });
 
   it('renders credential profiles list', async () => {

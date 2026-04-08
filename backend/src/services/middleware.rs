@@ -54,15 +54,21 @@ pub async fn require_auth(
             if !is_ws_upgrade {
                 return None;
             }
-            req.uri()
-                .query()
-                .and_then(|q| {
-                    q.split('&')
-                        .find_map(|pair| pair.strip_prefix("token="))
-                        .map(|t| t.to_string())
-                })
+            req.uri().query().and_then(|q| {
+                q.split('&')
+                    .find_map(|pair| pair.strip_prefix("token="))
+                    .map(|t| t.to_string())
+            })
         })
-        .ok_or_else(|| AppError::Auth("Missing or invalid Authorization header".into()))?;
+        .ok_or_else(|| {
+            AppError::Auth("Missing or invalid Authorization header".into())
+        })?;
+
+    // Check if the token has been revoked (logout) — do this before
+    // expensive DB lookups to short-circuit revoked tokens early.
+    if crate::services::token_revocation::is_revoked(&token) {
+        return Err(AppError::Auth("Token has been revoked".into()));
+    }
 
     // Try local JWT first, then fall back to OIDC
     let auth_user = if let Some(user) = try_local_jwt(&token, &db).await? {
@@ -71,11 +77,6 @@ pub async fn require_auth(
         // Fall back to OIDC validation
         validate_oidc_token(&token, &db).await?
     };
-
-    // Check if the token has been revoked (logout)
-    if crate::services::token_revocation::is_revoked(&token) {
-        return Err(AppError::Auth("Token has been revoked".into()));
-    }
 
     req.extensions_mut().insert(auth_user);
     Ok(next.run(req).await)
@@ -89,7 +90,7 @@ async fn try_local_jwt(
     use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
     use serde::Deserialize;
 
-    #[derive(Deserialize)]
+    #[derive(Deserialize, Clone)]
     struct LocalClaims {
         sub: String,
         #[allow(dead_code)]
@@ -193,10 +194,7 @@ async fn validate_oidc_token(
 
 /// Middleware that additionally requires the authenticated user to have the
 /// "admin" role. Must be layered after `require_auth`.
-pub async fn require_admin(
-    req: Request,
-    next: Next,
-) -> Result<Response, AppError> {
+pub async fn require_admin(req: Request, next: Next) -> Result<Response, AppError> {
     let user = req
         .extensions()
         .get::<AuthUser>()

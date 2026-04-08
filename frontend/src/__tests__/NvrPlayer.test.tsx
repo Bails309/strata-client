@@ -3,36 +3,41 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // Polyfill ResizeObserver for jsdom
-const resizeObserverMock = vi.fn(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
-vi.stubGlobal('ResizeObserver', resizeObserverMock);
+const resizeObserverMock = vi.fn(function() {
+  return {
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  };
+});
 
 // Mock guacamole-common-js
 vi.mock('guacamole-common-js', () => ({
   default: {
-    Client: vi.fn(() => ({
-      getDisplay: () => ({
-        getElement: () => document.createElement('div'),
-        getWidth: () => 1920,
-        getHeight: () => 1080,
-        scale: vi.fn(),
-        onresize: null,
-      }),
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      sendSize: vi.fn(),
-      onerror: null,
-      onstatechange: null,
-      onclipboard: null,
-    })),
-    WebSocketTunnel: vi.fn(() => ({
-      onerror: null,
-      oninstruction: null,
-      onstatechange: null,
-    })),
+    Client: vi.fn(function() {
+      return {
+        getDisplay: () => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: vi.fn(),
+          onresize: null,
+        }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        sendSize: vi.fn(),
+        onerror: null,
+        onstatechange: null,
+        onclipboard: null,
+      };
+    }),
+    WebSocketTunnel: vi.fn(function() {
+      return {
+        onerror: null,
+        oninstruction: null,
+        onstatechange: null,
+      };
+    }),
     Tunnel: { CLOSED: 0 },
     Status: vi.fn(),
     StringReader: vi.fn(),
@@ -59,6 +64,7 @@ function renderNvrPlayer(sessionId = 'test-session-123') {
 describe('NvrPlayer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('ResizeObserver', resizeObserverMock);
   });
 
   it('renders with connection name from URL params', () => {

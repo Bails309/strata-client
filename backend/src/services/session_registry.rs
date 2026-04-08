@@ -41,8 +41,9 @@ struct BufferedFrame {
 /// Instructions like `connect` and `args` carry authentication data and
 /// must not be stored in the NVR ring buffer.
 fn filter_sensitive_instructions(data: &str) -> String {
-    // Sensitive instruction opcodes that may carry credentials
-    const SENSITIVE_OPCODES: &[&str] = &[".connect,", ".args,"];
+    // Sensitive instruction opcodes that may carry credentials.
+    // We check for the exact opcode using the protocol format "<len>.<opcode>".
+    const SENSITIVE_MATCHERS: &[&str] = &["7.connect", "4.args"];
 
     let mut filtered = String::with_capacity(data.len());
     for inst in data.split_inclusive(';') {
@@ -50,7 +51,7 @@ fn filter_sensitive_instructions(data: &str) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        let is_sensitive = SENSITIVE_OPCODES.iter().any(|op| trimmed.contains(op));
+        let is_sensitive = SENSITIVE_MATCHERS.iter().any(|&m| trimmed.starts_with(m));
         if !is_sensitive {
             filtered.push_str(inst);
         }

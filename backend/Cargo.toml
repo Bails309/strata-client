@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"
@@ -35,7 +35,7 @@ sqlx = { version = "0.7", features = [
 ] }
 
 # Auth / JWT / OIDC
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 
 # Cryptography (envelope encryption)
@@ -70,6 +70,7 @@ anyhow = "1"
 dotenvy = "0.15"
 scopeguard = "1"
 urlencoding = "2.1"
+tempfile = "3"
 
 [profile.release]
 lto = true
@@ -78,4 +79,3 @@ strip = true
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-tempfile = "3"

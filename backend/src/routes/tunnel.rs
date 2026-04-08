@@ -58,7 +58,6 @@ pub async fn create_tunnel_ticket(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
-    let admin_max = 24;
     let ticket = tunnel_tickets::TunnelTicket {
         user_id: user.id,
         connection_id: body.connection_id,
@@ -67,9 +66,6 @@ pub async fn create_tunnel_ticket(
         width: body.width.unwrap_or(1920),
         height: body.height.unwrap_or(1080),
         dpi: body.dpi.unwrap_or(96),
-        ttl_hours: (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
-            .min(admin_max)
-            .max(1) as i32,
         created_at: std::time::Instant::now(),
     };
 
@@ -117,16 +113,20 @@ pub async fn ws_tunnel(
     }
 
     // Fetch connection details
-    let conn: (String, String, i32, Option<String>, String, serde_json::Value) =
-        sqlx::query_as(
-            "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1",
-        )
-        .bind(connection_id)
-        .fetch_optional(&db.pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
-
-    let (protocol, hostname, port, domain, connection_name, extra_json) = conn;
+    let (protocol, hostname, port, domain, connection_name, extra_json): (
+        String,
+        String,
+        i32,
+        Option<String>,
+        String,
+        serde_json::Value,
+    ) = sqlx::query_as(
+        "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+    )
+    .bind(connection_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Parse extra JSONB into a HashMap for guacd params
     let extra: std::collections::HashMap<String, String> = match &extra_json {
@@ -328,7 +328,9 @@ pub async fn ws_tunnel(
             user_id: nvr_user_id,
             username: nvr_username,
         };
-        if let Err(e) = tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await {
+        if let Err(e) =
+            tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+        {
             tracing::error!("Tunnel error: {e}");
             // Audit log the tunnel failure
             let _ = crate::services::audit::log(

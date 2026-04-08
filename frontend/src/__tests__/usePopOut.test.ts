@@ -4,26 +4,44 @@ import { renderHook, act } from '@testing-library/react';
 // Mock guacamole-common-js
 vi.mock('guacamole-common-js', () => ({
   default: {
-    Client: vi.fn(),
-    Mouse: Object.assign(vi.fn(() => ({
-      onEach: vi.fn(),
-      onmousedown: null,
-      onmouseup: null,
-      onmousemove: null,
-    })), {
-      Touchscreen: vi.fn(() => ({
+    Client: vi.fn(function() {
+      return {
+        getDisplay: vi.fn(() => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: vi.fn(),
+        })),
+        sendMouseState: vi.fn(),
+        sendKeyEvent: vi.fn(),
+        sendSize: vi.fn(),
+      };
+    }),
+    Mouse: Object.assign(vi.fn(function() {
+      return {
         onEach: vi.fn(),
         onmousedown: null,
         onmouseup: null,
         onmousemove: null,
-      })),
+      };
+    }), {
+      Touchscreen: vi.fn(function() {
+        return {
+          onEach: vi.fn(),
+          onmousedown: null,
+          onmouseup: null,
+          onmousemove: null,
+        };
+      }),
       Event: vi.fn(),
     }),
-    Keyboard: vi.fn(() => ({
-      onkeydown: null,
-      onkeyup: null,
-      reset: vi.fn(),
-    })),
+    Keyboard: vi.fn(function() {
+      return {
+        onkeydown: null,
+        onkeyup: null,
+        reset: vi.fn(),
+      };
+    }),
   },
 }));
 

@@ -10,7 +10,7 @@
 
 A high-performance, modernized client and proxy architecture for [Apache Guacamole](https://guacamole.apache.org/). Built with a Rust backend and a modern TypeScript SPA, featuring enterprise-grade security via HashiCorp Vault envelope encryption, OIDC SSO, and native FreeRDP 3 / Kerberos support.
 
-> **Version:** 0.6.0 — see the [CHANGELOG](CHANGELOG.md) for current progress.
+> **Version:** 0.6.1 — see the [CHANGELOG](CHANGELOG.md) for current progress.
 
 ---
 

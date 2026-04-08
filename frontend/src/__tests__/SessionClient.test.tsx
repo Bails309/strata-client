@@ -3,55 +3,69 @@ import { render } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // Polyfill ResizeObserver for jsdom
-vi.stubGlobal('ResizeObserver', vi.fn(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-})));
+const resizeObserverMock = vi.fn(function() {
+  return {
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  };
+});
 
 vi.mock('guacamole-common-js', () => ({
   default: {
-    Client: vi.fn(() => ({
-      getDisplay: () => ({
-        getElement: () => document.createElement('div'),
-        getWidth: () => 1920,
-        getHeight: () => 1080,
-        scale: vi.fn(),
-        onresize: null,
-      }),
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      sendSize: vi.fn(),
-      sendMouseState: vi.fn(),
-      sendKeyEvent: vi.fn(),
-      createClipboardStream: vi.fn(() => ({})),
-      onclipboard: null,
-      onfilesystem: null,
-      onfile: null,
-      onstatechange: null,
-      onerror: null,
-      onrequired: null,
-    })),
-    WebSocketTunnel: vi.fn(() => ({
-      onerror: null,
-    })),
-    Mouse: Object.assign(vi.fn(() => ({
-      onEach: vi.fn(),
-    })), {
-      Touchscreen: vi.fn(() => ({
+    Client: vi.fn(function() {
+      return {
+        getDisplay: () => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: vi.fn(),
+          onresize: null,
+        }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        sendSize: vi.fn(),
+        sendMouseState: vi.fn(),
+        sendKeyEvent: vi.fn(),
+        createClipboardStream: vi.fn(() => ({})),
+        onclipboard: null,
+        onfilesystem: null,
+        onfile: null,
+        onstatechange: null,
+        onerror: null,
+        onrequired: null,
+      };
+    }),
+    WebSocketTunnel: vi.fn(function() {
+      return {
+        onerror: null,
+      };
+    }),
+    Mouse: Object.assign(vi.fn(function() {
+      return {
         onEach: vi.fn(),
-      })),
+      };
+    }), {
+      Touchscreen: vi.fn(function() {
+        return {
+          onEach: vi.fn(),
+        };
+      }),
       Event: vi.fn(),
     }),
-    Keyboard: vi.fn(() => ({
-      onkeydown: null,
-      onkeyup: null,
-      reset: vi.fn(),
-    })),
-    StringWriter: vi.fn(() => ({
-      sendText: vi.fn(),
-      sendEnd: vi.fn(),
-    })),
+    Keyboard: vi.fn(function() {
+      return {
+        onkeydown: null,
+        onkeyup: null,
+        reset: vi.fn(),
+      };
+    }),
+    StringWriter: vi.fn(function() {
+      return {
+        sendText: vi.fn(),
+        sendEnd: vi.fn(),
+      };
+    }),
     StringReader: vi.fn(),
   },
 }));
@@ -103,6 +117,8 @@ import SessionClient from '../pages/SessionClient';
 
 describe('SessionClient', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('ResizeObserver', resizeObserverMock);
     // SessionClient portals into #root
     if (!document.getElementById('root')) {
       const root = document.createElement('div');

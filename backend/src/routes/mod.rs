@@ -188,7 +188,10 @@ mod tests {
 
     #[test]
     fn build_cors_layer_with_allowed_origins() {
-        std::env::set_var("STRATA_ALLOWED_ORIGINS", "https://app.example.com, https://dev.example.com");
+        std::env::set_var(
+            "STRATA_ALLOWED_ORIGINS",
+            "https://app.example.com, https://dev.example.com",
+        );
         std::env::remove_var("STRATA_DOMAIN");
         let _layer = build_cors_layer();
         std::env::remove_var("STRATA_ALLOWED_ORIGINS");

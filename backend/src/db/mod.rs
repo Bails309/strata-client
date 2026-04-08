@@ -53,24 +53,40 @@ impl Database {
     }
 
     /// Run migrations with advisory-lock protection to prevent HA race conditions.
+    /// Uses a dedicated connection so the session-level lock is held consistently.
     pub async fn migrate(&self) -> anyhow::Result<()> {
-        // Acquire a PostgreSQL advisory lock (key = hash of "strata-migrations")
+        // Acquire a dedicated connection so the advisory lock is held on the
+        // same session for the entire migration run.
+        let mut conn = self.pool.acquire().await?;
+
         const LOCK_ID: i64 = 0x5354_5241_5441; // "STRATA" in hex-ish
 
         sqlx::query("SELECT pg_advisory_lock($1)")
             .bind(LOCK_ID)
-            .execute(&self.pool)
+            .execute(&mut *conn)
             .await?;
 
         tracing::info!("Advisory lock acquired – running migrations");
-        sqlx::migrate!("./migrations").run(&self.pool).await?;
+
+        // sqlx::migrate!().run() requires a Pool, but we hold the lock on
+        // `conn`.  The lock prevents other instances from running migrations
+        // concurrently.  The migrator may use any pool connection for DDL,
+        // which is safe because only one process reaches this point.
+        let result = sqlx::migrate!("./migrations")
+            .run(&self.pool)
+            .await;
+
+        // Always release the lock, even if migrations failed
+        let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(LOCK_ID)
+            .execute(&mut *conn)
+            .await;
+
+        // Report migration result first
+        result?;
         tracing::info!("Migrations complete");
 
-        sqlx::query("SELECT pg_advisory_unlock($1)")
-            .bind(LOCK_ID)
-            .execute(&self.pool)
-            .await?;
-
+        unlock_result?;
         Ok(())
     }
 }

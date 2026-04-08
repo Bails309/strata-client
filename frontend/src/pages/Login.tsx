@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { login, getStatus, StatusResponse } from '../api';
 import { useTheme } from '../components/ThemeProvider';
 
@@ -13,13 +12,18 @@ export default function Login({ onLogin }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [searchParams] = useSearchParams();
   const { theme } = useTheme();
 
   useEffect(() => {
-    // Check for token in URL (from SSO redirect)
-    const token = searchParams.get('token');
+    // Check for token in URL fragment (from SSO redirect).
+    // We use a fragment (#token=) instead of a query parameter so the JWT
+    // is never sent to servers in Referer headers or logged by proxies.
+    const hash = window.location.hash;
+    const tokenMatch = hash.match(/[#&]token=([^&]*)/);
+    const token = tokenMatch ? decodeURIComponent(tokenMatch[1]) : null;
     if (token) {
+      // Clear the fragment to remove the token from the URL / browser history
+      window.history.replaceState(null, '', window.location.pathname);
       localStorage.setItem('access_token', token);
       onLogin();
       return;
@@ -35,7 +39,7 @@ export default function Login({ onLogin }: Props) {
       }
     }
     init();
-  }, [searchParams, onLogin]);
+  }, [onLogin]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

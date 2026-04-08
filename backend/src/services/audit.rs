@@ -3,8 +3,10 @@ use sqlx::{Pool, Postgres};
 use uuid::Uuid;
 
 /// Append an immutable, hash-chained audit log entry.
-/// Uses an advisory lock to serialise inserts, preventing concurrent
-/// requests from reading the same previous_hash and forking the chain.
+/// Uses `SELECT … FOR UPDATE` on the most recent row to serialise inserts
+/// within a transaction, preventing concurrent requests from reading the
+/// same previous_hash and forking the chain.  This is more granular than
+/// a global advisory lock and allows better throughput under concurrency.
 pub async fn log(
     pool: &Pool<Postgres>,
     user_id: Option<Uuid>,
@@ -13,19 +15,17 @@ pub async fn log(
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
-    // Acquire a transaction-scoped advisory lock (released on commit/rollback).
-    // Key 0x5354524154415544 = ascii "STRATAAUD" truncated to i64.
-    sqlx::query("SELECT pg_advisory_xact_lock(6006708461687685956)")
-        .execute(&mut *tx)
-        .await?;
-
-    // Fetch hash of the most recent entry (or empty string for the first)
-    let previous_hash: String = sqlx::query_scalar(
-        "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or_default();
+    // Lock the most recent row to serialise concurrent inserts.
+    // If the table is empty (first entry), no row is locked and there is
+    // no contention.  FOR UPDATE ensures only one transaction can read
+    // the tail at a time — others block until this transaction commits.
+    let previous_hash: String =
+        sqlx::query_scalar(
+            "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1 FOR UPDATE"
+        )
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or_default();
 
     // Compute current_hash = SHA-256(previous_hash || action_type || details)
     let mut hasher = Sha256::new();

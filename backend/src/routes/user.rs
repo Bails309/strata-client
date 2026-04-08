@@ -382,7 +382,8 @@ pub async fn update_credential_profile(
                 .fetch_one(&db.pool)
                 .await?;
 
-                let plaintext = vault::unseal(&vault_cfg, &existing.1, &existing.0, &existing.2).await?;
+                let plaintext =
+                    vault::unseal(&vault_cfg, &existing.1, &existing.0, &existing.2).await?;
                 let plain_str = String::from_utf8(plaintext).unwrap_or_default();
                 let parsed: serde_json::Value = serde_json::from_str(&plain_str)
                     .unwrap_or_else(|_| json!({ "u": "", "p": plain_str }));
@@ -672,37 +673,41 @@ pub async fn connection_info(
     Extension(user): Extension<AuthUser>,
     Path(connection_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db = require_running(&state).await?;
+    let (db, has_vault) = {
+        let s = state.read().await;
+        if s.phase != crate::services::app_state::BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        let db = s.db.clone().ok_or(AppError::SetupRequired)?;
+        let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some();
+        (db, vault)
+    };
 
     // Fetch protocol for this connection
     let protocol: String =
-        sqlx::query_scalar("SELECT protocol FROM connections WHERE id = $1")
+        sqlx::query_scalar("SELECT protocol FROM connections WHERE id = $1 AND soft_deleted_at IS NULL")
             .bind(connection_id)
             .fetch_optional(&db.pool)
             .await?
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Check if a credential profile is mapped to this user+connection
-    let has_vault_creds: bool = {
-        let s = state.read().await;
-        let has_vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some();
-        if !has_vault {
-            false
-        } else {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(
-                    SELECT 1 FROM credential_mappings cm
-                    JOIN credential_profiles cp ON cp.id = cm.credential_id
-                    WHERE cm.connection_id = $1 AND cp.user_id = $2
-                      AND cp.expires_at > now()
-                )",
-            )
-            .bind(connection_id)
-            .bind(user.id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap_or(false)
-        }
+    let has_vault_creds: bool = if !has_vault {
+        false
+    } else {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                SELECT 1 FROM credential_mappings cm
+                JOIN credential_profiles cp ON cp.id = cm.credential_id
+                WHERE cm.connection_id = $1 AND cp.user_id = $2
+                  AND cp.expires_at > now()
+            )",
+        )
+        .bind(connection_id)
+        .bind(user.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap_or(false)
     };
 
     Ok(Json(json!({
@@ -727,6 +732,9 @@ pub async fn get_recording(
         return Err(AppError::NotFound("Invalid filename".into()));
     }
 
+    // Escape quotes in filename for Content-Disposition header
+    let safe_filename = filename.replace('"', "");
+
     // Try local file first
     let recordings_dir = "/var/lib/guacamole/recordings";
     let path = format!("{recordings_dir}/{filename}");
@@ -746,7 +754,7 @@ pub async fn get_recording(
         let body = Body::from_stream(stream);
         return Ok(axum::response::Response::builder()
             .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
+            .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{safe_filename}\""))
             .body(body)
             .unwrap());
     }
@@ -773,7 +781,7 @@ pub async fn get_recording(
             let body = Body::from(data);
             return Ok(axum::response::Response::builder()
                 .header(header::CONTENT_TYPE, "application/octet-stream")
-                .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
+                .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{safe_filename}\""))
                 .body(body)
                 .unwrap());
         }

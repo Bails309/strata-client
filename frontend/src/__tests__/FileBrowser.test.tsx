@@ -4,17 +4,26 @@ import userEvent from '@testing-library/user-event';
 
 vi.mock('guacamole-common-js', () => ({
   default: {
-    BlobReader: vi.fn(),
-    BlobWriter: vi.fn(() => ({
-      onprogress: null,
-      oncomplete: null,
-      onerror: null,
-      sendBlob: vi.fn(),
-    })),
-    StringReader: vi.fn(() => ({
-      ontext: null,
-      onend: null,
-    })),
+    BlobReader: vi.fn(function() {
+      return {
+        onend: null,
+        getBlob: vi.fn(() => new Blob()),
+      };
+    }),
+    BlobWriter: vi.fn(function() {
+      return {
+        onprogress: null,
+        oncomplete: null,
+        onerror: null,
+        sendBlob: vi.fn(),
+      };
+    }),
+    StringReader: vi.fn(function() {
+      return {
+        ontext: null,
+        onend: null,
+      };
+    }),
     GuacObject: vi.fn(),
   },
 }));

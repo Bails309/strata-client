@@ -1,5 +1,5 @@
-import '@testing-library/jest-dom';
-import { vi } from 'vitest';
+import '@testing-library/jest-dom/vitest';
+import { vi, afterEach } from 'vitest';
 
 // Mock window.matchMedia for jsdom (not implemented)
 Object.defineProperty(window, 'matchMedia', {
@@ -14,4 +14,9 @@ Object.defineProperty(window, 'matchMedia', {
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
   })),
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });

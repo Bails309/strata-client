@@ -10,6 +10,9 @@ pub static JWT_SECRET: OnceLock<String> = OnceLock::new();
 /// Top-level configuration persisted to config.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// SECURITY: skip_serializing — database_url may contain credentials.
+    /// Resolved from DATABASE_URL env var or persisted config on load.
+    #[serde(skip_serializing, default)]
     pub database_url: String,
     pub database_mode: DatabaseMode,
 

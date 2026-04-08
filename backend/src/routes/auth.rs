@@ -23,6 +23,77 @@ static RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
 static IP_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// In-memory store for SSO CSRF state parameters.
+/// Each entry has a creation time; entries older than SSO_STATE_TTL are pruned.
+static SSO_STATE_STORE: std::sync::LazyLock<Mutex<HashMap<String, Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+const SSO_STATE_TTL_SECS: u64 = 300; // 5 minutes
+
+/// Cached OIDC discovery document with TTL.
+struct CachedDiscovery {
+    discovery: crate::services::auth::OidcDiscovery,
+    fetched_at: Instant,
+}
+static OIDC_DISCOVERY_CACHE: std::sync::LazyLock<Mutex<HashMap<String, CachedDiscovery>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+const OIDC_DISCOVERY_TTL_SECS: u64 = 600; // 10 minutes
+
+/// Fetch OIDC discovery document, returning a cached copy if fresh.
+async fn fetch_oidc_discovery(
+    issuer_url: &str,
+) -> Result<crate::services::auth::OidcDiscovery, AppError> {
+    // Check cache
+    {
+        let cache = OIDC_DISCOVERY_CACHE.lock().unwrap();
+        if let Some(entry) = cache.get(issuer_url) {
+            if entry.fetched_at.elapsed().as_secs() < OIDC_DISCOVERY_TTL_SECS {
+                return Ok(entry.discovery.clone());
+            }
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Auth(format!("HTTP client error: {e}")))?;
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer_url.trim_end_matches('/')
+    );
+    let discovery: crate::services::auth::OidcDiscovery = client
+        .get(&discovery_url)
+        .send()
+        .await
+        .map_err(|e| AppError::Auth(format!("OIDC discovery failed: {e}")))?
+        .json()
+        .await
+        .map_err(|e| AppError::Auth(format!("OIDC discovery parse: {e}")))?;
+
+    // Validate that the discovered issuer matches the configured one to
+    // prevent redirect/secret exfiltration via spoofed discovery documents.
+    let normalised_issuer = issuer_url.trim_end_matches('/');
+    let normalised_discovery = discovery.issuer.trim_end_matches('/');
+    if normalised_issuer != normalised_discovery {
+        return Err(AppError::Auth(format!(
+            "OIDC issuer mismatch: expected {normalised_issuer}, got {normalised_discovery}"
+        )));
+    }
+
+    // Update cache
+    {
+        let mut cache = OIDC_DISCOVERY_CACHE.lock().unwrap();
+        cache.insert(
+            issuer_url.to_string(),
+            CachedDiscovery {
+                discovery: discovery.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+
+    Ok(discovery)
+}
+
 const MAX_ATTEMPTS: usize = 5;
 const WINDOW_SECS: u64 = 60;
 /// Max attempts per IP across all usernames
@@ -100,8 +171,8 @@ pub async fn login(
                 map.clear();
             }
         }
-        let attempts = map.entry(client_ip.clone()).or_default();
         let cutoff = Instant::now() - std::time::Duration::from_secs(IP_WINDOW_SECS);
+        let attempts = map.entry(client_ip.clone()).or_default();
         attempts.retain(|t| *t > cutoff);
         if attempts.len() >= MAX_IP_ATTEMPTS {
             return Err(AppError::Auth(
@@ -124,8 +195,8 @@ pub async fn login(
                 map.clear();
             }
         }
-        let attempts = map.entry(body.username.clone()).or_default();
         let cutoff = Instant::now() - std::time::Duration::from_secs(WINDOW_SECS);
+        let attempts = map.entry(body.username.clone()).or_default();
         attempts.retain(|t| *t > cutoff);
         if attempts.len() >= MAX_ATTEMPTS {
             return Err(AppError::Auth(
@@ -138,16 +209,6 @@ pub async fn login(
         let s = state.read().await;
         s.db.clone().ok_or(AppError::Internal("Database not available".into()))?
     };
-
-    // Verify local authentication is enabled
-    let local_auth_enabled =
-        crate::services::settings::get(&db.pool, "local_auth_enabled")
-            .await?
-            .unwrap_or_else(|| "true".into())
-            == "true";
-    if !local_auth_enabled {
-        return Err(AppError::Auth("Local authentication is disabled".into()));
-    }
 
     // Look up user by username
     let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
@@ -255,19 +316,19 @@ fn create_local_jwt(user_id: Uuid, username: &str, role: &str) -> Result<String,
 }
 
 /// POST /api/auth/logout – revoke the current token.
-pub async fn logout(
-    headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, AppError> {
+pub async fn logout(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppError> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Auth("Missing Authorization header".into()))?;
 
-    // Decode without full validation to extract exp claim
+    // Try to decode as a local JWT to extract the real exp claim.
+    // If decode fails (e.g. OIDC token), use a default 24h TTL so
+    // the token is still tracked in the revocation list.
     use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, Clone)]
     struct ExpClaims { exp: u64 }
 
     let secret = crate::config::JWT_SECRET.get().cloned().unwrap_or_default();
@@ -275,13 +336,22 @@ pub async fn logout(
     validation.set_issuer(&["strata-local"]);
     validation.set_required_spec_claims(&["exp"]);
 
-    if let Ok(data) = decode::<ExpClaims>(
+    let exp = if let Ok(data) = decode::<ExpClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     ) {
-        crate::services::token_revocation::revoke(token, data.claims.exp);
-    }
+        data.claims.exp
+    } else {
+        // Non-local token (OIDC) — use 24h from now as a conservative TTL
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        now + 86400
+    };
+
+    crate::services::token_revocation::revoke(token, exp);
 
     Ok(Json(json!({ "status": "logged_out" })))
 }
@@ -289,9 +359,7 @@ pub async fn logout(
 // ── SSO / OIDC ─────────────────────────────────────────────────────────
 
 /// GET /api/auth/sso/login – redirect to the OIDC provider.
-pub async fn sso_login(
-    State(state): State<SharedState>,
-) -> Result<Redirect, AppError> {
+pub async fn sso_login(State(state): State<SharedState>) -> Result<Redirect, AppError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(AppError::Internal("Database not available".into()))?
@@ -309,32 +377,31 @@ pub async fn sso_login(
         return Err(AppError::Auth("SSO is not properly configured".into()));
     }
 
-    // Discover the authorization endpoint
-    let client = reqwest::Client::new();
-    let discovery_url = format!("{}/.well-known/openid-configuration", issuer_url.trim_end_matches('/'));
-    let discovery: crate::services::auth::OidcDiscovery = client
-        .get(&discovery_url)
-        .send()
-        .await
-        .map_err(|e| AppError::Auth(format!("OIDC discovery failed: {e}")))?
-        .json()
-        .await
-        .map_err(|e| AppError::Auth(format!("OIDC discovery parse: {e}")))?;
+    // Discover the authorization endpoint (cached)
+    let discovery = fetch_oidc_discovery(&issuer_url).await?;
 
-    // Construct authorization URL
-    // In production, use a state parameter and store it in a cookie/session
+    // Construct authorization URL with CSRF state parameter
     let redirect_uri = format!(
         "{}://{}/api/auth/sso/callback",
-        "https", // In production this should be based on STRATA_DOMAIN or headers
+        "https",
         std::env::var("STRATA_DOMAIN").unwrap_or_else(|_| "localhost".into())
     );
+
+    let state = Uuid::new_v4().to_string();
+    {
+        let mut store = SSO_STATE_STORE.lock().unwrap();
+        // Prune expired entries
+        let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
+        store.retain(|_, created| *created > cutoff);
+        store.insert(state.clone(), Instant::now());
+    }
 
     let auth_url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope=openid+profile+email&state={}",
         discovery.authorization_endpoint,
-        client_id,
+        urlencoding::encode(&client_id),
         urlencoding::encode(&redirect_uri),
-        Uuid::new_v4() // Random state
+        urlencoding::encode(&state),
     );
 
     Ok(Redirect::to(&auth_url))
@@ -343,7 +410,7 @@ pub async fn sso_login(
 #[derive(Deserialize)]
 pub struct SsoCallbackParams {
     pub code: String,
-    pub _state: Option<String>,
+    pub state: Option<String>,
 }
 
 /// GET /api/auth/sso/callback – handle the OIDC callback.
@@ -351,6 +418,18 @@ pub async fn sso_callback(
     State(state): State<SharedState>,
     Query(params): Query<SsoCallbackParams>,
 ) -> Result<Redirect, AppError> {
+    // Validate CSRF state parameter
+    let state_value = params.state.as_deref().unwrap_or_default();
+    {
+        let mut store = SSO_STATE_STORE.lock().unwrap();
+        let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
+        store.retain(|_, created| *created > cutoff);
+        match store.remove(state_value) {
+            Some(_) => {} // valid — consumed
+            None => return Err(AppError::Auth("Invalid or expired SSO state parameter".into())),
+        }
+    }
+
     let (db, vault) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(AppError::Internal("Database not available".into()))?;
@@ -375,15 +454,9 @@ pub async fn sso_callback(
         _ => client_secret_raw,
     };
 
-    // Discovery for token endpoint
+    // Discovery for token endpoint (cached)
+    let discovery = fetch_oidc_discovery(&issuer_url).await?;
     let client = reqwest::Client::new();
-    let discovery_url = format!("{}/.well-known/openid-configuration", issuer_url.trim_end_matches('/'));
-    let discovery: crate::services::auth::OidcDiscovery = client
-        .get(&discovery_url)
-        .send()
-        .await?
-        .json()
-        .await?;
 
     let redirect_uri = format!(
         "{}://{}/api/auth/sso/callback",
@@ -408,29 +481,50 @@ pub async fn sso_callback(
         .await
         .map_err(|e| AppError::Auth(format!("Token response parse error: {e}")))?;
 
-    let access_token = token_res["access_token"].as_str()
+    let access_token = token_res["access_token"]
+        .as_str()
         .ok_or_else(|| AppError::Auth("Missing access_token in response".into()))?;
 
     // Validate token and get claims
     let claims = crate::services::auth::validate_token(&issuer_url, &client_id, access_token).await?;
 
-    // Find user by context/sub
+    // Find user by OIDC subject first, then fall back to username match.
+    // We intentionally do NOT match by email to prevent account takeover
+    // via email claim manipulation.
     let row: Option<(Uuid, String, String)> = sqlx::query_as(
         "SELECT u.id, u.username, r.name
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.sub = $1 OR u.email = $2",
+         WHERE u.sub = $1",
     )
     .bind(&claims.sub)
-    .bind(claims.email.as_ref())
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
+
+    // If no match by sub, try matching by preferred_username for initial linking
+    let row = if row.is_none() {
+        if let Some(ref preferred) = claims.preferred_username {
+            sqlx::query_as(
+                "SELECT u.id, u.username, r.name
+                 FROM users u JOIN roles r ON u.role_id = r.id
+                 WHERE u.username = $1 AND u.sub IS NULL",
+            )
+            .bind(preferred)
+            .fetch_optional(&db.pool)
+            .await
+            .map_err(AppError::Database)?
+        } else {
+            None
+        }
+    } else {
+        row
+    };
 
     let (user_id, username, role) = row.ok_or_else(|| {
         AppError::Auth(format!("No Strata user found for OIDC identity (sub: {}). Registration via SSO is not enabled.", claims.sub))
     })?;
 
-    // Update sub if it was missing (matched by email)
+    // Link the OIDC subject to this user if it was matched by username
     sqlx::query("UPDATE users SET sub = $1 WHERE id = $2 AND sub IS NULL")
         .bind(&claims.sub)
         .bind(user_id)
@@ -449,9 +543,10 @@ pub async fn sso_callback(
     )
     .await?;
 
-    // Redirect back to frontend with the token
-    // The frontend will see the token in the URL, save it, and navigate Home
-    Ok(Redirect::to(&format!("/login?token={}", token)))
+    // Redirect back to frontend with the token in a URL fragment.
+    // Fragments (#) are never sent to servers in Referer headers, never logged
+    // by proxies/CDNs, and don't appear in server access logs.
+    Ok(Redirect::to(&format!("/login#token={}", token)))
 }
 
 #[cfg(test)]

@@ -175,7 +175,9 @@ fn guac_instruction(opcode: &str, args: &[&str]) -> Vec<u8> {
 
 /// Read a complete Guacamole protocol instruction from a TCP stream.
 /// Instructions are terminated by ';'.
-async fn read_instruction(reader: &mut (impl AsyncReadExt + Unpin)) -> Result<(String, Vec<String>), AppError> {
+async fn read_instruction(
+    reader: &mut (impl AsyncReadExt + Unpin),
+) -> Result<(String, Vec<String>), AppError> {
     let mut buf = Vec::with_capacity(4096);
     let mut byte = [0u8; 1];
     loop {
@@ -206,17 +208,29 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
 
     while !remaining.is_empty() {
         // Find the dot separating length from value
-        let dot_pos = remaining.find('.')
+        let dot_pos = remaining
+            .find('.')
             .ok_or_else(|| AppError::Internal(format!("bad guac instruction: {raw}")))?;
-        let len: usize = remaining[..dot_pos].parse()
+        let len: usize = remaining[..dot_pos]
+            .parse()
             .map_err(|_| AppError::Internal(format!("bad guac length: {raw}")))?;
+        
+        // Guacamole lengths are in UNICODE CHARACTERS, not bytes.
         let value_start = dot_pos + 1;
-        let value_end = value_start + len;
-        if value_end > remaining.len() {
-            return Err(AppError::Internal(format!("guac instruction truncated: {raw}")));
-        }
-        elements.push(remaining[value_start..value_end].to_string());
-        remaining = &remaining[value_end..];
+        let value_pool = &remaining[value_start..];
+        
+        // Find the byte offset of the len-th character
+        let byte_offset = value_pool
+            .char_indices()
+            .nth(len)
+            .map(|(idx, _)| idx)
+            .unwrap_or(value_pool.len());
+
+        let value = &value_pool[..byte_offset];
+        elements.push(value.to_string());
+        
+        remaining = &value_pool[byte_offset..];
+        
         // Skip the comma separator if present
         if remaining.starts_with(',') {
             remaining = &remaining[1..];
@@ -332,18 +346,24 @@ pub async fn proxy(
 
     // ── NVR: register session in the in-memory registry ──
     let nvr_handles = if let Some(ref ctx) = nvr {
-        match ctx.registry.register(
-            ctx.session_id.clone(),
-            ctx.connection_id,
-            ctx.connection_name.clone(),
-            ctx.protocol.clone(),
-            ctx.user_id,
-            ctx.username.clone(),
-        ).await {
+        match ctx
+            .registry
+            .register(
+                ctx.session_id.clone(),
+                ctx.connection_id,
+                ctx.connection_name.clone(),
+                ctx.protocol.clone(),
+                ctx.user_id,
+                ctx.username.clone(),
+            )
+            .await
+        {
             Some((tx, buffer)) => Some((tx, buffer, ctx.registry.clone())),
             None => {
                 tracing::error!("Session limit reached — rejecting tunnel");
-                return Err(AppError::Internal("Maximum concurrent session limit reached".into()));
+                return Err(AppError::Internal(
+                    "Maximum concurrent session limit reached".into(),
+                ));
             }
         }
     } else {
@@ -391,13 +411,17 @@ pub async fn proxy(
 
                         // Cap pending buffer to prevent OOM from malformed streams
                         if pending.len() > MAX_PENDING_BYTES {
-                            tracing::warn!("Pending buffer exceeded {}B — dropping data", MAX_PENDING_BYTES);
+                            tracing::warn!(
+                                "Pending buffer exceeded {}B — dropping data",
+                                MAX_PENDING_BYTES
+                            );
                             pending.clear();
                         }
 
                         // Track bytes from guacd
                         if let Some(ref sess) = bandwidth {
-                            sess.bytes_from_guacd.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+                            sess.bytes_from_guacd
+                                .fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
                         }
 
                         // Find the last instruction boundary (';')
@@ -440,7 +464,8 @@ pub async fn proxy(
                         }
                         // Track bytes to guacd
                         if let Some(ref sess) = bandwidth {
-                            sess.bytes_to_guacd.fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                            sess.bytes_to_guacd
+                                .fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
                         }
                         if tcp_write.write_all(text.as_bytes()).await.is_err()
                             || tcp_write.flush().await.is_err()
@@ -481,6 +506,10 @@ pub async fn proxy(
                     tracing::info!("WebSocket ping send failed");
                     break;
                 }
+                // Reset the pong deadline so we measure from ping-sent, not
+                // from the last received pong. This prevents premature
+                // disconnects on slow systems where the first tick fires late.
+                last_pong = tokio::time::Instant::now();
             }
         }
     }
@@ -767,5 +796,32 @@ mod tests {
         assert_eq!(m["hostname"], "legit.com");
         // Empty value not inserted
         assert!(!m.contains_key("font-size"));
+    }
+
+    #[test]
+    fn test_parse_instruction_utf8() {
+        // "4.café,2.is,4.good;"
+        // 'café' has 4 chars, 5 bytes in UTF-8
+        let input = "4.café,2.is,4.good;";
+        let (opcode, args) = parse_instruction(input).unwrap();
+        assert_eq!(opcode, "café");
+        assert_eq!(args, vec!["is", "good"]);
+    }
+
+    #[test]
+    fn test_parse_instruction_multibyte() {
+        // "1.Ω,5.alpha;"
+        let input = "1.Ω,5.alpha;";
+        let (opcode, args) = parse_instruction(input).unwrap();
+        assert_eq!(opcode, "Ω");
+        assert_eq!(args, vec!["alpha"]);
+    }
+
+    #[test]
+    fn test_parse_instruction_normal() {
+        let input = "4.args,8.hostname,4.port;";
+        let (opcode, args) = parse_instruction(input).unwrap();
+        assert_eq!(opcode, "args");
+        assert_eq!(args, vec!["hostname", "port"]);
     }
 }

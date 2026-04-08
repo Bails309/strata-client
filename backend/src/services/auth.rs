@@ -15,7 +15,7 @@ pub struct Claims {
 }
 
 /// OIDC discovery document (subset).
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct OidcDiscovery {
     pub jwks_uri: String,
     pub issuer: String,
@@ -91,10 +91,11 @@ pub async fn validate_token(
         .map_err(|e| AppError::Auth(format!("Token header: {e}")))?;
 
     // Require a kid in the token header to prevent key confusion attacks
-    let kid = header.kid
+    let kid = header
+        .kid
         .ok_or_else(|| AppError::Auth("Token missing kid header claim".into()))?;
-
-    let jwk = jwks.keys
+    let jwk = jwks
+        .keys
         .iter()
         .find(|k| k.kid.as_deref() == Some(&kid))
         .ok_or_else(|| AppError::Auth("No matching JWK kid".into()))?;

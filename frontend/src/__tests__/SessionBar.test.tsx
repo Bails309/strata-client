@@ -1,25 +1,36 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../components/SessionManager', () => ({
   useSessionManager: vi.fn(),
+  // GuacSession is an interface, no need to mock if only used as type
 }));
 
-import SessionBar from '../components/SessionBar';
 import { useSessionManager } from '../components/SessionManager';
+import SessionBar from '../components/SessionBar';
+
+// Polyfill ResizeObserver for jsdom
+const resizeObserverMock = vi.fn(function() {
+  return {
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  };
+});
 
 function renderSessionBar() {
   return render(
-    <BrowserRouter>
+    <MemoryRouter>
       <SessionBar />
-    </BrowserRouter>,
+    </MemoryRouter>,
   );
 }
 
 describe('SessionBar', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('ResizeObserver', resizeObserverMock);
   });
 
   it('renders nothing when sessions is empty', () => {

@@ -11,6 +11,13 @@ import { getMe } from '../api';
 describe('SessionWatermark', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal('ResizeObserver', vi.fn(function() {
+      return {
+        observe: vi.fn(),
+        unobserve: vi.fn(),
+        disconnect: vi.fn(),
+      };
+    }));
   });
 
   it('renders nothing when user is not loaded yet', () => {

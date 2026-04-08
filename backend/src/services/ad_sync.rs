@@ -58,13 +58,17 @@ pub(crate) struct DiscoveredComputer {
 
 // ── Execute a full sync for one config ─────────────────────────────────
 
-pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::Result<Uuid> {
+pub async fn run_sync(
+    pool: &Pool<Postgres>,
+    config: &AdSyncConfig,
+) -> anyhow::Result<Uuid> {
     // Advisory lock keyed on config UUID to prevent concurrent syncs for the same config.
-    // pg_try_advisory_lock is session-level and non-blocking; returns false if already held.
+    // Use a dedicated connection so the session-level lock is held on the same session.
+    let mut conn = pool.acquire().await?;
     let lock_key = config.id.as_u128() as i64;
     let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
         .bind(lock_key)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
     if !acquired {
         anyhow::bail!("Sync already in progress for config '{}'", config.label);
@@ -79,10 +83,10 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
 
     let result = do_sync(pool, config, run_id).await;
 
-    // Always release the advisory lock, even on error
+    // Always release the advisory lock on the SAME connection, even on error
     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(lock_key)
-        .execute(pool)
+        .execute(&mut *conn)
         .await;
 
     match result {
@@ -110,7 +114,11 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
     Ok(run_id)
 }
 
-async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> anyhow::Result<()> {
+async fn do_sync(
+    pool: &Pool<Postgres>,
+    config: &AdSyncConfig,
+    run_id: Uuid,
+) -> anyhow::Result<()> {
     // Phase 1: Query LDAP for computers
     let computers = ldap_query(config).await?;
     tracing::info!(
@@ -120,114 +128,91 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         config.search_bases,
     );
 
-    // Phase 2: Fetch existing connections for this source
-    let existing: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, COALESCE(ad_dn,''), hostname FROM connections WHERE ad_source_id = $1 AND soft_deleted_at IS NULL",
-    )
-    .bind(config.id)
-    .fetch_all(pool)
-    .await?;
+    // Phase 2: Compute stats and perform bulk upsert
+    let mut dns = Vec::with_capacity(computers.len());
+    let mut hostnames = Vec::with_capacity(computers.len());
+    let mut names = Vec::with_capacity(computers.len());
+    let mut descriptions = Vec::with_capacity(computers.len());
 
-    let existing_dns: std::collections::HashSet<String> =
-        existing.iter().map(|(_, dn, _)| dn.clone()).collect();
-
-    let discovered_dns: std::collections::HashSet<String> =
-        computers.iter().map(|c| c.dn.clone()).collect();
-
-    let mut created = 0i32;
-    let mut updated = 0i32;
-
-    // Phase 3: Upsert discovered computers
     for computer in &computers {
-        let hostname = computer
-            .dns_host_name
-            .as_deref()
-            .unwrap_or(&computer.name)
-            .to_lowercase();
-        let name = computer.name.to_lowercase();
+        dns.push(computer.dn.clone());
+        hostnames.push(
+            computer
+                .dns_host_name
+                .as_deref()
+                .unwrap_or(&computer.name)
+                .to_lowercase(),
+        );
+        names.push(computer.name.to_lowercase());
 
-        let desc = computer
-            .description
-            .as_deref()
-            .unwrap_or_default()
-            .to_string();
+        let desc = computer.description.as_deref().unwrap_or_default();
         let description = if desc.is_empty() {
             format!("Imported from AD: {}", config.label)
         } else {
-            desc
+            desc.to_string()
         };
-
-        if existing_dns.contains(&computer.dn) {
-            // Update hostname, name, description, domain if changed
-            let changed = sqlx::query(
-                "UPDATE connections SET hostname = $1, name = $2, description = $5, domain = $6, soft_deleted_at = NULL, updated_at = now()
-                 WHERE ad_source_id = $3 AND ad_dn = $4 AND (hostname != $1 OR name != $2 OR description IS DISTINCT FROM $5 OR domain IS DISTINCT FROM $6 OR soft_deleted_at IS NOT NULL)",
-            )
-            .bind(&hostname)
-            .bind(&name)
-            .bind(config.id)
-            .bind(&computer.dn)
-            .bind(&description)
-            .bind(&config.domain_override)
-            .execute(pool)
-            .await?;
-            if changed.rows_affected() > 0 {
-                updated += 1;
-            }
-        } else {
-            // Check if soft-deleted — resurrect
-            let resurrected = sqlx::query(
-                "UPDATE connections SET soft_deleted_at = NULL, hostname = $1, name = $2, description = $5, domain = $6, updated_at = now()
-                 WHERE ad_source_id = $3 AND ad_dn = $4 AND soft_deleted_at IS NOT NULL",
-            )
-            .bind(&hostname)
-            .bind(&name)
-            .bind(config.id)
-            .bind(&computer.dn)
-            .bind(&description)
-            .bind(&config.domain_override)
-            .execute(pool)
-            .await?;
-
-            if resurrected.rows_affected() == 0 {
-                // Truly new
-                sqlx::query(
-                    "INSERT INTO connections (name, protocol, hostname, port, domain, description, group_id, ad_source_id, ad_dn, extra)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '{}'::jsonb)",
-                )
-                .bind(&name)
-                .bind(&config.protocol)
-                .bind(&hostname)
-                .bind(config.default_port)
-                .bind(&config.domain_override)
-                .bind(&description)
-                .bind(config.group_id)
-                .bind(config.id)
-                .bind(&computer.dn)
-                .execute(pool)
-                .await?;
-                created += 1;
-            } else {
-                updated += 1;
-            }
-        }
+        descriptions.push(description);
     }
 
-    // Phase 4: Soft-delete connections whose DN vanished from LDAP
-    let mut soft_deleted = 0i32;
-    for (id, dn, _) in &existing {
-        if !dn.is_empty() && !discovered_dns.contains(dn) {
-            let affected = sqlx::query(
-                "UPDATE connections SET soft_deleted_at = now() WHERE id = $1 AND soft_deleted_at IS NULL",
-            )
-            .bind(id)
-            .execute(pool)
-            .await?;
-            if affected.rows_affected() > 0 {
-                soft_deleted += 1;
-            }
-        }
-    }
+    // High performance bulk upsert using UNNEST and ON CONFLICT.
+    // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
+    let stats: (i64, i64) = sqlx::query_as(
+        r#"
+        WITH discovered AS (
+            SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS t(dn, hostname, name, description)
+        ),
+        upserted AS (
+            INSERT INTO connections (name, protocol, hostname, port, domain, description, group_id, ad_source_id, ad_dn, extra)
+            SELECT name, $5, hostname, $6, $7, description, $8, $9, dn, '{}'::jsonb
+            FROM discovered
+            ON CONFLICT (ad_source_id, ad_dn) DO UPDATE SET
+                soft_deleted_at = NULL,
+                hostname = EXCLUDED.hostname,
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                domain = EXCLUDED.domain,
+                updated_at = now()
+            WHERE connections.hostname != EXCLUDED.hostname 
+               OR connections.name != EXCLUDED.name 
+               OR connections.description IS DISTINCT FROM EXCLUDED.description 
+               OR connections.domain IS DISTINCT FROM EXCLUDED.domain
+               OR connections.soft_deleted_at IS NOT NULL
+            RETURNING (xmax = 0) AS is_insert
+        )
+        SELECT 
+            COALESCE(COUNT(*) FILTER (WHERE is_insert), 0)::bigint AS created,
+            COALESCE(COUNT(*) FILTER (WHERE NOT is_insert), 0)::bigint AS updated
+        FROM upserted
+        "#,
+    )
+    .bind(&dns)
+    .bind(&hostnames)
+    .bind(&names)
+    .bind(&descriptions)
+    .bind(&config.protocol)
+    .bind(config.default_port)
+    .bind(&config.domain_override)
+    .bind(config.group_id)
+    .bind(config.id)
+    .fetch_one(pool)
+    .await?;
+
+    let created = stats.0 as i32;
+    let updated = stats.1 as i32;
+
+    // Phase 3: Bulk soft-delete connections whose DN vanished from LDAP
+    let soft_deleted_res = sqlx::query(
+        "UPDATE connections SET soft_deleted_at = now() 
+         WHERE ad_source_id = $1 
+           AND ad_dn IS NOT NULL 
+           AND NOT (ad_dn = ANY($2)) 
+           AND soft_deleted_at IS NULL",
+    )
+    .bind(config.id)
+    .bind(&dns)
+    .execute(pool)
+    .await?;
+    let soft_deleted = soft_deleted_res.rows_affected() as i32;
 
     // Phase 5: Hard-delete connections soft-deleted > 7 days ago
     let hard_result = sqlx::query(
@@ -277,7 +262,9 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
 
 // ── Build custom rustls config with CA cert ────────────────────────────
 
-fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::ClientConfig>> {
+fn build_tls_config_with_ca(
+    pem: &str,
+) -> anyhow::Result<std::sync::Arc<rustls::ClientConfig>> {
     let mut root_store = rustls::RootCertStore::empty();
 
     // Load system root certificates
@@ -309,7 +296,9 @@ fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::
 
 // ── LDAP query (dispatch by auth method) ───────────────────────────────
 
-pub async fn ldap_query(config: &AdSyncConfig) -> anyhow::Result<Vec<DiscoveredComputer>> {
+pub async fn ldap_query(
+    config: &AdSyncConfig,
+) -> anyhow::Result<Vec<DiscoveredComputer>> {
     let bases = if config.search_bases.is_empty() {
         vec![String::new()]
     } else {
@@ -336,7 +325,10 @@ pub async fn ldap_query(config: &AdSyncConfig) -> anyhow::Result<Vec<DiscoveredC
 
 // ── Simple bind (DN + password) ────────────────────────────────────────
 
-async fn ldap_query_simple(config: &AdSyncConfig, search_base: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
+async fn ldap_query_simple(
+    config: &AdSyncConfig,
+    search_base: &str,
+) -> anyhow::Result<Vec<DiscoveredComputer>> {
     use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
     use std::time::Duration;
 
@@ -423,7 +415,10 @@ async fn ldap_query_simple(config: &AdSyncConfig, search_base: &str) -> anyhow::
 
 // ── Kerberos keytab auth (kinit + ldapsearch subprocess) ───────────────
 
-async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
+async fn ldap_query_kerberos(
+    config: &AdSyncConfig,
+    search_base: &str,
+) -> anyhow::Result<Vec<DiscoveredComputer>> {
     let principal = config
         .krb5_principal
         .as_deref()
@@ -439,8 +434,11 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         anyhow::bail!("Keytab file not found: {keytab}");
     }
 
-    // Use a per-config credential cache to avoid races between concurrent syncs
-    let ccache = format!("FILE:/tmp/krb5cc_adsync_{}", config.id);
+    // Use a per-config credential cache to avoid races between concurrent syncs.
+    // NamedTempFile ensures the file is created with secure permissions and is unique.
+    let mut ccache_file = tempfile::NamedTempFile::new()
+        .map_err(|e| anyhow::anyhow!("Failed to create Kerberos ccache: {e}"))?;
+    let ccache = format!("FILE:{}", ccache_file.path().display());
 
     // Obtain TGT via keytab
     let kinit_out = tokio::process::Command::new("kinit")
@@ -465,6 +463,12 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         _ => "sub",
     };
 
+    let filter = if config.search_filter.is_empty() {
+        "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))"
+    } else {
+        &config.search_filter
+    };
+
     let mut cmd = tokio::process::Command::new("ldapsearch");
     cmd.args([
         "-H",
@@ -476,7 +480,7 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         "-s",
         scope_arg,
         "-LLL",
-        if config.search_filter.is_empty() { "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))" } else { &config.search_filter },
+        filter,
         "cn",
         "dNSHostName",
         "distinguishedName",
@@ -489,14 +493,19 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         cmd.env("LDAPTLS_REQCERT", "never");
     }
 
-    // If custom CA cert provided, write to temp file and point ldapsearch at it
-    let ca_cert_path = if let Some(ref pem) = config.ca_cert_pem {
+    // If custom CA cert provided, write to secure temp file.
+    // NamedTempFile is automatically cleaned up when dropped.
+    let _ca_cert_file = if let Some(ref pem) = config.ca_cert_pem {
         if !pem.is_empty() && !config.tls_skip_verify {
-            let path = format!("/tmp/adsync_ca_{}.crt", config.id);
-            tokio::fs::write(&path, pem.as_bytes()).await
-                .map_err(|e| anyhow::anyhow!("Failed to write CA cert for ldapsearch: {e}"))?;
-            cmd.env("LDAPTLS_CACERT", &path);
-            Some(path)
+            use std::io::Write;
+            let mut tmp = tempfile::Builder::new()
+                .suffix(".crt")
+                .tempfile()
+                .map_err(|e| anyhow::anyhow!("Failed to create CA cert temp file: {e}"))?;
+            tmp.write_all(pem.as_bytes())
+                .map_err(|e| anyhow::anyhow!("Failed to write CA cert: {e}"))?;
+            cmd.env("LDAPTLS_CACERT", tmp.path());
+            Some(tmp)
         } else {
             None
         }
@@ -504,16 +513,11 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         None
     };
 
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to run ldapsearch: {e}. Is the openldap-clients package installed?"))?;
-
-    // Always clean up temp files, even on error
-    let _ = tokio::fs::remove_file(format!("/tmp/krb5cc_adsync_{}", config.id)).await;
-    if let Some(ref path) = ca_cert_path {
-        let _ = tokio::fs::remove_file(path).await;
-    }
+    let output = cmd.output().await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to run ldapsearch: {e}. Is the openldap-clients package installed?"
+        )
+    })?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -603,7 +607,9 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
 
 // ── Test connection (bind + search, return count) ──────────────────────
 
-pub async fn test_connection(config: &AdSyncConfig) -> anyhow::Result<(usize, Vec<String>)> {
+pub async fn test_connection(
+    config: &AdSyncConfig,
+) -> anyhow::Result<(usize, Vec<String>)> {
     let results = ldap_query(config).await?;
     let total = results.len();
     let sample: Vec<String> = results
@@ -622,7 +628,9 @@ pub async fn test_connection(config: &AdSyncConfig) -> anyhow::Result<(usize, Ve
 
 // ── Scheduled Background Sync ──────────────────────────────────────────
 
-pub fn spawn_sync_scheduler(pool: Pool<Postgres>, vault: Option<crate::config::VaultConfig>) {
+pub fn spawn_sync_scheduler(
+    state: crate::services::app_state::SharedState,
+) {
     tokio::spawn(async move {
         // Wait 30s after boot before first check
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -630,6 +638,15 @@ pub fn spawn_sync_scheduler(pool: Pool<Postgres>, vault: Option<crate::config::V
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
+            let (pool, vault) = {
+                let s = state.read().await;
+                let pool = match s.db.as_ref() {
+                    Some(db) => db.pool.clone(),
+                    None => continue,
+                };
+                let vault = s.config.as_ref().and_then(|c| c.vault.clone());
+                (pool, vault)
+            };
             if let Err(e) = scheduler_tick(&pool, vault.as_ref()).await {
                 tracing::warn!("AD sync scheduler error: {e}");
             }
@@ -637,7 +654,10 @@ pub fn spawn_sync_scheduler(pool: Pool<Postgres>, vault: Option<crate::config::V
     });
 }
 
-async fn scheduler_tick(pool: &Pool<Postgres>, vault: Option<&crate::config::VaultConfig>) -> anyhow::Result<()> {
+async fn scheduler_tick(
+    pool: &Pool<Postgres>,
+    vault: Option<&crate::config::VaultConfig>,
+) -> anyhow::Result<()> {
     // Check global enable
     let enabled = crate::services::settings::get(pool, "ad_sync_enabled")
         .await?
@@ -648,11 +668,10 @@ async fn scheduler_tick(pool: &Pool<Postgres>, vault: Option<&crate::config::Vau
     }
 
     // Get all enabled configs
-    let configs: Vec<AdSyncConfig> = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs WHERE enabled = true",
-    )
-    .fetch_all(pool)
-    .await?;
+    let configs: Vec<AdSyncConfig> =
+        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE enabled = true")
+            .fetch_all(pool)
+            .await?;
 
     for config in &configs {
         // Check if enough time has passed since last run

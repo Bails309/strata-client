@@ -524,7 +524,17 @@ pub async fn sso_callback(
     })?;
 
     // Find user by email. We match by email to link pre-created SSO users.
-    let row: Option<(Uuid, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+    #[derive(sqlx::FromRow)]
+    struct SsoUserRow {
+        id: Uuid,
+        username: String,
+        role_name: String,
+        sub: Option<String>,
+        #[allow(dead_code)]
+        full_name: Option<String>,
+    }
+
+    let row: Option<SsoUserRow> = sqlx::query_as(
         "SELECT u.id, u.username, r.name as role_name, u.sub, u.full_name
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.email = $1",
@@ -534,27 +544,35 @@ pub async fn sso_callback(
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, role, existing_sub, existing_full_name) = row.ok_or_else(|| {
+    let row = row.ok_or_else(|| {
         AppError::Auth(format!("No Strata user found for email {}. Registration via SSO is not enabled. Please contact your administrator.", user_email))
     })?;
 
-    // Link the OIDC subject to this user and update name if it was pre-created without one
-    if existing_sub.is_none() || existing_full_name.is_none() {
-        sqlx::query("UPDATE users SET sub = COALESCE(sub, $1), full_name = COALESCE(full_name, $2) WHERE id = $3")
+    if let Some(sub) = &row.sub {
+        if sub != &claims.sub {
+            return Err(AppError::Auth(format!(
+                "SSO subject mismatch for user {}. Please contact your administrator.",
+                row.username
+            )));
+        }
+    } else {
+        // Link this user to the OIDC subject on first login
+        sqlx::query("UPDATE users SET sub = $1, full_name = COALESCE(full_name, $2) WHERE id = $3")
             .bind(&claims.sub)
             .bind(&claims.name)
-            .bind(user_id)
-            .execute(&db.pool).await.map_err(AppError::Database)?;
+            .bind(row.id)
+            .execute(&db.pool)
+            .await?;
     }
 
-    // Create local JWT
-    let token = create_local_jwt(user_id, &username, &role)?;
+    // Success — generate JWT
+    let token = create_local_jwt(row.id, &row.username, &row.role_name)?;
 
     audit::log(
         &db.pool,
-        Some(user_id),
+        Some(row.id),
         "auth.sso_login",
-        &json!({ "username": username, "sub": claims.sub }),
+        &json!({ "username": row.username, "sub": claims.sub }),
     )
     .await?;
 
@@ -643,7 +661,7 @@ mod tests {
         assert_eq!(claims["username"], "bob");
         assert_eq!(claims["role"], "user");
         assert_eq!(claims["iss"], "strata-local");
-        assert!(claims["jti"].as_str().unwrap().len() > 0);
+        assert!(!claims["jti"].as_str().unwrap().is_empty());
         assert!(claims["exp"].as_u64().unwrap() > claims["iat"].as_u64().unwrap());
     }
 

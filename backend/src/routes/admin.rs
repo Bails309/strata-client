@@ -206,12 +206,7 @@ pub async fn update_sso(
             "dek": base64::engine::general_purpose::STANDARD.encode(&sealed.encrypted_dek),
             "n": base64::engine::general_purpose::STANDARD.encode(&sealed.nonce),
         });
-        settings::set(
-            &db.pool,
-            "sso_client_secret",
-            &format!("vault:{}", encoded.to_string()),
-        )
-        .await?;
+        settings::set(&db.pool, "sso_client_secret", &format!("vault:{}", encoded)).await?;
     } else {
         return Err(AppError::Config(
             "Vault must be configured before enabling SSO. Client secrets require encrypted storage.".into(),

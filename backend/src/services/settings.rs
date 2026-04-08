@@ -97,10 +97,3 @@ pub async fn get_all(pool: &Pool<Postgres>) -> anyhow::Result<Vec<(String, Strin
 
     Ok(rows)
 }
-
-/// Explicitly invalidate the entire settings cache.
-/// Call after bulk changes or vault mode switches.
-pub fn invalidate_all() {
-    let mut cache = CACHE.lock().unwrap();
-    cache.clear();
-}

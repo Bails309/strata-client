@@ -297,11 +297,9 @@ pub async fn create_credential_profile(
         .flatten()
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(12)
-        .min(12)
-        .max(1);
+        .clamp(1, 12);
     let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
-        .min(admin_max)
-        .max(1) as i32;
+        .clamp(1, admin_max) as i32;
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, expires_at)
@@ -409,11 +407,9 @@ pub async fn update_credential_profile(
             .flatten()
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(12)
-            .min(12)
-            .max(1);
+            .clamp(1, 12);
         let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
-            .min(admin_max)
-            .max(1) as i32;
+            .clamp(1, admin_max) as i32;
 
         sqlx::query(
             "UPDATE credential_profiles
@@ -448,11 +444,9 @@ pub async fn update_credential_profile(
             .flatten()
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(12)
-            .min(12)
-            .max(1);
+            .clamp(1, 12);
         let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
-            .min(admin_max)
-            .max(1) as i32;
+            .clamp(1, admin_max) as i32;
         sqlx::query(
             "UPDATE credential_profiles SET ttl_hours = $1, expires_at = now() + make_interval(hours => $1), updated_at = now() WHERE id = $2",
         )
@@ -1009,3 +1003,4 @@ mod tests {
         );
     }
 }
+

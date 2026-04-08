@@ -81,7 +81,7 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
         .post(&url)
         .header("X-Vault-Token", &vault.token)
         .json(&VaultEncryptRequest {
-            plaintext: b64.encode(&dek),
+            plaintext: b64.encode(dek),
         })
         .send()
         .await
@@ -182,9 +182,9 @@ pub async fn seal_setting(vault: &VaultConfig, plaintext: &str) -> Result<String
     let sealed = seal(vault, plaintext.as_bytes()).await?;
     let b64 = base64::engine::general_purpose::STANDARD;
     let encoded = serde_json::json!({
-        "ct": b64.encode(&sealed.ciphertext),
-        "dek": b64.encode(&sealed.encrypted_dek),
-        "n": b64.encode(&sealed.nonce),
+        "ct": b64.encode(sealed.ciphertext),
+        "dek": b64.encode(sealed.encrypted_dek),
+        "n": b64.encode(sealed.nonce),
     });
     Ok(format!("vault:{encoded}"))
 }

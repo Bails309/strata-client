@@ -143,6 +143,7 @@ mod tests {
             sub: "user123".into(),
             preferred_username: Some("alice".into()),
             email: Some("alice@example.com".into()),
+            name: None,
             exp: 9999999999,
             iat: 1000000000,
         };
@@ -156,6 +157,7 @@ mod tests {
             sub: "sub-id".into(),
             preferred_username: None,
             email: None,
+            name: None,
             exp: 123,
             iat: 100,
         };

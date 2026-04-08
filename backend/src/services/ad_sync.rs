@@ -557,8 +557,7 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
         }
 
         // LDIF continuation line (leading single space) — append to previous value
-        if line.starts_with(' ') {
-            let cont = &line[1..];
+        if let Some(cont) = line.strip_prefix(' ') {
             if last_key.eq_ignore_ascii_case("dn") {
                 current_dn.push_str(cont);
             } else if !last_key.is_empty() {

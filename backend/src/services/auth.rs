@@ -39,7 +39,11 @@ struct Jwk {
 }
 
 /// Validate an OIDC bearer token against the dynamically-configured issuer.
-pub async fn validate_token(issuer_url: &str, client_id: &str, token: &str) -> Result<Claims, AppError> {
+pub async fn validate_token(
+    issuer_url: &str,
+    client_id: &str,
+    token: &str,
+) -> Result<Claims, AppError> {
     // Validate issuer URL scheme to prevent SSRF
     if !issuer_url.starts_with("https://") {
         return Err(AppError::Auth("OIDC issuer must use HTTPS".into()));
@@ -51,8 +55,10 @@ pub async fn validate_token(issuer_url: &str, client_id: &str, token: &str) -> R
         .map_err(|e| AppError::Auth(format!("HTTP client error: {e}")))?;
 
     // 1. Fetch OIDC discovery
-    let discovery_url =
-        format!("{}/.well-known/openid-configuration", issuer_url.trim_end_matches('/'));
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer_url.trim_end_matches('/')
+    );
     let discovery: OidcDiscovery = client
         .get(&discovery_url)
         .send()

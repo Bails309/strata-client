@@ -111,11 +111,7 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
     Ok(run_id)
 }
 
-async fn do_sync(
-    pool: &Pool<Postgres>,
-    config: &AdSyncConfig,
-    run_id: Uuid,
-) -> anyhow::Result<()> {
+async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> anyhow::Result<()> {
     // Phase 1: Query LDAP for computers
     let computers = ldap_query(config).await?;
     tracing::info!(
@@ -277,7 +273,8 @@ fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::
     }
 
     for cert_der in certs {
-        root_store.add(&rustls::Certificate(cert_der))
+        root_store
+            .add(&rustls::Certificate(cert_der))
             .map_err(|e| anyhow::anyhow!("Failed to add CA certificate: {e}"))?;
     }
 
@@ -291,9 +288,7 @@ fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::
 
 // ── LDAP query (dispatch by auth method) ───────────────────────────────
 
-pub async fn ldap_query(
-    config: &AdSyncConfig,
-) -> anyhow::Result<Vec<DiscoveredComputer>> {
+pub async fn ldap_query(config: &AdSyncConfig) -> anyhow::Result<Vec<DiscoveredComputer>> {
     let bases = if config.search_bases.is_empty() {
         vec![String::new()]
     } else {
@@ -366,7 +361,13 @@ async fn ldap_query_simple(
             search_base,
             scope,
             filter,
-            vec!["cn", "dNSHostName", "distinguishedName", "name", "description"],
+            vec![
+                "cn",
+                "dNSHostName",
+                "distinguishedName",
+                "name",
+                "description",
+            ],
         )
         .await?
         .success()?;
@@ -384,17 +385,9 @@ async fn ldap_query_simple(
             .cloned()
             .unwrap_or_else(|| dn.clone());
 
-        let dns_host_name = se
-            .attrs
-            .get("dNSHostName")
-            .and_then(|v| v.first())
-            .cloned();
+        let dns_host_name = se.attrs.get("dNSHostName").and_then(|v| v.first()).cloned();
 
-        let description = se
-            .attrs
-            .get("description")
-            .and_then(|v| v.first())
-            .cloned();
+        let description = se.attrs.get("description").and_then(|v| v.first()).cloned();
 
         computers.push(DiscoveredComputer {
             dn,
@@ -509,9 +502,7 @@ async fn ldap_query_kerberos(
     };
 
     let output = cmd.output().await.map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to run ldapsearch: {e}. Is the openldap-clients package installed?"
-        )
+        anyhow::anyhow!("Failed to run ldapsearch: {e}. Is the openldap-clients package installed?")
     })?;
 
     if !output.status.success() {
@@ -532,23 +523,24 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
     let mut current_dn = String::new();
     let mut attrs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    let flush =
-        |dn: &str, attrs: &std::collections::HashMap<String, String>| -> Option<DiscoveredComputer> {
-            if dn.is_empty() {
-                return None;
-            }
-            let name = attrs
-                .get("cn")
-                .or_else(|| attrs.get("name"))
-                .cloned()
-                .unwrap_or_else(|| dn.to_string());
-            Some(DiscoveredComputer {
-                dn: dn.to_string(),
-                name,
-                dns_host_name: attrs.get("dNSHostName").cloned(),
-                description: attrs.get("description").cloned(),
-            })
-        };
+    let flush = |dn: &str,
+                 attrs: &std::collections::HashMap<String, String>|
+     -> Option<DiscoveredComputer> {
+        if dn.is_empty() {
+            return None;
+        }
+        let name = attrs
+            .get("cn")
+            .or_else(|| attrs.get("name"))
+            .cloned()
+            .unwrap_or_else(|| dn.to_string());
+        Some(DiscoveredComputer {
+            dn: dn.to_string(),
+            name,
+            dns_host_name: attrs.get("dNSHostName").cloned(),
+            description: attrs.get("description").cloned(),
+        })
+    };
 
     // Track the last key seen so continuation lines can append to it
     let mut last_key = String::new();
@@ -602,9 +594,7 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
 
 // ── Test connection (bind + search, return count) ──────────────────────
 
-pub async fn test_connection(
-    config: &AdSyncConfig,
-) -> anyhow::Result<(usize, Vec<String>)> {
+pub async fn test_connection(config: &AdSyncConfig) -> anyhow::Result<(usize, Vec<String>)> {
     let results = ldap_query(config).await?;
     let total = results.len();
     let sample: Vec<String> = results
@@ -623,9 +613,7 @@ pub async fn test_connection(
 
 // ── Scheduled Background Sync ──────────────────────────────────────────
 
-pub fn spawn_sync_scheduler(
-    state: crate::services::app_state::SharedState,
-) {
+pub fn spawn_sync_scheduler(state: crate::services::app_state::SharedState) {
     tokio::spawn(async move {
         // Wait 30s after boot before first check
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -670,12 +658,11 @@ async fn scheduler_tick(
 
     for config in &configs {
         // Check if enough time has passed since last run
-        let last_run: Option<DateTime<Utc>> = sqlx::query_scalar(
-            "SELECT MAX(started_at) FROM ad_sync_runs WHERE config_id = $1",
-        )
-        .bind(config.id)
-        .fetch_one(pool)
-        .await?;
+        let last_run: Option<DateTime<Utc>> =
+            sqlx::query_scalar("SELECT MAX(started_at) FROM ad_sync_runs WHERE config_id = $1")
+                .bind(config.id)
+                .fetch_one(pool)
+                .await?;
 
         let should_run = match last_run {
             None => true,
@@ -694,12 +681,18 @@ async fn scheduler_tick(
                     match crate::services::vault::unseal_setting(vc, &config.bind_password).await {
                         Ok(pw) => config.bind_password = pw,
                         Err(e) => {
-                            tracing::error!("AD sync '{}': failed to decrypt bind_password: {e}", config.label);
+                            tracing::error!(
+                                "AD sync '{}': failed to decrypt bind_password: {e}",
+                                config.label
+                            );
                             continue;
                         }
                     }
                 } else {
-                    tracing::error!("AD sync '{}': bind_password is encrypted but Vault not configured", config.label);
+                    tracing::error!(
+                        "AD sync '{}': bind_password is encrypted but Vault not configured",
+                        config.label
+                    );
                     continue;
                 }
             }

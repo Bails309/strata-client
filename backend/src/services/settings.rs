@@ -31,10 +31,11 @@ pub async fn get(pool: &Pool<Postgres>, key: &str) -> anyhow::Result<Option<Stri
     }
 
     // Cache miss or stale — query the DB
-    let row: Option<String> = sqlx::query_scalar("SELECT value FROM system_settings WHERE key = $1")
-        .bind(key)
-        .fetch_optional(pool)
-        .await?;
+    let row: Option<String> =
+        sqlx::query_scalar("SELECT value FROM system_settings WHERE key = $1")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?;
 
     // Update cache
     {

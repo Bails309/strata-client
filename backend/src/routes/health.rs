@@ -110,11 +110,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
         .as_ref()
         .and_then(|c| c.guacd_host.clone())
         .unwrap_or_else(|| "guacd".into());
-    let guacd_port = s
-        .config
-        .as_ref()
-        .and_then(|c| c.guacd_port)
-        .unwrap_or(4822);
+    let guacd_port = s.config.as_ref().and_then(|c| c.guacd_port).unwrap_or(4822);
     let guacd_reachable = check_tcp(&guacd_host, guacd_port).await;
 
     // ── Vault ──

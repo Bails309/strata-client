@@ -60,9 +60,7 @@ pub async fn require_auth(
                     .map(|t| t.to_string())
             })
         })
-        .ok_or_else(|| {
-            AppError::Auth("Missing or invalid Authorization header".into())
-        })?;
+        .ok_or_else(|| AppError::Auth("Missing or invalid Authorization header".into()))?;
 
     // Check if the token has been revoked (logout) — do this before
     // expensive DB lookups to short-circuit revoked tokens early.
@@ -139,8 +137,7 @@ async fn try_local_jwt(
     .await
     .map_err(AppError::Database)?;
 
-    let (id, username, role) =
-        row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
+    let (id, username, role) = row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
 
     Ok(Some(AuthUser {
         id,
@@ -151,10 +148,7 @@ async fn try_local_jwt(
 }
 
 /// Validate an OIDC bearer token. Returns an error if SSO is not configured.
-async fn validate_oidc_token(
-    token: &str,
-    db: &crate::db::Database,
-) -> Result<AuthUser, AppError> {
+async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<AuthUser, AppError> {
     let issuer_url = settings::get(&db.pool, "sso_issuer_url")
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
@@ -180,9 +174,8 @@ async fn validate_oidc_token(
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, role) = user.ok_or_else(|| {
-        AppError::Auth(format!("No user found for OIDC subject: {}", claims.sub))
-    })?;
+    let (user_id, username, role) = user
+        .ok_or_else(|| AppError::Auth(format!("No user found for OIDC subject: {}", claims.sub)))?;
 
     Ok(AuthUser {
         id: user_id,

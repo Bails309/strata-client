@@ -41,7 +41,9 @@ pub async fn initialize(
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return Err(AppError::Config("Initialization already in progress".into()));
+        return Err(AppError::Config(
+            "Initialization already in progress".into(),
+        ));
     }
 
     // Ensure we reset the flag on any exit path
@@ -50,9 +52,8 @@ pub async fn initialize(
     });
 
     // Determine database URL from environment variable
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgresql://strata:strata_default@postgres-local:5432/strata".into()
-    });
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://strata:strata_default@postgres-local:5432/strata".into());
     let db_mode = if db_url.contains("postgres-local") {
         DatabaseMode::Local
     } else {
@@ -75,9 +76,10 @@ pub async fn initialize(
     // Build Vault config based on mode
     let vault = match body.vault_mode.as_deref() {
         Some("local") => {
-            let address = std::env::var("VAULT_ADDR")
-                .unwrap_or_else(|_| "http://vault:8200".into());
-            let transit_key = body.vault_transit_key
+            let address =
+                std::env::var("VAULT_ADDR").unwrap_or_else(|_| "http://vault:8200".into());
+            let transit_key = body
+                .vault_transit_key
                 .unwrap_or_else(|| "guac-master-key".into());
 
             // Provision the bundled Vault: init → unseal → transit → key
@@ -88,7 +90,8 @@ pub async fn initialize(
                 None => {
                     return Err(AppError::Vault(
                         "Bundled Vault is already initialized but no stored credentials exist. \
-                         Use external mode or reset the vault-data volume.".into(),
+                         Use external mode or reset the vault-data volume."
+                            .into(),
                     ));
                 }
             };
@@ -113,22 +116,20 @@ pub async fn initialize(
                 unseal_key,
             })
         }
-        Some("external") => {
-            match (body.vault_address, body.vault_token, body.vault_transit_key) {
-                (Some(addr), Some(token), Some(key)) => Some(VaultConfig {
-                    address: addr,
-                    token,
-                    transit_key: key,
-                    mode: VaultMode::External,
-                    unseal_key: None,
-                }),
-                _ => {
-                    return Err(AppError::Config(
-                        "External vault requires address, token, and transit_key".into(),
-                    ));
-                }
+        Some("external") => match (body.vault_address, body.vault_token, body.vault_transit_key) {
+            (Some(addr), Some(token), Some(key)) => Some(VaultConfig {
+                address: addr,
+                token,
+                transit_key: key,
+                mode: VaultMode::External,
+                unseal_key: None,
+            }),
+            _ => {
+                return Err(AppError::Config(
+                    "External vault requires address, token, and transit_key".into(),
+                ));
             }
-        }
+        },
         _ => None, // No vault — skip
     };
 
@@ -158,9 +159,8 @@ pub async fn initialize(
         jwt_secret: std::env::var("JWT_SECRET").ok(),
     };
 
-    cfg.save(&AppConfig::config_path()).map_err(|e| {
-        AppError::Config(format!("Failed to save config.toml: {e}"))
-    })?;
+    cfg.save(&AppConfig::config_path())
+        .map_err(|e| AppError::Config(format!("Failed to save config.toml: {e}")))?;
 
     // Transition to Running
     {
@@ -204,7 +204,10 @@ mod tests {
         }"#;
         let r: InitRequest = serde_json::from_str(json).unwrap();
         assert_eq!(r.vault_mode.as_deref().unwrap(), "external");
-        assert_eq!(r.vault_address.as_deref().unwrap(), "https://vault.corp:8200");
+        assert_eq!(
+            r.vault_address.as_deref().unwrap(),
+            "https://vault.corp:8200"
+        );
         assert_eq!(r.vault_token.as_deref().unwrap(), "hvs.1234");
     }
 }

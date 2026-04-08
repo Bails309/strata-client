@@ -1,4 +1,4 @@
-use axum::extract::{Path, State, Extension};
+use axum::extract::{Extension, Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -118,12 +118,11 @@ pub async fn list_favorites(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<Uuid>>, AppError> {
     let db = require_running(&state).await?;
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT connection_id FROM user_favorites WHERE user_id = $1",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT connection_id FROM user_favorites WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_all(&db.pool)
+            .await?;
     Ok(Json(ids))
 }
 
@@ -300,7 +299,9 @@ pub async fn create_credential_profile(
         .unwrap_or(12)
         .min(12)
         .max(1);
-    let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
+    let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
+        .min(admin_max)
+        .max(1) as i32;
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, expires_at)
@@ -410,8 +411,9 @@ pub async fn update_credential_profile(
             .unwrap_or(12)
             .min(12)
             .max(1);
-        let ttl_hours =
-            (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
+        let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
+            .min(admin_max)
+            .max(1) as i32;
 
         sqlx::query(
             "UPDATE credential_profiles
@@ -448,8 +450,9 @@ pub async fn update_credential_profile(
             .unwrap_or(12)
             .min(12)
             .max(1);
-        let ttl_hours =
-            (body.ttl_hours.unwrap_or(admin_max as i32) as i64).min(admin_max).max(1) as i32;
+        let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64)
+            .min(admin_max)
+            .max(1) as i32;
         sqlx::query(
             "UPDATE credential_profiles SET ttl_hours = $1, expires_at = now() + make_interval(hours => $1), updated_at = now() WHERE id = $2",
         )
@@ -503,12 +506,11 @@ pub async fn delete_credential_profile(
     .execute(&db.pool)
     .await?;
 
-    let deleted =
-        sqlx::query("DELETE FROM credential_profiles WHERE id = $1 AND user_id = $2")
-            .bind(profile_id)
-            .bind(user.id)
-            .execute(&db.pool)
-            .await?;
+    let deleted = sqlx::query("DELETE FROM credential_profiles WHERE id = $1 AND user_id = $2")
+        .bind(profile_id)
+        .bind(user.id)
+        .execute(&db.pool)
+        .await?;
 
     if deleted.rows_affected() == 0 {
         return Err(AppError::NotFound("Credential profile not found".into()));
@@ -774,9 +776,10 @@ pub async fn get_recording(
             let s = state.read().await;
             s.config.as_ref().and_then(|c| c.vault.as_ref().cloned())
         };
-        if let Some(azure) = crate::services::recordings::get_azure_config(&db.pool, vault_cfg.as_ref())
-            .await
-            .map_err(|_| AppError::NotFound("Config error".into()))?
+        if let Some(azure) =
+            crate::services::recordings::get_azure_config(&db.pool, vault_cfg.as_ref())
+                .await
+                .map_err(|_| AppError::NotFound("Config error".into()))?
         {
             let data = crate::services::recordings::download_from_azure(&azure, &filename)
                 .await
@@ -794,7 +797,9 @@ pub async fn get_recording(
         }
     }
 
-    Err(AppError::NotFound(format!("Recording not found: {filename}")))
+    Err(AppError::NotFound(format!(
+        "Recording not found: {filename}"
+    )))
 }
 
 #[cfg(test)]

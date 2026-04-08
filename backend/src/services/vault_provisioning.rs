@@ -121,7 +121,9 @@ pub async fn unseal(address: &str, key: &str) -> Result<(), AppError> {
         .map_err(|e| AppError::Vault(format!("Vault unseal parse: {e}")))?;
 
     if data.sealed {
-        return Err(AppError::Vault("Vault is still sealed after unseal attempt".into()));
+        return Err(AppError::Vault(
+            "Vault is still sealed after unseal attempt".into(),
+        ));
     }
 
     Ok(())
@@ -165,7 +167,9 @@ pub async fn enable_transit(address: &str, token: &str) -> Result<(), AppError> 
         if status.as_u16() == 400 && body.contains("already in use") {
             return Ok(());
         }
-        return Err(AppError::Vault(format!("Transit enable failed ({status}): {body}")));
+        return Err(AppError::Vault(format!(
+            "Transit enable failed ({status}): {body}"
+        )));
     }
 
     tracing::info!("Transit secrets engine enabled");
@@ -173,7 +177,11 @@ pub async fn enable_transit(address: &str, token: &str) -> Result<(), AppError> 
 }
 
 /// Create a Transit encryption key (idempotent — does not error if key exists).
-pub async fn create_transit_key(address: &str, token: &str, key_name: &str) -> Result<(), AppError> {
+pub async fn create_transit_key(
+    address: &str,
+    token: &str,
+    key_name: &str,
+) -> Result<(), AppError> {
     let url = format!(
         "{}/v1/transit/keys/{}",
         address.trim_end_matches('/'),
@@ -232,14 +240,10 @@ pub async fn provision(
     } else {
         // Already initialized — use stored credentials
         let token = existing_token
-            .ok_or_else(|| {
-                AppError::Vault("Vault is initialized but no token is stored".into())
-            })?
+            .ok_or_else(|| AppError::Vault("Vault is initialized but no token is stored".into()))?
             .to_string();
         let key = existing_unseal_key
-            .ok_or_else(|| {
-                AppError::Vault("Vault is sealed but no unseal key is stored".into())
-            })?
+            .ok_or_else(|| AppError::Vault("Vault is sealed but no unseal key is stored".into()))?
             .to_string();
         (token, key, None)
     };

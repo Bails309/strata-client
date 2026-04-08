@@ -29,21 +29,45 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/sso/login", get(auth::sso_login))
         .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))
-        .route("/api/shared/tunnel/:share_token", get(share::ws_shared_tunnel));
+        .route(
+            "/api/shared/tunnel/:share_token",
+            get(share::ws_shared_tunnel),
+        );
 
     // ── Admin routes (auth + admin role) ─────────────────────────────
     let admin = Router::new()
         .route("/api/admin/settings", get(admin::get_settings))
         .route("/api/admin/settings", put(admin::update_settings))
-        .route("/api/admin/settings/auth-methods", put(admin::update_auth_methods))
+        .route(
+            "/api/admin/settings/auth-methods",
+            put(admin::update_auth_methods),
+        )
         .route("/api/admin/settings/sso", put(admin::update_sso))
-        .route("/api/admin/settings/sso/test", post(admin::test_sso_connection))
+        .route(
+            "/api/admin/settings/sso/test",
+            post(admin::test_sso_connection),
+        )
         .route("/api/admin/settings/kerberos", put(admin::update_kerberos))
-        .route("/api/admin/kerberos-realms", get(admin::list_kerberos_realms))
-        .route("/api/admin/kerberos-realms", post(admin::create_kerberos_realm))
-        .route("/api/admin/kerberos-realms/:id", put(admin::update_kerberos_realm))
-        .route("/api/admin/kerberos-realms/:id", delete(admin::delete_kerberos_realm))
-        .route("/api/admin/settings/recordings", put(admin::update_recordings))
+        .route(
+            "/api/admin/kerberos-realms",
+            get(admin::list_kerberos_realms),
+        )
+        .route(
+            "/api/admin/kerberos-realms",
+            post(admin::create_kerberos_realm),
+        )
+        .route(
+            "/api/admin/kerberos-realms/:id",
+            put(admin::update_kerberos_realm),
+        )
+        .route(
+            "/api/admin/kerberos-realms/:id",
+            delete(admin::delete_kerberos_realm),
+        )
+        .route(
+            "/api/admin/settings/recordings",
+            put(admin::update_recordings),
+        )
         .route("/api/admin/settings/vault", put(admin::update_vault))
         .route("/api/admin/health", get(health::service_health))
         .route("/api/admin/roles", get(admin::list_roles))
@@ -51,57 +75,120 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/connections", get(admin::list_connections))
         .route("/api/admin/connections", post(admin::create_connection))
         .route("/api/admin/connections/:id", put(admin::update_connection))
-        .route("/api/admin/connections/:id", delete(admin::delete_connection))
-        .route("/api/admin/connection-groups", get(admin::list_connection_groups))
-        .route("/api/admin/connection-groups", post(admin::create_connection_group))
-        .route("/api/admin/connection-groups/:id", put(admin::update_connection_group))
-        .route("/api/admin/connection-groups/:id", delete(admin::delete_connection_group))
+        .route(
+            "/api/admin/connections/:id",
+            delete(admin::delete_connection),
+        )
+        .route(
+            "/api/admin/connection-groups",
+            get(admin::list_connection_groups),
+        )
+        .route(
+            "/api/admin/connection-groups",
+            post(admin::create_connection_group),
+        )
+        .route(
+            "/api/admin/connection-groups/:id",
+            put(admin::update_connection_group),
+        )
+        .route(
+            "/api/admin/connection-groups/:id",
+            delete(admin::delete_connection_group),
+        )
         .route(
             "/api/admin/role-connections",
             put(admin::update_role_connections),
         )
-        .route("/api/admin/users", get(admin::list_users).post(admin::create_user))
+        .route(
+            "/api/admin/users",
+            get(admin::list_users).post(admin::create_user),
+        )
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
         .route("/api/admin/sessions", get(admin::list_active_sessions))
-        .route("/api/admin/sessions/:session_id/observe", get(admin::observe_session))
+        .route(
+            "/api/admin/sessions/:session_id/observe",
+            get(admin::observe_session),
+        )
         .route("/api/admin/metrics", get(admin::get_metrics))
-        .route("/api/admin/ad-sync-configs", get(admin::list_ad_sync_configs))
-        .route("/api/admin/ad-sync-configs", post(admin::create_ad_sync_config))
-        .route("/api/admin/ad-sync-configs/test", post(admin::test_ad_sync_connection))
-        .route("/api/admin/ad-sync-configs/:id", put(admin::update_ad_sync_config))
-        .route("/api/admin/ad-sync-configs/:id", delete(admin::delete_ad_sync_config))
-        .route("/api/admin/ad-sync-configs/:id/sync", post(admin::trigger_ad_sync))
-        .route("/api/admin/ad-sync-configs/:id/runs", get(admin::list_ad_sync_runs))
+        .route(
+            "/api/admin/ad-sync-configs",
+            get(admin::list_ad_sync_configs),
+        )
+        .route(
+            "/api/admin/ad-sync-configs",
+            post(admin::create_ad_sync_config),
+        )
+        .route(
+            "/api/admin/ad-sync-configs/test",
+            post(admin::test_ad_sync_connection),
+        )
+        .route(
+            "/api/admin/ad-sync-configs/:id",
+            put(admin::update_ad_sync_config),
+        )
+        .route(
+            "/api/admin/ad-sync-configs/:id",
+            delete(admin::delete_ad_sync_config),
+        )
+        .route(
+            "/api/admin/ad-sync-configs/:id/sync",
+            post(admin::trigger_ad_sync),
+        )
+        .route(
+            "/api/admin/ad-sync-configs/:id/runs",
+            get(admin::list_ad_sync_runs),
+        )
         .route("/api/recordings/:filename", get(user::get_recording))
         .layer(middleware::from_fn(require_admin))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_auth,
-        ));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // ── Authenticated user routes ────────────────────────────────────
     let user_routes = Router::new()
         .route("/api/user/me", get(user::me))
         .route("/api/user/connections", get(user::my_connections))
         .route("/api/user/credentials", put(user::update_credential))
-        .route("/api/user/credential-profiles", get(user::list_credential_profiles))
-        .route("/api/user/credential-profiles", post(user::create_credential_profile))
-        .route("/api/user/credential-profiles/:profile_id", put(user::update_credential_profile))
-        .route("/api/user/credential-profiles/:profile_id", delete(user::delete_credential_profile))
-        .route("/api/user/credential-profiles/:profile_id/mappings", get(user::get_profile_mappings))
-        .route("/api/user/credential-mappings", put(user::set_credential_mapping))
-        .route("/api/user/credential-mappings/:connection_id", delete(user::remove_credential_mapping))
+        .route(
+            "/api/user/credential-profiles",
+            get(user::list_credential_profiles),
+        )
+        .route(
+            "/api/user/credential-profiles",
+            post(user::create_credential_profile),
+        )
+        .route(
+            "/api/user/credential-profiles/:profile_id",
+            put(user::update_credential_profile),
+        )
+        .route(
+            "/api/user/credential-profiles/:profile_id",
+            delete(user::delete_credential_profile),
+        )
+        .route(
+            "/api/user/credential-profiles/:profile_id/mappings",
+            get(user::get_profile_mappings),
+        )
+        .route(
+            "/api/user/credential-mappings",
+            put(user::set_credential_mapping),
+        )
+        .route(
+            "/api/user/credential-mappings/:connection_id",
+            delete(user::remove_credential_mapping),
+        )
         .route("/api/user/favorites", get(user::list_favorites))
         .route("/api/user/favorites", post(user::toggle_favorite))
-        .route("/api/user/connections/:connection_id/info", get(user::connection_info))
+        .route(
+            "/api/user/connections/:connection_id/info",
+            get(user::connection_info),
+        )
         .route("/api/tunnel/:connection_id", get(tunnel::ws_tunnel))
         .route("/api/tunnel/ticket", post(tunnel::create_tunnel_ticket))
-        .route("/api/user/connections/:connection_id/share", post(share::create_share))
+        .route(
+            "/api/user/connections/:connection_id/share",
+            post(share::create_share),
+        )
         .route("/api/user/shares/:share_id", delete(share::revoke_share))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_auth,
-        ));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public
         .merge(admin)

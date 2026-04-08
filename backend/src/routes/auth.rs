@@ -1,13 +1,13 @@
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
-use axum::Json;
 use axum::response::Redirect;
+use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::services::app_state::SharedState;
@@ -207,7 +207,8 @@ pub async fn login(
 
     let db = {
         let s = state.read().await;
-        s.db.clone().ok_or(AppError::Internal("Database not available".into()))?
+        s.db.clone()
+            .ok_or(AppError::Internal("Database not available".into()))?
     };
 
     let row: Option<(Uuid, String, Option<String>, String)> = sqlx::query_as(
@@ -235,10 +236,15 @@ pub async fn login(
         .map_err(|_| {
             // Record failed attempt for both username and IP
             let mut map = RATE_LIMIT.lock().unwrap();
-            map.entry(body.username.clone()).or_default().push(Instant::now());
+            map.entry(body.username.clone())
+                .or_default()
+                .push(Instant::now());
             drop(map);
             let mut ip_map = IP_RATE_LIMIT.lock().unwrap();
-            ip_map.entry(client_ip.clone()).or_default().push(Instant::now());
+            ip_map
+                .entry(client_ip.clone())
+                .or_default()
+                .push(Instant::now());
             AppError::Auth("Invalid username or password".into())
         })?;
 
@@ -328,7 +334,9 @@ pub async fn logout(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppEr
     use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
     #[derive(serde::Deserialize, Clone)]
-    struct ExpClaims { exp: u64 }
+    struct ExpClaims {
+        exp: u64,
+    }
 
     let secret = crate::config::JWT_SECRET.get().cloned().unwrap_or_default();
     let mut validation = Validation::new(Algorithm::HS256);
@@ -361,16 +369,24 @@ pub async fn logout(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppEr
 pub async fn sso_login(State(state): State<SharedState>) -> Result<Redirect, AppError> {
     let db = {
         let s = state.read().await;
-        s.db.clone().ok_or(AppError::Internal("Database not available".into()))?
+        s.db.clone()
+            .ok_or(AppError::Internal("Database not available".into()))?
     };
 
-    let sso_enabled = settings::get(&db.pool, "sso_enabled").await?.unwrap_or_default() == "true";
+    let sso_enabled = settings::get(&db.pool, "sso_enabled")
+        .await?
+        .unwrap_or_default()
+        == "true";
     if !sso_enabled {
         return Err(AppError::Auth("SSO is disabled".into()));
     }
 
-    let issuer_url = settings::get(&db.pool, "sso_issuer_url").await?.unwrap_or_default();
-    let client_id = settings::get(&db.pool, "sso_client_id").await?.unwrap_or_default();
+    let issuer_url = settings::get(&db.pool, "sso_issuer_url")
+        .await?
+        .unwrap_or_default();
+    let client_id = settings::get(&db.pool, "sso_client_id")
+        .await?
+        .unwrap_or_default();
 
     if issuer_url.is_empty() || client_id.is_empty() {
         return Err(AppError::Auth("SSO is not properly configured".into()));
@@ -425,20 +441,32 @@ pub async fn sso_callback(
         store.retain(|_, created| *created > cutoff);
         match store.remove(state_value) {
             Some(_) => {} // valid — consumed
-            None => return Err(AppError::Auth("Invalid or expired SSO state parameter".into())),
+            None => {
+                return Err(AppError::Auth(
+                    "Invalid or expired SSO state parameter".into(),
+                ))
+            }
         }
     }
 
     let (db, vault) = {
         let s = state.read().await;
-        let db = s.db.clone().ok_or(AppError::Internal("Database not available".into()))?;
+        let db =
+            s.db.clone()
+                .ok_or(AppError::Internal("Database not available".into()))?;
         let vault = s.config.as_ref().and_then(|c| c.vault.clone());
         (db, vault)
     };
 
-    let issuer_url = settings::get(&db.pool, "sso_issuer_url").await?.unwrap_or_default();
-    let client_id = settings::get(&db.pool, "sso_client_id").await?.unwrap_or_default();
-    let client_secret_raw = settings::get(&db.pool, "sso_client_secret").await?.unwrap_or_default();
+    let issuer_url = settings::get(&db.pool, "sso_issuer_url")
+        .await?
+        .unwrap_or_default();
+    let client_id = settings::get(&db.pool, "sso_client_id")
+        .await?
+        .unwrap_or_default();
+    let client_secret_raw = settings::get(&db.pool, "sso_client_secret")
+        .await?
+        .unwrap_or_default();
 
     if issuer_url.is_empty() || client_id.is_empty() || client_secret_raw.is_empty() {
         return Err(AppError::Auth("SSO configuration is incomplete".into()));
@@ -448,7 +476,9 @@ pub async fn sso_callback(
     let client_secret = match vault {
         Some(v) => crate::services::vault::unseal_setting(&v, &client_secret_raw).await?,
         None if client_secret_raw.starts_with("vault:") => {
-            return Err(AppError::Config("Vault not configured but SSO secret is encrypted".into()));
+            return Err(AppError::Config(
+                "Vault not configured but SSO secret is encrypted".into(),
+            ));
         }
         _ => client_secret_raw,
     };
@@ -485,7 +515,8 @@ pub async fn sso_callback(
         .ok_or_else(|| AppError::Auth("Missing access_token in response".into()))?;
 
     // Validate token and get claims
-    let claims = crate::services::auth::validate_token(&issuer_url, &client_id, access_token).await?;
+    let claims =
+        crate::services::auth::validate_token(&issuer_url, &client_id, access_token).await?;
 
     // Extract email from claims
     let user_email = claims.email.as_ref().ok_or_else(|| {
@@ -562,7 +593,10 @@ mod tests {
     #[test]
     fn extract_client_ip_trims_whitespace() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", " 10.0.0.1 , 192.168.1.1 ".parse().unwrap());
+        headers.insert(
+            "x-forwarded-for",
+            " 10.0.0.1 , 192.168.1.1 ".parse().unwrap(),
+        );
         assert_eq!(extract_client_ip(&headers), "192.168.1.1");
     }
 

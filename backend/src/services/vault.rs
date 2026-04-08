@@ -209,8 +209,7 @@ pub async fn unseal_setting(vault: &VaultConfig, value: &str) -> Result<String, 
         .decode(parsed["n"].as_str().unwrap_or(""))
         .map_err(|e| AppError::Vault(format!("nonce decode: {e}")))?;
     let plaintext = unseal(vault, &dek, &ct, &n).await?;
-    String::from_utf8(plaintext)
-        .map_err(|e| AppError::Vault(format!("UTF-8 decode: {e}")))
+    String::from_utf8(plaintext).map_err(|e| AppError::Vault(format!("UTF-8 decode: {e}")))
 }
 
 #[cfg(test)]
@@ -239,7 +238,9 @@ mod tests {
             mode: crate::config::VaultMode::Local,
             unseal_key: None,
         };
-        let result = unseal_setting(&vault_cfg, "plain-text-value").await.unwrap();
+        let result = unseal_setting(&vault_cfg, "plain-text-value")
+            .await
+            .unwrap();
         assert_eq!(result, "plain-text-value");
     }
 

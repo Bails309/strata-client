@@ -127,9 +127,7 @@ pub async fn test_sso_connection(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Validate issuer URL uses HTTPS
     if !body.issuer_url.starts_with("https://") {
-        return Err(AppError::Validation(
-            "SSO issuer URL must use HTTPS".into(),
-        ));
+        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
     }
 
     let client = reqwest::Client::builder()
@@ -165,7 +163,8 @@ pub async fn test_sso_connection(
         })))
     } else {
         Err(AppError::Validation(
-            "OIDC configuration is missing required endpoints (authorization, token, or jwks).".into(),
+            "OIDC configuration is missing required endpoints (authorization, token, or jwks)."
+                .into(),
         ))
     }
 }
@@ -185,9 +184,7 @@ pub async fn update_sso(
 
     // Validate issuer URL uses HTTPS
     if !body.issuer_url.starts_with("https://") {
-        return Err(AppError::Validation(
-            "SSO issuer URL must use HTTPS".into(),
-        ));
+        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
     }
 
     settings::set(&db.pool, "sso_enabled", "true").await?;
@@ -356,7 +353,10 @@ pub async fn update_vault(
             } else {
                 // No existing vault config — fresh init
                 let result = crate::services::vault_provisioning::provision(
-                    &address, &transit_key, None, None,
+                    &address,
+                    &transit_key,
+                    None,
+                    None,
                 )
                 .await?;
                 match result {
@@ -859,9 +859,7 @@ pub struct RoleRow {
     pub name: String,
 }
 
-pub async fn list_roles(
-    State(state): State<SharedState>,
-) -> Result<Json<Vec<RoleRow>>, AppError> {
+pub async fn list_roles(State(state): State<SharedState>) -> Result<Json<Vec<RoleRow>>, AppError> {
     let db = require_running(&state).await?;
     let rows: Vec<RoleRow> = sqlx::query_as("SELECT id, name FROM roles ORDER BY name")
         .fetch_all(&db.pool)
@@ -941,7 +939,11 @@ pub async fn create_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     let db = require_running(&state).await?;
     let port = body.port.unwrap_or(3389);
-    let extra = if body.extra.is_null() { serde_json::json!({}) } else { body.extra.clone() };
+    let extra = if body.extra.is_null() {
+        serde_json::json!({})
+    } else {
+        body.extra.clone()
+    };
     let row: ConnectionRow = sqlx::query_as(
         "INSERT INTO connections (name, protocol, hostname, port, domain, description, group_id, extra)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -974,7 +976,11 @@ pub async fn update_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     let db = require_running(&state).await?;
     let port = body.port.unwrap_or(3389);
-    let extra = if body.extra.is_null() { serde_json::json!({}) } else { body.extra.clone() };
+    let extra = if body.extra.is_null() {
+        serde_json::json!({})
+    } else {
+        body.extra.clone()
+    };
     let row: ConnectionRow = sqlx::query_as(
         "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, group_id = $7, extra = $8, updated_at = now()
          WHERE id = $9 AND soft_deleted_at IS NULL
@@ -1085,9 +1091,7 @@ pub struct CreateUserRequest {
     pub auth_type: String, // "local" or "sso"
 }
 
-pub async fn list_users(
-    State(state): State<SharedState>,
-) -> Result<Json<Vec<UserRow>>, AppError> {
+pub async fn list_users(State(state): State<SharedState>) -> Result<Json<Vec<UserRow>>, AppError> {
     let db = require_running(&state).await?;
     let rows: Vec<UserRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name
@@ -1112,10 +1116,18 @@ pub async fn create_user(
         .await?;
 
     if existing.is_some() {
-        return Err(AppError::Validation(format!("User with email {} already exists", body.email)));
+        return Err(AppError::Validation(format!(
+            "User with email {} already exists",
+            body.email
+        )));
     }
 
-    let username = body.email.split('@').next().unwrap_or(&body.email).to_string();
+    let username = body
+        .email
+        .split('@')
+        .next()
+        .unwrap_or(&body.email)
+        .to_string();
 
     let (password_hash, plaintext_password) = if body.auth_type == "local" {
         use rand::{distributions::Alphanumeric, Rng};
@@ -1124,14 +1136,14 @@ pub async fn create_user(
             .take(16)
             .map(char::from)
             .collect();
-        
-        use argon2::{PasswordHasher, password_hash::SaltString};
+
+        use argon2::{password_hash::SaltString, PasswordHasher};
         let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
         let hash = argon2::Argon2::default()
             .hash_password(plain.as_bytes(), &salt)
             .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
             .to_string();
-        
+
         (Some(hash), Some(plain))
     } else {
         (None, None)
@@ -1140,7 +1152,7 @@ pub async fn create_user(
     let user_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO users (id, username, email, full_name, password_hash, auth_type, role_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(user_id)
     .bind(&username)

@@ -82,25 +82,34 @@ impl HandshakeParams {
 
         // RDP virtual drive — enables file transfer via RDPDR channel
         if self.protocol == "rdp" {
-            m.entry("enable-drive".into()).or_insert_with(|| "true".into());
-            m.entry("drive-path".into()).or_insert_with(|| "/var/lib/guacamole/drive".into());
-            m.entry("drive-name".into()).or_insert_with(|| "Guacamole".into());
-            m.entry("create-drive-path".into()).or_insert_with(|| "true".into());
+            m.entry("enable-drive".into())
+                .or_insert_with(|| "true".into());
+            m.entry("drive-path".into())
+                .or_insert_with(|| "/var/lib/guacamole/drive".into());
+            m.entry("drive-name".into())
+                .or_insert_with(|| "Guacamole".into());
+            m.entry("create-drive-path".into())
+                .or_insert_with(|| "true".into());
 
             // FreeRDP 3 GFX pipeline — enables H.264 hardware/software encoding
             // for significantly lower bandwidth usage on modern RDP hosts.
-            m.entry("enable-gfx".into()).or_insert_with(|| "true".into());
-            m.entry("enable-gfx-h264".into()).or_insert_with(|| "true".into());
+            m.entry("enable-gfx".into())
+                .or_insert_with(|| "true".into());
+            m.entry("enable-gfx-h264".into())
+                .or_insert_with(|| "true".into());
         }
 
         // SFTP for SSH connections
         if self.protocol == "ssh" {
-            m.entry("enable-sftp".into()).or_insert_with(|| "true".into());
+            m.entry("enable-sftp".into())
+                .or_insert_with(|| "true".into());
         }
 
         // Clipboard — enable for all protocols
-        m.entry("disable-copy".into()).or_insert_with(|| "false".into());
-        m.entry("disable-paste".into()).or_insert_with(|| "false".into());
+        m.entry("disable-copy".into())
+            .or_insert_with(|| "false".into());
+        m.entry("disable-paste".into())
+            .or_insert_with(|| "false".into());
 
         // Merge extra params — only allow known safe guacd parameter names.
         // This prevents injection of arbitrary protocol options.
@@ -186,7 +195,9 @@ async fn read_instruction(
             .await
             .map_err(|e| AppError::Internal(format!("guacd read: {e}")))?;
         if n == 0 {
-            return Err(AppError::Internal("guacd closed connection during handshake".into()));
+            return Err(AppError::Internal(
+                "guacd closed connection during handshake".into(),
+            ));
         }
         buf.push(byte[0]);
         if byte[0] == b';' {
@@ -194,8 +205,8 @@ async fn read_instruction(
         }
     }
 
-    let text = String::from_utf8(buf)
-        .map_err(|e| AppError::Internal(format!("guacd non-utf8: {e}")))?;
+    let text =
+        String::from_utf8(buf).map_err(|e| AppError::Internal(format!("guacd non-utf8: {e}")))?;
 
     parse_instruction(&text)
 }
@@ -214,11 +225,11 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
         let len: usize = remaining[..dot_pos]
             .parse()
             .map_err(|_| AppError::Internal(format!("bad guac length: {raw}")))?;
-        
+
         // Guacamole lengths are in UNICODE CHARACTERS, not bytes.
         let value_start = dot_pos + 1;
         let value_pool = &remaining[value_start..];
-        
+
         // Find the byte offset of the len-th character
         let byte_offset = value_pool
             .char_indices()
@@ -228,9 +239,9 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
 
         let value = &value_pool[..byte_offset];
         elements.push(value.to_string());
-        
+
         remaining = &value_pool[byte_offset..];
-        
+
         // Skip the comma separator if present
         if remaining.starts_with(',') {
             remaining = &remaining[1..];
@@ -271,7 +282,9 @@ pub async fn proxy(
     // Step 2: Read "args" response from guacd
     let (opcode, arg_names) = read_instruction(&mut tcp_read).await?;
     if opcode != "args" {
-        return Err(AppError::Internal(format!("expected 'args' from guacd, got '{opcode}'")));
+        return Err(AppError::Internal(format!(
+            "expected 'args' from guacd, got '{opcode}'"
+        )));
     }
 
     tracing::debug!("guacd args: {:?}", arg_names);
@@ -330,7 +343,9 @@ pub async fn proxy(
     if resp_opcode == "error" {
         let msg = resp_args.first().cloned().unwrap_or_default();
         let code = resp_args.get(1).cloned().unwrap_or_default();
-        return Err(AppError::Internal(format!("guacd error: {msg} (code {code})")));
+        return Err(AppError::Internal(format!(
+            "guacd error: {msg} (code {code})"
+        )));
     }
     if resp_opcode != "ready" {
         tracing::warn!("unexpected guacd response: {resp_opcode} {:?}", resp_args);

@@ -2,10 +2,10 @@ use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
@@ -91,7 +91,11 @@ pub async fn create_share(
     // Validate mode
     let mode = match body.mode.as_str() {
         "view" | "control" => body.mode.clone(),
-        _ => return Err(AppError::Validation("mode must be 'view' or 'control'".into())),
+        _ => {
+            return Err(AppError::Validation(
+                "mode must be 'view' or 'control'".into(),
+            ))
+        }
     };
 
     // Generate a unique share token
@@ -157,7 +161,9 @@ pub async fn revoke_share(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Share not found or already revoked".into()));
+        return Err(AppError::NotFound(
+            "Share not found or already revoked".into(),
+        ));
     }
 
     Ok(Json(serde_json::json!({ "status": "revoked" })))
@@ -307,12 +313,11 @@ pub async fn ws_shared_tunnel(
     };
 
     // Get the owner username for credential fallback
-    let owner_username: Option<String> = sqlx::query_scalar(
-        "SELECT username FROM users WHERE id = $1",
-    )
-    .bind(owner_user_id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let owner_username: Option<String> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+            .bind(owner_user_id)
+            .fetch_optional(&db.pool)
+            .await?;
 
     let (final_username, final_password) = match (cred_username, cred_password) {
         (Some(u), Some(p)) => (Some(u), Some(p)),
@@ -332,7 +337,10 @@ pub async fn ws_shared_tunnel(
     };
 
     let security = extra.get("security").cloned().or(Some("any".into()));
-    let ignore_cert = extra.get("ignore-cert").map(|v| v == "true").unwrap_or(false);
+    let ignore_cert = extra
+        .get("ignore-cert")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let safe_port: u16 = port
         .try_into()
@@ -367,10 +375,12 @@ pub async fn ws_shared_tunnel(
         let s = state.read().await;
         s.session_registry.clone()
     };
-    let nvr_session_id =
-        format!("shared-{}-{}", connection_id, chrono::Utc::now().timestamp_millis());
-    let nvr_username =
-        format!(
+    let nvr_session_id = format!(
+        "shared-{}-{}",
+        connection_id,
+        chrono::Utc::now().timestamp_millis()
+    );
+    let nvr_username = format!(
         "shared:{}",
         owner_username.unwrap_or_else(|| "unknown".into())
     );
@@ -387,12 +397,12 @@ pub async fn ws_shared_tunnel(
                 user_id: owner_user_id,
                 username: nvr_username,
             };
-            if let Err(e) = tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+            if let Err(e) =
+                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
             {
                 tracing::error!("Shared tunnel error: {e}");
             }
-        })
-    )
+        }))
 }
 
 #[cfg(test)]

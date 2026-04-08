@@ -15,9 +15,7 @@ pub struct RecordingConfig {
     pub storage_type: StorageType,
 }
 
-pub async fn get_config(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-) -> anyhow::Result<RecordingConfig> {
+pub async fn get_config(pool: &sqlx::Pool<sqlx::Postgres>) -> anyhow::Result<RecordingConfig> {
     let enabled = crate::services::settings::get(pool, "recordings_enabled")
         .await?
         .unwrap_or_else(|| "false".into())
@@ -148,9 +146,7 @@ pub async fn upload_to_azure(
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
     let ct = "application/octet-stream";
-    let x_headers = format!(
-        "x-ms-blob-type:BlockBlob\nx-ms-date:{date}\nx-ms-version:2023-11-03"
-    );
+    let x_headers = format!("x-ms-blob-type:BlockBlob\nx-ms-date:{date}\nx-ms-version:2023-11-03");
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("PUT", data.len(), ct, &x_headers, &resource)?;
 
@@ -190,9 +186,7 @@ pub async fn upload_file_to_azure(
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
     let ct = "application/octet-stream";
-    let x_headers = format!(
-        "x-ms-blob-type:BlockBlob\nx-ms-date:{date}\nx-ms-version:2023-11-03"
-    );
+    let x_headers = format!("x-ms-blob-type:BlockBlob\nx-ms-date:{date}\nx-ms-version:2023-11-03");
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("PUT", file_len, ct, &x_headers, &resource)?;
 
@@ -223,10 +217,7 @@ pub async fn upload_file_to_azure(
     Ok(())
 }
 
-pub async fn download_from_azure(
-    cfg: &AzureBlobConfig,
-    blob: &str,
-) -> anyhow::Result<Vec<u8>> {
+pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<Vec<u8>> {
     let url = cfg.blob_url(blob);
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
@@ -306,9 +297,7 @@ async fn sync_pass(
         // Skip files still being written (modified < 30 s ago)
         if let Ok(meta) = entry.metadata().await {
             if let Ok(modified) = meta.modified() {
-                if modified.elapsed().unwrap_or_default()
-                    < std::time::Duration::from_secs(30)
-                {
+                if modified.elapsed().unwrap_or_default() < std::time::Duration::from_secs(30) {
                     continue;
                 }
             }

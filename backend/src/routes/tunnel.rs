@@ -19,7 +19,7 @@ fn clamp_dimension(val: u32, min: u32, max: u32, default: u32) -> u32 {
     }
 }
 const MIN_DIM: u32 = 64;
-const MAX_WIDTH: u32 = 7680;  // 8K
+const MAX_WIDTH: u32 = 7680; // 8K
 const MAX_HEIGHT: u32 = 4320; // 8K
 const MAX_DPI: u32 = 600;
 
@@ -249,7 +249,10 @@ pub async fn ws_tunnel(
     } else if query.password.is_some() {
         // Legacy: credentials supplied as query params (kept for backward compat)
         (
-            query.username.clone().or_else(|| Some(user.username.clone())),
+            query
+                .username
+                .clone()
+                .or_else(|| Some(user.username.clone())),
             query.password.clone(),
         )
     } else {
@@ -266,7 +269,10 @@ pub async fn ws_tunnel(
 
     // Use per-connection security/ignore-cert from extra, with fallback defaults
     let security = extra.get("security").cloned().or(Some("any".into()));
-    let ignore_cert = extra.get("ignore-cert").map(|v| v == "true").unwrap_or(false);
+    let ignore_cert = extra
+        .get("ignore-cert")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let safe_port: u16 = port
         .try_into()
@@ -310,7 +316,11 @@ pub async fn ws_tunnel(
         let s = state.read().await;
         s.session_registry.clone()
     };
-    let nvr_session_id = format!("{}-{}", connection_id, chrono::Utc::now().timestamp_millis());
+    let nvr_session_id = format!(
+        "{}-{}",
+        connection_id,
+        chrono::Utc::now().timestamp_millis()
+    );
     let nvr_connection_name = connection_name.clone();
     let nvr_protocol = handshake.protocol.clone();
     let nvr_user_id = user_id;
@@ -380,7 +390,10 @@ mod tests {
 
     #[test]
     fn clamp_dimension_exactly_max() {
-        assert_eq!(clamp_dimension(MAX_WIDTH, MIN_DIM, MAX_WIDTH, 1920), MAX_WIDTH);
+        assert_eq!(
+            clamp_dimension(MAX_WIDTH, MIN_DIM, MAX_WIDTH, 1920),
+            MAX_WIDTH
+        );
     }
 
     #[test]
@@ -418,7 +431,10 @@ mod tests {
     fn create_ticket_request_minimal() {
         let json = r#"{"connection_id":"550e8400-e29b-41d4-a716-446655440000"}"#;
         let r: CreateTicketRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(r.connection_id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            r.connection_id.to_string(),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
         assert!(r.username.is_none());
         assert!(r.width.is_none());
     }

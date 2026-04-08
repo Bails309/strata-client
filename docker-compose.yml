@@ -14,13 +14,22 @@ services:
       - krb5-config:/etc/krb5
     environment:
       - KRB5_CONFIG=/etc/krb5/krb5.conf
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
 
-  # ── 1b. Additional guacd sidecar (activate with --profile scale) ────
+  # ── 1b. Additional guacd sidecar
   # To use, set GUACD_INSTANCES=guacd-2:4822 in your .env file.
   # You can duplicate this block for guacd-3, guacd-4, etc.
   guacd-2:
@@ -39,6 +48,10 @@ services:
       - krb5-config:/etc/krb5
     environment:
       - KRB5_CONFIG=/etc/krb5/krb5.conf
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
       interval: 15s
@@ -54,6 +67,8 @@ services:
     restart: unless-stopped
     networks:
       - guac-internal
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - backend-config:/app/config
       - guac-recordings:/var/lib/guacamole/recordings:ro
@@ -61,11 +76,17 @@ services:
       - krb5-config:/etc/krb5
     environment:
       - RUST_LOG=${RUST_LOG:-info}
-      - DATABASE_URL=postgresql://strata:strata_default@postgres-local:5432/strata
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}
       - GUACD_HOST=guacd
       - GUACD_PORT=4822
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
-      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
+      - STRATA_ALLOWED_ORIGINS=${STRATA_ALLOWED_ORIGINS:-}
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
     depends_on:
       postgres-local:
         condition: service_healthy
@@ -79,6 +100,14 @@ services:
       dockerfile: Dockerfile
     image: strata/frontend:latest
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:uid=101,gid=101
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/log/nginx:uid=101,gid=101
+      - /run:uid=101,gid=101
+    security_opt:
+      - no-new-privileges:true
     networks:
       - guac-internal
     depends_on:
@@ -116,12 +145,19 @@ services:
     restart: unless-stopped
     networks:
       - guac-internal
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - postgres-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_USER: strata
-      POSTGRES_PASSWORD: strata_default
-      POSTGRES_DB: strata
+      POSTGRES_USER: ${POSTGRES_USER:-strata}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strata_default}
+      POSTGRES_DB: ${POSTGRES_DB:-strata}
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U strata -d strata"]
       interval: 10s

@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { login } from '../api';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { login, getStatus, StatusResponse } from '../api';
 import { useTheme } from '../components/ThemeProvider';
 
 interface Props {
@@ -11,7 +12,30 @@ export default function Login({ onLogin }: Props) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [searchParams] = useSearchParams();
   const { theme } = useTheme();
+
+  useEffect(() => {
+    // Check for token in URL (from SSO redirect)
+    const token = searchParams.get('token');
+    if (token) {
+      localStorage.setItem('access_token', token);
+      onLogin();
+      return;
+    }
+
+    // Fetch system status to see enabled auth methods
+    async function init() {
+      try {
+         const s = await getStatus();
+         setStatus(s);
+      } catch {
+         // Fallback - show nothing or retry
+      }
+    }
+    init();
+  }, [searchParams, onLogin]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,51 +69,78 @@ export default function Login({ onLogin }: Props) {
 
         {/* Login Card */}
         <div className="card">
-          <form onSubmit={handleSubmit}>
-            {error && (
-              <div className="rounded-sm mb-4 px-4 py-2 text-[0.8125rem] bg-danger-dim text-danger">
-                {error}
+          {error && (
+            <div className="rounded-sm mb-4 px-4 py-2 text-[0.8125rem] bg-danger-dim text-danger">
+              {error}
+            </div>
+          )}
+
+          {status?.local_auth_enabled && (
+            <form onSubmit={handleSubmit} className={status.sso_enabled ? 'mb-6 pb-6 border-b border-border/50' : ''}>
+              <div className="form-group">
+                <label>Username</label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="admin"
+                  autoComplete="username"
+                  autoFocus
+                  required
+                />
               </div>
-            )}
 
-            <div className="form-group">
-              <label>Username</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="admin"
-                autoComplete="username"
-                autoFocus
-                required
-              />
+              <div className="form-group">
+                <label>Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn-primary w-full mt-2"
+                disabled={loading || !username || !password}
+                style={{ padding: '0.65rem' }}
+              >
+                {loading ? 'Signing in…' : 'Sign In'}
+              </button>
+            </form>
+          )}
+
+          {status?.sso_enabled && (
+            <div className="space-y-3">
+              <a
+                href="/api/auth/sso/login"
+                className="btn w-full border border-border bg-surface-primary hover:bg-surface-secondary flex items-center justify-center gap-3 transition-all transform hover:scale-[1.01]"
+                style={{ padding: '0.65rem' }}
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+                </svg>
+                <span className="font-semibold text-txt-primary">Sign in with SSO</span>
+              </a>
+              <p className="text-[0.7rem] text-center text-txt-tertiary">
+                Secure enterprise login via Keycloak / OIDC
+              </p>
             </div>
+          )}
 
-            <div className="form-group">
-              <label>Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoComplete="current-password"
-                required
-              />
+          {!status && !loading && (
+            <div className="text-center py-4">
+              <div className="w-6 h-6 rounded-full animate-spin mx-auto mb-2 border-2 border-border border-t-accent" />
+              <p className="text-xs text-txt-secondary">Locating authentication service…</p>
             </div>
-
-            <button
-              type="submit"
-              className="btn-primary w-full mt-2"
-              disabled={loading || !username || !password}
-              style={{ padding: '0.65rem' }}
-            >
-              {loading ? 'Signing in…' : 'Sign In'}
-            </button>
-          </form>
+          )}
         </div>
 
         <p className="text-center text-txt-tertiary text-xs mt-6">
-          Default credentials: admin / admin
+          Strata Client
         </p>
       </div>
     </div>

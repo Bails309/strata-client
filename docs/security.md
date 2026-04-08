@@ -8,7 +8,7 @@ This document describes the security model, encryption architecture, and authent
 
 ### OIDC / OpenID Connect
 
-Strata Client supports standard OpenID Connect for user authentication. The identity provider (IdP) is configured dynamically via the Admin UI.
+Strata Client supports standard OpenID Connect for user authentication. The identity provider (IdP) is configured dynamic via the Admin UI, with client secrets stored securely in HashiCorp Vault.
 
 **Flow:**
 
@@ -26,7 +26,14 @@ Strata Client supports standard OpenID Connect for user authentication. The iden
 
 ### Local Authentication
 
-For environments without an OIDC provider, Strata Client supports built-in username/password authentication. Passwords are hashed using industry-standard algorithms before storage. Local auth is configured via the `002_local_auth.sql` migration.
+For environments without an OIDC provider, Strata Client supports built-in username/password authentication. Passwords are hashed using Argon2id before storage. Local authentication can be globally disabled via the Admin Settings; when disabled, the backend strictly rejects all local login attempts with a 401.
+
+### Authentication Method Enforcement
+
+Administrators can toggle `local_auth_enabled` and `sso_enabled` independently.
+- **Local Auth Disabled**: The `/api/auth/login` endpoint returns `401 Unauthorized` immediately.
+- **SSO Disabled**: The `/api/auth/sso/login` and `/api/auth/sso/callback` endpoints are deactivated.
+- **Safety Guard**: The system prevents disabling both methods simultaneously to ensure administrative access is maintained.
 
 ### User Resolution
 

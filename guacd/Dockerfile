@@ -37,7 +37,7 @@ COPY patches/ /tmp/patches/
 RUN cd /src && \
     for p in /tmp/patches/*.patch; do \
         echo "Applying $(basename $p)..." && \
-        git apply "$p" || echo "Patch $(basename $p) already applied or N/A"; \
+        git apply "$p" || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
     done
 
 WORKDIR /src
@@ -83,9 +83,14 @@ RUN if [ -f /usr/lib/freerdp3/libguac-common-svc-client.so ]; then \
 # Shared library path
 RUN ldconfig /usr/local/lib || true
 
-# Recordings volume mount point
-RUN mkdir -p /var/lib/guacamole/recordings && \
-    chmod 0750 /var/lib/guacamole/recordings
+# Recordings & drive volume mount points
+RUN mkdir -p /var/lib/guacamole/recordings /var/lib/guacamole/drive && \
+    chmod 0750 /var/lib/guacamole/recordings /var/lib/guacamole/drive
+
+# Run as non-root user
+RUN addgroup -S guacd && adduser -S guacd -G guacd \
+    && chown -R guacd:guacd /var/lib/guacamole
+USER guacd
 
 EXPOSE 4822
 

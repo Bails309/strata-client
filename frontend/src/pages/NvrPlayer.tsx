@@ -32,12 +32,13 @@ export default function NvrPlayer() {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (tunnelRef.current) {
+      tunnelRef.current.oninstruction = null;
+      tunnelRef.current = null;
+    }
     if (clientRef.current) {
       clientRef.current.disconnect();
       clientRef.current = null;
-    }
-    if (tunnelRef.current) {
-      tunnelRef.current = null;
     }
   }, []);
 

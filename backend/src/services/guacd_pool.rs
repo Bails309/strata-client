@@ -47,3 +47,47 @@ impl GuacdPool {
         self.instances.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_instance_always_returns_primary() {
+        let pool = GuacdPool::new("guacd", 4822, &[]);
+        assert_eq!(pool.len(), 1);
+
+        let (host, port) = pool.next();
+        assert_eq!(host, "guacd");
+        assert_eq!(port, 4822);
+    }
+
+    #[test]
+    fn round_robin_across_instances() {
+        let extras = vec!["guacd2:4823".into(), "guacd3:4824".into()];
+        let pool = GuacdPool::new("guacd1", 4822, &extras);
+        assert_eq!(pool.len(), 3);
+
+        let (h1, p1) = pool.next();
+        let (h2, p2) = pool.next();
+        let (h3, p3) = pool.next();
+        let (h4, p4) = pool.next(); // wraps around
+
+        assert_eq!((h1, p1), ("guacd1", 4822));
+        assert_eq!((h2, p2), ("guacd2", 4823));
+        assert_eq!((h3, p3), ("guacd3", 4824));
+        assert_eq!((h4, p4), ("guacd1", 4822)); // wrap-around
+    }
+
+    #[test]
+    fn extras_without_port_default_to_4822() {
+        let extras = vec!["guacd2".into()];
+        let pool = GuacdPool::new("guacd1", 4822, &extras);
+        assert_eq!(pool.len(), 2);
+
+        let _ = pool.next(); // skip primary
+        let (host, port) = pool.next();
+        assert_eq!(host, "guacd2");
+        assert_eq!(port, 4822);
+    }
+}

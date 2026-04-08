@@ -1,0 +1,12 @@
+.git
+.gitignore
+*.md
+LICENSE
+NOTICE
+docs/
+node_modules/
+dist/
+.env
+.env.*
+docker-compose.yml
+Caddyfile

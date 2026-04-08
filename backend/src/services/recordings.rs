@@ -56,10 +56,30 @@ pub struct AzureBlobConfig {
 
 pub async fn get_azure_config(
     pool: &sqlx::Pool<sqlx::Postgres>,
+    vault: Option<&crate::config::VaultConfig>,
 ) -> anyhow::Result<Option<AzureBlobConfig>> {
     let account_name = crate::services::settings::get(pool, "recordings_azure_account_name").await?;
-    let access_key = crate::services::settings::get(pool, "recordings_azure_access_key").await?;
+    let access_key_raw = crate::services::settings::get(pool, "recordings_azure_access_key").await?;
     let container_name = crate::services::settings::get(pool, "recordings_azure_container_name").await?;
+
+    // Decrypt access key if vault-encrypted
+    let access_key = match access_key_raw {
+        Some(ref raw) if raw.starts_with("vault:") => {
+            if let Some(vc) = vault {
+                match crate::services::vault::unseal_setting(vc, raw).await {
+                    Ok(decrypted) => Some(decrypted),
+                    Err(e) => {
+                        tracing::error!("Failed to decrypt Azure access key: {e}");
+                        None
+                    }
+                }
+            } else {
+                tracing::warn!("Azure access key is vault-encrypted but Vault is not configured");
+                None
+            }
+        }
+        other => other,
+    };
 
     match (account_name, access_key) {
         (Some(name), Some(key)) if !name.is_empty() && !key.is_empty() => {
@@ -114,6 +134,7 @@ impl AzureBlobConfig {
     }
 }
 
+#[allow(dead_code)]
 pub async fn upload_to_azure(
     cfg: &AzureBlobConfig,
     blob: &str,
@@ -150,6 +171,53 @@ pub async fn upload_to_azure(
     Ok(())
 }
 
+/// Stream a file from disk to Azure Blob Storage without loading it entirely into memory.
+pub async fn upload_file_to_azure(
+    cfg: &AzureBlobConfig,
+    blob: &str,
+    file_path: &str,
+) -> anyhow::Result<()> {
+    let meta = tokio::fs::metadata(file_path).await
+        .map_err(|e| anyhow::anyhow!("Cannot stat {file_path}: {e}"))?;
+    let file_len = meta.len() as usize;
+
+    let url = cfg.blob_url(blob);
+    let date = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let ct = "application/octet-stream";
+    let x_headers = format!(
+        "x-ms-blob-type:BlockBlob\nx-ms-date:{date}\nx-ms-version:2023-11-03"
+    );
+    let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
+    let auth = cfg.sign("PUT", file_len, ct, &x_headers, &resource)?;
+
+    let file = tokio::fs::File::open(file_path).await
+        .map_err(|e| anyhow::anyhow!("Cannot open {file_path}: {e}"))?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = reqwest::Body::wrap_stream(stream);
+
+    let resp = reqwest::Client::new()
+        .put(&url)
+        .header("Authorization", auth)
+        .header("x-ms-date", &date)
+        .header("x-ms-version", "2023-11-03")
+        .header("x-ms-blob-type", "BlockBlob")
+        .header("Content-Type", ct)
+        .header("Content-Length", file_len)
+        .body(body)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Azure Blob upload failed ({status}): {text}");
+    }
+
+    Ok(())
+}
+
 pub async fn download_from_azure(
     cfg: &AzureBlobConfig,
     blob: &str,
@@ -181,13 +249,13 @@ pub async fn download_from_azure(
 
 // ── Background sync task ───────────────────────────────────────────────
 
-pub fn spawn_sync_task(pool: sqlx::Pool<sqlx::Postgres>) {
+pub fn spawn_sync_task(pool: sqlx::Pool<sqlx::Postgres>, vault: Option<crate::config::VaultConfig>) {
     tokio::spawn(async move {
         let mut synced: HashSet<String> = HashSet::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
-            if let Err(e) = sync_pass(&pool, &mut synced).await {
+            if let Err(e) = sync_pass(&pool, &mut synced, vault.as_ref()).await {
                 tracing::warn!("Recording sync error: {e}");
             }
         }
@@ -197,13 +265,14 @@ pub fn spawn_sync_task(pool: sqlx::Pool<sqlx::Postgres>) {
 async fn sync_pass(
     pool: &sqlx::Pool<sqlx::Postgres>,
     synced: &mut HashSet<String>,
+    vault: Option<&crate::config::VaultConfig>,
 ) -> anyhow::Result<()> {
     let config = get_config(pool).await?;
     if !config.enabled || config.storage_type != StorageType::AzureBlob {
         return Ok(());
     }
 
-    let azure = match get_azure_config(pool).await? {
+    let azure = match get_azure_config(pool, vault).await? {
         Some(c) => c,
         None => return Ok(()),
     };
@@ -232,17 +301,97 @@ async fn sync_pass(
         }
 
         let path = format!("{dir}/{name}");
-        match tokio::fs::read(&path).await {
-            Ok(data) => match upload_to_azure(&azure, &name, data).await {
-                Ok(_) => {
-                    synced.insert(name.clone());
-                    tracing::info!("Synced recording to Azure Blob: {name}");
-                }
-                Err(e) => tracing::warn!("Azure Blob upload failed for {name}: {e}"),
-            },
-            Err(e) => tracing::warn!("Failed to read recording {name}: {e}"),
+        match upload_file_to_azure(&azure, &name, &path).await {
+            Ok(_) => {
+                synced.insert(name.clone());
+                tracing::info!("Synced recording to Azure Blob: {name}");
+            }
+            Err(e) => tracing::warn!("Azure Blob upload failed for {name}: {e}"),
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_type_equality() {
+        assert_eq!(StorageType::Local, StorageType::Local);
+        assert_eq!(StorageType::AzureBlob, StorageType::AzureBlob);
+        assert_ne!(StorageType::Local, StorageType::AzureBlob);
+    }
+
+    #[test]
+    fn storage_type_debug() {
+        assert_eq!(format!("{:?}", StorageType::Local), "Local");
+        assert_eq!(format!("{:?}", StorageType::AzureBlob), "AzureBlob");
+    }
+
+    #[test]
+    fn recording_config_fields() {
+        let cfg = RecordingConfig {
+            enabled: true,
+            retention_days: 90,
+            storage_type: StorageType::AzureBlob,
+        };
+        assert!(cfg.enabled);
+        assert_eq!(cfg.retention_days, 90);
+        assert_eq!(cfg.storage_type, StorageType::AzureBlob);
+    }
+
+    #[test]
+    fn blob_url_format() {
+        let cfg = AzureBlobConfig {
+            account_name: "mystorageaccount".into(),
+            container_name: "recordings".into(),
+            access_key: String::new(),
+        };
+        assert_eq!(
+            cfg.blob_url("session-123.guac"),
+            "https://mystorageaccount.blob.core.windows.net/recordings/session-123.guac"
+        );
+    }
+
+    #[test]
+    fn blob_url_custom_container() {
+        let cfg = AzureBlobConfig {
+            account_name: "acct".into(),
+            container_name: "custom-container".into(),
+            access_key: String::new(),
+        };
+        assert_eq!(
+            cfg.blob_url("file.bin"),
+            "https://acct.blob.core.windows.net/custom-container/file.bin"
+        );
+    }
+
+    #[test]
+    fn sign_produces_shared_key() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        // Use a known base64-encoded key (32 bytes)
+        let key_bytes = [0u8; 32];
+        let cfg = AzureBlobConfig {
+            account_name: "testacct".into(),
+            container_name: "recordings".into(),
+            access_key: B64.encode(key_bytes),
+        };
+        let sig = cfg
+            .sign("PUT", 1024, "application/octet-stream", "x-ms-date:Thu, 01 Jan 2026 00:00:00 GMT\nx-ms-version:2023-11-03", "/testacct/recordings/test.bin")
+            .unwrap();
+        assert!(sig.starts_with("SharedKey testacct:"));
+    }
+
+    #[test]
+    fn sign_invalid_base64_key_fails() {
+        let cfg = AzureBlobConfig {
+            account_name: "acct".into(),
+            container_name: "rec".into(),
+            access_key: "not-valid-base64!!!".into(),
+        };
+        let result = cfg.sign("GET", 0, "", "", "/acct/rec/file.bin");
+        assert!(result.is_err());
+    }
 }

@@ -1,10 +1,40 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getMyConnections, getConnectionInfo, Connection, getStatus, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile } from '../api';
+import { getMyConnections, getConnectionInfo, Connection, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile, createTunnelTicket, getServiceHealth } from '../api';
 import { useSessionManager } from '../components/SessionManager';
 import Select from '../components/Select';
 
 const PAGE_SIZE = 50;
+
+function ProtocolIcon({ protocol }: { protocol: string }) {
+  const p = protocol.toLowerCase();
+  if (p === 'rdp') {
+    return (
+      <svg width="20" height="20" viewBox="0 0 88 88" fill="currentColor">
+        <path d="M0 12.4l35.687-4.86.016 34.423-35.67.143L0 12.4zm35.67 33.529l.028 34.453L0 75.39V45.71h35.67V45.93zM40.336 6.326L87.971 0v41.527H40.33l.006-35.2zM87.971 46.26l-.011 41.74-47.624-6.661V46.26h47.635z" />
+      </svg>
+    );
+  }
+  if (p === 'ssh') {
+    return (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>
+      </svg>
+    );
+  }
+  if (p === 'db') {
+    return (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19C3 20.6569 7.02944 22 12 22C16.9706 22 21 20.6569 21 19V5"/><path d="M3 12C3 13.6569 7.02944 15 12 15C16.9706 15 21 13.6569 21 12"/>
+      </svg>
+    );
+  }
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+    </svg>
+  );
+}
 
 /** Connections that need credentials before tiled open */
 interface TiledCredPrompt {
@@ -56,7 +86,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     getMyConnections().then(setConnections).catch(() => {});
-    getStatus().then((s) => setVaultConfigured(s.vault_configured)).catch(() => {});
+    getServiceHealth().then((h) => setVaultConfigured(h.vault.configured)).catch(() => {});
     getFavorites().then((ids) => setFavorites(new Set(ids))).catch(() => {});
     loadProfiles();
   }, [loadProfiles]);
@@ -203,7 +233,7 @@ export default function Dashboard() {
   }, [checked, connections]);
 
   /** Create all tiled sessions and navigate */
-  const launchTiled = useCallback((
+  const launchTiled = useCallback(async (
     conns: Connection[],
     creds: Record<string, { username: string; password: string }>,
   ) => {
@@ -215,16 +245,30 @@ export default function Dashboard() {
     for (const conn of conns) {
       const token = localStorage.getItem('access_token') || '';
       const dpr = window.devicePixelRatio || 1;
+      const connCreds = creds[conn.id];
+
+      // Obtain a one-time tunnel ticket so credentials never appear in the WebSocket URL
+      let ticketId: string | undefined;
+      try {
+        const resp = await createTunnelTicket({
+          connection_id: conn.id,
+          username: connCreds?.username || undefined,
+          password: connCreds?.password || undefined,
+          width: 800,
+          height: 600,
+          dpi: Math.round(96 * dpr),
+        });
+        ticketId = resp.ticket;
+      } catch {
+        continue; // skip this connection on ticket failure
+      }
+
       const connectParams = new URLSearchParams();
       connectParams.set('token', token);
+      connectParams.set('ticket', ticketId);
       connectParams.set('width', '800');
       connectParams.set('height', '600');
       connectParams.set('dpi', String(Math.round(96 * dpr)));
-
-      // Attach credentials if provided
-      const connCreds = creds[conn.id];
-      if (connCreds?.username) connectParams.set('username', connCreds.username);
-      if (connCreds?.password) connectParams.set('password', connCreds.password);
 
       const session = createSession({
         connectionId: conn.id,
@@ -254,9 +298,104 @@ export default function Dashboard() {
     launchTiled(allConns, tiledCreds);
   }, [tiledCredPrompt, tiledCreds, launchTiled]);
 
+  // ── Top 5 most recently accessed connections for the hero cards ──
+  const recentConnections = useMemo(() => {
+    return [...connections]
+      .filter((c) => c.last_accessed)
+      .sort((a, b) => new Date(b.last_accessed!).getTime() - new Date(a.last_accessed!).getTime())
+      .slice(0, 5);
+  }, [connections]);
+
+  /** Get credential status for a connection based on its mapped profile */
+  const getCredStatus = useCallback((connId: string): 'active' | 'expired' | 'none' => {
+    const profileId = connProfileMap[connId];
+    if (!profileId) return 'none';
+    const profile = credProfiles.find((p) => p.id === profileId);
+    if (!profile) return 'none';
+    return profile.expired ? 'expired' : 'active';
+  }, [connProfileMap, credProfiles]);
+
   return (
     <div>
       <h1>My Connections</h1>
+
+      {/* ── Recent Connections — Premium Glass Cards ── */}
+      {recentConnections.length > 0 && (
+        <div className="recent-cards-section">
+          <div className="recent-cards-grid">
+            {recentConnections.map((conn) => {
+              const status = getCredStatus(conn.id);
+              const domain = conn.domain || conn.hostname.split('.').slice(1).join('.');
+              return (
+                <div
+                  key={conn.id}
+                  className="recent-card"
+                  onClick={() => navigate(`/session/${conn.id}`)}
+                >
+                  {/* Status indicator dot */}
+                  <div
+                    className="recent-card-dot"
+                    style={{
+                      background: status === 'active' ? '#22c55e' : status === 'expired' ? '#ef4444' : '#8b5cf6',
+                      boxShadow: status === 'active'
+                        ? '0 0 8px rgba(34, 197, 94, 0.6)'
+                        : status === 'expired'
+                          ? '0 0 8px rgba(239, 68, 68, 0.6)'
+                          : '0 0 8px rgba(139, 92, 246, 0.6)',
+                    }}
+                  />
+
+                  {/* Card protocol icon */}
+                  <div className="recent-card-icon-badge">
+                    <ProtocolIcon protocol={conn.protocol} />
+                  </div>
+
+                  {/* Card content */}
+                  <h3 className="recent-card-title">{conn.name}</h3>
+                  <p className="recent-card-detail">
+                    {conn.protocol.toUpperCase()} - {conn.hostname}:{conn.port}
+                  </p>
+                  <div className="recent-card-meta">
+                    {domain && (
+                      <p>
+                        Status: {domain}{' '}
+                        <span style={{
+                          color: status === 'active' ? '#22c55e' : status === 'expired' ? '#ef4444' : 'var(--color-txt-tertiary)',
+                        }}>
+                          ({status === 'none' ? 'no profile' : status})
+                        </span>
+                      </p>
+                    )}
+                    <p>
+                      Last Accessed:{' '}
+                      {new Date(conn.last_accessed!).toLocaleDateString('en-GB', {
+                        day: 'numeric', month: 'short', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit', second: '2-digit',
+                      })}
+                    </p>
+                  </div>
+
+                  {/* Connect button */}
+                  <button
+                    className="btn-connect-glass w-full"
+                    style={{
+                      '--btn-border': status === 'active' ? 'rgba(34, 197, 94, 0.4)' : status === 'expired' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(139, 92, 246, 0.4)',
+                      '--btn-text': status === 'active' ? '#22c55e' : status === 'expired' ? '#ef4444' : '#a78bfa',
+                      '--btn-glow': status === 'active' ? 'rgba(34, 197, 94, 0.15)' : status === 'expired' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(139, 92, 246, 0.15)',
+                    } as React.CSSProperties}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/session/${conn.id}`); }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                      <polygon points="5,3 19,12 5,21" />
+                    </svg>
+                    Connect
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Toolbar ── */}
       <div className="flex items-center gap-4 mb-5 flex-wrap">
@@ -544,44 +683,71 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
   onProfileChange: (connectionId: string, profileId: string) => void;
   onConnect: () => void;
 }) {
-  return (
-    <tr>
-      <td>
-        <input type="checkbox" checked={checked} onChange={onToggleChecked} className="checkbox" />
-      </td>
-      <td>
-        <div className="font-medium">{conn.name}</div>
-        {conn.description && <div className="text-[0.75rem] text-txt-tertiary mt-0.5">{conn.description}</div>}
-      </td>
-      <td>
-        <span className="badge badge-accent">{conn.protocol.toUpperCase()}</span>
-      </td>
-      <td className="text-[0.8125rem] text-txt-secondary">
-        {conn.protocol.toUpperCase()} — {conn.hostname}:{conn.port}
-      </td>
-      <td className="text-[0.8125rem] text-txt-secondary">
-        {conn.last_accessed
-          ? new Date(conn.last_accessed).toLocaleDateString(undefined, {
-              month: 'short', day: 'numeric', year: 'numeric',
-              hour: '2-digit', minute: '2-digit',
-            })
-          : '—'}
-      </td>
-      <td>
-        <div className="flex gap-2">
-          <button
-            className="btn-sm !px-2"
-            onClick={onToggleFavorite}
-            title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24"
-              fill={isFavorite ? 'var(--color-warning, #f59e0b)' : 'none'}
-              stroke={isFavorite ? 'var(--color-warning, #f59e0b)' : 'currentColor'}
-              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-            </svg>
-          </button>
-          <button className="btn-sm-primary" onClick={onConnect}>Connect</button>
+    const status: 'active' | 'expired' | 'none' = useMemo(() => {
+      const profile = credProfiles.find(p => p.id === assignedProfileId);
+      if (!profile) return 'none';
+      return profile.expired ? 'expired' : 'active';
+    }, [credProfiles, assignedProfileId]);
+
+    const statusColors = {
+      active: { border: 'rgba(34, 197, 94, 0.4)', text: '#22c55e', glow: 'rgba(34, 197, 94, 0.15)' },
+      expired: { border: 'rgba(239, 68, 68, 0.4)', text: '#ef4444', glow: 'rgba(239, 68, 68, 0.15)' },
+      none: { border: 'rgba(139, 92, 246, 0.4)', text: '#a78bfa', glow: 'rgba(139, 92, 246, 0.15)' },
+    }[status];
+
+    return (
+      <tr>
+        <td>
+          <input type="checkbox" checked={checked} onChange={onToggleChecked} className="checkbox" />
+        </td>
+        <td>
+          <div className="font-medium">{conn.name}</div>
+          {conn.description && <div className="text-[0.75rem] text-txt-tertiary mt-0.5">{conn.description}</div>}
+        </td>
+        <td>
+          <div className="flex items-center gap-2.5 text-accent-light">
+            <ProtocolIcon protocol={conn.protocol} />
+            <span className="badge badge-accent">{conn.protocol.toUpperCase()}</span>
+          </div>
+        </td>
+        <td className="text-[0.8125rem] text-txt-secondary">
+          {conn.protocol.toUpperCase()} — {conn.hostname}:{conn.port}
+        </td>
+        <td className="text-[0.8125rem] text-txt-secondary">
+          {conn.last_accessed
+            ? new Date(conn.last_accessed).toLocaleDateString('en-GB', {
+                day: 'numeric', month: 'short', year: 'numeric',
+                hour: '2-digit', minute: '2-digit',
+              })
+            : '—'}
+        </td>
+        <td>
+          <div className="flex gap-2">
+            <button
+              className="btn-sm !px-2"
+              onClick={onToggleFavorite}
+              title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24"
+                fill={isFavorite ? 'var(--color-warning, #f59e0b)' : 'none'}
+                stroke={isFavorite ? 'var(--color-warning, #f59e0b)' : 'currentColor'}
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+            </button>
+            <button
+              className="btn-connect-glass"
+              style={{
+                '--btn-border': statusColors.border,
+                '--btn-text': statusColors.text,
+                '--btn-glow': statusColors.glow,
+                padding: '0.35rem 0.8rem',
+                fontSize: '0.75rem'
+              } as React.CSSProperties}
+              onClick={onConnect}
+            >
+              Connect
+            </button>
           {vaultConfigured && (
             <div className="min-w-[140px]">
               <Select

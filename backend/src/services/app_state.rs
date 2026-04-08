@@ -31,3 +31,42 @@ impl std::fmt::Debug for AppState {
 }
 
 pub type SharedState = Arc<RwLock<AppState>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boot_phase_default_is_setup() {
+        let phase = BootPhase::Setup;
+        assert_eq!(phase, BootPhase::Setup);
+        assert_ne!(phase, BootPhase::Running);
+    }
+
+    #[test]
+    fn boot_phase_clone_and_eq() {
+        let a = BootPhase::Running;
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn boot_phase_debug() {
+        assert_eq!(format!("{:?}", BootPhase::Setup), "Setup");
+        assert_eq!(format!("{:?}", BootPhase::Running), "Running");
+    }
+
+    #[test]
+    fn app_state_debug_format() {
+        let state = AppState {
+            phase: BootPhase::Setup,
+            config: None,
+            db: None,
+            session_registry: SessionRegistry::new(),
+            guacd_pool: None,
+        };
+        let debug = format!("{:?}", state);
+        assert!(debug.contains("Setup"));
+        assert!(debug.contains("config: None"));
+    }
+}

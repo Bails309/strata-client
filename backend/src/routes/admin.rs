@@ -20,7 +20,23 @@ async fn require_running(state: &SharedState) -> Result<crate::db::Database, App
     s.db.clone().ok_or(AppError::SetupRequired)
 }
 
+/// Validate that a string looks like a safe hostname/realm (prevent injection in krb5.conf).
+fn is_safe_hostname(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 255
+        && s.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == ':' || c == '_')
+}
+
 // ── Settings ───────────────────────────────────────────────────────────
+
+/// Settings keys whose values must be redacted from API responses.
+const SENSITIVE_SETTINGS: &[&str] = &[
+    "sso_client_secret",
+    "ad_bind_password",
+    "azure_storage_access_key",
+    "vault_token",
+    "vault_unseal_key",
+];
 
 pub async fn get_settings(
     State(state): State<SharedState>,
@@ -29,7 +45,13 @@ pub async fn get_settings(
     let all = settings::get_all(&db.pool).await?;
     let map: serde_json::Map<String, serde_json::Value> = all
         .into_iter()
-        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .map(|(k, v)| {
+            if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s)) {
+                (k, serde_json::Value::String("********".into()))
+            } else {
+                (k, serde_json::Value::String(v))
+            }
+        })
         .collect();
     Ok(Json(serde_json::Value::Object(map)))
 }
@@ -45,11 +67,39 @@ pub struct SettingKV {
     pub value: String,
 }
 
+/// Settings keys that cannot be updated via the generic settings endpoint.
+/// These must be updated through their dedicated endpoints (SSO, Kerberos, Vault, etc).
+const RESTRICTED_SETTINGS: &[&str] = &[
+    "jwt_secret",
+    "sso_client_secret",
+    "sso_issuer_url",
+    "sso_client_id",
+    "sso_enabled",
+    "ad_bind_password",
+    "vault_token",
+    "vault_unseal_key",
+    "kerberos_realm",
+    "kerberos_kdc",
+    "kerberos_admin_server",
+    "local_auth_enabled",
+];
+
 pub async fn update_settings(
     State(state): State<SharedState>,
     Json(body): Json<SettingsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    // Block restricted keys — must use dedicated endpoints
+    for kv in &body.settings {
+        if RESTRICTED_SETTINGS.iter().any(|r| kv.key == *r) {
+            return Err(AppError::Validation(format!(
+                "Setting '{}' cannot be updated through this endpoint",
+                kv.key
+            )));
+        }
+    }
+
     for kv in &body.settings {
         settings::set(&db.pool, &kv.key, &kv.value).await?;
     }
@@ -71,12 +121,88 @@ pub async fn update_sso(
     Json(body): Json<SsoUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    // Validate issuer URL uses HTTPS
+    if !body.issuer_url.starts_with("https://") {
+        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
+    }
+
     settings::set(&db.pool, "sso_enabled", "true").await?;
     settings::set(&db.pool, "sso_issuer_url", &body.issuer_url).await?;
     settings::set(&db.pool, "sso_client_id", &body.client_id).await?;
-    settings::set(&db.pool, "sso_client_secret", &body.client_secret).await?;
+
+    // Encrypt client secret before storing — require Vault
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config.as_ref().and_then(|c| c.vault.clone())
+    };
+    if let Some(ref vc) = vault_cfg {
+        let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes()).await
+            .map_err(|e| AppError::Vault(format!("Failed to encrypt SSO secret: {e}")))?;
+        use base64::Engine;
+        let encoded = serde_json::json!({
+            "ct": base64::engine::general_purpose::STANDARD.encode(&sealed.ciphertext),
+            "dek": base64::engine::general_purpose::STANDARD.encode(&sealed.encrypted_dek),
+            "n": base64::engine::general_purpose::STANDARD.encode(&sealed.nonce),
+        });
+        settings::set(&db.pool, "sso_client_secret", &format!("vault:{}", encoded.to_string())).await?;
+    } else {
+        return Err(AppError::Config(
+            "Vault must be configured before enabling SSO. Client secrets require encrypted storage.".into(),
+        ));
+    }
+
     audit::log(&db.pool, None, "sso.configured", &json!({})).await?;
     Ok(Json(json!({ "status": "sso_updated" })))
+}
+
+// ── Auth Methods ────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct AuthMethodsUpdateRequest {
+    pub sso_enabled: bool,
+    pub local_auth_enabled: bool,
+}
+
+pub async fn update_auth_methods(
+    State(state): State<SharedState>,
+    Json(body): Json<AuthMethodsUpdateRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Ensure at least one method is enabled
+    if !body.sso_enabled && !body.local_auth_enabled {
+        return Err(AppError::Validation(
+            "At least one authentication method must be enabled.".into(),
+        ));
+    }
+
+    // If enabling SSO, verify it has been configured (issuer_url and client_id exist)
+    if body.sso_enabled {
+        let issuer = settings::get(&db.pool, "sso_issuer_url").await?.unwrap_or_default();
+        let client_id = settings::get(&db.pool, "sso_client_id").await?.unwrap_or_default();
+        if issuer.is_empty() || client_id.is_empty() {
+            return Err(AppError::Validation(
+                "SSO cannot be enabled until it is configured in the SSO tab.".into(),
+            ));
+        }
+    }
+
+    settings::set(&db.pool, "sso_enabled", if body.sso_enabled { "true" } else { "false" }).await?;
+    settings::set(&db.pool, "local_auth_enabled", if body.local_auth_enabled { "true" } else { "false" }).await?;
+
+    audit::log(
+        &db.pool,
+        None,
+        "settings.auth_methods_updated",
+        &json!({
+            "sso_enabled": body.sso_enabled,
+            "local_auth_enabled": body.local_auth_enabled
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "updated" })))
 }
 
 // ── Vault ──────────────────────────────────────────────────────────────
@@ -219,6 +345,17 @@ pub async fn update_kerberos(
     Json(body): Json<KerberosUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    // Validate hostname-like values to prevent injection
+    if !is_safe_hostname(&body.realm)
+        || body.kdc.iter().any(|k| !is_safe_hostname(k))
+        || !is_safe_hostname(&body.admin_server)
+    {
+        return Err(AppError::Validation(
+            "Kerberos hostnames must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+        ));
+    }
+
     let ticket_lifetime = body.ticket_lifetime.as_deref().unwrap_or("10h");
     let renew_lifetime = body.renew_lifetime.as_deref().unwrap_or("7d");
 
@@ -287,14 +424,28 @@ pub async fn create_kerberos_realm(
     Json(body): Json<CreateKerberosRealmRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    // Validate hostname-like values
+    if !is_safe_hostname(&body.realm)
+        || body.kdc_servers.iter().any(|k| !is_safe_hostname(k))
+        || !is_safe_hostname(&body.admin_server)
+    {
+        return Err(AppError::Validation(
+            "Kerberos hostnames must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+        ));
+    }
+
     let ticket_lifetime = body.ticket_lifetime.as_deref().unwrap_or("10h");
     let renew_lifetime = body.renew_lifetime.as_deref().unwrap_or("7d");
     let is_default = body.is_default.unwrap_or(false);
 
+    // Use a transaction so unset-others + insert is atomic
+    let mut tx = db.pool.begin().await?;
+
     // If marking as default, unset other defaults
     if is_default {
         sqlx::query("UPDATE kerberos_realms SET is_default = false WHERE is_default = true")
-            .execute(&db.pool)
+            .execute(&mut *tx)
             .await?;
     }
 
@@ -309,8 +460,10 @@ pub async fn create_kerberos_realm(
     .bind(ticket_lifetime)
     .bind(renew_lifetime)
     .bind(is_default)
-    .fetch_one(&db.pool)
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     // Keep kerberos_enabled in sync
     settings::set(&db.pool, "kerberos_enabled", "true").await?;
@@ -348,38 +501,43 @@ pub async fn update_kerberos_realm(
         return Err(AppError::NotFound("Kerberos realm not found".into()));
     }
 
+    // Use a transaction so unset-others + field updates are atomic
+    let mut tx = db.pool.begin().await?;
+
     // If marking as default, unset other defaults
     if body.is_default == Some(true) {
         sqlx::query("UPDATE kerberos_realms SET is_default = false WHERE is_default = true AND id != $1")
             .bind(realm_id)
-            .execute(&db.pool)
+            .execute(&mut *tx)
             .await?;
     }
 
     if let Some(ref realm) = body.realm {
         sqlx::query("UPDATE kerberos_realms SET realm = $1, updated_at = now() WHERE id = $2")
-            .bind(realm).bind(realm_id).execute(&db.pool).await?;
+            .bind(realm).bind(realm_id).execute(&mut *tx).await?;
     }
     if let Some(ref kdc) = body.kdc_servers {
         sqlx::query("UPDATE kerberos_realms SET kdc_servers = $1, updated_at = now() WHERE id = $2")
-            .bind(kdc.join(",")).bind(realm_id).execute(&db.pool).await?;
+            .bind(kdc.join(",")).bind(realm_id).execute(&mut *tx).await?;
     }
     if let Some(ref admin) = body.admin_server {
         sqlx::query("UPDATE kerberos_realms SET admin_server = $1, updated_at = now() WHERE id = $2")
-            .bind(admin).bind(realm_id).execute(&db.pool).await?;
+            .bind(admin).bind(realm_id).execute(&mut *tx).await?;
     }
     if let Some(ref tl) = body.ticket_lifetime {
         sqlx::query("UPDATE kerberos_realms SET ticket_lifetime = $1, updated_at = now() WHERE id = $2")
-            .bind(tl).bind(realm_id).execute(&db.pool).await?;
+            .bind(tl).bind(realm_id).execute(&mut *tx).await?;
     }
     if let Some(ref rl) = body.renew_lifetime {
         sqlx::query("UPDATE kerberos_realms SET renew_lifetime = $1, updated_at = now() WHERE id = $2")
-            .bind(rl).bind(realm_id).execute(&db.pool).await?;
+            .bind(rl).bind(realm_id).execute(&mut *tx).await?;
     }
     if let Some(d) = body.is_default {
         sqlx::query("UPDATE kerberos_realms SET is_default = $1, updated_at = now() WHERE id = $2")
-            .bind(d).bind(realm_id).execute(&db.pool).await?;
+            .bind(d).bind(realm_id).execute(&mut *tx).await?;
     }
+
+    tx.commit().await?;
 
     regenerate_krb5_conf(&db.pool).await?;
     audit::log(&db.pool, None, "kerberos.realm_updated", &json!({ "realm_id": realm_id.to_string() })).await?;
@@ -472,7 +630,21 @@ pub async fn update_recordings(
         settings::set(&db.pool, "recordings_azure_container_name", container).await?;
     }
     if let Some(ref key) = body.azure_access_key {
-        settings::set(&db.pool, "recordings_azure_access_key", key).await?;
+        // Encrypt access key via Vault if configured
+        let stored = if !key.is_empty() {
+            let vault_cfg = {
+                let s = state.read().await;
+                s.config.as_ref().and_then(|c| c.vault.clone())
+            };
+            if let Some(ref vc) = vault_cfg {
+                crate::services::vault::seal_setting(vc, key).await?
+            } else {
+                key.clone()
+            }
+        } else {
+            String::new()
+        };
+        settings::set(&db.pool, "recordings_azure_access_key", &stored).await?;
     }
     audit::log(&db.pool, None, "recordings.configured", &json!({ "enabled": body.enabled })).await?;
     Ok(Json(json!({ "status": "recordings_updated" })))
@@ -693,6 +865,7 @@ pub struct AuditLogRow {
     pub id: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub user_id: Option<Uuid>,
+    pub username: Option<String>,
     pub action_type: String,
     pub details: serde_json::Value,
     pub current_hash: String,
@@ -713,8 +886,9 @@ pub async fn list_audit_logs(
     let offset = (query.page.unwrap_or(1) - 1).max(0) * per_page;
 
     let rows: Vec<AuditLogRow> = sqlx::query_as(
-        "SELECT id, created_at, user_id, action_type, details, current_hash
-         FROM audit_logs ORDER BY id DESC LIMIT $1 OFFSET $2",
+        "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash
+         FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+         ORDER BY a.id DESC LIMIT $1 OFFSET $2",
     )
     .bind(per_page)
     .bind(offset)
@@ -911,11 +1085,17 @@ pub async fn list_ad_sync_configs(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<AdSyncConfig>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<AdSyncConfig> = sqlx::query_as(
+    let mut rows: Vec<AdSyncConfig> = sqlx::query_as(
         "SELECT * FROM ad_sync_configs ORDER BY label",
     )
     .fetch_all(&db.pool)
     .await?;
+    // Redact bind_password — never expose encrypted or plaintext secrets to clients
+    for r in &mut rows {
+        if !r.bind_password.is_empty() {
+            r.bind_password = "••••••••".into();
+        }
+    }
     Ok(Json(rows))
 }
 
@@ -946,6 +1126,37 @@ pub async fn create_ad_sync_config(
     Json(body): Json<CreateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    // Validate LDAP URL uses a safe scheme
+    if !body.ldap_url.starts_with("ldap://") && !body.ldap_url.starts_with("ldaps://") {
+        return Err(AppError::Validation("LDAP URL must use ldap:// or ldaps://".into()));
+    }
+
+    // Validate search filter has balanced parentheses (basic LDAP filter sanity)
+    if let Some(ref filter) = body.search_filter {
+        let opens = filter.chars().filter(|c| *c == '(').count();
+        let closes = filter.chars().filter(|c| *c == ')').count();
+        if opens != closes || opens == 0 {
+            return Err(AppError::Validation("Invalid LDAP search filter — unbalanced parentheses".into()));
+        }
+    }
+
+    // Encrypt bind_password via Vault if configured
+    let bind_password = body.bind_password.as_deref().unwrap_or("");
+    let stored_password = if !bind_password.is_empty() {
+        let vault_cfg = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.clone())
+        };
+        if let Some(ref vc) = vault_cfg {
+            crate::services::vault::seal_setting(vc, bind_password).await?
+        } else {
+            bind_password.to_string()
+        }
+    } else {
+        String::new()
+    };
+
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, group_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id",
@@ -953,7 +1164,7 @@ pub async fn create_ad_sync_config(
     .bind(&body.label)
     .bind(&body.ldap_url)
     .bind(body.bind_dn.as_deref().unwrap_or(""))
-    .bind(body.bind_password.as_deref().unwrap_or(""))
+    .bind(&stored_password)
     .bind(&body.search_bases)
     .bind(body.search_filter.as_deref().unwrap_or("(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))"))
     .bind(body.search_scope.as_deref().unwrap_or("subtree"))
@@ -1028,8 +1239,22 @@ pub async fn update_ad_sync_config(
             .bind(v).bind(id).execute(&db.pool).await?;
     }
     if let Some(ref v) = body.bind_password {
+        // Encrypt bind_password via Vault if configured
+        let stored = if !v.is_empty() {
+            let vault_cfg = {
+                let s = state.read().await;
+                s.config.as_ref().and_then(|c| c.vault.clone())
+            };
+            if let Some(ref vc) = vault_cfg {
+                crate::services::vault::seal_setting(vc, v).await?
+            } else {
+                v.clone()
+            }
+        } else {
+            String::new()
+        };
         sqlx::query("UPDATE ad_sync_configs SET bind_password = $1, updated_at = now() WHERE id = $2")
-            .bind(v).bind(id).execute(&db.pool).await?;
+            .bind(&stored).bind(id).execute(&db.pool).await?;
     }
     if let Some(ref v) = body.search_bases {
         sqlx::query("UPDATE ad_sync_configs SET search_bases = $1, updated_at = now() WHERE id = $2")
@@ -1125,13 +1350,24 @@ pub async fn trigger_ad_sync(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let config: AdSyncConfig = sqlx::query_as(
+    let mut config: AdSyncConfig = sqlx::query_as(
         "SELECT * FROM ad_sync_configs WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&db.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+
+    // Decrypt bind_password if vault-encrypted
+    if config.bind_password.starts_with("vault:") {
+        let vault_cfg = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.clone())
+        };
+        if let Some(ref vc) = vault_cfg {
+            config.bind_password = crate::services::vault::unseal_setting(vc, &config.bind_password).await?;
+        }
+    }
 
     let run_id = crate::services::ad_sync::run_sync(&db.pool, &config).await
         .map_err(|e| AppError::Internal(format!("Sync failed: {e}")))?;
@@ -1200,4 +1436,216 @@ pub async fn list_ad_sync_runs(
     .fetch_all(&db.pool)
     .await?;
     Ok(Json(rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_safe_hostname ───────────────────────────────────────────
+    #[test]
+    fn safe_hostname_valid() {
+        assert!(is_safe_hostname("dc1.corp.local"));
+        assert!(is_safe_hostname("kdc-primary"));
+        assert!(is_safe_hostname("host.example.com:88"));
+        assert!(is_safe_hostname("CORP.LOCAL"));
+        assert!(is_safe_hostname("a"));
+        assert!(is_safe_hostname("host_name"));
+    }
+
+    #[test]
+    fn safe_hostname_rejects_empty() {
+        assert!(!is_safe_hostname(""));
+    }
+
+    #[test]
+    fn safe_hostname_rejects_injection() {
+        assert!(!is_safe_hostname("host; rm -rf /"));
+        assert!(!is_safe_hostname("host\nrealm = EVIL"));
+        assert!(!is_safe_hostname("host$(cmd)"));
+        assert!(!is_safe_hostname("host`cmd`"));
+        assert!(!is_safe_hostname("host/path"));
+        assert!(!is_safe_hostname("host name"));
+    }
+
+    #[test]
+    fn safe_hostname_rejects_too_long() {
+        let long = "a".repeat(256);
+        assert!(!is_safe_hostname(&long));
+        // 255 is ok
+        let ok = "a".repeat(255);
+        assert!(is_safe_hostname(&ok));
+    }
+
+    // ── SENSITIVE_SETTINGS ─────────────────────────────────────────
+    #[test]
+    fn sensitive_settings_contains_known_keys() {
+        assert!(SENSITIVE_SETTINGS.contains(&"sso_client_secret"));
+        assert!(SENSITIVE_SETTINGS.contains(&"vault_token"));
+        assert!(SENSITIVE_SETTINGS.contains(&"vault_unseal_key"));
+        assert!(SENSITIVE_SETTINGS.contains(&"ad_bind_password"));
+    }
+
+    // ── RESTRICTED_SETTINGS ────────────────────────────────────────
+    #[test]
+    fn restricted_settings_contains_known_keys() {
+        assert!(RESTRICTED_SETTINGS.contains(&"jwt_secret"));
+        assert!(RESTRICTED_SETTINGS.contains(&"sso_client_secret"));
+        assert!(RESTRICTED_SETTINGS.contains(&"sso_issuer_url"));
+        assert!(RESTRICTED_SETTINGS.contains(&"kerberos_realm"));
+        assert!(RESTRICTED_SETTINGS.contains(&"local_auth_enabled"));
+    }
+
+    #[test]
+    fn restricted_and_sensitive_overlap() {
+        // sso_client_secret must be in both lists
+        assert!(SENSITIVE_SETTINGS.contains(&"sso_client_secret"));
+        assert!(RESTRICTED_SETTINGS.contains(&"sso_client_secret"));
+    }
+
+    // ── Struct deserialization ──────────────────────────────────────
+    #[test]
+    fn sso_update_request_deser() {
+        let json = r#"{"issuer_url":"https://sso.example.com","client_id":"id","client_secret":"s"}"#;
+        let r: SsoUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.issuer_url, "https://sso.example.com");
+        assert_eq!(r.client_id, "id");
+    }
+
+    #[test]
+    fn auth_methods_update_request_deser() {
+        let json = r#"{"sso_enabled":true,"local_auth_enabled":false}"#;
+        let r: AuthMethodsUpdateRequest = serde_json::from_str(json).unwrap();
+        assert!(r.sso_enabled);
+        assert!(!r.local_auth_enabled);
+    }
+
+    #[test]
+    fn kerberos_update_request_deser() {
+        let json = r#"{"realm":"CORP.LOCAL","kdc":["kdc1.corp.local"],"admin_server":"admin.corp.local"}"#;
+        let r: KerberosUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.realm, "CORP.LOCAL");
+        assert_eq!(r.kdc.len(), 1);
+        assert!(r.ticket_lifetime.is_none());
+    }
+
+    #[test]
+    fn create_connection_request_defaults() {
+        let json = r#"{"name":"test","protocol":"rdp","hostname":"10.0.0.1"}"#;
+        let r: CreateConnectionRequest = serde_json::from_str(json).unwrap();
+        assert!(r.port.is_none());
+        assert!(r.domain.is_none());
+        assert_eq!(r.description, "");
+        assert!(r.extra.is_null());
+    }
+
+    #[test]
+    fn create_connection_request_full() {
+        let json = r#"{
+            "name":"prod-server",
+            "protocol":"ssh",
+            "hostname":"192.168.1.100",
+            "port":22,
+            "domain":"CORP",
+            "description":"Production server",
+            "extra":{"color-depth":"24"}
+        }"#;
+        let r: CreateConnectionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.port.unwrap(), 22);
+        assert_eq!(r.domain.as_deref().unwrap(), "CORP");
+        assert_eq!(r.extra["color-depth"], "24");
+    }
+
+    #[test]
+    fn role_connection_update_deser() {
+        let json = r#"{"role_id":"550e8400-e29b-41d4-a716-446655440000","connection_ids":[]}"#;
+        let r: RoleConnectionUpdate = serde_json::from_str(json).unwrap();
+        assert!(r.connection_ids.is_empty());
+    }
+
+    #[test]
+    fn audit_log_query_defaults() {
+        let q: AuditLogQuery = serde_json::from_str("{}").unwrap();
+        assert!(q.page.is_none());
+        assert!(q.per_page.is_none());
+    }
+
+    #[test]
+    fn audit_log_query_values() {
+        let q: AuditLogQuery = serde_json::from_str(r#"{"page":2,"per_page":100}"#).unwrap();
+        assert_eq!(q.page.unwrap(), 2);
+        assert_eq!(q.per_page.unwrap(), 100);
+    }
+
+    #[test]
+    fn recordings_update_request_minimal() {
+        let r: RecordingsUpdateRequest = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+        assert!(r.enabled);
+        assert!(r.retention_days.is_none());
+        assert!(r.storage_type.is_none());
+    }
+
+    #[test]
+    fn create_role_request_deser() {
+        let r: CreateRoleRequest = serde_json::from_str(r#"{"name":"viewer"}"#).unwrap();
+        assert_eq!(r.name, "viewer");
+    }
+
+    #[test]
+    fn create_kerberos_realm_request_deser() {
+        let json = r#"{"realm":"CORP","kdc_servers":["kdc1","kdc2"],"admin_server":"admin"}"#;
+        let r: CreateKerberosRealmRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.realm, "CORP");
+        assert_eq!(r.kdc_servers.len(), 2);
+        assert!(r.is_default.is_none());
+    }
+
+    #[test]
+    fn create_group_request_deser() {
+        let r: CreateGroupRequest = serde_json::from_str(r#"{"name":"servers"}"#).unwrap();
+        assert_eq!(r.name, "servers");
+        assert!(r.parent_id.is_none());
+    }
+
+    #[test]
+    fn vault_update_request_local() {
+        let json = r#"{"mode":"local"}"#;
+        let r: VaultUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.mode, "local");
+        assert!(r.address.is_none());
+        assert!(r.token.is_none());
+    }
+
+    #[test]
+    fn vault_update_request_external() {
+        let json = r#"{"mode":"external","address":"https://vault:8200","token":"tok","transit_key":"key"}"#;
+        let r: VaultUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.mode, "external");
+        assert_eq!(r.address.unwrap(), "https://vault:8200");
+    }
+
+    #[test]
+    fn settings_update_request_deser() {
+        let json = r#"{"settings":[{"key":"theme","value":"dark"},{"key":"timeout","value":"30"}]}"#;
+        let r: SettingsUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.settings.len(), 2);
+        assert_eq!(r.settings[0].key, "theme");
+        assert_eq!(r.settings[1].value, "30");
+    }
+
+    #[test]
+    fn create_ad_sync_config_request_minimal() {
+        let json = r#"{"label":"Corp AD","ldap_url":"ldap://dc.corp.local","search_bases":["dc=corp,dc=local"]}"#;
+        let r: CreateAdSyncConfigRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.label, "Corp AD");
+        assert!(r.bind_dn.is_none());
+        assert!(r.protocol.is_none());
+        assert!(r.tls_skip_verify.is_none());
+    }
+
+    #[test]
+    fn observe_query_defaults() {
+        let q: ObserveQuery = serde_json::from_str("{}").unwrap();
+        assert!(q.offset.is_none());
+    }
 }

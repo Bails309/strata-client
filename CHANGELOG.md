@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-04-08
+
+### Added
+- **SSO / OIDC (Keycloak) Support**: Integrated OpenID Connect authentication.
+  - New endpoints: `GET /api/auth/sso/login` (redirect) and `GET /api/auth/sso/callback` (handler).
+  - Secure storage of OIDC client secrets using HashiCorp Vault.
+  - Automatic OIDC discovery via `/.well-known/openid-configuration`.
+- **Configurable Authentication Methods**: Admin can now toggle between Local Authentication and SSO/OIDC in the Security settings.
+- **Improved Security Enforcement**: Backend system now strictly enforces the `local_auth_enabled` policy, rejecting local logins when disabled.
+
+### Fixed
+- **Security Loophole**: Fixed a flaw where local authentication remained functional even when disabled in the dashboard.
+- **UI Consistency**: Resolved an issue where the Security tab checkboxes could appear disabled by default when unconfigured.
+- **Build Regressions**: 
+  - Fixed TypeScript compilation errors in frontend tests related to unused imports and variables.
+  - Resolved `Cannot find name 'vi'` build error in test setup by importing the Vitest utility.
+  - Suppressed Rust compiler warnings (`dead_code`, `unreachable_patterns`) in the backend authentication service.
+
 ## [0.5.0] — 2026-04-07
 
 ### Added

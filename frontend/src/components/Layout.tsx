@@ -1,13 +1,14 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useTheme } from './ThemeProvider';
+import { getMe, MeResponse } from '../api';
 
 /* ── Sidebar context so other components can read the width ── */
 const SidebarContext = createContext(180);
 export function useSidebarWidth() { return useContext(SidebarContext); }
 
-const SIDEBAR_EXPANDED = 180;
-const SIDEBAR_COLLAPSED = 56;
+const SIDEBAR_EXPANDED = 200; // Increased slightly for better fit
+const SIDEBAR_COLLAPSED = 60;
 
 const NAV_ITEMS = [
   { to: '/', label: 'Connections', icon: (
@@ -35,8 +36,15 @@ const NAV_ITEMS = [
 export default function Layout({ onLogout }: { onLogout: () => void }) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  const [user, setUser] = useState<MeResponse | null>(null);
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
   const { theme, preference, cycle } = useTheme();
+
+  useEffect(() => {
+    getMe().then(setUser).catch(() => null);
+  }, []);
+
+  const initial = user?.username?.charAt(0).toUpperCase() || 'S';
 
   return (
     <SidebarContext.Provider value={sidebarWidth}>
@@ -72,7 +80,7 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
                     key={item.to}
                     to={item.to}
                     className={`flex items-center gap-2.5 rounded-sm no-underline text-[0.8125rem] font-medium transition-all duration-150
-                      ${collapsed ? 'justify-center p-2' : 'py-2 px-2.5'}
+                      ${collapsed ? 'justify-center p-2.5' : 'py-2 px-2.5'}
                       ${active
                         ? 'text-txt-primary bg-accent-dim font-semibold'
                         : 'text-txt-secondary hover:text-txt-primary hover:bg-nav-link-hover'
@@ -88,54 +96,71 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
           </div>
 
           {/* Bottom section */}
-          <div className="flex flex-col items-center gap-2 pt-4" style={{ borderTop: '1px solid var(--color-border)' }}>
-            {!collapsed && (
-              <div className="w-12 h-12 rounded-xl flex items-center justify-center text-lg font-bold text-white"
-                style={{ background: 'var(--color-accent)' }}>
-                S
+          <div className="flex flex-col gap-3 pt-4" style={{ borderTop: '1px solid var(--color-border)' }}>
+            
+            {/* User Profile */}
+            <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : 'px-1'}`}>
+              <div className="user-avatar-premium mesh-gradient w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0">
+                {initial}
+                <div className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-success border border-nav-bg" />
               </div>
-            )}
-            {!collapsed && (
-              <div className="flex items-center gap-1.5 text-[0.7rem] text-txt-tertiary">
-                <div className="w-1.5 h-1.5 rounded-full bg-success" style={{ boxShadow: '0 0 8px rgba(52, 211, 153, 0.4)' }} />
-                Connected
-              </div>
-            )}
-            {!collapsed && (
-              <button className="btn-ghost w-full text-xs text-center" onClick={onLogout}>Sign Out</button>
-            )}
-
-            {/* Theme toggle */}
-            <button
-              className="w-full flex items-center justify-center gap-2 text-txt-secondary hover:text-txt-primary rounded-sm cursor-pointer transition-all duration-150 p-2 hover:bg-nav-link-hover"
-              onClick={cycle}
-              title={`Theme: ${preference} (${theme})`}
-            >
-              {theme === 'dark' ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
-                </svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-                </svg>
-              )}
               {!collapsed && (
-                <span className="text-xs capitalize">{preference === 'system' ? 'System' : theme === 'dark' ? 'Dark' : 'Light'}</span>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-semibold text-txt-primary truncate">{user?.username || 'Guest'}</span>
+                  <span className="text-[0.625rem] text-txt-tertiary uppercase tracking-wider">{user?.role || 'User'}</span>
+                </div>
               )}
-            </button>
+            </div>
 
-            {/* Collapse toggle */}
-            <button
-              className="w-full flex items-center justify-center text-txt-secondary hover:text-txt-primary rounded-sm cursor-pointer transition-all duration-150 p-2 hover:bg-nav-link-hover"
-              onClick={() => setCollapsed(!collapsed)}
-              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                style={{ transform: collapsed ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s' }}>
-                <polyline points="11 17 6 12 11 7" /><polyline points="18 17 13 12 18 7" />
-              </svg>
-            </button>
+            {!collapsed && (
+              <div className="flex flex-col gap-1 px-1">
+                <div className="flex items-center gap-1.5 text-[0.65rem] text-txt-tertiary px-1">
+                  <div className="w-1 h-1 rounded-full bg-success shadow-[0_0_6px_var(--color-success)]" />
+                  System Online
+                </div>
+                <button 
+                  className="btn-ghost w-full text-[0.7rem] py-1.5 opacity-70 hover:opacity-100 transition-opacity" 
+                  onClick={onLogout}
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-0.5">
+              {/* Theme toggle */}
+              <button
+                className={`flex items-center gap-2.5 text-txt-secondary hover:text-txt-primary rounded-sm cursor-pointer transition-all duration-150 p-2 hover:bg-nav-link-hover ${collapsed ? 'justify-center' : ''}`}
+                onClick={cycle}
+                title={`Theme: ${preference} (${theme})`}
+              >
+                {theme === 'dark' ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                  </svg>
+                )}
+                {!collapsed && (
+                  <span className="text-[0.75rem] capitalize">{preference === 'system' ? 'System' : theme === 'dark' ? 'Dark' : 'Light'}</span>
+                )}
+              </button>
+
+              {/* Collapse toggle */}
+              <button
+                className={`flex items-center gap-2.5 text-txt-secondary hover:text-txt-primary rounded-sm cursor-pointer transition-all duration-150 p-2 hover:bg-nav-link-hover ${collapsed ? 'justify-center' : ''}`}
+                onClick={() => setCollapsed(!collapsed)}
+                title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                  style={{ transform: collapsed ? 'rotate(180deg)' : undefined, transition: 'transform 0.2s' }}>
+                  <polyline points="11 17 6 12 11 7" /><polyline points="18 17 13 12 18 7" />
+                </svg>
+                {!collapsed && <span className="text-[0.75rem]">Collapse</span>}
+              </button>
+            </div>
           </div>
         </aside>
 

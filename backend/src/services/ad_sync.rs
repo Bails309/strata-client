@@ -49,7 +49,7 @@ pub struct AdSyncRun {
 // ── Discovered computer from LDAP ──────────────────────────────────────
 
 #[derive(Debug)]
-struct DiscoveredComputer {
+pub(crate) struct DiscoveredComputer {
     dn: String,
     name: String,
     dns_host_name: Option<String>,
@@ -59,6 +59,17 @@ struct DiscoveredComputer {
 // ── Execute a full sync for one config ─────────────────────────────────
 
 pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::Result<Uuid> {
+    // Advisory lock keyed on config UUID to prevent concurrent syncs for the same config.
+    // pg_try_advisory_lock is session-level and non-blocking; returns false if already held.
+    let lock_key = config.id.as_u128() as i64;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(lock_key)
+        .fetch_one(pool)
+        .await?;
+    if !acquired {
+        anyhow::bail!("Sync already in progress for config '{}'", config.label);
+    }
+
     // Create run record
     let run_id: Uuid = sqlx::query_scalar(
         "INSERT INTO ad_sync_runs (config_id) VALUES ($1) RETURNING id",
@@ -67,7 +78,15 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
     .fetch_one(pool)
     .await?;
 
-    match do_sync(pool, config, run_id).await {
+    let result = do_sync(pool, config, run_id).await;
+
+    // Always release the advisory lock, even on error
+    let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(lock_key)
+        .execute(pool)
+        .await;
+
+    match result {
         Ok(_) => {
             sqlx::query(
                 "UPDATE ad_sync_runs SET status = 'success', finished_at = now() WHERE id = $1",
@@ -491,18 +510,18 @@ async fn ldap_query_kerberos(config: &AdSyncConfig, search_base: &str) -> anyhow
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run ldapsearch: {e}. Is the openldap-clients package installed?"))?;
 
+    // Always clean up temp files, even on error
+    let _ = tokio::fs::remove_file(format!("/tmp/krb5cc_adsync_{}", config.id)).await;
+    if let Some(ref path) = ca_cert_path {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
     if !output.status.success() {
         anyhow::bail!(
             "ldapsearch failed (exit {}): {}",
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         );
-    }
-
-    // Clean up credential cache and CA cert temp file
-    let _ = tokio::fs::remove_file(format!("/tmp/krb5cc_adsync_{}", config.id)).await;
-    if let Some(path) = ca_cert_path {
-        let _ = tokio::fs::remove_file(&path).await;
     }
 
     let ldif = String::from_utf8_lossy(&output.stdout);
@@ -532,6 +551,9 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
         })
     };
 
+    // Track the last key seen so continuation lines can append to it
+    let mut last_key = String::new();
+
     for line in ldif.lines() {
         if line.is_empty() {
             if let Some(c) = flush(&current_dn, &attrs) {
@@ -539,11 +561,20 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
             }
             current_dn.clear();
             attrs.clear();
+            last_key.clear();
             continue;
         }
 
-        // LDIF continuation line (leading space)
+        // LDIF continuation line (leading single space) — append to previous value
         if line.starts_with(' ') {
+            let cont = &line[1..];
+            if last_key.eq_ignore_ascii_case("dn") {
+                current_dn.push_str(cont);
+            } else if !last_key.is_empty() {
+                if let Some(v) = attrs.get_mut(&last_key) {
+                    v.push_str(cont);
+                }
+            }
             continue;
         }
 
@@ -553,6 +584,7 @@ fn parse_ldif(ldif: &str) -> anyhow::Result<Vec<DiscoveredComputer>> {
         }
 
         if let Some((key, value)) = line.split_once(": ") {
+            last_key = key.to_string();
             if key.eq_ignore_ascii_case("dn") {
                 current_dn = value.to_string();
             } else {
@@ -590,7 +622,7 @@ pub async fn test_connection(config: &AdSyncConfig) -> anyhow::Result<(usize, Ve
 
 // ── Scheduled Background Sync ──────────────────────────────────────────
 
-pub fn spawn_sync_scheduler(pool: Pool<Postgres>) {
+pub fn spawn_sync_scheduler(pool: Pool<Postgres>, vault: Option<crate::config::VaultConfig>) {
     tokio::spawn(async move {
         // Wait 30s after boot before first check
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -598,14 +630,14 @@ pub fn spawn_sync_scheduler(pool: Pool<Postgres>) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
-            if let Err(e) = scheduler_tick(&pool).await {
+            if let Err(e) = scheduler_tick(&pool, vault.as_ref()).await {
                 tracing::warn!("AD sync scheduler error: {e}");
             }
         }
     });
 }
 
-async fn scheduler_tick(pool: &Pool<Postgres>) -> anyhow::Result<()> {
+async fn scheduler_tick(pool: &Pool<Postgres>, vault: Option<&crate::config::VaultConfig>) -> anyhow::Result<()> {
     // Check global enable
     let enabled = crate::services::settings::get(pool, "ad_sync_enabled")
         .await?
@@ -641,11 +673,219 @@ async fn scheduler_tick(pool: &Pool<Postgres>) -> anyhow::Result<()> {
 
         if should_run {
             tracing::info!("AD sync scheduler: running sync for '{}'", config.label);
-            if let Err(e) = run_sync(pool, config).await {
+            // Decrypt bind_password if vault-encrypted
+            let mut config = config.clone();
+            if config.bind_password.starts_with("vault:") {
+                if let Some(vc) = vault {
+                    match crate::services::vault::unseal_setting(vc, &config.bind_password).await {
+                        Ok(pw) => config.bind_password = pw,
+                        Err(e) => {
+                            tracing::error!("AD sync '{}': failed to decrypt bind_password: {e}", config.label);
+                            continue;
+                        }
+                    }
+                } else {
+                    tracing::error!("AD sync '{}': bind_password is encrypted but Vault not configured", config.label);
+                    continue;
+                }
+            }
+            if let Err(e) = run_sync(pool, &config).await {
                 tracing::error!("AD sync scheduler failed for '{}': {e}", config.label);
             }
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── AdSyncConfig serde roundtrip ──────────────────────────────────
+
+    fn sample_config() -> AdSyncConfig {
+        AdSyncConfig {
+            id: Uuid::nil(),
+            label: "test-sync".to_string(),
+            ldap_url: "ldaps://dc.example.com:636".to_string(),
+            bind_dn: "CN=svc,DC=example,DC=com".to_string(),
+            bind_password: "s3cret".to_string(),
+            search_bases: vec!["DC=example,DC=com".to_string()],
+            search_filter: "".to_string(),
+            search_scope: "subtree".to_string(),
+            protocol: "rdp".to_string(),
+            default_port: 3389,
+            domain_override: None,
+            group_id: None,
+            tls_skip_verify: false,
+            sync_interval_minutes: 60,
+            enabled: true,
+            auth_method: "simple".to_string(),
+            keytab_path: None,
+            krb5_principal: None,
+            ca_cert_pem: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn ad_sync_config_serialize_roundtrip() {
+        let config = sample_config();
+        let json_str = serde_json::to_string(&config).unwrap();
+        let parsed: AdSyncConfig = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed.label, "test-sync");
+        assert_eq!(parsed.ldap_url, "ldaps://dc.example.com:636");
+        assert_eq!(parsed.default_port, 3389);
+        assert!(!parsed.tls_skip_verify);
+        assert!(parsed.enabled);
+    }
+
+    #[test]
+    fn ad_sync_config_deserializes_from_json() {
+        let j = json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "label": "prod",
+            "ldap_url": "ldap://dc:389",
+            "bind_dn": "cn=admin",
+            "bind_password": "pass",
+            "search_bases": ["DC=corp"],
+            "search_filter": "(objectClass=computer)",
+            "search_scope": "subtree",
+            "protocol": "rdp",
+            "default_port": 3389,
+            "domain_override": null,
+            "group_id": null,
+            "tls_skip_verify": true,
+            "sync_interval_minutes": 30,
+            "enabled": false,
+            "auth_method": "kerberos",
+            "keytab_path": "/etc/strata.keytab",
+            "krb5_principal": "svc@CORP",
+            "ca_cert_pem": null,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        });
+        let config: AdSyncConfig = serde_json::from_value(j).unwrap();
+        assert_eq!(config.label, "prod");
+        assert!(config.tls_skip_verify);
+        assert!(!config.enabled);
+        assert_eq!(config.auth_method, "kerberos");
+        assert_eq!(config.krb5_principal.as_deref(), Some("svc@CORP"));
+    }
+
+    #[test]
+    fn ad_sync_config_optional_fields() {
+        let config = sample_config();
+        assert!(config.domain_override.is_none());
+        assert!(config.group_id.is_none());
+        assert!(config.keytab_path.is_none());
+        assert!(config.krb5_principal.is_none());
+        assert!(config.ca_cert_pem.is_none());
+    }
+
+    // ── AdSyncRun serialization ───────────────────────────────────────
+
+    #[test]
+    fn ad_sync_run_serializes() {
+        let run = AdSyncRun {
+            id: Uuid::nil(),
+            config_id: Uuid::nil(),
+            started_at: Utc::now(),
+            finished_at: None,
+            status: "running".to_string(),
+            created: 5,
+            updated: 3,
+            soft_deleted: 1,
+            hard_deleted: 0,
+            error_message: None,
+        };
+        let v = serde_json::to_value(&run).unwrap();
+        assert_eq!(v["status"], "running");
+        assert_eq!(v["created"], 5);
+        assert_eq!(v["updated"], 3);
+        assert_eq!(v["soft_deleted"], 1);
+        assert_eq!(v["hard_deleted"], 0);
+        assert!(v["finished_at"].is_null());
+        assert!(v["error_message"].is_null());
+    }
+
+    #[test]
+    fn ad_sync_run_serializes_with_error() {
+        let run = AdSyncRun {
+            id: Uuid::nil(),
+            config_id: Uuid::nil(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            status: "failed".to_string(),
+            created: 0,
+            updated: 0,
+            soft_deleted: 0,
+            hard_deleted: 0,
+            error_message: Some("LDAP bind failed".to_string()),
+        };
+        let v = serde_json::to_value(&run).unwrap();
+        assert_eq!(v["status"], "failed");
+        assert_eq!(v["error_message"], "LDAP bind failed");
+        assert!(!v["finished_at"].is_null());
+    }
+
+    // ── DiscoveredComputer Debug ──────────────────────────────────────
+
+    #[test]
+    fn discovered_computer_debug_format() {
+        let dc = DiscoveredComputer {
+            dn: "CN=PC1,DC=test".to_string(),
+            name: "PC1".to_string(),
+            dns_host_name: Some("pc1.test.local".to_string()),
+            description: Some("Workstation".to_string()),
+        };
+        let dbg = format!("{:?}", dc);
+        assert!(dbg.contains("PC1"));
+        assert!(dbg.contains("pc1.test.local"));
+    }
+
+    // ── parse_ldif ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_ldif_single_entry() {
+        let ldif = "dn: CN=PC1,OU=Computers,DC=corp,DC=com\ncn: PC1\ndNSHostName: pc1.corp.com\ndescription: Dev workstation\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "PC1");
+        assert_eq!(result[0].dns_host_name.as_deref(), Some("pc1.corp.com"));
+        assert_eq!(result[0].description.as_deref(), Some("Dev workstation"));
+    }
+
+    #[test]
+    fn parse_ldif_multiple_entries() {
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\n\ndn: CN=PC2,DC=corp\ncn: PC2\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "PC1");
+        assert_eq!(result[1].name, "PC2");
+    }
+
+    #[test]
+    fn parse_ldif_continuation_line() {
+        let ldif = "dn: CN=LongName,OU=Very Long OU,DC=corp,\n DC=com\ncn: LongName\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].dn.contains("DC=com"));
+    }
+
+    #[test]
+    fn parse_ldif_empty_input() {
+        let result = parse_ldif("").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_ldif_skips_comments() {
+        let ldif = "# This is a comment\ndn: CN=PC1,DC=corp\ncn: PC1\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+    }
 }

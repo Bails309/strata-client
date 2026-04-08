@@ -9,7 +9,7 @@ import {
   setCredentialMapping,
   removeCredentialMapping,
   getMyConnections,
-  getStatus,
+  getServiceHealth,
   CredentialProfile,
   CredentialMapping,
   Connection,
@@ -39,17 +39,18 @@ export default function Credentials() {
   const mappingDropdownRef = useRef<HTMLDivElement>(null);
   const mappingTriggerRef = useRef<HTMLDivElement>(null);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [profs, conns, status] = await Promise.all([
+      const [profs, conns, health] = await Promise.all([
         getCredentialProfiles(),
         getMyConnections(),
-        getStatus(),
+        getServiceHealth(),
       ]);
       setProfiles(profs);
       setConnections(conns);
-      setVaultConfigured(status.vault_configured);
+      setVaultConfigured(health.vault.configured);
 
       // Load mappings for all profiles
       const m: Record<string, CredentialMapping[]> = {};
@@ -100,10 +101,12 @@ export default function Credentials() {
   }
 
   async function handleDeleteProfile(id: string) {
+    if (!id) return;
     setError('');
     try {
       await deleteCredentialProfile(id);
       if (expanded === id) setExpanded(null);
+      setDeletingId(null);
       await load();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Delete failed');
@@ -351,8 +354,8 @@ export default function Credentials() {
                         </span>
                       ) : (
                         <span className="ml-3 text-xs text-txt-tertiary">
-                          Expires {new Date(profile.expires_at).toLocaleString(undefined, {
-                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                          Expires {new Date(profile.expires_at).toLocaleString('en-GB', {
+                            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
                           })}
                         </span>
                       )}
@@ -372,7 +375,7 @@ export default function Credentials() {
                       className="btn !px-2 !py-1 text-xs text-danger"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDeleteProfile(profile.id);
+                        setDeletingId(profile.id);
                       }}
                     >
                       Delete
@@ -541,6 +544,51 @@ export default function Credentials() {
             );
           })}
         </div>
+      )}
+
+      {/* ── Delete Confirmation Modal ── */}
+      {deletingId && createPortal(
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => setDeletingId(null)}
+        >
+          <div 
+            className="card max-w-sm w-full mx-4 shadow-2xl scale-in"
+            onClick={e => e.stopPropagation()}
+            style={{ border: '1px solid rgba(239, 68, 68, 0.2)' }}
+          >
+            <div className="flex items-center gap-3 text-danger mb-4">
+              <div className="w-10 h-10 rounded-full bg-danger-dim flex items-center justify-center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+              </div>
+              <h3 className="!mb-0">Delete Profile?</h3>
+            </div>
+            
+            <p className="text-txt-secondary text-sm mb-6">
+              Are you sure you want to delete <span className="text-txt-primary font-semibold">{profiles.find(p => p.id === deletingId)?.label}</span>? 
+              This will unmap it from <span className="text-txt-primary font-semibold">{mappings[deletingId]?.length || 0}</span> connections. This action cannot be undone.
+            </p>
+
+            <div className="flex gap-3">
+              <button 
+                className="btn-primary flex-1 !bg-danger hover:!bg-danger-hover border-none"
+                onClick={() => handleDeleteProfile(deletingId)}
+              >
+                Delete Permanently
+              </button>
+              <button 
+                className="btn flex-1"
+                onClick={() => setDeletingId(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

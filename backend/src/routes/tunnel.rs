@@ -1,13 +1,23 @@
 use axum::extract::{Extension, Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
-use crate::services::{recordings, vault};
+use crate::services::{recordings, tunnel_tickets, vault};
 use crate::tunnel::{self, HandshakeParams, NvrContext};
+
+/// Clamp display dimensions to safe bounds.
+fn clamp_dimension(val: u32, min: u32, max: u32, default: u32) -> u32 {
+    if val == 0 { default } else { val.clamp(min, max) }
+}
+const MIN_DIM: u32 = 64;
+const MAX_WIDTH: u32 = 7680;  // 8K
+const MAX_HEIGHT: u32 = 4320; // 8K
+const MAX_DPI: u32 = 600;
 
 #[derive(Deserialize, Default)]
 pub struct TunnelQuery {
@@ -16,6 +26,47 @@ pub struct TunnelQuery {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub dpi: Option<u32>,
+    pub ticket: Option<String>,
+}
+
+// ── Ticket creation ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CreateTicketRequest {
+    pub connection_id: Uuid,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub dpi: Option<u32>,
+}
+
+pub async fn create_tunnel_ticket(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<CreateTicketRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _db = {
+        let s = state.read().await;
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        s.db.clone().ok_or(AppError::SetupRequired)?
+    };
+
+    let ticket = tunnel_tickets::TunnelTicket {
+        user_id: user.id,
+        connection_id: body.connection_id,
+        username: body.username,
+        password: body.password,
+        width: body.width.unwrap_or(1920),
+        height: body.height.unwrap_or(1080),
+        dpi: body.dpi.unwrap_or(96),
+        created_at: std::time::Instant::now(),
+    };
+
+    let ticket_id = tunnel_tickets::create(ticket);
+    Ok(Json(serde_json::json!({ "ticket": ticket_id })))
 }
 
 pub async fn ws_tunnel(
@@ -137,13 +188,34 @@ pub async fn ws_tunnel(
         guacd_port = config.guacd_port.unwrap_or(4822);
     };
 
-    // Determine credentials: Vault profile first, then query-string fallback
+    // ── Resolve credentials ──────────────────────────────────────────
+
+    // Priority: Vault profile > ticket > query-string fallback
+    // Consume the one-time ticket (if provided) to extract credentials
+    let ticket_creds = query.ticket.as_deref().and_then(tunnel_tickets::consume);
+    // If ticket provided dimensions, use them
+    let effective_width = clamp_dimension(
+        ticket_creds.as_ref().map(|t| t.width).or(query.width).unwrap_or(1920),
+        MIN_DIM, MAX_WIDTH, 1920,
+    );
+    let effective_height = clamp_dimension(
+        ticket_creds.as_ref().map(|t| t.height).or(query.height).unwrap_or(1080),
+        MIN_DIM, MAX_HEIGHT, 1080,
+    );
+    let effective_dpi = clamp_dimension(
+        ticket_creds.as_ref().map(|t| t.dpi).or(query.dpi).unwrap_or(96),
+        MIN_DIM, MAX_DPI, 96,
+    );
+
     let (final_username, final_password) = if vault_password.is_some() {
         // Vault-stored credential profile – use stored username (or Strata login as fallback)
         (vault_username.or_else(|| Some(user.username.clone())), vault_password)
+    } else if let Some(ref tc) = ticket_creds {
+        // Credentials from one-time ticket
+        (tc.username.clone().or_else(|| Some(user.username.clone())), tc.password.clone())
     } else if query.password.is_some() {
-        // Credentials supplied by the frontend credential form
-        (query.username.or_else(|| Some(user.username.clone())), query.password)
+        // Legacy: credentials supplied as query params (kept for backward compat)
+        (query.username.clone().or_else(|| Some(user.username.clone())), query.password.clone())
     } else {
         (None, None)
     };
@@ -158,12 +230,14 @@ pub async fn ws_tunnel(
 
     // Use per-connection security/ignore-cert from extra, with fallback defaults
     let security = extra.get("security").cloned().or(Some("any".into()));
-    let ignore_cert = extra.get("ignore-cert").map(|v| v == "true").unwrap_or(true);
+    let ignore_cert = extra.get("ignore-cert").map(|v| v == "true").unwrap_or(false);
+
+    let safe_port: u16 = port.try_into().map_err(|_| AppError::Validation("Invalid port number".into()))?;
 
     let handshake = HandshakeParams {
         protocol,
         hostname,
-        port: port as u16,
+        port: safe_port,
         username: final_username,
         password: final_password,
         domain,
@@ -171,9 +245,9 @@ pub async fn ws_tunnel(
         ignore_cert,
         recording_path,
         create_recording_path: true,
-        width: query.width.unwrap_or(1920),
-        height: query.height.unwrap_or(1080),
-        dpi: query.dpi.unwrap_or(96),
+        width: effective_width,
+        height: effective_height,
+        dpi: effective_dpi,
         extra,
     };
 
@@ -204,6 +278,8 @@ pub async fn ws_tunnel(
     let nvr_user_id = user_id;
     let nvr_username = user.username.clone();
 
+    let audit_pool = db.pool.clone();
+
     Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| async move {
         let nvr = NvrContext {
             registry: session_registry,
@@ -216,6 +292,100 @@ pub async fn ws_tunnel(
         };
         if let Err(e) = tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await {
             tracing::error!("Tunnel error: {e}");
+            // Audit log the tunnel failure
+            let _ = crate::services::audit::log(
+                &audit_pool,
+                Some(user_id),
+                "tunnel.failed",
+                &serde_json::json!({ "connection_id": connection_id.to_string(), "error": e.to_string() }),
+            )
+            .await;
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── clamp_dimension ────────────────────────────────────────────
+    #[test]
+    fn clamp_dimension_zero_returns_default() {
+        assert_eq!(clamp_dimension(0, MIN_DIM, MAX_WIDTH, 1920), 1920);
+    }
+
+    #[test]
+    fn clamp_dimension_below_min() {
+        assert_eq!(clamp_dimension(10, MIN_DIM, MAX_WIDTH, 1920), MIN_DIM);
+    }
+
+    #[test]
+    fn clamp_dimension_above_max() {
+        assert_eq!(clamp_dimension(10000, MIN_DIM, MAX_WIDTH, 1920), MAX_WIDTH);
+    }
+
+    #[test]
+    fn clamp_dimension_normal_passthrough() {
+        assert_eq!(clamp_dimension(1024, MIN_DIM, MAX_WIDTH, 1920), 1024);
+    }
+
+    #[test]
+    fn clamp_dimension_exactly_min() {
+        assert_eq!(clamp_dimension(MIN_DIM, MIN_DIM, MAX_WIDTH, 1920), MIN_DIM);
+    }
+
+    #[test]
+    fn clamp_dimension_exactly_max() {
+        assert_eq!(clamp_dimension(MAX_WIDTH, MIN_DIM, MAX_WIDTH, 1920), MAX_WIDTH);
+    }
+
+    #[test]
+    fn clamp_dpi_values() {
+        assert_eq!(clamp_dimension(0, MIN_DIM, MAX_DPI, 96), 96);
+        assert_eq!(clamp_dimension(700, MIN_DIM, MAX_DPI, 96), MAX_DPI);
+        assert_eq!(clamp_dimension(144, MIN_DIM, MAX_DPI, 96), 144);
+    }
+
+    // ── TunnelQuery deserialization ────────────────────────────────
+    #[test]
+    fn tunnel_query_defaults() {
+        let q: TunnelQuery = serde_json::from_str("{}").unwrap();
+        assert!(q.username.is_none());
+        assert!(q.password.is_none());
+        assert!(q.width.is_none());
+        assert!(q.height.is_none());
+        assert!(q.dpi.is_none());
+        assert!(q.ticket.is_none());
+    }
+
+    #[test]
+    fn tunnel_query_with_values() {
+        let q: TunnelQuery = serde_json::from_str(
+            r#"{"username":"admin","password":"pw","width":1920,"height":1080,"dpi":96,"ticket":"abc"}"#,
+        )
+        .unwrap();
+        assert_eq!(q.username.unwrap(), "admin");
+        assert_eq!(q.password.unwrap(), "pw");
+        assert_eq!(q.width.unwrap(), 1920);
+    }
+
+    // ── CreateTicketRequest deserialization ─────────────────────────
+    #[test]
+    fn create_ticket_request_minimal() {
+        let json = r#"{"connection_id":"550e8400-e29b-41d4-a716-446655440000"}"#;
+        let r: CreateTicketRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.connection_id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+        assert!(r.username.is_none());
+        assert!(r.width.is_none());
+    }
+
+    // ── Dimension constants make sense ─────────────────────────────
+    #[test]
+    fn dimension_constants_valid() {
+        assert!(MIN_DIM < MAX_WIDTH);
+        assert!(MIN_DIM < MAX_HEIGHT);
+        assert!(MIN_DIM < MAX_DPI);
+        assert!(MAX_WIDTH >= 3840); // at least 4K
+        assert!(MAX_HEIGHT >= 2160); // at least 4K
+    }
 }

@@ -1,4 +1,5 @@
 use axum::extract::{Path, State, Extension};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -7,7 +8,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
-use crate::services::vault;
+use crate::services::{settings, vault};
 
 async fn require_running(state: &SharedState) -> Result<crate::db::Database, AppError> {
     let s = state.read().await;
@@ -30,13 +31,31 @@ pub struct UserProfile {
 pub async fn me(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _db = require_running(&state).await?;
+    let db = require_running(&state).await?;
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            // Use rightmost entry — the one added by our trusted proxy (Caddy)
+            v.rsplit(',')
+                .map(|s| s.trim())
+                .find(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_default();
+    let watermark_enabled = settings::get(&db.pool, "watermark_enabled")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
         "role": user.role,
         "sub": user.sub,
+        "client_ip": client_ip,
+        "watermark_enabled": watermark_enabled == "true",
     })))
 }
 
@@ -197,6 +216,17 @@ pub async fn update_credential(
         "credential.updated",
         &json!({ "connection_id": body.connection_id.to_string() }),
     )
+    .await?;
+
+    // Revoke active share links for this connection owned by this user,
+    // since the underlying credentials have changed
+    sqlx::query(
+        "UPDATE connection_shares SET revoked = true
+         WHERE owner_user_id = $1 AND connection_id = $2 AND NOT revoked",
+    )
+    .bind(user.id)
+    .bind(body.connection_id)
+    .execute(&db.pool)
     .await?;
 
     Ok(Json(json!({ "status": "credential_saved" })))
@@ -434,6 +464,20 @@ pub async fn update_credential_profile(
     )
     .await?;
 
+    // Revoke active share links for connections using this profile
+    if body.username.is_some() || body.password.is_some() {
+        sqlx::query(
+            "UPDATE connection_shares SET revoked = true
+             WHERE owner_user_id = $1 AND connection_id IN (
+                 SELECT connection_id FROM credential_mappings WHERE credential_id = $2
+             ) AND NOT revoked",
+        )
+        .bind(user.id)
+        .bind(profile_id)
+        .execute(&db.pool)
+        .await?;
+    }
+
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -443,6 +487,18 @@ pub async fn delete_credential_profile(
     Path(profile_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    // Revoke active share links for connections using this profile BEFORE deleting
+    sqlx::query(
+        "UPDATE connection_shares SET revoked = true
+         WHERE owner_user_id = $1 AND connection_id IN (
+             SELECT connection_id FROM credential_mappings WHERE credential_id = $2
+         ) AND NOT revoked",
+    )
+    .bind(user.id)
+    .bind(profile_id)
+    .execute(&db.pool)
+    .await?;
 
     let deleted = sqlx::query(
         "DELETE FROM credential_profiles WHERE id = $1 AND user_id = $2",
@@ -536,6 +592,30 @@ pub async fn set_credential_mapping(
 
     if !exists {
         return Err(AppError::NotFound("Credential profile not found".into()));
+    }
+
+    // Verify user has access to this connection via their role (or is admin)
+    let has_access: bool = if user.role == "admin" {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)")
+            .bind(body.connection_id)
+            .fetch_one(&db.pool)
+            .await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM connections c
+                JOIN role_connections rc ON rc.connection_id = c.id
+                JOIN users u ON u.role_id = rc.role_id
+                WHERE c.id = $1 AND u.id = $2 AND c.soft_deleted_at IS NULL
+            )",
+        )
+        .bind(body.connection_id)
+        .bind(user.id)
+        .fetch_one(&db.pool)
+        .await?
+    };
+    if !has_access {
+        return Err(AppError::NotFound("Connection not found".into()));
     }
 
     // Remove any existing mapping for this user+connection (different profile)
@@ -646,7 +726,19 @@ pub async fn get_recording(
     }
 
     // Try local file first
-    let path = format!("/var/lib/guacamole/recordings/{filename}");
+    let recordings_dir = "/var/lib/guacamole/recordings";
+    let path = format!("{recordings_dir}/{filename}");
+
+    // Resolve symlinks and verify the canonical path stays within recordings dir
+    if let Ok(canonical) = tokio::fs::canonicalize(&path).await {
+        let recordings_canonical = tokio::fs::canonicalize(recordings_dir)
+            .await
+            .unwrap_or_else(|_| std::path::PathBuf::from(recordings_dir));
+        if !canonical.starts_with(&recordings_canonical) {
+            return Err(AppError::NotFound("Invalid filename".into()));
+        }
+    }
+
     if let Ok(file) = File::open(&path).await {
         let stream = ReaderStream::new(file);
         let body = Body::from_stream(stream);
@@ -664,7 +756,11 @@ pub async fn get_recording(
         .map_err(|_| AppError::NotFound("Config error".into()))?;
 
     if config.storage_type == crate::services::recordings::StorageType::AzureBlob {
-        if let Some(azure) = crate::services::recordings::get_azure_config(&db.pool)
+        let vault_cfg = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.as_ref().cloned())
+        };
+        if let Some(azure) = crate::services::recordings::get_azure_config(&db.pool, vault_cfg.as_ref())
             .await
             .map_err(|_| AppError::NotFound("Config error".into()))?
         {
@@ -682,4 +778,212 @@ pub async fn get_recording(
     }
 
     Err(AppError::NotFound(format!("Recording not found: {filename}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── FavoriteRequest ────────────────────────────────────────────────
+
+    #[test]
+    fn favorite_request_deserializes() {
+        let j = json!({ "connection_id": "550e8400-e29b-41d4-a716-446655440000" });
+        let req: FavoriteRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(
+            req.connection_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+    }
+
+    #[test]
+    fn favorite_request_rejects_missing_field() {
+        let j = json!({});
+        assert!(serde_json::from_value::<FavoriteRequest>(j).is_err());
+    }
+
+    #[test]
+    fn favorite_request_rejects_invalid_uuid() {
+        let j = json!({ "connection_id": "not-a-uuid" });
+        assert!(serde_json::from_value::<FavoriteRequest>(j).is_err());
+    }
+
+    // ── UpdateCredentialRequest ────────────────────────────────────────
+
+    #[test]
+    fn update_credential_request_deserializes() {
+        let j = json!({
+            "connection_id": "550e8400-e29b-41d4-a716-446655440000",
+            "password": "s3cret!"
+        });
+        let req: UpdateCredentialRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(
+            req.connection_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+        assert_eq!(req.password, "s3cret!");
+    }
+
+    #[test]
+    fn update_credential_request_rejects_missing_password() {
+        let j = json!({ "connection_id": "550e8400-e29b-41d4-a716-446655440000" });
+        assert!(serde_json::from_value::<UpdateCredentialRequest>(j).is_err());
+    }
+
+    // ── CreateCredentialProfileRequest ─────────────────────────────────
+
+    #[test]
+    fn create_profile_request_deserializes_with_ttl() {
+        let j = json!({
+            "label": "Work",
+            "username": "admin",
+            "password": "hunter2",
+            "ttl_hours": 8
+        });
+        let req: CreateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.label, "Work");
+        assert_eq!(req.username, "admin");
+        assert_eq!(req.password, "hunter2");
+        assert_eq!(req.ttl_hours, Some(8));
+    }
+
+    #[test]
+    fn create_profile_request_ttl_is_optional() {
+        let j = json!({
+            "label": "Work",
+            "username": "admin",
+            "password": "hunter2"
+        });
+        let req: CreateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert!(req.ttl_hours.is_none());
+    }
+
+    #[test]
+    fn create_profile_request_rejects_missing_label() {
+        let j = json!({ "username": "admin", "password": "hunter2" });
+        assert!(serde_json::from_value::<CreateCredentialProfileRequest>(j).is_err());
+    }
+
+    // ── UpdateCredentialProfileRequest ─────────────────────────────────
+
+    #[test]
+    fn update_profile_request_all_optional() {
+        let j = json!({});
+        let req: UpdateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert!(req.label.is_none());
+        assert!(req.username.is_none());
+        assert!(req.password.is_none());
+        assert!(req.ttl_hours.is_none());
+    }
+
+    #[test]
+    fn update_profile_request_partial_fields() {
+        let j = json!({ "label": "New Label", "ttl_hours": 4 });
+        let req: UpdateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.label.as_deref(), Some("New Label"));
+        assert_eq!(req.ttl_hours, Some(4));
+        assert!(req.username.is_none());
+        assert!(req.password.is_none());
+    }
+
+    // ── SetMappingRequest ──────────────────────────────────────────────
+
+    #[test]
+    fn set_mapping_request_deserializes() {
+        let j = json!({
+            "profile_id": "550e8400-e29b-41d4-a716-446655440000",
+            "connection_id": "660e8400-e29b-41d4-a716-446655440000"
+        });
+        let req: SetMappingRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(
+            req.profile_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+        assert_eq!(
+            req.connection_id,
+            Uuid::parse_str("660e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
+    }
+
+    #[test]
+    fn set_mapping_request_rejects_missing_profile_id() {
+        let j = json!({ "connection_id": "660e8400-e29b-41d4-a716-446655440000" });
+        assert!(serde_json::from_value::<SetMappingRequest>(j).is_err());
+    }
+
+    // ── MappingRow serialization ───────────────────────────────────────
+
+    #[test]
+    fn mapping_row_serializes() {
+        let row = MappingRow {
+            connection_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            connection_name: "Server A".to_string(),
+            protocol: "rdp".to_string(),
+        };
+        let v = serde_json::to_value(&row).unwrap();
+        assert_eq!(v["connection_name"], "Server A");
+        assert_eq!(v["protocol"], "rdp");
+    }
+
+    // ── UserProfile serialization ──────────────────────────────────────
+
+    #[test]
+    fn user_profile_serializes() {
+        let profile = UserProfile {
+            id: Uuid::nil(),
+            username: "testuser".to_string(),
+            role_name: "admin".to_string(),
+        };
+        let v = serde_json::to_value(&profile).unwrap();
+        assert_eq!(v["username"], "testuser");
+        assert_eq!(v["role_name"], "admin");
+    }
+
+    // ── Filename sanitization (path traversal prevention) ──────────────
+
+    #[test]
+    fn filename_rejects_double_dot() {
+        let filename = "../../etc/passwd";
+        assert!(
+            filename.contains("..") || filename.contains('/') || filename.contains('\\'),
+            "filename with '..' should be rejected"
+        );
+    }
+
+    #[test]
+    fn filename_rejects_forward_slash() {
+        let filename = "subdir/recording.guac";
+        assert!(
+            filename.contains('/'),
+            "filename with '/' should be rejected"
+        );
+    }
+
+    #[test]
+    fn filename_rejects_backslash() {
+        let filename = "subdir\\recording.guac";
+        assert!(
+            filename.contains('\\'),
+            "filename with '\\' should be rejected"
+        );
+    }
+
+    #[test]
+    fn filename_allows_clean_name() {
+        let filename = "session-abc123.guac";
+        assert!(
+            !filename.contains("..") && !filename.contains('/') && !filename.contains('\\'),
+            "clean filename should pass validation"
+        );
+    }
+
+    #[test]
+    fn filename_allows_dots_in_name() {
+        let filename = "session.2024.01.15.guac";
+        assert!(
+            !filename.contains("..") && !filename.contains('/') && !filename.contains('\\'),
+            "dots (not ..) should be allowed"
+        );
+    }
 }

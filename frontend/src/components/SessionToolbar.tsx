@@ -7,13 +7,16 @@ import Select from './Select';
 interface Props {
   session: GuacSession;
   connectionId: string;
+  isPoppedOut?: boolean;
+  onPopOut?: () => void;
+  onPopIn?: () => void;
 }
 
 /**
  * Floating toolbar rendered over the session view.
  * Provides access to connection sharing and file browser.
  */
-export default function SessionToolbar({ session, connectionId }: Props) {
+export default function SessionToolbar({ session, connectionId, isPoppedOut, onPopOut, onPopIn }: Props) {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareMode, setShareMode] = useState<'view' | 'control'>('view');
@@ -23,6 +26,7 @@ export default function SessionToolbar({ session, connectionId }: Props) {
   const [copied, setCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const shareAbortRef = useRef<AbortController | null>(null);
 
   const hasFilesystems = session.filesystems.length > 0;
 
@@ -46,19 +50,25 @@ export default function SessionToolbar({ session, connectionId }: Props) {
   }, [shareOpen]);
 
   const handleShare = useCallback(async (mode: 'view' | 'control' = 'view') => {
+    // Abort any in-flight share request
+    shareAbortRef.current?.abort();
+    const controller = new AbortController();
+    shareAbortRef.current = controller;
+
     setShareMode(mode);
     setShareLoading(true);
     setShareUrl(null);
     setCopied(false);
     try {
       const result = await createShareLink(connectionId, mode);
+      if (controller.signal.aborted) return;
       const fullUrl = `${window.location.origin}${result.share_url}`;
       setShareUrl(fullUrl);
       setShareOpen(true);
     } catch {
-      // Sharing not available
+      // Sharing not available or aborted
     } finally {
-      setShareLoading(false);
+      if (!controller.signal.aborted) setShareLoading(false);
     }
   }, [connectionId]);
 
@@ -205,6 +215,52 @@ export default function SessionToolbar({ session, connectionId }: Props) {
             </svg>
           )}
         </button>
+
+        {/* Pop-out / pop-in toggle */}
+        {(onPopOut || onPopIn) && (
+          <button
+            onClick={() => isPoppedOut ? onPopIn?.() : onPopOut?.()}
+            title={isPoppedOut ? 'Return to main window' : 'Pop out to separate window'}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 36,
+              height: 36,
+              borderRadius: 6,
+              border: isPoppedOut ? '1px solid var(--color-accent)' : '1px solid rgba(255,255,255,0.15)',
+              background: isPoppedOut ? 'rgba(0,0,0,0.85)' : 'rgba(0,0,0,0.65)',
+              color: '#fff',
+              cursor: 'pointer',
+              backdropFilter: 'blur(8px)',
+              transition: 'background 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.85)';
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--color-accent)';
+            }}
+            onMouseLeave={(e) => {
+              if (!isPoppedOut) {
+                (e.currentTarget as HTMLElement).style.background = 'rgba(0,0,0,0.65)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.15)';
+              }
+            }}
+          >
+            {isPoppedOut ? (
+              /* Arrow pointing inward (pop-in) */
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 4 4 4 4 9" /><line x1="4" y1="4" x2="11" y2="11" />
+                <rect x="10" y="10" width="11" height="11" rx="2" />
+              </svg>
+            ) : (
+              /* Arrow pointing outward (pop-out) */
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 3 21 3 21 9" /><line x1="21" y1="3" x2="13" y2="11" />
+                <rect x="3" y="3" width="11" height="11" rx="2" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Share popover */}

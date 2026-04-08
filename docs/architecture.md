@@ -84,7 +84,10 @@ The central orchestrator. Responsibilities:
 
 - **Bootstrap & config** — detects `config.toml` on startup; enters setup mode if missing
 - **Database** — connects to local or external PostgreSQL; runs advisory-lock-protected migrations
-- **Auth** — validates OIDC tokens via JWKS, maps to local users, enforces role-based access
+- **Auth** — multi-method authentication system:
+  - **SSO/OIDC** — dynamic IdP discovery via JWKS, secure client secret storage in Vault, and automatic session establishment.
+  - **Local Auth** — built-in credentials ( Argon2id) with global enable/disable toggle.
+  - **Enforcement** — strict backend policy check on every login attempt ensures disabled methods cannot be accessed.
 - **Vault** — envelope encryption for stored credentials via Vault Transit
 - **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
 - **guacd pool** — round-robin connection distribution across multiple guacd instances (`GuacdPool`)
@@ -110,7 +113,8 @@ Pages:
 - **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync, file transfer, session toolbar, and touch toolbar for tablet special keys
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
-- **Admin Settings** — tabbed UI for health, SSO, Kerberos (multi-realm), vault, recordings, access control, connection group management, AD sync sources, active session monitoring, and metrics
+- **Login** — unified login portal supporting local credentials and OIDC Single Sign-On; dynamically adjusts based on enabled authentication methods
+- **Admin Settings** — tabbed UI for health, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, access control, connection group management, AD sync sources, active session monitoring, and metrics
 - **Audit Logs** — paginated, hash-chained log viewer
 - **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
 - **PWA** — installable Progressive Web App with offline shell caching via service worker; standalone display mode on mobile and tablet

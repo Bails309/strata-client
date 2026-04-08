@@ -1,4 +1,5 @@
 use axum::extract::ws::{Message, WebSocket};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -101,14 +102,63 @@ impl HandshakeParams {
         m.entry("disable-copy".into()).or_insert_with(|| "false".into());
         m.entry("disable-paste".into()).or_insert_with(|| "false".into());
 
-        // Merge extra params — they override base values
+        // Merge extra params — only allow known safe guacd parameter names.
+        // This prevents injection of arbitrary protocol options.
         for (k, v) in &self.extra {
-            if !v.is_empty() {
+            if !v.is_empty() && is_allowed_guacd_param(k) {
                 m.insert(k.clone(), v.clone());
             }
         }
         m
     }
+}
+
+/// Whitelist of guacd parameters that connections may override via `extra`.
+/// Sensitive parameters (credentials, recording paths, drive paths) are excluded.
+fn is_allowed_guacd_param(name: &str) -> bool {
+    matches!(
+        name,
+        "color-depth"
+            | "enable-wallpaper"
+            | "enable-theming"
+            | "enable-font-smoothing"
+            | "enable-full-window-drag"
+            | "enable-desktop-composition"
+            | "enable-menu-animations"
+            | "enable-printing"
+            | "enable-gfx"
+            | "enable-gfx-h264"
+            | "resize-method"
+            | "server-layout"
+            | "console"
+            | "initial-program"
+            | "timezone"
+            | "client-name"
+            | "enable-audio"
+            | "enable-audio-input"
+            | "disable-audio"
+            | "disable-copy"
+            | "disable-paste"
+            | "enable-touch"
+            | "swap-red-blue"
+            | "cursor"
+            | "read-only"
+            | "scrollback"
+            | "font-name"
+            | "font-size"
+            | "backspace"
+            | "terminal-type"
+            | "typescript-path"
+            | "typescript-name"
+            | "create-typescript-path"
+            | "wol-send-packet"
+            | "wol-mac-addr"
+            | "wol-broadcast-addr"
+            | "wol-udp-port"
+            | "wol-wait-time"
+            | "force-lossless"
+            | "disable-glyph-caching"
+    )
 }
 
 /// Encode a single Guacamole protocol instruction.
@@ -282,15 +332,20 @@ pub async fn proxy(
 
     // ── NVR: register session in the in-memory registry ──
     let nvr_handles = if let Some(ref ctx) = nvr {
-        let (tx, buffer) = ctx.registry.register(
+        match ctx.registry.register(
             ctx.session_id.clone(),
             ctx.connection_id,
             ctx.connection_name.clone(),
             ctx.protocol.clone(),
             ctx.user_id,
             ctx.username.clone(),
-        ).await;
-        Some((tx, buffer, ctx.registry.clone()))
+        ).await {
+            Some((tx, buffer)) => Some((tx, buffer, ctx.registry.clone())),
+            None => {
+                tracing::error!("Session limit reached — rejecting tunnel");
+                return Err(AppError::Internal("Maximum concurrent session limit reached".into()));
+            }
+        }
     } else {
         None
     };
@@ -302,6 +357,14 @@ pub async fn proxy(
     // up to the last ';' in each read, keeping the remainder for next time.
     let mut tcp_buf = vec![0u8; 65536];
     let mut pending = Vec::<u8>::new();
+    /// Maximum pending buffer size (1 MB). If a client sends data without
+    /// instruction terminators the buffer is capped to prevent OOM.
+    const MAX_PENDING_BYTES: usize = 1024 * 1024;
+
+    // WebSocket keepalive – send a Ping every 15 s, timeout if no Pong in 30 s.
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
+    ping_interval.tick().await; // consume the first immediate tick
+    let mut last_pong = tokio::time::Instant::now();
 
     // Resolve bandwidth counters (if NVR is active, track via session handle)
     let bandwidth = if let Some((_, _, ref registry)) = nvr_handles {
@@ -325,6 +388,12 @@ pub async fn proxy(
                     }
                     Ok(n) => {
                         pending.extend_from_slice(&tcp_buf[..n]);
+
+                        // Cap pending buffer to prevent OOM from malformed streams
+                        if pending.len() > MAX_PENDING_BYTES {
+                            tracing::warn!("Pending buffer exceeded {}B — dropping data", MAX_PENDING_BYTES);
+                            pending.clear();
+                        }
 
                         // Track bytes from guacd
                         if let Some(ref sess) = bandwidth {
@@ -364,6 +433,11 @@ pub async fn proxy(
             result = ws.recv() => {
                 match result {
                     Some(Ok(Message::Text(text))) => {
+                        // Validate UTF-8 and ensure it only contains valid Guacamole protocol chars
+                        if !text.is_ascii() && std::str::from_utf8(text.as_bytes()).is_err() {
+                            tracing::warn!("Received non-UTF8 WebSocket text — dropping");
+                            continue;
+                        }
                         // Track bytes to guacd
                         if let Some(ref sess) = bandwidth {
                             sess.bytes_to_guacd.fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -375,17 +449,12 @@ pub async fn proxy(
                             break;
                         }
                     }
-                    Some(Ok(Message::Binary(data))) => {
-                        // Track bytes to guacd
-                        if let Some(ref sess) = bandwidth {
-                            sess.bytes_to_guacd.fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        if tcp_write.write_all(&data).await.is_err()
-                            || tcp_write.flush().await.is_err()
-                        {
-                            tracing::info!("guacd TCP write failed (binary)");
-                            break;
-                        }
+                    Some(Ok(Message::Binary(_data))) => {
+                        // Guacamole protocol is text-only — reject binary frames
+                        tracing::warn!("Received binary WebSocket message — ignoring");
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_pong = tokio::time::Instant::now();
                     }
                     Some(Ok(Message::Close(reason))) => {
                         tracing::info!("WebSocket closed by client: {:?}", reason);
@@ -402,6 +471,17 @@ pub async fn proxy(
                     _ => {}
                 }
             }
+            // Periodic keepalive ping
+            _ = ping_interval.tick() => {
+                if last_pong.elapsed() > Duration::from_secs(30) {
+                    tracing::info!("WebSocket keepalive timeout (no pong in 30s)");
+                    break;
+                }
+                if ws.send(Message::Ping(Vec::new())).await.is_err() {
+                    tracing::info!("WebSocket ping send failed");
+                    break;
+                }
+            }
         }
     }
 
@@ -413,4 +493,279 @@ pub async fn proxy(
 
     tracing::info!("Tunnel closed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── guac_instruction encoding ──────────────────────────────────
+    #[test]
+    fn guac_instruction_select_rdp() {
+        let bytes = guac_instruction("select", &["rdp"]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "6.select,3.rdp;");
+    }
+
+    #[test]
+    fn guac_instruction_no_args() {
+        let bytes = guac_instruction("video", &[]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "5.video;");
+    }
+
+    #[test]
+    fn guac_instruction_multiple_args() {
+        let bytes = guac_instruction("size", &["1920", "1080", "96"]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "4.size,4.1920,4.1080,2.96;");
+    }
+
+    #[test]
+    fn guac_instruction_empty_arg() {
+        let bytes = guac_instruction("connect", &["", "host"]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "7.connect,0.,4.host;");
+    }
+
+    // ── parse_instruction ──────────────────────────────────────────
+    #[test]
+    fn parse_instruction_simple() {
+        let (op, args) = parse_instruction("4.args,8.hostname,4.port;").unwrap();
+        assert_eq!(op, "args");
+        assert_eq!(args, vec!["hostname", "port"]);
+    }
+
+    #[test]
+    fn parse_instruction_no_args() {
+        let (op, args) = parse_instruction("5.ready;").unwrap();
+        assert_eq!(op, "ready");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parse_instruction_roundtrip() {
+        let encoded = guac_instruction("connect", &["host.example.com", "3389", "admin"]);
+        let text = String::from_utf8(encoded).unwrap();
+        let (op, args) = parse_instruction(&text).unwrap();
+        assert_eq!(op, "connect");
+        assert_eq!(args, vec!["host.example.com", "3389", "admin"]);
+    }
+
+    #[test]
+    fn parse_instruction_empty_string_arg() {
+        // An arg with length 0 produces an empty string
+        let (op, args) = parse_instruction("6.select,0.;").unwrap();
+        assert_eq!(op, "select");
+        assert_eq!(args, vec![""]);
+    }
+
+    #[test]
+    fn parse_instruction_errors_on_empty() {
+        assert!(parse_instruction(";").is_err());
+    }
+
+    #[test]
+    fn parse_instruction_errors_on_truncated() {
+        // Length says 10 but only 3 chars follow
+        assert!(parse_instruction("10.abc;").is_err());
+    }
+
+    #[test]
+    fn parse_instruction_errors_on_no_dot() {
+        assert!(parse_instruction("nodot;").is_err());
+    }
+
+    // ── is_allowed_guacd_param ─────────────────────────────────────
+    #[test]
+    fn allowed_params_whitelist() {
+        assert!(is_allowed_guacd_param("color-depth"));
+        assert!(is_allowed_guacd_param("enable-wallpaper"));
+        assert!(is_allowed_guacd_param("resize-method"));
+        assert!(is_allowed_guacd_param("font-size"));
+        assert!(is_allowed_guacd_param("force-lossless"));
+    }
+
+    #[test]
+    fn blocked_params_not_in_whitelist() {
+        assert!(!is_allowed_guacd_param("hostname"));
+        assert!(!is_allowed_guacd_param("password"));
+        assert!(!is_allowed_guacd_param("username"));
+        assert!(!is_allowed_guacd_param("recording-path"));
+        assert!(!is_allowed_guacd_param("drive-path"));
+        assert!(!is_allowed_guacd_param("enable-drive"));
+        assert!(!is_allowed_guacd_param("arbitrary-param"));
+    }
+
+    // ── HandshakeParams ────────────────────────────────────────────
+    #[test]
+    fn handshake_param_map_basic() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "10.0.0.1".into(),
+            port: 3389,
+            username: Some("admin".into()),
+            password: Some("secret".into()),
+            domain: Some("CORP".into()),
+            security: Some("nla".into()),
+            ignore_cert: true,
+            recording_path: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.param_map();
+        assert_eq!(m["hostname"], "10.0.0.1");
+        assert_eq!(m["port"], "3389");
+        assert_eq!(m["username"], "admin");
+        assert_eq!(m["password"], "secret");
+        assert_eq!(m["domain"], "CORP");
+        assert_eq!(m["security"], "nla");
+        assert_eq!(m["ignore-cert"], "true");
+        assert_eq!(m["width"], "1920");
+        assert_eq!(m["height"], "1080");
+        assert_eq!(m["dpi"], "96");
+        assert_eq!(m["resize-method"], "display-update");
+    }
+
+    #[test]
+    fn handshake_param_map_optional_fields_omitted() {
+        let hp = HandshakeParams {
+            protocol: "ssh".into(),
+            hostname: "box".into(),
+            port: 22,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 800,
+            height: 600,
+            dpi: 72,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.param_map();
+        assert!(!m.contains_key("username"));
+        assert!(!m.contains_key("password"));
+        assert!(!m.contains_key("domain"));
+        assert!(!m.contains_key("security"));
+        assert!(!m.contains_key("ignore-cert"));
+        assert!(!m.contains_key("recording-path"));
+    }
+
+    #[test]
+    fn handshake_recording_path_included() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: Some("/tmp/rec".into()),
+            create_recording_path: true,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.param_map();
+        assert_eq!(m["recording-path"], "/tmp/rec");
+        assert_eq!(m["create-recording-path"], "true");
+    }
+
+    #[test]
+    fn full_param_map_rdp_defaults() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.full_param_map();
+        // RDP-specific defaults
+        assert_eq!(m["enable-drive"], "true");
+        assert_eq!(m["drive-path"], "/var/lib/guacamole/drive");
+        assert_eq!(m["enable-gfx"], "true");
+        assert_eq!(m["enable-gfx-h264"], "true");
+        // Clipboard
+        assert_eq!(m["disable-copy"], "false");
+        assert_eq!(m["disable-paste"], "false");
+    }
+
+    #[test]
+    fn full_param_map_ssh_defaults() {
+        let hp = HandshakeParams {
+            protocol: "ssh".into(),
+            hostname: "h".into(),
+            port: 22,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 800,
+            height: 600,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["enable-sftp"], "true");
+        // Should NOT have RDP-specific params
+        assert!(!m.contains_key("enable-drive"));
+        assert!(!m.contains_key("enable-gfx"));
+    }
+
+    #[test]
+    fn full_param_map_extra_override() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("color-depth".into(), "24".into());
+        extra.insert("enable-wallpaper".into(), "true".into());
+        // Blocked param should be ignored
+        extra.insert("hostname".into(), "evil.com".into());
+        // Empty value should be ignored
+        extra.insert("font-size".into(), "".into());
+
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "legit.com".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra,
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["color-depth"], "24");
+        assert_eq!(m["enable-wallpaper"], "true");
+        // hostname should remain the original, not overridden
+        assert_eq!(m["hostname"], "legit.com");
+        // Empty value not inserted
+        assert!(!m.contains_key("font-size"));
+    }
 }

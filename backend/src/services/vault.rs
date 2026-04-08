@@ -174,3 +174,124 @@ pub async fn unseal(
 
     Ok(plaintext)
 }
+
+/// Encrypt a string value for storage using the `vault:{json}` envelope format.
+/// Used for settings, AD sync bind passwords, and other secrets stored as TEXT.
+pub async fn seal_setting(
+    vault: &VaultConfig,
+    plaintext: &str,
+) -> Result<String, AppError> {
+    let sealed = seal(vault, plaintext.as_bytes()).await?;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let encoded = serde_json::json!({
+        "ct": b64.encode(&sealed.ciphertext),
+        "dek": b64.encode(&sealed.encrypted_dek),
+        "n": b64.encode(&sealed.nonce),
+    });
+    Ok(format!("vault:{encoded}"))
+}
+
+/// Decrypt a `vault:{json}` envelope string. If the value does not start with
+/// `vault:`, it is returned as-is (legacy plaintext).
+pub async fn unseal_setting(
+    vault: &VaultConfig,
+    value: &str,
+) -> Result<String, AppError> {
+    let json_str = match value.strip_prefix("vault:") {
+        Some(j) => j,
+        None => return Ok(value.to_string()),
+    };
+    let parsed: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| AppError::Vault(format!("Invalid vault envelope: {e}")))?;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let ct = b64
+        .decode(parsed["ct"].as_str().unwrap_or(""))
+        .map_err(|e| AppError::Vault(format!("ct decode: {e}")))?;
+    let dek = b64
+        .decode(parsed["dek"].as_str().unwrap_or(""))
+        .map_err(|e| AppError::Vault(format!("dek decode: {e}")))?;
+    let n = b64
+        .decode(parsed["n"].as_str().unwrap_or(""))
+        .map_err(|e| AppError::Vault(format!("nonce decode: {e}")))?;
+    let plaintext = unseal(vault, &dek, &ct, &n).await?;
+    String::from_utf8(plaintext)
+        .map_err(|e| AppError::Vault(format!("UTF-8 decode: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sealed_credential_fields() {
+        let sc = SealedCredential {
+            ciphertext: vec![1, 2, 3],
+            encrypted_dek: vec![4, 5, 6],
+            nonce: vec![7, 8, 9],
+        };
+        assert_eq!(sc.ciphertext, vec![1, 2, 3]);
+        assert_eq!(sc.encrypted_dek, vec![4, 5, 6]);
+        assert_eq!(sc.nonce, vec![7, 8, 9]);
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_plaintext_passthrough() {
+        // Non-vault-prefixed values should pass through unchanged
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "test-token".into(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let result = unseal_setting(&vault_cfg, "plain-text-value").await.unwrap();
+        assert_eq!(result, "plain-text-value");
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_invalid_json_after_prefix() {
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "test-token".into(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let result = unseal_setting(&vault_cfg, "vault:not-valid-json").await;
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("Invalid vault envelope"));
+    }
+
+    #[test]
+    fn vault_encrypt_request_serializes() {
+        let req = VaultEncryptRequest {
+            plaintext: "dGVzdA==".into(),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["plaintext"], "dGVzdA==");
+    }
+
+    #[test]
+    fn vault_decrypt_request_serializes() {
+        let req = VaultDecryptRequest {
+            ciphertext: "vault:v1:abc123".into(),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["ciphertext"], "vault:v1:abc123");
+    }
+
+    #[test]
+    fn vault_encrypt_response_deserializes() {
+        let json = r#"{"data":{"ciphertext":"vault:v1:encrypted"}}"#;
+        let resp: VaultEncryptResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.data.ciphertext, "vault:v1:encrypted");
+    }
+
+    #[test]
+    fn vault_decrypt_response_deserializes() {
+        let json = r#"{"data":{"plaintext":"dGVzdA=="}}"#;
+        let resp: VaultDecryptResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.data.plaintext, "dGVzdA==");
+    }
+}

@@ -10,6 +10,16 @@ pub struct RealmConfig {
     pub is_default: bool,
 }
 
+/// Reject values that could inject krb5.conf directives (newlines, braces, etc.).
+fn sanitize_krb5_value(val: &str, field: &str) -> anyhow::Result<()> {
+    if val.contains('\n') || val.contains('\r') || val.contains('{') || val.contains('}')
+        || val.contains('[') || val.contains(']') || val.contains('#') || val.contains(';')
+    {
+        anyhow::bail!("Invalid character in Kerberos {field}: {val:?}");
+    }
+    Ok(())
+}
+
 /// Generate a krb5.conf that contains all configured realms and write it out.
 pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyhow::Result<()> {
     if realms.is_empty() {
@@ -17,6 +27,17 @@ pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyho
         let _ = std::fs::remove_file(output_path);
         tracing::info!("No Kerberos realms configured — removed {output_path}");
         return Ok(());
+    }
+
+    // Validate all values before generating config
+    for r in realms {
+        sanitize_krb5_value(&r.realm, "realm")?;
+        sanitize_krb5_value(&r.admin_server, "admin_server")?;
+        sanitize_krb5_value(&r.ticket_lifetime, "ticket_lifetime")?;
+        sanitize_krb5_value(&r.renew_lifetime, "renew_lifetime")?;
+        for kdc in &r.kdcs {
+            sanitize_krb5_value(kdc, "kdc")?;
+        }
     }
 
     // The default realm is whichever is flagged, or the first one
@@ -128,4 +149,129 @@ pub fn write_krb5_conf(
         is_default: true,
     };
     write_krb5_conf_multi(&[rc], output_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_rejects_newline() {
+        assert!(sanitize_krb5_value("REALM\ninjected", "realm").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_carriage_return() {
+        assert!(sanitize_krb5_value("REALM\rinjected", "realm").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_braces() {
+        assert!(sanitize_krb5_value("REALM{}", "realm").is_err());
+        assert!(sanitize_krb5_value("REALM[x]", "realm").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_comment_chars() {
+        assert!(sanitize_krb5_value("REALM#comment", "realm").is_err());
+        assert!(sanitize_krb5_value("REALM;comment", "realm").is_err());
+    }
+
+    #[test]
+    fn sanitize_allows_valid_values() {
+        assert!(sanitize_krb5_value("EXAMPLE.COM", "realm").is_ok());
+        assert!(sanitize_krb5_value("kdc.example.com", "kdc").is_ok());
+        assert!(sanitize_krb5_value("24h", "ticket_lifetime").is_ok());
+        assert!(sanitize_krb5_value("7d", "renew_lifetime").is_ok());
+    }
+
+    #[test]
+    fn write_single_realm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("krb5.conf");
+        let path_str = path.to_str().unwrap();
+
+        write_krb5_conf(
+            "EXAMPLE.COM",
+            &["kdc1.example.com".into(), "kdc2.example.com".into()],
+            "admin.example.com",
+            "24h",
+            "7d",
+            path_str,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(path_str).unwrap();
+        assert!(content.contains("default_realm = EXAMPLE.COM"));
+        assert!(content.contains("kdc = kdc1.example.com"));
+        assert!(content.contains("kdc = kdc2.example.com"));
+        assert!(content.contains("admin_server = admin.example.com"));
+        assert!(content.contains("ticket_lifetime = 24h"));
+        assert!(content.contains("renew_lifetime = 7d"));
+    }
+
+    #[test]
+    fn write_multi_realm_includes_capaths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("krb5.conf");
+        let path_str = path.to_str().unwrap();
+
+        let realms = vec![
+            RealmConfig {
+                realm: "ALPHA.COM".into(),
+                kdcs: vec!["kdc.alpha.com".into()],
+                admin_server: "admin.alpha.com".into(),
+                ticket_lifetime: "24h".into(),
+                renew_lifetime: "7d".into(),
+                is_default: true,
+            },
+            RealmConfig {
+                realm: "BETA.COM".into(),
+                kdcs: vec!["kdc.beta.com".into()],
+                admin_server: "admin.beta.com".into(),
+                ticket_lifetime: "12h".into(),
+                renew_lifetime: "3d".into(),
+                is_default: false,
+            },
+        ];
+
+        write_krb5_conf_multi(&realms, path_str).unwrap();
+
+        let content = std::fs::read_to_string(path_str).unwrap();
+        assert!(content.contains("default_realm = ALPHA.COM"));
+        assert!(content.contains("ALPHA.COM = {"));
+        assert!(content.contains("BETA.COM = {"));
+        assert!(content.contains("[capaths]"));
+    }
+
+    #[test]
+    fn write_empty_realms_removes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("krb5.conf");
+        let path_str = path.to_str().unwrap();
+
+        // Create the file first
+        std::fs::write(path_str, "placeholder").unwrap();
+        assert!(path.exists());
+
+        write_krb5_conf_multi(&[], path_str).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_rejects_injected_realm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("krb5.conf");
+        let path_str = path.to_str().unwrap();
+
+        let result = write_krb5_conf(
+            "EVIL\n[logging]",
+            &["kdc.example.com".into()],
+            "admin.example.com",
+            "24h",
+            "7d",
+            path_str,
+        );
+        assert!(result.is_err());
+    }
 }

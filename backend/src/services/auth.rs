@@ -16,9 +16,11 @@ pub struct Claims {
 
 /// OIDC discovery document (subset).
 #[derive(Deserialize)]
-struct OidcDiscovery {
-    jwks_uri: String,
-    issuer: String,
+pub struct OidcDiscovery {
+    pub jwks_uri: String,
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
 }
 
 /// JSON Web Key Set.
@@ -41,7 +43,15 @@ pub async fn validate_token(
     client_id: &str,
     token: &str,
 ) -> Result<Claims, AppError> {
-    let client = Client::new();
+    // Validate issuer URL scheme to prevent SSRF
+    if !issuer_url.starts_with("https://") {
+        return Err(AppError::Auth("OIDC issuer must use HTTPS".into()));
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Auth(format!("HTTP client error: {e}")))?;
 
     // 1. Fetch OIDC discovery
     let discovery_url = format!(
@@ -57,6 +67,15 @@ pub async fn validate_token(
         .await
         .map_err(|e| AppError::Auth(format!("OIDC discovery parse: {e}")))?;
 
+    // Validate that the discovered issuer matches the configured one
+    let normalised_issuer = issuer_url.trim_end_matches('/');
+    let normalised_discovery = discovery.issuer.trim_end_matches('/');
+    if normalised_issuer != normalised_discovery {
+        return Err(AppError::Auth(format!(
+            "OIDC issuer mismatch: expected {normalised_issuer}, got {normalised_discovery}"
+        )));
+    }
+
     // 2. Fetch JWKS
     let jwks: Jwks = client
         .get(&discovery.jwks_uri)
@@ -71,16 +90,14 @@ pub async fn validate_token(
     let header = jsonwebtoken::decode_header(token)
         .map_err(|e| AppError::Auth(format!("Token header: {e}")))?;
 
-    let jwk = if let Some(kid) = &header.kid {
-        jwks.keys
-            .iter()
-            .find(|k| k.kid.as_deref() == Some(kid))
-            .ok_or_else(|| AppError::Auth("No matching JWK kid".into()))?
-    } else {
-        jwks.keys
-            .first()
-            .ok_or_else(|| AppError::Auth("JWKS empty".into()))?
-    };
+    // Require a kid in the token header to prevent key confusion attacks
+    let kid = header.kid
+        .ok_or_else(|| AppError::Auth("Token missing kid header claim".into()))?;
+
+    let jwk = jwks.keys
+        .iter()
+        .find(|k| k.kid.as_deref() == Some(&kid))
+        .ok_or_else(|| AppError::Auth("No matching JWK kid".into()))?;
 
     if jwk.kty != "RSA" {
         return Err(AppError::Auth("Unsupported key type".into()));
@@ -98,4 +115,63 @@ pub async fn validate_token(
         .map_err(|e| AppError::Auth(format!("Token validation: {e}")))?;
 
     Ok(token_data.claims)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn validate_token_rejects_http_issuer() {
+        let result = validate_token("http://evil.example.com", "client-id", "fake.jwt.token").await;
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("HTTPS"), "Should require HTTPS, got: {err}");
+    }
+
+    #[tokio::test]
+    async fn validate_token_rejects_non_url_issuer() {
+        let result = validate_token("ftp://example.com", "client-id", "fake.jwt.token").await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn claims_debug() {
+        let claims = Claims {
+            sub: "user123".into(),
+            preferred_username: Some("alice".into()),
+            email: Some("alice@example.com".into()),
+            exp: 9999999999,
+            iat: 1000000000,
+        };
+        let debug = format!("{:?}", claims);
+        assert!(debug.contains("user123"));
+    }
+
+    #[test]
+    fn claims_serialize() {
+        let claims = Claims {
+            sub: "sub-id".into(),
+            preferred_username: None,
+            email: None,
+            exp: 123,
+            iat: 100,
+        };
+        let json = serde_json::to_value(&claims).unwrap();
+        assert_eq!(json["sub"], "sub-id");
+        assert!(json["preferred_username"].is_null());
+    }
+
+    #[test]
+    fn oidc_discovery_deserializes() {
+        let json = r#"{
+            "jwks_uri": "https://idp.example.com/.well-known/jwks.json",
+            "issuer": "https://idp.example.com",
+            "authorization_endpoint": "https://idp.example.com/authorize",
+            "token_endpoint": "https://idp.example.com/token"
+        }"#;
+        let disc: OidcDiscovery = serde_json::from_str(json).unwrap();
+        assert_eq!(disc.issuer, "https://idp.example.com");
+        assert!(disc.jwks_uri.contains("jwks.json"));
+    }
 }

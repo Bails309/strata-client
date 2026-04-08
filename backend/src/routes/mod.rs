@@ -11,23 +11,23 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::services::app_state::SharedState;
 use crate::services::middleware::{require_admin, require_auth};
 
 pub fn build_router(state: SharedState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = build_cors_layer();
 
     // ── Public routes (no auth) ──────────────────────────────────────
     let public = Router::new()
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))
         .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/sso/login", get(auth::sso_login))
+        .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))
         .route("/api/shared/tunnel/:share_token", get(share::ws_shared_tunnel));
 
@@ -35,6 +35,7 @@ pub fn build_router(state: SharedState) -> Router {
     let admin = Router::new()
         .route("/api/admin/settings", get(admin::get_settings))
         .route("/api/admin/settings", put(admin::update_settings))
+        .route("/api/admin/settings/auth-methods", put(admin::update_auth_methods))
         .route("/api/admin/settings/sso", put(admin::update_sso))
         .route("/api/admin/settings/kerberos", put(admin::update_kerberos))
         .route("/api/admin/kerberos-realms", get(admin::list_kerberos_realms))
@@ -67,6 +68,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/ad-sync-configs/:id", delete(admin::delete_ad_sync_config))
         .route("/api/admin/ad-sync-configs/:id/sync", post(admin::trigger_ad_sync))
         .route("/api/admin/ad-sync-configs/:id/runs", get(admin::list_ad_sync_runs))
+        .route("/api/recordings/:filename", get(user::get_recording))
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
@@ -86,7 +88,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/user/favorites", post(user::toggle_favorite))
         .route("/api/user/connections/:connection_id/info", get(user::connection_info))
         .route("/api/tunnel/:connection_id", get(tunnel::ws_tunnel))
-        .route("/api/recordings/:filename", get(user::get_recording))
+        .route("/api/tunnel/ticket", post(tunnel::create_tunnel_ticket))
         .route("/api/user/connections/:connection_id/share", post(share::create_share))
         .route("/api/user/shares/:share_id", delete(share::revoke_share))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -97,4 +99,119 @@ pub fn build_router(state: SharedState) -> Router {
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
+}
+
+/// Build CORS layer from STRATA_ALLOWED_ORIGINS env var.
+/// In production, STRATA_ALLOWED_ORIGINS must be set explicitly.
+fn build_cors_layer() -> CorsLayer {
+    use axum::http::{HeaderValue, Method};
+
+    let allowed: Vec<HeaderValue> = std::env::var("STRATA_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<HeaderValue>().ok())
+        .collect();
+
+    let origin_list: Vec<HeaderValue> = if allowed.is_empty() {
+        // Try to derive from STRATA_DOMAIN if set
+        let domain_origins: Vec<HeaderValue> = std::env::var("STRATA_DOMAIN")
+            .ok()
+            .filter(|d| !d.is_empty() && d != ":80")
+            .map(|d| {
+                vec![
+                    format!("https://{d}").parse::<HeaderValue>().ok(),
+                    format!("http://{d}").parse::<HeaderValue>().ok(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if domain_origins.is_empty() {
+            tracing::error!(
+                "STRATA_ALLOWED_ORIGINS not set and STRATA_DOMAIN not configured — \
+                 cross-origin requests will be rejected. Set STRATA_ALLOWED_ORIGINS \
+                 for production use."
+            );
+            vec![]
+        } else {
+            tracing::info!("CORS origins derived from STRATA_DOMAIN");
+            domain_origins
+        }
+    } else {
+        allowed
+    };
+
+    // Use a predicate so requests without Origin (e.g. Caddy reverse proxy,
+    // curl, Postman) are allowed through, while browser cross-origin requests
+    // are validated against the allowlist.
+    let origin = tower_http::cors::AllowOrigin::predicate(move |origin, _parts| {
+        origin_list.iter().any(|allowed| allowed == origin)
+    });
+
+    CorsLayer::new()
+        .allow_origin(origin)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::ACCEPT,
+        ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CORS layer builder must not panic regardless of env var state.
+    /// We cannot inspect the internal origin list, but we can verify
+    /// the returned CorsLayer is valid by construction.
+    #[test]
+    fn build_cors_layer_no_env_does_not_panic() {
+        // Clear both vars so the fallback path runs
+        std::env::remove_var("STRATA_ALLOWED_ORIGINS");
+        std::env::remove_var("STRATA_DOMAIN");
+        let _layer = build_cors_layer();
+    }
+
+    #[test]
+    fn build_cors_layer_with_allowed_origins() {
+        std::env::set_var("STRATA_ALLOWED_ORIGINS", "https://app.example.com, https://dev.example.com");
+        std::env::remove_var("STRATA_DOMAIN");
+        let _layer = build_cors_layer();
+        std::env::remove_var("STRATA_ALLOWED_ORIGINS");
+    }
+
+    #[test]
+    fn build_cors_layer_with_domain_fallback() {
+        std::env::remove_var("STRATA_ALLOWED_ORIGINS");
+        std::env::set_var("STRATA_DOMAIN", "strata.example.com");
+        let _layer = build_cors_layer();
+        std::env::remove_var("STRATA_DOMAIN");
+    }
+
+    #[test]
+    fn build_cors_layer_ignores_empty_origins() {
+        std::env::set_var("STRATA_ALLOWED_ORIGINS", "  ,  ,  ");
+        std::env::remove_var("STRATA_DOMAIN");
+        let _layer = build_cors_layer();
+        std::env::remove_var("STRATA_ALLOWED_ORIGINS");
+    }
+
+    #[test]
+    fn build_cors_layer_domain_port80_treated_as_unset() {
+        std::env::remove_var("STRATA_ALLOWED_ORIGINS");
+        std::env::set_var("STRATA_DOMAIN", ":80");
+        let _layer = build_cors_layer();
+        std::env::remove_var("STRATA_DOMAIN");
+    }
 }

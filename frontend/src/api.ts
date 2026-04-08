@@ -42,8 +42,8 @@ export const initialize = (data: InitRequest) =>
 
 export interface StatusResponse {
   phase: 'setup' | 'running';
-  database_connected: boolean;
-  vault_configured: boolean;
+  sso_enabled: boolean;
+  local_auth_enabled: boolean;
 }
 
 export const getStatus = () => request<StatusResponse>('/status');
@@ -68,19 +68,54 @@ export interface LoginResponse {
 export const login = (data: LoginRequest) =>
   request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(data) });
 
-export function logout() {
+export async function logout() {
+  try {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+  } catch {
+    // Best-effort — proceed with local cleanup even if server call fails
+  }
   localStorage.removeItem('access_token');
 }
+
+// ── Current User ────────────────────────────────────────────────────
+
+export interface MeResponse {
+  id: string;
+  username: string;
+  role: string;
+  sub?: string;
+  client_ip: string;
+  watermark_enabled: boolean;
+}
+
+export const getMe = () => request<MeResponse>('/user/me');
 
 // ── Settings ────────────────────────────────────────────────────────
 
 export const getSettings = () => request<Record<string, string>>('/admin/settings');
 
-export const updateSettings = (settings: { key: string; value: string }[]) =>
-  request('/admin/settings', { method: 'PUT', body: JSON.stringify({ settings }) });
+export const updateSettings = (settings: Array<{ key: string; value: string }>) =>
+  request<{ status: string }>('/admin/settings', { method: 'PUT', body: JSON.stringify({ settings }) });
+
+export interface AuthMethodsRequest {
+  sso_enabled: boolean;
+  local_auth_enabled: boolean;
+}
+
+export const updateAuthMethods = (data: AuthMethodsRequest) =>
+  request<{ status: string }>('/admin/settings/auth-methods', { method: 'PUT', body: JSON.stringify(data) });
 
 export const updateSso = (data: { issuer_url: string; client_id: string; client_secret: string }) =>
   request('/admin/settings/sso', { method: 'PUT', body: JSON.stringify(data) });
+
+export const testSsoConnection = (data: { issuer_url: string; client_id: string; client_secret: string }) =>
+  request<{ status: string; message: string }>('/admin/settings/sso/test', { method: 'POST', body: JSON.stringify(data) });
 
 export const updateKerberos = (data: { realm: string; kdc: string[]; admin_server: string; ticket_lifetime: string; renew_lifetime: string }) =>
   request('/admin/settings/kerberos', { method: 'PUT', body: JSON.stringify(data) });
@@ -379,6 +414,7 @@ export interface AuditLog {
   id: number;
   created_at: string;
   user_id?: string;
+  username?: string;
   action_type: string;
   details: Record<string, unknown>;
   current_hash: string;
@@ -387,14 +423,22 @@ export interface AuditLog {
 export const getAuditLogs = (page = 1, per_page = 50) =>
   request<AuditLog[]>(`/admin/audit-logs?page=${page}&per_page=${per_page}`);
 
-// ── Tunnel WebSocket ────────────────────────────────────────────────
+// ── Tunnel Tickets ──────────────────────────────────────────────────
 
-export function createTunnelWebSocket(connectionId: string): WebSocket {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = localStorage.getItem('access_token');
-  const url = `${proto}//${window.location.host}/api/tunnel/${connectionId}${token ? `?token=${token}` : ''}`;
-  return new WebSocket(url);
+export interface CreateTunnelTicketRequest {
+  connection_id: string;
+  username?: string;
+  password?: string;
+  width?: number;
+  height?: number;
+  dpi?: number;
 }
+
+export const createTunnelTicket = (body: CreateTunnelTicketRequest) =>
+  request<{ ticket: string }>('/tunnel/ticket', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 
 // ── Connection Sharing ──────────────────────────────────────────────
 

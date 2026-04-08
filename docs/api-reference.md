@@ -27,8 +27,8 @@ System boot phase and database connectivity.
 ```json
 {
   "phase": "running",
-  "database_connected": true,
-  "vault_configured": true
+  "sso_enabled": true,
+  "local_auth_enabled": true
 }
 ```
 
@@ -67,7 +67,35 @@ First-boot initialization. Only available when `phase == "setup"`.
 
 ---
 
-## Admin Endpoints
+## Authentication Endpoints
+
+### `POST /api/auth/login`
+
+Standard local username/password login. Only available if `local_auth_enabled` is true.
+
+**Request Body**
+```json
+{
+  "username": "admin",
+  "password": "password"
+}
+```
+
+### `GET /api/auth/sso/login`
+
+Initiates the OIDC Single Sign-On flow. Redirects the user to the configured OIDC issuer's authorization endpoint. Only available if `sso_enabled` is true and properly configured.
+
+**Success**: `303 See Other` redirect to the issuer.
+
+### `GET /api/auth/sso/callback`
+
+The handle for the OIDC provider's callback. Exchange the authorization code for an ID token and establishes a session.
+
+**Query Parameters**
+- `code`: The authorization code from the issuer.
+- `state`: The CSRF state token.
+
+**Success**: `303 See Other` redirect back to the frontend dashboard.
 
 All admin endpoints require authentication **and** the `admin` role.
 
@@ -127,6 +155,21 @@ Configure OIDC / SSO.
   "client_secret": "secret"
 }
 ```
+
+#### `PUT /api/admin/settings/auth-methods`
+
+Configure which authentication methods are globally enabled.
+
+**Request Body**
+```json
+{
+  "sso_enabled": true,
+  "local_auth_enabled": true
+}
+```
+
+> [!IMPORTANT]
+> At least one authentication method must remain enabled at all times.
 
 #### `PUT /api/admin/settings/kerberos`
 

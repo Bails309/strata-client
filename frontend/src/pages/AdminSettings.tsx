@@ -12,6 +12,7 @@ import {
   KerberosRealm,
   updateRecordings,
   updateVault,
+  updateAuthMethods,
   getServiceHealth,
   getMetrics,
   getRoles,
@@ -32,6 +33,7 @@ import {
   deleteAdSyncConfig,
   triggerAdSync,
   testAdSyncConnection,
+  testSsoConnection,
   getAdSyncRuns,
   AdSyncConfig,
   AdSyncRun,
@@ -44,7 +46,7 @@ import {
   MetricsSummary,
 } from '../api';
 
-type Tab = 'health' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'ad-sync' | 'sessions';
+type Tab = 'health' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'ad-sync' | 'sessions' | 'security';
 
 export default function AdminSettings() {
   const [tab, setTab] = useState<Tab>('health');
@@ -54,13 +56,17 @@ export default function AdminSettings() {
   const [groups, setGroups] = useState<ConnectionGroup[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [msg, setMsg] = useState('');
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
-    getSettings().then(setSettings).catch(() => {});
-    getRoles().then(setRoles).catch(() => {});
-    getConnections().then(setConnections).catch(() => {});
-    getConnectionGroups().then(setGroups).catch(() => {});
-    getUsers().then(setUsers).catch(() => {});
+    setLoadError('');
+    Promise.all([
+      getSettings().then(setSettings),
+      getRoles().then(setRoles),
+      getConnections().then(setConnections),
+      getConnectionGroups().then(setGroups),
+      getUsers().then(setUsers),
+    ]).catch(() => setLoadError('Failed to load settings'));
   }, []);
 
   function flash(text: string) {
@@ -78,8 +84,14 @@ export default function AdminSettings() {
         </div>
       )}
 
+      {loadError && (
+        <div className="rounded-md mb-4 px-4 py-2 bg-danger/10 text-danger">
+          {loadError}
+        </div>
+      )}
+
       <div className="tabs">
-        {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'ad-sync', 'sessions'] as Tab[]).map((t) => (
+        {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'ad-sync', 'sessions', 'security'] as Tab[]).map((t) => (
           <button key={t} className={`tab ${tab === t ? 'tab-active' : ''}`} onClick={() => setTab(t)}>
             {t === 'sso' ? 'SSO / OIDC' : t === 'health' ? 'Health' : t === 'ad-sync' ? 'AD Sync' : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
@@ -133,6 +145,11 @@ export default function AdminSettings() {
 
       {/* ── Active Sessions (NVR) ── */}
       {tab === 'sessions' && <SessionsTab />}
+
+      {/* ── Security ── */}
+      {tab === 'security' && (
+        <SecurityTab settings={settings} onSave={() => { flash('Security settings updated'); getSettings().then(setSettings).catch(() => {}); }} />
+      )}
     </div>
   );
 }
@@ -179,8 +196,17 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
         <p className="text-txt-secondary text-sm">
           Service configuration is managed through environment variables and docker-compose.
         </p>
-        <button className="btn shrink-0" onClick={refresh}>
-          {loading ? 'Refreshing…' : 'Refresh'}
+        <button className="btn-primary shrink-0" onClick={refresh}>
+          <span className="flex items-center gap-2">
+            <svg 
+              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+              className={loading ? 'animate-spin' : ''}
+            >
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+              <path d="M21 3v5h-5"/>
+            </svg>
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </span>
         </button>
       </div>
 
@@ -288,15 +314,41 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
   const [issuer, setIssuer] = useState(settings.sso_issuer_url || '');
   const [clientId, setClientId] = useState(settings.sso_client_id || '');
   const [clientSecret, setClientSecret] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     setIssuer(settings.sso_issuer_url || '');
     setClientId(settings.sso_client_id || '');
   }, [settings]);
 
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await testSsoConnection({ issuer_url: issuer, client_id: clientId, client_secret: clientSecret });
+      setTestResult({ success: res.status === 'success', msg: res.message });
+    } catch (err: unknown) {
+      setTestResult({ success: false, msg: err instanceof Error ? err.message : 'Test failed' });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const callbackUrl = `${window.location.origin}/api/auth/oidc/callback`;
+
   return (
     <div className="card">
-      <h2>SSO / OIDC (Keycloak)</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="!mb-0">SSO / OIDC (Keycloak)</h2>
+        <div className="flex flex-col items-end">
+          <span className="text-[10px] uppercase tracking-wider text-txt-tertiary font-bold mb-1">Callback URL</span>
+          <code className="text-[11px] bg-surface-tertiary px-2 py-1 rounded border border-border font-mono text-accent">
+            {callbackUrl}
+          </code>
+        </div>
+      </div>
+
       <div className="form-group">
         <label>Issuer URL</label>
         <input value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="https://keycloak.example.com/realms/strata" />
@@ -309,9 +361,40 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
         <label>Client Secret</label>
         <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
       </div>
-      <button className="btn-primary" onClick={async () => { await updateSso({ issuer_url: issuer, client_id: clientId, client_secret: clientSecret }); onSave(); }}>
-        Save SSO Settings
-      </button>
+
+      {testResult && (
+        <div className={`rounded-md mb-4 px-4 py-2 text-sm ${testResult.success ? 'bg-success-dim text-success' : 'bg-danger-dim text-danger'}`}>
+          <div className="flex items-center gap-2">
+            {testResult.success ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            )}
+            {testResult.msg}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <button 
+          className="btn-primary" 
+          onClick={async () => { await updateSso({ issuer_url: issuer, client_id: clientId, client_secret: clientSecret }); onSave(); }}
+        >
+          Save SSO Settings
+        </button>
+        <button 
+          className="btn" 
+          onClick={handleTest} 
+          disabled={testing || !issuer || !clientId}
+        >
+          {testing ? 'Testing…' : 'Test Connection'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -881,18 +964,48 @@ function AccessTab({
     <div className="grid gap-6">
       {/* Roles */}
       <div className="card">
-        <h2>Roles</h2>
-        <table>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="!mb-0">Roles</h2>
+          <p className="text-txt-tertiary text-xs">Standard RBAC roles for platform access</p>
+        </div>
+        
+        <table className="mb-4">
           <thead><tr><th>Name</th><th>ID</th></tr></thead>
           <tbody>
-            {roles.map((r) => <tr key={r.id}><td>{r.name}</td><td className="font-mono text-[0.8rem]">{r.id}</td></tr>)}
+            {roles.map((r) => (
+              <tr key={r.id}>
+                <td><span className="font-semibold text-accent">{r.name}</span></td>
+                <td className="font-mono text-[0.8rem] text-txt-secondary">{r.id}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
-        <div className="flex gap-2 mt-4">
-          <input value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)} placeholder="New role name" />
-          <button className="btn-primary" onClick={async () => { const r = await createRole(newRoleName); onRoleCreated(r); setNewRoleName(''); }}>
-            Add Role
-          </button>
+
+        <div className="bg-surface-secondary/50 p-3 rounded-lg border border-border/50">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-[400px]">
+              <input 
+                value={newRoleName} 
+                onChange={(e) => setNewRoleName(e.target.value)} 
+                placeholder="New role name..."
+                className="w-full pr-10" 
+              />
+            </div>
+            <button 
+              className="btn-primary flex items-center gap-2 whitespace-nowrap shadow-sm"
+              disabled={!newRoleName.trim()}
+              onClick={async () => { 
+                const r = await createRole(newRoleName); 
+                onRoleCreated(r); 
+                setNewRoleName(''); 
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Add Role
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1033,17 +1146,21 @@ function AccessTab({
 
       {/* Connection Groups */}
       <div className="card">
-        <h2>Connection Groups</h2>
-        {groups.length > 0 && (
-          <table>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="!mb-0">Connection Groups</h2>
+          <p className="text-txt-tertiary text-xs">Organize your connections into hierarchical folders</p>
+        </div>
+
+        {groups.length > 0 ? (
+          <table className="mb-4">
             <thead><tr><th>Name</th><th>Parent</th><th className="w-[100px]">Actions</th></tr></thead>
             <tbody>
               {groups.map((g) => (
                 <tr key={g.id}>
-                  <td>{g.name}</td>
-                  <td>{g.parent_id ? (groups.find(p => p.id === g.parent_id)?.name || '—') : '—'}</td>
+                  <td><span className="font-medium">{g.name}</span></td>
+                  <td>{g.parent_id ? (groups.find(p => p.id === g.parent_id)?.name || '—') : <span className="text-txt-tertiary italic">Root</span>}</td>
                   <td>
-                    <button className="btn text-[0.8rem] px-2 py-1 text-danger" onClick={async () => {
+                    <button className="btn-ghost text-[0.8rem] px-2 py-1 text-danger hover:bg-danger/10" onClick={async () => {
                       if (!window.confirm(`Delete group "${g.name}"? Connections in this group will become ungrouped.`)) return;
                       await deleteConnectionGroup(g.id);
                       onGroupsChanged(groups.filter(x => x.id !== g.id));
@@ -1053,30 +1170,50 @@ function AccessTab({
               ))}
             </tbody>
           </table>
-        )}
-        {groups.length === 0 && <p className="text-txt-secondary text-sm mb-3">No groups yet. Create one to organize connections.</p>}
-        <div className="flex gap-2 mt-4">
-          <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="Group name" />
-          <div className="min-w-[160px]">
-            <Select
-              value={newGroupParent}
-              onChange={setNewGroupParent}
-              placeholder="No parent (top-level)"
-              options={[
-                { value: '', label: 'No parent (top-level)' },
-                ...groups.filter(g => !g.parent_id).map(g => ({ value: g.id, label: g.name })),
-              ]}
-            />
+        ) : (
+          <div className="text-center py-6 bg-surface-secondary/30 rounded-lg border border-dashed border-border mb-4">
+            <p className="text-txt-secondary text-sm">No groups created yet.</p>
           </div>
-          <button className="btn-primary" onClick={async () => {
-            if (!newGroupName.trim()) return;
-            const g = await createConnectionGroup({ name: newGroupName.trim(), parent_id: newGroupParent || undefined });
-            onGroupsChanged([...groups, g]);
-            setNewGroupName('');
-            setNewGroupParent('');
-          }}>
-            Add Group
-          </button>
+        )}
+
+        <div className="bg-surface-secondary/50 p-3 rounded-lg border border-border/50">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 max-w-[300px]">
+              <input 
+                value={newGroupName} 
+                onChange={(e) => setNewGroupName(e.target.value)} 
+                placeholder="Group name..." 
+                className="w-full"
+              />
+            </div>
+            <div className="w-[200px]">
+              <Select
+                value={newGroupParent}
+                onChange={setNewGroupParent}
+                placeholder="Root Level"
+                options={[
+                  { value: '', label: 'Root Level' },
+                  ...groups.filter(g => !g.parent_id).map(g => ({ value: g.id, label: g.name })),
+                ]}
+              />
+            </div>
+            <button 
+              className="btn-primary flex items-center gap-2 whitespace-nowrap shadow-sm"
+              disabled={!newGroupName.trim()}
+              onClick={async () => {
+                if (!newGroupName.trim()) return;
+                const g = await createConnectionGroup({ name: newGroupName.trim(), parent_id: newGroupParent || undefined });
+                onGroupsChanged([...groups, g]);
+                setNewGroupName('');
+                setNewGroupParent('');
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Add Group
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1963,18 +2100,21 @@ function SessionsTab() {
 
   return (
     <div className="card">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between p-4 bg-surface-secondary/50 border-b border-border mb-6 -mx-7 -mt-7">
         <div>
           <h3 className="text-lg font-semibold text-txt-primary">Active Sessions</h3>
           <p className="text-sm text-txt-secondary mt-0.5">
-            Live user sessions with NVR buffer. Observe any session to see what the user is doing — or rewind up to 5 minutes.
+            Live user sessions with NVR buffer. Observe or rewind up to 5 minutes.
           </p>
         </div>
         <button
           onClick={refresh}
-          className="btn btn-secondary text-sm"
+          className="btn-sm-primary"
           disabled={loading}
         >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
@@ -2364,7 +2504,7 @@ function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () =
               <tbody>
                 {selectedRuns.runs.map((r) => (
                   <tr key={r.id}>
-                    <td>{new Date(r.started_at).toLocaleString()}</td>
+                    <td>{new Date(r.started_at).toLocaleString('en-GB')}</td>
                     <td>
                       <span className={`badge ${r.status === 'success' ? 'badge-success' : r.status === 'error' ? 'badge-error' : 'badge-warning'}`}>
                         {r.status}
@@ -2387,13 +2527,31 @@ function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () =
 
   // ── Config list ──
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <p className="text-sm opacity-70">
-          Import connections from Active Directory via LDAP. Objects that disappear from AD are soft-deleted for 7 days before permanent removal.
-        </p>
-        <button className="btn btn-primary btn-sm" onClick={() => setEditing({ search_bases: [''], search_filter: '(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', search_scope: 'subtree', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, enabled: true, auth_method: 'simple' })}>
-          + Add Source
+    <div className="space-y-6">
+      <div className="flex items-center justify-between p-4 bg-surface-secondary/30 border border-border/50 rounded-lg">
+        <div>
+          <h3 className="text-base font-semibold text-txt-primary">AD Sync Sources</h3>
+          <p className="text-sm text-txt-secondary mt-1 max-w-2xl">
+            Import connections from Active Directory via LDAP. Objects that disappear are soft-deleted for 7 days.
+          </p>
+        </div>
+        <button 
+          className="btn-sm-primary" 
+          onClick={() => setEditing({ 
+            search_bases: [''], 
+            search_filter: '(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', 
+            search_scope: 'subtree', 
+            protocol: 'rdp', 
+            default_port: 3389, 
+            sync_interval_minutes: 60, 
+            enabled: true, 
+            auth_method: 'simple' 
+          })}
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add Source
         </button>
       </div>
 
@@ -2436,6 +2594,129 @@ function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () =
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Security Tab ───────────────────────────────────────────────────────
+
+function SecurityTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
+  const [watermarkEnabled, setWatermarkEnabled] = useState(settings.watermark_enabled === 'true');
+  const [ssoEnabled, setSsoEnabled] = useState(settings.sso_enabled === 'true');
+  const [localAuthEnabled, setLocalAuthEnabled] = useState(settings.local_auth_enabled === undefined ? true : settings.local_auth_enabled === 'true');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setWatermarkEnabled(settings.watermark_enabled === 'true');
+    setSsoEnabled(settings.sso_enabled === 'true');
+    setLocalAuthEnabled(settings.local_auth_enabled === undefined ? true : settings.local_auth_enabled === 'true');
+  }, [settings]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      // Update general security settings
+      await updateSettings([
+        { key: 'watermark_enabled', value: String(watermarkEnabled) },
+      ]);
+      
+      // Update authentication methods (dedicated endpoint with validation)
+      await updateAuthMethods({
+        sso_enabled: ssoEnabled,
+        local_auth_enabled: localAuthEnabled,
+      });
+
+      onSave();
+    } catch { /* handled by parent */ }
+    setSaving(false);
+  }
+
+  return (
+    <div className="card mt-6">
+      <div className="flex items-center justify-between p-4 bg-surface-secondary/50 border-b border-border mb-6 -mx-7 -mt-7">
+        <div>
+          <h3 className="text-lg font-semibold text-txt-primary">Security Settings</h3>
+          <p className="text-sm text-txt-secondary mt-0.5">
+            Configure global security policies and authentication methods.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <div>
+          <h4 className="text-sm font-semibold text-txt-primary uppercase tracking-wider mb-4">Authentication Methods</h4>
+          <div className="space-y-5">
+            <div className="form-group">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={localAuthEnabled}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    if (!val && !ssoEnabled) return; // Prevent disabling both
+                    setLocalAuthEnabled(val);
+                  }}
+                  className="checkbox"
+                />
+                <div>
+                  <span className="font-medium group-hover:text-txt-primary transition-colors">Local Authentication</span>
+                  <p className="text-txt-secondary text-sm mt-0.5">
+                    Allow users to log in with a username and password stored in the local database.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            <div className="form-group">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={ssoEnabled}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    if (!val && !localAuthEnabled) return; // Prevent disabling both
+                    setSsoEnabled(val);
+                  }}
+                  className="checkbox"
+                />
+                <div>
+                  <span className="font-medium group-hover:text-txt-primary transition-colors">SSO / OIDC (Keycloak)</span>
+                  <p className="text-txt-secondary text-sm mt-0.5">
+                    Enable Single Sign-On via OpenID Connect. Ensure you have configured the provider settings in the SSO tab.
+                  </p>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div className="pt-6 border-t border-border/10">
+          <h4 className="text-sm font-semibold text-txt-primary uppercase tracking-wider mb-4">Session Protection</h4>
+          <div className="form-group">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={watermarkEnabled}
+                onChange={(e) => setWatermarkEnabled(e.target.checked)}
+                className="checkbox"
+              />
+              <div>
+                <span className="font-medium group-hover:text-txt-primary transition-colors">Session Watermark</span>
+                <p className="text-txt-secondary text-sm mt-0.5">
+                  Overlay a semi-transparent watermark on all active sessions showing the user's name,
+                  IP address, and timestamp. Helps deter unauthorized screen capture.
+                </p>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-8 pt-6 border-t border-border/10">
+        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving…' : 'Save Security Settings'}
+        </button>
+      </div>
     </div>
   );
 }

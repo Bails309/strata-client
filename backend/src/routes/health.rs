@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::config::DatabaseMode;
 use crate::services::app_state::{BootPhase, SharedState};
+use crate::services::settings;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -17,29 +18,34 @@ pub async fn health_check() -> Json<HealthResponse> {
 #[derive(Serialize)]
 pub struct StatusResponse {
     pub phase: String,
-    pub database_connected: bool,
-    pub vault_configured: bool,
+    pub sso_enabled: bool,
+    pub local_auth_enabled: bool,
 }
 
 pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
     let s = state.read().await;
-    let db_connected = if let Some(ref db) = s.db {
-        crate::db::pool::check(&db.pool).await
-    } else {
-        false
-    };
 
-    let vault_configured = s.config.as_ref()
-        .and_then(|c| c.vault.as_ref())
-        .is_some();
+    let (sso, local) = if let Some(ref db) = s.db {
+        let sso = settings::get(&db.pool, "sso_enabled").await
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let local = settings::get(&db.pool, "local_auth_enabled").await
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(true); // Default to local auth enabled
+        (sso, local)
+    } else {
+        (false, true)
+    };
 
     Json(StatusResponse {
         phase: match s.phase {
             BootPhase::Setup => "setup".into(),
             BootPhase::Running => "running".into(),
         },
-        database_connected: db_connected,
-        vault_configured,
+        sso_enabled: sso,
+        local_auth_enabled: local,
     })
 }
 
@@ -146,4 +152,80 @@ async fn check_tcp(host: &str, port: u16) -> bool {
     .await
     .map(|r| r.is_ok())
     .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_db_url_strips_credentials() {
+        let url = "postgresql://admin:s3cret@db.example.com:5432/strata";
+        assert_eq!(sanitize_db_url(url), "db.example.com:5432/strata");
+    }
+
+    #[test]
+    fn sanitize_db_url_no_credentials() {
+        let url = "db.example.com:5432/strata";
+        assert_eq!(sanitize_db_url(url), url);
+    }
+
+    #[test]
+    fn sanitize_db_url_at_sign_in_password() {
+        let url = "postgresql://user:p%40ss@host:5432/db";
+        // rfind('@') finds the last @, which is the delimiter
+        assert_eq!(sanitize_db_url(url), "host:5432/db");
+    }
+
+    #[test]
+    fn health_response_serializes() {
+        let resp = HealthResponse { status: "ok" };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[test]
+    fn status_response_serializes() {
+        let resp = StatusResponse {
+            phase: "running".into(),
+            sso_enabled: true,
+            local_auth_enabled: false,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["phase"], "running");
+        assert_eq!(json["sso_enabled"], true);
+        assert_eq!(json["local_auth_enabled"], false);
+    }
+
+    #[test]
+    fn service_health_serializes() {
+        let health = ServiceHealth {
+            database: DatabaseHealth {
+                connected: true,
+                mode: "local".into(),
+                host: "localhost:5432/strata".into(),
+            },
+            guacd: GuacdHealth {
+                reachable: false,
+                host: "guacd".into(),
+                port: 4822,
+            },
+            vault: VaultHealth {
+                configured: true,
+                address: "http://vault:8200".into(),
+                mode: "local".into(),
+            },
+        };
+        let json = serde_json::to_value(&health).unwrap();
+        assert_eq!(json["database"]["connected"], true);
+        assert_eq!(json["guacd"]["port"], 4822);
+        assert_eq!(json["vault"]["mode"], "local");
+    }
+
+    #[tokio::test]
+    async fn check_tcp_unreachable_returns_false() {
+        // Connect to a port that's almost certainly not listening
+        let result = check_tcp("127.0.0.1", 19999).await;
+        assert!(!result);
+    }
 }

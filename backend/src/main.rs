@@ -66,6 +66,22 @@ async fn main() -> anyhow::Result<()> {
     // ── Ensure default admin account exists ──
     ensure_default_admin(&db).await?;
 
+    // ── Resolve JWT signing secret ──
+    // Priority: JWT_SECRET env → persisted config → generate new random secret.
+    let jwt_secret = std::env::var("JWT_SECRET").ok()
+        .or_else(|| persisted.as_ref().and_then(|c| c.jwt_secret.clone()))
+        .unwrap_or_else(|| {
+            use base64::Engine;
+            let mut key = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+            let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
+            tracing::info!("Generated new JWT signing secret (persisted to config)");
+            secret
+        });
+    // Publish to process-wide OnceLock so auth/middleware can read it
+    config::JWT_SECRET.set(jwt_secret.clone())
+        .expect("JWT_SECRET already initialized");
+
     // ── Auto-unseal bundled Vault on startup ──
     if let Some(ref v) = vault {
         if v.mode == VaultMode::Local {
@@ -98,23 +114,24 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("guacd pool: {} instances configured", guacd_pool.len());
     }
 
-    // ── Persist config ──
+    // ── Persist config (secrets are skip_serializing — only safe fields go to disk) ──
     let cfg = AppConfig {
         database_url: db_url,
         database_mode: db_mode,
-        vault,
+        vault: vault.clone(),
         guacd_host: Some(guacd_host),
         guacd_port: Some(guacd_port),
         guacd_instances,
+        jwt_secret: Some(jwt_secret.clone()),
     };
     cfg.save(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to save config: {e}"))?;
 
     // ── Spawn recording sync background task ──
-    services::recordings::spawn_sync_task(db.pool.clone());
+    services::recordings::spawn_sync_task(db.pool.clone(), vault.clone());
 
     // ── Spawn AD sync scheduler ──
-    services::ad_sync::spawn_sync_scheduler(db.pool.clone());
+    services::ad_sync::spawn_sync_scheduler(db.pool.clone(), vault.clone());
 
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
@@ -136,12 +153,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Resolve Vault config from env vars, falling back to persisted config.
+/// Token and unseal_key are always resolved from env (never written to disk).
 fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
     let addr = std::env::var("VAULT_ADDR").ok();
     let token = std::env::var("VAULT_TOKEN").ok();
     let key = std::env::var("VAULT_TRANSIT_KEY").ok();
 
-    match (addr, token, key) {
+    match (addr, token.clone(), key) {
         (Some(a), Some(t), Some(k)) => Some(VaultConfig {
             address: a,
             token: t,
@@ -149,7 +167,19 @@ fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
             mode: VaultMode::External,
             unseal_key: None,
         }),
-        _ => persisted.as_ref().and_then(|c| c.vault.clone()),
+        _ => {
+            // Fall back to persisted config for address/transit_key/mode.
+            // Token and unseal_key come from env if available, else from persisted (legacy compat).
+            persisted.as_ref().and_then(|c| c.vault.clone()).map(|mut v| {
+                if let Ok(t) = std::env::var("VAULT_TOKEN") {
+                    v.token = t;
+                }
+                if let Ok(uk) = std::env::var("VAULT_UNSEAL_KEY") {
+                    v.unseal_key = Some(uk);
+                }
+                v
+            })
+        }
     }
 }
 
@@ -168,7 +198,13 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
     }
 
     let username = std::env::var("DEFAULT_ADMIN_USERNAME").unwrap_or_else(|_| "admin".into());
-    let password = std::env::var("DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| "admin".into());
+    let password = std::env::var("DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| {
+        // Generate a random 16-character password for first boot
+        use base64::Engine;
+        let mut buf = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+    });
 
     // Hash the password with Argon2
     let salt = argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
@@ -195,7 +231,11 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
     .await?;
 
     tracing::info!("Default admin account created (username: {username})");
-    tracing::warn!("⚠ Change the default admin password after first login!");
+    tracing::warn!("╔════════════════════════════════════════════════════════════╗");
+    tracing::warn!("║  A default admin password has been generated.             ║");
+    tracing::warn!("║  Set DEFAULT_ADMIN_PASSWORD env var to control it,        ║");
+    tracing::warn!("║  or change it immediately after first login.              ║");
+    tracing::warn!("╚════════════════════════════════════════════════════════════╝");
 
     Ok(())
 }

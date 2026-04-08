@@ -24,12 +24,38 @@ const MAX_BUFFER_BYTES: usize = 50 * 1024 * 1024;
 /// typical frame rates (~30–60 fps × multi-instruction batches).
 const BROADCAST_CAPACITY: usize = 8192;
 
+/// Maximum number of concurrent sessions allowed.
+const MAX_SESSIONS: usize = 500;
+
 // ── Timestamped frame ──────────────────────────────────────────────
 
 struct BufferedFrame {
     timestamp: Instant,
     data: String,
     byte_size: usize,
+}
+
+// ── Credential filtering ───────────────────────────────────────────
+
+/// Filter out Guacamole instructions that could contain credentials.
+/// Instructions like `connect` and `args` carry authentication data and
+/// must not be stored in the NVR ring buffer.
+fn filter_sensitive_instructions(data: &str) -> String {
+    // Sensitive instruction opcodes that may carry credentials
+    const SENSITIVE_OPCODES: &[&str] = &[".connect,", ".args,"];
+
+    let mut filtered = String::with_capacity(data.len());
+    for inst in data.split_inclusive(';') {
+        let trimmed = inst.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let is_sensitive = SENSITIVE_OPCODES.iter().any(|op| trimmed.contains(op));
+        if !is_sensitive {
+            filtered.push_str(inst);
+        }
+    }
+    filtered
 }
 
 // ── Per-session ring buffer ────────────────────────────────────────
@@ -53,15 +79,23 @@ impl SessionBuffer {
     }
 
     /// Append a chunk of Guacamole instructions to the buffer.
+    /// Filters out instructions that may contain credentials (connect, args)
+    /// to prevent credential leakage through NVR replay.
     pub fn push(&mut self, data: String) {
-        let byte_size = data.len();
+        // Filter out credential-bearing instructions from the NVR buffer
+        let filtered = filter_sensitive_instructions(&data);
+        if filtered.is_empty() {
+            return;
+        }
+
+        let byte_size = filtered.len();
 
         // Cache the most recent `size` instruction so we can inject it on
         // replay even if the original has been evicted from the buffer.
         // A `size` instruction looks like: `4.size,1.0,4.1920,4.1080;`
-        if data.contains(".size,") {
+        if filtered.contains(".size,") {
             // Extract just the size instruction(s) from the chunk
-            for inst in data.split(';') {
+            for inst in filtered.split(';') {
                 let trimmed = inst.trim();
                 if !trimmed.is_empty() && trimmed.contains(".size,") {
                     self.last_size_instruction = Some(format!("{trimmed};"));
@@ -71,7 +105,7 @@ impl SessionBuffer {
 
         self.frames.push_back(BufferedFrame {
             timestamp: Instant::now(),
-            data,
+            data: filtered,
             byte_size,
         });
         self.total_bytes += byte_size;
@@ -171,6 +205,7 @@ impl SessionRegistry {
 
     /// Register a new session and return the broadcast sender + buffer
     /// handle for the tunnel proxy to use.
+    /// Returns `None` if the maximum session limit has been reached.
     pub async fn register(
         &self,
         session_id: String,
@@ -179,7 +214,16 @@ impl SessionRegistry {
         protocol: String,
         user_id: Uuid,
         username: String,
-    ) -> (broadcast::Sender<Arc<String>>, Arc<RwLock<SessionBuffer>>) {
+    ) -> Option<(broadcast::Sender<Arc<String>>, Arc<RwLock<SessionBuffer>>)> {
+        // Use a single write lock for atomic check-and-insert (no TOCTOU)
+        let mut sessions = self.sessions.write().await;
+        if sessions.len() >= MAX_SESSIONS {
+            tracing::warn!(
+                "Session limit reached ({MAX_SESSIONS}), rejecting new session for user {username}"
+            );
+            return None;
+        }
+
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let buffer = Arc::new(RwLock::new(SessionBuffer::new()));
 
@@ -197,8 +241,8 @@ impl SessionRegistry {
             bytes_to_guacd: AtomicU64::new(0),
         });
 
-        self.sessions.write().await.insert(session_id, session);
-        (tx, buffer)
+        sessions.insert(session_id, session);
+        Some((tx, buffer))
     }
 
     /// Remove a session from the registry (called when the tunnel closes).
@@ -265,4 +309,116 @@ pub struct MetricsSummary {
     pub total_bytes_to_guacd: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
     pub guacd_pool_size: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_removes_connect_instructions() {
+        let input = "5.ready,1.0;7.connect,3.rdp,10.myhost.com;4.size,1.0,4.1920,4.1080;";
+        let result = filter_sensitive_instructions(input);
+        assert!(!result.contains(".connect,"));
+        assert!(result.contains(".size,"));
+        assert!(result.contains(".ready,"));
+    }
+
+    #[test]
+    fn filter_removes_args_instructions() {
+        let input = "4.args,1.0,8.username,8.password;4.size,1.0,4.1920,4.1080;";
+        let result = filter_sensitive_instructions(input);
+        assert!(!result.contains(".args,"));
+        assert!(result.contains(".size,"));
+    }
+
+    #[test]
+    fn filter_preserves_normal_instructions() {
+        let input = "4.size,1.0,4.1920,4.1080;3.img,1.0,2.12,1.0,1.0,3.100,3.100;";
+        let result = filter_sensitive_instructions(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn filter_handles_empty_input() {
+        assert_eq!(filter_sensitive_instructions(""), "");
+    }
+
+    #[test]
+    fn session_buffer_evicts_by_size() {
+        let mut buf = SessionBuffer::new();
+        // Push data exceeding MAX_BUFFER_BYTES
+        let large_chunk = "x".repeat(10 * 1024 * 1024); // 10MB
+        for _ in 0..6 {
+            buf.push(large_chunk.clone());
+        }
+        // Total should be capped around MAX_BUFFER_BYTES
+        assert!(buf.total_bytes <= MAX_BUFFER_BYTES + large_chunk.len());
+    }
+
+    #[test]
+    fn session_buffer_caches_last_size() {
+        let mut buf = SessionBuffer::new();
+        buf.push("4.size,1.0,4.1920,4.1080;".to_string());
+        assert_eq!(buf.last_size(), Some("4.size,1.0,4.1920,4.1080;"));
+
+        buf.push("3.img,1.0,2.12,1.0,1.0;".to_string());
+        // Size should still be cached
+        assert_eq!(buf.last_size(), Some("4.size,1.0,4.1920,4.1080;"));
+    }
+
+    #[test]
+    fn buffer_depth_empty() {
+        let buf = SessionBuffer::new();
+        assert_eq!(buf.buffer_depth_secs(), 0);
+    }
+
+    #[tokio::test]
+    async fn registry_register_and_unregister() {
+        let registry = SessionRegistry::new();
+        let session_id = "test-session-1".to_string();
+        let conn_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+
+        let result = registry
+            .register(
+                session_id.clone(),
+                conn_id,
+                "TestConn".into(),
+                "rdp".into(),
+                user_id,
+                "admin".into(),
+            )
+            .await;
+        assert!(result.is_some());
+
+        let sessions = registry.list().await;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "test-session-1");
+        assert_eq!(sessions[0].protocol, "rdp");
+
+        registry.unregister(&session_id).await;
+        let sessions = registry.list().await;
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_get_session() {
+        let registry = SessionRegistry::new();
+        let session_id = "test-get-session".to_string();
+
+        registry
+            .register(
+                session_id.clone(),
+                Uuid::new_v4(),
+                "Conn".into(),
+                "vnc".into(),
+                Uuid::new_v4(),
+                "user".into(),
+            )
+            .await;
+
+        assert!(registry.get(&session_id).await.is_some());
+        assert!(registry.get("nonexistent").await.is_none());
+    }
 }

@@ -35,7 +35,14 @@ pub async fn require_auth(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
-    // Extract Bearer token from Authorization header, or from ?token= query param (WebSocket)
+    // Extract Bearer token from Authorization header, or from ?token= query param (WebSocket upgrade only)
+    let is_ws_upgrade = req
+        .headers()
+        .get(http::header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+
     let token = req
         .headers()
         .get(http::header::AUTHORIZATION)
@@ -43,6 +50,10 @@ pub async fn require_auth(
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string())
         .or_else(|| {
+            // Only allow ?token= for WebSocket upgrade requests
+            if !is_ws_upgrade {
+                return None;
+            }
             req.uri()
                 .query()
                 .and_then(|q| {
@@ -60,6 +71,11 @@ pub async fn require_auth(
         // Fall back to OIDC validation
         validate_oidc_token(&token, &db).await?
     };
+
+    // Check if the token has been revoked (logout)
+    if crate::services::token_revocation::is_revoked(&token) {
+        return Err(AppError::Auth("Token has been revoked".into()));
+    }
 
     req.extensions_mut().insert(auth_user);
     Ok(next.run(req).await)
@@ -83,8 +99,10 @@ async fn try_local_jwt(
         iss: String,
     }
 
-    let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "strata-local-dev-secret-change-me".into());
+    let secret = match crate::config::JWT_SECRET.get() {
+        Some(s) => s.clone(),
+        None => return Ok(None),
+    };
 
     let mut validation = Validation::new(Algorithm::HS256);
     validation.set_issuer(&["strata-local"]);
@@ -190,4 +208,37 @@ pub async fn require_admin(
     }
 
     Ok(next.run(req).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_user_clone() {
+        let user = AuthUser {
+            id: Uuid::new_v4(),
+            sub: "sub-123".into(),
+            username: "alice".into(),
+            role: "admin".into(),
+        };
+        let cloned = user.clone();
+        assert_eq!(user.id, cloned.id);
+        assert_eq!(user.username, cloned.username);
+        assert_eq!(user.role, cloned.role);
+        assert_eq!(user.sub, cloned.sub);
+    }
+
+    #[test]
+    fn auth_user_debug() {
+        let user = AuthUser {
+            id: Uuid::nil(),
+            sub: "sub".into(),
+            username: "bob".into(),
+            role: "user".into(),
+        };
+        let debug = format!("{:?}", user);
+        assert!(debug.contains("bob"));
+        assert!(debug.contains("user"));
+    }
 }

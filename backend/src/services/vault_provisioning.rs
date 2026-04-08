@@ -257,3 +257,80 @@ pub async fn provision(
 
     Ok(init_result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vault_init_result_clone() {
+        let result = VaultInitResult {
+            root_token: "s.roottoken".into(),
+            unseal_key: "unseal-key-123".into(),
+        };
+        let cloned = result.clone();
+        assert_eq!(result.root_token, cloned.root_token);
+        assert_eq!(result.unseal_key, cloned.unseal_key);
+    }
+
+    #[test]
+    fn vault_init_result_debug() {
+        let result = VaultInitResult {
+            root_token: "s.root".into(),
+            unseal_key: "key".into(),
+        };
+        let debug = format!("{:?}", result);
+        assert!(debug.contains("root"));
+    }
+
+    #[test]
+    fn init_request_serializes() {
+        let req = InitRequest {
+            secret_shares: 1,
+            secret_threshold: 1,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["secret_shares"], 1);
+        assert_eq!(json["secret_threshold"], 1);
+    }
+
+    #[test]
+    fn init_response_deserializes() {
+        let json = r#"{"keys":["abc123"],"root_token":"s.token"}"#;
+        let resp: InitResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.root_token, "s.token");
+        assert_eq!(resp.keys.len(), 1);
+    }
+
+    #[test]
+    fn unseal_request_serializes() {
+        let req = UnsealRequest {
+            key: "my-unseal-key".into(),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["key"], "my-unseal-key");
+    }
+
+    #[test]
+    fn unseal_response_deserializes() {
+        let json = r#"{"sealed":false}"#;
+        let resp: UnsealResponse = serde_json::from_str(json).unwrap();
+        assert!(!resp.sealed);
+    }
+
+    #[test]
+    fn health_response_deserializes() {
+        let json = r#"{"initialized":true,"sealed":false}"#;
+        let resp: HealthResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.initialized);
+        assert!(!resp.sealed);
+    }
+
+    #[test]
+    fn mounts_response_deserializes() {
+        let json = r#"{"data":{"transit/":{"type":"transit"},"secret/":{"type":"kv"}}}"#;
+        let resp: MountsResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.data.contains_key("transit/"));
+        assert!(resp.data.contains_key("secret/"));
+    }
+}

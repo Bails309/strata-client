@@ -2,12 +2,16 @@ use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{AppConfig, DatabaseMode, VaultConfig, VaultMode};
 use crate::db::Database;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::vault_provisioning;
+
+/// Guard to prevent concurrent initialization attempts.
+static INITIALIZING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Deserialize)]
 pub struct InitRequest {
@@ -24,13 +28,23 @@ pub async fn initialize(
     State(state): State<SharedState>,
     Json(body): Json<InitRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Only allow during setup phase
+    // Atomically check+transition with a write lock to prevent race conditions
     {
         let s = state.read().await;
         if s.phase != BootPhase::Setup {
             return Err(AppError::Config("System is already initialized".into()));
         }
     }
+
+    // Atomic compare-and-swap to prevent concurrent initialization
+    if INITIALIZING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Err(AppError::Config("Initialization already in progress".into()));
+    }
+
+    // Ensure we reset the flag on any exit path
+    let _guard = scopeguard::guard((), |_| {
+        INITIALIZING.store(false, Ordering::SeqCst);
+    });
 
     // Determine database URL from environment variable
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -124,6 +138,7 @@ pub async fn initialize(
         guacd_host: Some(guacd_host),
         guacd_port: Some(guacd_port),
         guacd_instances,
+        jwt_secret: std::env::var("JWT_SECRET").ok(),
     };
 
     cfg.save(&AppConfig::config_path())
@@ -139,4 +154,39 @@ pub async fn initialize(
 
     tracing::info!("Initialization complete – system is now running");
     Ok(Json(json!({ "status": "initialized" })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_request_minimal() {
+        let r: InitRequest = serde_json::from_str("{}").unwrap();
+        assert!(r.vault_mode.is_none());
+        assert!(r.vault_address.is_none());
+        assert!(r.vault_token.is_none());
+        assert!(r.vault_transit_key.is_none());
+    }
+
+    #[test]
+    fn init_request_local_vault() {
+        let json = r#"{"vault_mode":"local"}"#;
+        let r: InitRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.vault_mode.as_deref().unwrap(), "local");
+    }
+
+    #[test]
+    fn init_request_external_vault() {
+        let json = r#"{
+            "vault_mode":"external",
+            "vault_address":"https://vault.corp:8200",
+            "vault_token":"hvs.1234",
+            "vault_transit_key":"my-key"
+        }"#;
+        let r: InitRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.vault_mode.as_deref().unwrap(), "external");
+        assert_eq!(r.vault_address.as_deref().unwrap(), "https://vault.corp:8200");
+        assert_eq!(r.vault_token.as_deref().unwrap(), "hvs.1234");
+    }
 }

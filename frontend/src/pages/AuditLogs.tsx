@@ -29,12 +29,12 @@ export default function AuditLogs() {
             {logs.map((log) => (
               <tr key={log.id}>
                 <td>{log.id}</td>
-                <td className="text-[0.8rem]">{new Date(log.created_at).toLocaleString()}</td>
+                <td className="text-[0.8rem]">{new Date(log.created_at).toLocaleString('en-GB')}</td>
                 <td>
                   <span className="badge badge-success">{log.action_type}</span>
                 </td>
-                <td className="font-mono text-xs">
-                  {log.user_id?.slice(0, 8) || '—'}
+                <td className="text-sm">
+                  {log.username || (log.user_id ? log.user_id.slice(0, 8) : '—')}
                 </td>
                 <td className="text-[0.8rem] max-w-[300px] overflow-hidden text-ellipsis">
                   {JSON.stringify(log.details)}

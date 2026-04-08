@@ -117,7 +117,7 @@ function SessionThumbnail({
     capture();
     intervalRef.current = setInterval(capture, 2000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [session]);
+  }, [session.id, session.displayEl]);
 
   return (
     <div

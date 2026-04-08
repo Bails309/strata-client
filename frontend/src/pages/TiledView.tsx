@@ -4,12 +4,13 @@ import { useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
+import SessionWatermark from '../components/SessionWatermark';
 
 /**
  * Computes a grid layout (cols × rows) to best fill the available space
  * for `n` tiles, minimizing wasted area.
  */
-function computeGrid(n: number): { cols: number; rows: number } {
+export function computeGrid(n: number): { cols: number; rows: number } {
   if (n <= 0) return { cols: 1, rows: 1 };
   const cols = Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
@@ -185,6 +186,7 @@ export default function TiledView() {
           onSubmitCreds={(creds) => submitTileCreds(session.id, creds)}
         />
       ))}
+      <SessionWatermark />
     </div>,
     document.getElementById('root')!,
   );

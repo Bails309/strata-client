@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { getConnectionInfo, getConnections } from '../api';
+import { getConnectionInfo, getConnections, createTunnelTicket } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
+import { usePopOut } from '../components/usePopOut';
 import SessionToolbar from '../components/SessionToolbar';
+import SessionWatermark from '../components/SessionWatermark';
 import TouchToolbar from '../components/TouchToolbar';
 
 /*
@@ -16,11 +18,21 @@ import TouchToolbar from '../components/TouchToolbar';
  */
 type Phase = 'loading' | 'prompt' | 'connected';
 
+/** Reconnection state (null = not reconnecting) */
+interface ReconnectState {
+  attempt: number;
+  maxAttempts: number;
+}
+
+const RECONNECT_MAX_ATTEMPTS = 10;
+const RECONNECT_BASE_DELAY = 1000; // 1 second
+const RECONNECT_MAX_DELAY = 30000; // 30 seconds
+
 export default function SessionClient() {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sessions, activeSessionId, setActiveSessionId, createSession, getSession } = useSessionManager();
+  const { sessions, activeSessionId, setActiveSessionId, createSession, closeSession, getSession } = useSessionManager();
   const sidebarWidth = useSidebarWidth();
 
   const [phase, setPhase] = useState<Phase>('loading');
@@ -32,6 +44,9 @@ export default function SessionClient() {
   const [hasDomain, setHasDomain] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string }>({ username: '', password: '' });
   const containerFocusedRef = useRef(false);
+  const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
+  const userDisconnectRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [barHeight, setBarHeight] = useState(0);
 
@@ -39,6 +54,8 @@ export default function SessionClient() {
   const currentSession = sessions.find(
     (s) => s.connectionId === connectionId && s.id === activeSessionId
   ) || sessions.find((s) => s.connectionId === connectionId);
+
+  const { isPoppedOut, popOut, returnDisplay } = usePopOut(currentSession, containerRef);
 
   // ── Observe session bar height to offset the session container ──
   useEffect(() => {
@@ -99,6 +116,101 @@ export default function SessionClient() {
     setPhase('connected');
   }, [credForm]);
 
+  // ── Auto-reconnect: attempt to re-establish a dropped session ──
+  const attemptReconnect = useCallback((attempt: number) => {
+    if (!connectionId || !containerRef.current || userDisconnectRef.current) return;
+
+    setReconnecting({ attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS });
+    setError('');
+
+    const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(2, attempt - 1), RECONNECT_MAX_DELAY);
+
+    reconnectTimerRef.current = setTimeout(async () => {
+      if (userDisconnectRef.current) return;
+      const container = containerRef.current;
+      if (!container) return;
+
+      try {
+        const token = localStorage.getItem('access_token') || '';
+        const dpr = window.devicePixelRatio || 1;
+
+        const resp = await createTunnelTicket({
+          connection_id: connectionId,
+          width: container.clientWidth,
+          height: container.clientHeight,
+          dpi: Math.round(96 * dpr),
+        });
+
+        if (userDisconnectRef.current) return;
+
+        const connectParams = new URLSearchParams();
+        connectParams.set('token', token);
+        connectParams.set('ticket', resp.ticket);
+        connectParams.set('width', String(container.clientWidth));
+        connectParams.set('height', String(container.clientHeight));
+        connectParams.set('dpi', String(Math.round(96 * dpr)));
+
+        const session = createSession({
+          connectionId,
+          name: connectionName || protocol.toUpperCase(),
+          protocol,
+          containerEl: container,
+          connectParams,
+        });
+
+        wireSessionErrorHandlers(session, attempt);
+        attachSession(session, container);
+        setReconnecting(null);
+      } catch {
+        if (attempt >= RECONNECT_MAX_ATTEMPTS) {
+          setReconnecting(null);
+          setError('Connection lost. Automatic reconnection failed after multiple attempts.');
+        } else {
+          attemptReconnect(attempt + 1);
+        }
+      }
+    }, delay);
+  }, [connectionId, connectionName, protocol, createSession]);
+
+  // ── Wire error/close handlers onto a session for reconnection ──
+  const wireSessionErrorHandlers = useCallback((session: GuacSession, _prevAttempt?: number) => {
+    const handleUnexpectedClose = () => {
+      if (userDisconnectRef.current) return;
+      // Clean up the dead session from the manager
+      closeSession(session.id);
+      attemptReconnect(1);
+    };
+
+    session.tunnel.onstatechange = (state: number) => {
+      if (state === Guacamole.Tunnel.CLOSED && !userDisconnectRef.current) {
+        handleUnexpectedClose();
+      }
+    };
+
+    session.tunnel.onerror = (status: Guacamole.Status) => {
+      session.error = status.message || 'Connection failed';
+      if (!userDisconnectRef.current) {
+        handleUnexpectedClose();
+      } else {
+        setError(`Tunnel error: ${session.error}`);
+      }
+    };
+
+    session.client.onerror = (status: Guacamole.Status) => {
+      session.error = status.message || 'Connection failed';
+      // Client errors during an active session trigger reconnection
+      if (!userDisconnectRef.current && phase === 'connected') {
+        handleUnexpectedClose();
+      } else {
+        setError(`Error: ${session.error}`);
+      }
+    };
+
+    session.client.onrequired = (parameters: string[]) => {
+      setSshRequired(parameters);
+    };
+  }, [closeSession, attemptReconnect, phase]);
+
   // ── Phase 3: Create or attach session ──
   useEffect(() => {
     if (phase !== 'connected' || !connectionId || !containerRef.current) return;
@@ -112,19 +224,37 @@ export default function SessionClient() {
     const container = containerRef.current;
 
     // Defer to next frame so the fixed-position portal container has its final layout dimensions.
-    const raf = requestAnimationFrame(() => {
+    let cancelled = false;
+    const raf = requestAnimationFrame(async () => {
       const token = localStorage.getItem('access_token') || '';
       const dpr = window.devicePixelRatio || 1;
+      const creds = pendingCredsRef.current;
+
+      // Obtain a one-time tunnel ticket so credentials never appear in the WebSocket URL
+      let ticketId: string | undefined;
+      try {
+        const resp = await createTunnelTicket({
+          connection_id: connectionId,
+          username: creds.username || undefined,
+          password: creds.password || undefined,
+          width: container.clientWidth,
+          height: container.clientHeight,
+          dpi: Math.round(96 * dpr),
+        });
+        ticketId = resp.ticket;
+      } catch {
+        if (!cancelled) setError('Failed to create tunnel ticket');
+        return;
+      }
+
+      if (cancelled) return;
 
       const connectParams = new URLSearchParams();
       connectParams.set('token', token);
+      connectParams.set('ticket', ticketId);
       connectParams.set('width', String(container.clientWidth));
       connectParams.set('height', String(container.clientHeight));
       connectParams.set('dpi', String(Math.round(96 * dpr)));
-
-      const creds = pendingCredsRef.current;
-      if (creds.username) connectParams.set('username', creds.username);
-      if (creds.password) connectParams.set('password', creds.password);
 
       const session = createSession({
         connectionId,
@@ -134,17 +264,7 @@ export default function SessionClient() {
         connectParams,
       });
 
-      session.tunnel.onerror = (status: Guacamole.Status) => {
-        session.error = status.message || 'Connection failed';
-        setError(`Tunnel error: ${session.error}`);
-      };
-      session.client.onerror = (status: Guacamole.Status) => {
-        session.error = status.message || 'Connection failed';
-        setError(`Error: ${session.error}`);
-      };
-      session.client.onrequired = (parameters: string[]) => {
-        setSshRequired(parameters);
-      };
+      wireSessionErrorHandlers(session);
 
       pendingCredsRef.current = { username: '', password: '' };
       setCredForm({ username: '', password: '', domain: '' });
@@ -152,8 +272,8 @@ export default function SessionClient() {
       attachSession(session, container);
     });
 
-    return () => cancelAnimationFrame(raf);
-  }, [phase, connectionId, protocol, connectionName, createSession, getSession]);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  }, [phase, connectionId, protocol, connectionName, createSession, getSession, wireSessionErrorHandlers]);
 
   // Re-attach when switching back to an existing session
   useEffect(() => {
@@ -266,6 +386,17 @@ export default function SessionClient() {
     };
   }, [currentSession]);
 
+  // Cleanup reconnect timer on unmount and mark user-initiated disconnect
+  useEffect(() => {
+    return () => {
+      userDisconnectRef.current = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // SSH runtime credentials
   const submitSshCredentials = useCallback(() => {
     if (!currentSession || !sshRequired) return;
@@ -315,21 +446,69 @@ export default function SessionClient() {
         }}
       />
 
-      {/* Session toolbar — share & file browser */}
+      {/* Session toolbar — share, file browser, pop-out */}
       {currentSession && connectionId && (
         <>
-          <SessionToolbar session={currentSession} connectionId={connectionId} />
+          <SessionToolbar
+            session={currentSession}
+            connectionId={connectionId}
+            isPoppedOut={isPoppedOut}
+            onPopOut={popOut}
+            onPopIn={returnDisplay}
+          />
           <TouchToolbar client={currentSession.client} />
+          <SessionWatermark />
         </>
       )}
 
-      {phase === 'loading' && !error && (
+      {/* Pop-out placeholder */}
+      {isPoppedOut && (
+        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(0,0,0,0.9)' }}>
+          <div className="card max-w-[400px] text-center !p-8">
+            <div className="text-3xl mb-3">🖥️</div>
+            <h3 className="text-lg font-semibold mb-2">Session Popped Out</h3>
+            <p className="text-txt-secondary text-sm mb-4">
+              This session is displayed in a separate window. Close that window or click below to return it here.
+            </p>
+            <button className="btn-primary" onClick={returnDisplay}>Return to Main Window</button>
+          </div>
+        </div>
+      )}
+
+      {phase === 'loading' && !error && !reconnecting && (
         <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
           <p className="text-gray-500">Loading connection…</p>
         </div>
       )}
 
-      {error && !sshRequired && phase !== 'prompt' && (
+      {/* Reconnecting overlay */}
+      {reconnecting && (
+        <div className="absolute inset-0 flex items-center justify-center z-20" style={{ background: 'rgba(0,0,0,0.85)' }}>
+          <div className="card max-w-[400px] text-center !p-8">
+            <div className="mb-4">
+              <svg className="animate-spin h-10 w-10 mx-auto text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Reconnecting…</h3>
+            <p className="text-txt-secondary text-sm mb-4">
+              Connection lost. Attempting to reconnect ({reconnecting.attempt}/{reconnecting.maxAttempts})
+            </p>
+            <button className="btn text-sm" onClick={() => {
+              userDisconnectRef.current = true;
+              if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+              }
+              setReconnecting(null);
+              setError('Connection lost. Reconnection cancelled.');
+            }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {error && !reconnecting && !sshRequired && phase !== 'prompt' && (
         <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(0,0,0,0.85)' }}>
           <div className="card max-w-[400px] text-center !p-8">
             <div className="text-3xl mb-2">⚠</div>

@@ -501,7 +501,20 @@ html.light .recent-card-btn:hover {
   }
   .btn-ghost:active { opacity: 0.85; }
   .btn-ghost:disabled {
-    @apply opacity-40 cursor-not-allowed;
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-danger-outline {
+    @apply flex items-center justify-center rounded-sm border border-danger/20 text-danger/80 bg-danger/5 transition-all duration-150;
+  }
+
+  .btn-danger-outline:hover {
+    @apply border-danger/40 text-danger bg-danger/10;
+  }
+
+  .btn-danger-outline:active {
+    @apply scale-[0.98] opacity-80;
   }
 
   /* Cards — clean elevation with subtle top highlight */

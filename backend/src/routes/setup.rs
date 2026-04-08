@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::{AppConfig, DatabaseMode, VaultConfig, VaultMode};
+use crate::config::{AppConfig, DatabaseMode, LocalVaultSecrets, VaultConfig, VaultMode};
 use crate::db::Database;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
@@ -89,6 +89,18 @@ pub async fn initialize(
                     ));
                 }
             };
+
+            // Persist local vault secrets so they survive container restarts
+            if let Some(ref uk) = unseal_key {
+                if let Err(e) = (LocalVaultSecrets {
+                    token: token.clone(),
+                    unseal_key: uk.clone(),
+                })
+                .save()
+                {
+                    tracing::warn!("Failed to persist vault secrets: {e}");
+                }
+            }
 
             Some(VaultConfig {
                 address,

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::config::{AppConfig, DatabaseMode, VaultConfig, VaultMode};
+use crate::config::{AppConfig, DatabaseMode, LocalVaultSecrets, VaultConfig, VaultMode};
 use crate::db::Database;
 use crate::services::app_state::{AppState, BootPhase};
 
@@ -153,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Resolve Vault config from env vars, falling back to persisted config.
-/// Token and unseal_key are always resolved from env (never written to disk).
+/// For local vault mode, secrets are loaded from the vault-secrets file.
 fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
     let addr = std::env::var("VAULT_ADDR").ok();
     let token = std::env::var("VAULT_TOKEN").ok();
@@ -169,14 +169,29 @@ fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
         }),
         _ => {
             // Fall back to persisted config for address/transit_key/mode.
-            // Token and unseal_key come from env if available, else from persisted (legacy compat).
             persisted.as_ref().and_then(|c| c.vault.clone()).map(|mut v| {
+                // Env vars take highest priority
                 if let Ok(t) = std::env::var("VAULT_TOKEN") {
                     v.token = t;
                 }
                 if let Ok(uk) = std::env::var("VAULT_UNSEAL_KEY") {
                     v.unseal_key = Some(uk);
                 }
+
+                // For local vault mode, fill in missing token/unseal_key from
+                // the persisted secrets file (written during setup).
+                if v.mode == VaultMode::Local && (v.token.is_empty() || v.unseal_key.is_none()) {
+                    if let Some(secrets) = LocalVaultSecrets::load() {
+                        if v.token.is_empty() {
+                            v.token = secrets.token;
+                        }
+                        if v.unseal_key.is_none() {
+                            v.unseal_key = Some(secrets.unseal_key);
+                        }
+                        tracing::info!("Loaded local vault secrets from persisted file");
+                    }
+                }
+
                 v
             })
         }

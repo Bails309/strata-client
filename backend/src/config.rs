@@ -91,6 +91,51 @@ impl AppConfig {
     }
 }
 
+/// Secrets file for the bundled (local) Vault.
+/// Kept separate from config.toml so the main config can be freely
+/// serialized without leaking credentials.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalVaultSecrets {
+    pub token: String,
+    pub unseal_key: String,
+}
+
+impl LocalVaultSecrets {
+    /// Derive the secrets file path from the config directory.
+    pub fn path() -> String {
+        let config = AppConfig::config_path();
+        let dir = Path::new(&config)
+            .parent()
+            .unwrap_or_else(|| Path::new("/app/config"));
+        dir.join("vault-secrets.json").to_string_lossy().into_owned()
+    }
+
+    /// Persist the local vault secrets to disk (restrictive permissions on Unix).
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::path();
+        if let Some(parent) = Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string(self)?;
+        std::fs::write(&path, &json)?;
+
+        // Restrict file permissions to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
+    /// Load local vault secrets from disk, if they exist.
+    pub fn load() -> Option<Self> {
+        let path = Self::path();
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +229,44 @@ mod tests {
 
         cfg.save(path_str).unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn local_vault_secrets_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets_path = dir.path().join("vault-secrets.json");
+
+        // Write directly to the file to test load independently of path()
+        let secrets = LocalVaultSecrets {
+            token: "hvs.root-token-123".into(),
+            unseal_key: "abc123def456".into(),
+        };
+        let json = serde_json::to_string(&secrets).unwrap();
+        std::fs::write(&secrets_path, &json).unwrap();
+
+        let loaded: LocalVaultSecrets =
+            serde_json::from_str(&std::fs::read_to_string(&secrets_path).unwrap()).unwrap();
+        assert_eq!(loaded.token, "hvs.root-token-123");
+        assert_eq!(loaded.unseal_key, "abc123def456");
+    }
+
+    #[test]
+    fn local_vault_secrets_save_creates_file() {
+        // Use env var to redirect the config path into a temp directory
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
+
+        let secrets = LocalVaultSecrets {
+            token: "hvs.test".into(),
+            unseal_key: "key123".into(),
+        };
+        secrets.save().unwrap();
+
+        let loaded = LocalVaultSecrets::load().unwrap();
+        assert_eq!(loaded.token, "hvs.test");
+        assert_eq!(loaded.unseal_key, "key123");
+
+        std::env::remove_var("CONFIG_PATH");
     }
 }

@@ -71,6 +71,9 @@ Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL, V
 
 ## Production Deployment
 
+> [!TIP]
+> **New to Strata Client?** For a comprehensive host-level guide, see our [Ubuntu VM Deployment Guide](ubuntu-vm-deployment.md).
+
 ### 1. Environment Configuration
 
 Edit `.env` or set environment variables:
@@ -81,7 +84,17 @@ HTTPS_PORT=443           # Caddy HTTPS listener (host mapping)
 RUST_LOG=info            # Log level: trace, debug, info, warn, error
 ```
 
-### 2. Caddy Gateway
+### 2. Build & run
+
+For local evaluation or development:
+
+```bash
+docker compose up -d --build
+```
+
+For production deployment on an Ubuntu VM, see the detailed [Ubuntu VM Deployment Guide](docs/ubuntu-vm-deployment.md).
+
+### 3. Setup Wizard
 
 All traffic flows through Caddy. No backend or frontend ports are exposed directly — Caddy is the single entry point.
 

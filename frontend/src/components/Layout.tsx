@@ -99,7 +99,7 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
           <div className="flex flex-col gap-3 pt-4" style={{ borderTop: '1px solid var(--color-border)' }}>
             
             {/* User Profile */}
-            <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : 'px-1'}`}>
+            <div className={`flex items-center gap-2.5 ${collapsed ? 'justify-center' : 'px-2.5'}`}>
               <div className="user-avatar-premium mesh-gradient w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0">
                 {initial}
                 <div className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-success border border-nav-bg" />
@@ -113,13 +113,13 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
             </div>
 
             {!collapsed && (
-              <div className="flex flex-col gap-1 px-1">
-                <div className="flex items-center gap-1.5 text-[0.65rem] text-txt-tertiary px-1">
+              <div className="flex flex-col gap-2 px-2.5">
+                <div className="flex items-center gap-1.5 text-[0.65rem] text-txt-tertiary">
                   <div className="w-1 h-1 rounded-full bg-success shadow-[0_0_6px_var(--color-success)]" />
                   System Online
                 </div>
                 <button 
-                  className="btn-ghost w-full text-[0.7rem] py-1.5 opacity-70 hover:opacity-100 transition-opacity" 
+                  className="btn-danger-outline w-full text-[0.7rem] py-2 font-medium" 
                   onClick={onLogout}
                 >
                   Sign Out

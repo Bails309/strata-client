@@ -314,6 +314,20 @@ pub async fn update_vault(
 
     let audit_address = vault_cfg.address.clone();
 
+    // Persist local vault secrets so they survive container restarts
+    if vault_cfg.mode == VaultMode::Local {
+        if let Some(ref uk) = vault_cfg.unseal_key {
+            if let Err(e) = (crate::config::LocalVaultSecrets {
+                token: vault_cfg.token.clone(),
+                unseal_key: uk.clone(),
+            })
+            .save()
+            {
+                tracing::warn!("Failed to persist vault secrets: {e}");
+            }
+        }
+    }
+
     // Update config and persist
     {
         let mut s = state.write().await;

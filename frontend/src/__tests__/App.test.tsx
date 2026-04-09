@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Outlet } from 'react-router-dom';
 import App from '../App';
 
@@ -21,7 +22,12 @@ vi.mock('../pages/SharedViewer', () => ({ default: () => <div>Shared</div> }));
 vi.mock('../pages/NvrPlayer', () => ({ default: () => <div>NVR</div> }));
 vi.mock('../pages/Credentials', () => ({ default: () => <div>Credentials</div> }));
 vi.mock('../components/Layout', () => ({
-  default: () => <div><Outlet /></div>,
+  default: ({ onLogout }: { onLogout?: () => void }) => (
+    <div>
+      <Outlet />
+      {onLogout && <button onClick={onLogout}>mock-logout</button>}
+    </div>
+  ),
 }));
 vi.mock('../components/SessionManager', () => ({
   SessionManagerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -102,5 +108,52 @@ describe('App routing', () => {
 
     renderApp('/');
     expect(await screen.findByText('Login Page')).toBeInTheDocument();
+  });
+
+  it('shows loading spinner while auth state is pending', () => {
+    localStorage.setItem('access_token', 'pending-token');
+    // fetch that never resolves keeps authenticated === null
+    globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
+
+    renderApp('/');
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+  });
+
+  it('logs out and redirects to login', async () => {
+    localStorage.setItem('access_token', 'valid-token');
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    renderApp('/');
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
+    await userEvent.click(screen.getByText('mock-logout'));
+    expect(await screen.findByText('Login Page')).toBeInTheDocument();
+    expect(localStorage.getItem('access_token')).toBeNull();
+  });
+
+  it('calls handleLogin and navigates to dashboard', async () => {
+    // First call: no token → unauthenticated
+    globalThis.fetch = vi.fn(async () => {
+      return new Response('', { status: 401 });
+    }) as unknown as typeof fetch;
+
+    renderApp('/login');
+    await screen.findByText('Login Page');
+
+    // Now simulate login: set token and make getMe succeed
+    localStorage.setItem('access_token', 'fresh-token');
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    await userEvent.click(screen.getByText('mock-login'));
+    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
   });
 });

@@ -2,18 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('guacamole-common-js', () => ({
-  default: {
-    Client: vi.fn(),
-    StringWriter: vi.fn(() => ({
-      sendText: vi.fn(),
-      sendEnd: vi.fn(),
-    })),
-    Mouse: Object.assign(vi.fn(), { Touchscreen: vi.fn() }),
-    Keyboard: vi.fn(),
-    GuacObject: vi.fn(),
-  },
-}));
+vi.mock('guacamole-common-js', () => {
+  function MockStringWriter() {
+    (this as any).sendText = vi.fn();
+    (this as any).sendEnd = vi.fn();
+  }
+  return {
+    default: {
+      Client: vi.fn(),
+      StringWriter: MockStringWriter,
+      Mouse: Object.assign(vi.fn(), { Touchscreen: vi.fn() }),
+      Keyboard: vi.fn(),
+      GuacObject: vi.fn(),
+    },
+  };
+});
 
 import SessionMenu from '../components/SessionMenu';
 
@@ -391,5 +394,42 @@ describe('SessionMenu', () => {
       />,
     );
     expect(screen.getByText(/temporary view access/)).toBeInTheDocument();
+  });
+
+  it('copies share URL to clipboard when copy button is clicked', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    const session = createMockSession();
+    render(
+      <SessionMenu
+        session={session as any}
+        isOpen={true}
+        onClose={vi.fn()}
+        shareUrl="https://example.com/share/xyz"
+        onShare={vi.fn()}
+        sharingEnabled={true}
+      />,
+    );
+    await userEvent.click(screen.getByTitle('Copy link'));
+    expect(writeText).toHaveBeenCalledWith('https://example.com/share/xyz');
+  });
+
+  it('returns null when not open', () => {
+    const session = createMockSession();
+    const { container } = render(
+      <SessionMenu
+        session={session as any}
+        isOpen={false}
+        onClose={vi.fn()}
+        shareUrl=""
+        onShare={vi.fn()}
+        sharingEnabled={false}
+      />,
+    );
+    expect(container.innerHTML).toBe('');
   });
 });

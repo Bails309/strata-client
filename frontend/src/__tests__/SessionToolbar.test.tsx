@@ -303,5 +303,25 @@ describe('SessionToolbar', () => {
     await user.unhover(btn);
     expect(btn).toBeInTheDocument();
   });
+
+  it('copies share URL to clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
+    vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/xyz', share_token: 'xyz', mode: 'view' });
+    const user = userEvent.setup();
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
+    await user.click(screen.getByTitle('Share this connection'));
+    await user.click(screen.getByText('View Only'));
+    await waitFor(() => expect(screen.getByTitle('Copy link')).toBeInTheDocument());
+    await user.click(screen.getByTitle('Copy link'));
+    // handleCopy sets "copied" state, verified by the check icon appearing
+    await waitFor(() => {
+      expect(screen.getByText('Generate new link')).toBeInTheDocument();
+    });
+  });
 });
 

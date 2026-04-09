@@ -28,6 +28,8 @@ import {
   getServiceHealth,
   getRoles,
   createRole,
+  updateRole,
+  deleteRole,
   getConnections,
   getMyConnections,
   createConnection,
@@ -38,7 +40,11 @@ import {
   updateConnectionFolder,
   deleteConnectionFolder,
   updateRoleConnections,
+  getRoleMappings,
+  updateRoleMappings,
   getUsers,
+  createUser,
+  deleteUser,
   updateCredential,
   getCredentialProfiles,
   createCredentialProfile,
@@ -668,5 +674,52 @@ describe('buildNvrObserveUrl', () => {
     });
     const url = buildNvrObserveUrl('s1');
     expect(url).not.toContain('token=');
+  });
+
+  // ── Roles (update/delete) ────────────────────────
+
+  it('updateRole sends PUT with role data', async () => {
+    const fn = mockFetch({ id: 'r1', name: 'Updated' });
+    await updateRole('r1', { name: 'Updated' });
+    expect(lastCall(fn).url).toBe('/api/admin/roles/r1');
+    expect(lastCall(fn).method).toBe('PUT');
+  });
+
+  it('deleteRole sends DELETE', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await deleteRole('r1');
+    expect(lastCall(fn).url).toBe('/api/admin/roles/r1');
+    expect(lastCall(fn).method).toBe('DELETE');
+  });
+
+  // ── Role Mappings ────────────────────────────────
+
+  it('getRoleMappings sends GET for role', async () => {
+    const fn = mockFetch({ connection_ids: [], folder_ids: [] });
+    await getRoleMappings('r1');
+    expect(lastCall(fn).url).toBe('/api/admin/roles/r1/mappings');
+  });
+
+  it('updateRoleMappings sends PUT with ids', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await updateRoleMappings('r1', ['c1'], ['f1']);
+    expect(lastCall(fn).url).toBe('/api/admin/roles/r1/mappings');
+    expect(lastCall(fn).method).toBe('PUT');
+  });
+
+  // ── Users (create/delete) ────────────────────────
+
+  it('createUser sends POST', async () => {
+    const fn = mockFetch({ id: 'u1', username: 'new' });
+    await createUser({ username: 'new', password: 'pass', role_id: 'r1' } as any);
+    expect(lastCall(fn).url).toBe('/api/admin/users');
+    expect(lastCall(fn).method).toBe('POST');
+  });
+
+  it('deleteUser sends DELETE', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await deleteUser('u1');
+    expect(lastCall(fn).url).toBe('/api/admin/users/u1');
+    expect(lastCall(fn).method).toBe('DELETE');
   });
 });

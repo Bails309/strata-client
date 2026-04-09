@@ -144,6 +144,24 @@ fn get_base_url(headers: &HeaderMap) -> String {
     }
 }
 
+#[derive(sqlx::FromRow)]
+struct UserAuthRow {
+    id: Uuid,
+    username: String,
+    password_hash: Option<String>,
+    #[sqlx(rename = "name")]
+    role: String,
+    can_manage_system: bool,
+    can_manage_users: bool,
+    can_manage_connections: bool,
+    can_view_audit_logs: bool,
+    can_create_users: bool,
+    can_create_user_groups: bool,
+    can_create_connections: bool,
+    can_create_connection_folders: bool,
+    can_create_sharing_profiles: bool,
+}
+
 /// POST /api/auth/login – authenticate with local username/password.
 /// Returns a signed JWT for subsequent API calls.
 pub async fn login(
@@ -231,7 +249,7 @@ pub async fn login(
             .ok_or(AppError::Internal("Database not available".into()))?
     };
 
-    let row: Option<(Uuid, String, Option<String>, String, bool, bool, bool, bool, bool, bool, bool, bool, bool)> = sqlx::query_as(
+    let row: Option<UserAuthRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.password_hash, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
@@ -244,23 +262,10 @@ pub async fn login(
     .await
     .map_err(AppError::Database)?;
 
-    let (
-        user_id,
-        username,
-        password_hash,
-        role,
-        can_manage_system,
-        can_manage_users,
-        can_manage_connections,
-        can_view_audit_logs,
-        can_create_users,
-        can_create_user_groups,
-        can_create_connections,
-        can_create_connection_folders,
-        can_create_sharing_profiles,
-    ) = row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
+    let user = row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
-    let hash = password_hash
+    let hash = user
+        .password_hash
         .ok_or_else(|| AppError::Auth("This account does not support local login".into()))?;
 
     // Verify password with Argon2
@@ -291,13 +296,13 @@ pub async fn login(
     }
 
     // Generate a local JWT
-    let token = create_local_jwt(user_id, &username, &role)?;
+    let token = create_local_jwt(user.id, &user.username, &user.role)?;
 
     audit::log(
         &db.pool,
-        Some(user_id),
+        Some(user.id),
         "auth.local_login",
-        &json!({ "username": username }),
+        &json!({ "username": user.username }),
     )
     .await?;
 
@@ -305,18 +310,18 @@ pub async fn login(
         "access_token": token,
         "token_type": "Bearer",
         "user": {
-            "id": user_id,
-            "username": username,
-            "role": role,
-            "can_manage_system": can_manage_system,
-            "can_manage_users": can_manage_users,
-            "can_manage_connections": can_manage_connections,
-            "can_view_audit_logs": can_view_audit_logs,
-            "can_create_users": can_create_users,
-            "can_create_user_groups": can_create_user_groups,
-            "can_create_connections": can_create_connections,
-            "can_create_connection_folders": can_create_connection_folders,
-            "can_create_sharing_profiles": can_create_sharing_profiles,
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "can_manage_system": user.can_manage_system,
+            "can_manage_users": user.can_manage_users,
+            "can_manage_connections": user.can_manage_connections,
+            "can_view_audit_logs": user.can_view_audit_logs,
+            "can_create_users": user.can_create_users,
+            "can_create_user_groups": user.can_create_user_groups,
+            "can_create_connections": user.can_create_connections,
+            "can_create_connection_folders": user.can_create_connection_folders,
+            "can_create_sharing_profiles": user.can_create_sharing_profiles,
         }
     })))
 }

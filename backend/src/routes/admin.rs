@@ -225,7 +225,7 @@ pub async fn test_sso_connection(
                 // Otherwise, if it's a grant/code error, it means the secret was correct.
                 if error_code == "invalid_client" || error_code == "unauthorized_client" {
                     return Err(AppError::Validation(
-                        format!("OIDC provider rejected client: {error_code}. Check settings in Keycloak.").into(),
+                        format!("OIDC provider rejected client: {error_code}. Check settings in Keycloak.")
                     ));
                 }
             }

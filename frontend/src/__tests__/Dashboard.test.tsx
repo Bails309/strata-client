@@ -531,4 +531,53 @@ describe('Dashboard', () => {
       expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
     });
   });
+
+  it('filters connections by protocol type selector', async () => {
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // Open the type dropdown and select SSH
+    const typeTrigger = screen.getByText('All');
+    await userEvent.click(typeTrigger);
+    await userEvent.click(screen.getByRole('option', { name: 'SSH' }));
+    await waitFor(() => {
+      expect(screen.getByText('Server Beta')).toBeInTheDocument();
+      expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows DB protocol icon for database connections', async () => {
+    renderDashboard();
+    expect(await screen.findByText('DB Server')).toBeInTheDocument();
+    expect(screen.getByText('DB')).toBeInTheDocument();
+  });
+
+  it('shows no connections message when all filtered out', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    await userEvent.type(screen.getByPlaceholderText(/search/i), 'nonexistent_xyz');
+    await waitFor(() => {
+      expect(screen.getByText(/no connections match/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders folder view when group by folder is toggled', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // Click the folder view toggle button
+    await userEvent.click(screen.getByTitle('Group by folder'));
+    await waitFor(() => {
+      expect(screen.getByText('Production')).toBeInTheDocument();
+      expect(screen.getByText('Ungrouped')).toBeInTheDocument();
+    });
+  });
+
+  it('shows empty state when no connections exist', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue([]);
+    renderDashboard();
+    await waitFor(() => {
+      expect(screen.getByText(/no connections available/i)).toBeInTheDocument();
+    });
+  });
 });

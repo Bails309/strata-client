@@ -1753,3 +1753,91 @@ describe('SecurityTab', () => {
     });
   });
 });
+
+describe('ConnectionForm protocol sections', () => {
+  beforeEach(() => {
+    setupDefaults();
+    vi.mocked(getConnections).mockResolvedValue([
+      { id: 'c1', name: 'Server A', protocol: 'ssh', hostname: '10.0.0.1', port: 22, description: 'SSH server', folder_id: null, folder_name: null, domain: '', extra: {}, updated_at: '' },
+    ]);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('shows SSH protocol sections when editing SSH connection', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    const row = screen.getByText('Server A').closest('tr')!;
+    await user.click(within(row).getByText('Edit'));
+    // SSH sections should render — section titles have ▸/▾ prefix
+    expect(screen.getByText(/Authentication/)).toBeInTheDocument();
+    expect(screen.getByText(/Display/)).toBeInTheDocument();
+    expect(screen.getByText(/Terminal Behavior/)).toBeInTheDocument();
+    expect(screen.getByText(/SFTP/)).toBeInTheDocument();
+    expect(screen.getByText(/Screen Recording/)).toBeInTheDocument();
+    expect(screen.getByText(/Wake-on-LAN/)).toBeInTheDocument();
+  });
+
+  it('expands and collapses SSH section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    const row = screen.getByText('Server A').closest('tr')!;
+    await user.click(within(row).getByText('Edit'));
+    // Authentication is defaultOpen, so it should show fields
+    expect(screen.getByText('Private Key')).toBeInTheDocument();
+    // Display is collapsed by default — click to expand
+    await user.click(screen.getByText(/Display/));
+    expect(screen.getByText('Font Name')).toBeInTheDocument();
+    // Click again to collapse
+    await user.click(screen.getByText(/Display/));
+    expect(screen.queryByText('Font Name')).not.toBeInTheDocument();
+  });
+
+  it('shows VNC protocol sections when protocol changed to VNC', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    // Default is RDP — switch to VNC via the protocol dropdown
+    const protocolTrigger = screen.getAllByText('RDP').find(el => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText('VNC'));
+    // VNC Authentication section is defaultOpen, so Password should be visible
+    expect(screen.getByText('Password')).toBeInTheDocument();
+  });
+
+  it('calls createConnection on form submit', async () => {
+    vi.mocked(createConnection).mockResolvedValue({
+      id: 'c2', name: 'New SSH', protocol: 'ssh', hostname: '10.0.0.5', port: 22,
+      description: '', folder_id: null, folder_name: null, domain: '', extra: {}, updated_at: '',
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.type(screen.getByPlaceholderText('My Server'), 'New SSH');
+    await user.clear(screen.getByPlaceholderText('10.0.0.10'));
+    await user.type(screen.getByPlaceholderText('10.0.0.10'), '10.0.0.5');
+    await user.click(screen.getByText('Create Connection'));
+    await waitFor(() => {
+      expect(createConnection).toHaveBeenCalledWith(expect.objectContaining({ name: 'New SSH', hostname: '10.0.0.5' }));
+    });
+  });
+
+  it('closes form with Cancel button', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    expect(screen.getByText('Add Connection')).toBeInTheDocument();
+    const cancelButtons = screen.getAllByText('Cancel');
+    await user.click(cancelButtons[cancelButtons.length - 1]);
+    expect(screen.queryByPlaceholderText('My Server')).not.toBeInTheDocument();
+  });
+});

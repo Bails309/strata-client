@@ -55,8 +55,8 @@ export default function Dashboard() {
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [showFavorites, setShowFavorites] = useState(false);
-  const [groupView, setGroupView] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [folderView, setFolderView] = useState(false);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const [credProfiles, setCredProfiles] = useState<CredentialProfile[]>([]);
   /** Map of connection_id → profile_id currently assigned */
   const [connProfileMap, setConnProfileMap] = useState<Record<string, string>>({});
@@ -109,27 +109,27 @@ export default function Dashboard() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Build grouped structure for group view
+  // Build grouped structure for folder view
   const groupedConnections = useMemo(() => {
-    if (!groupView) return null;
-    const groupMap = new Map<string, { name: string; connections: Connection[] }>();
+    if (!folderView) return null;
+    const folderMap = new Map<string, { name: string; connections: Connection[] }>();
     const ungrouped: Connection[] = [];
     for (const conn of paged) {
-      const gid = conn.group_id;
-      if (gid && conn.group_name) {
-        if (!groupMap.has(gid)) groupMap.set(gid, { name: conn.group_name, connections: [] });
-        groupMap.get(gid)!.connections.push(conn);
+      const fid = conn.folder_id;
+      if (fid && conn.folder_name) {
+        if (!folderMap.has(fid)) folderMap.set(fid, { name: conn.folder_name, connections: [] });
+        folderMap.get(fid)!.connections.push(conn);
       } else {
         ungrouped.push(conn);
       }
     }
-    return { groups: [...groupMap.entries()], ungrouped };
-  }, [groupView, paged]);
+    return { folders: [...folderMap.entries()], ungrouped };
+  }, [folderView, paged]);
 
-  const toggleGroupCollapse = useCallback((gid: string) => {
-    setCollapsedGroups(prev => {
+  const toggleFolderCollapse = useCallback((fid: string) => {
+    setCollapsedFolders(prev => {
       const next = new Set(prev);
-      if (next.has(gid)) next.delete(gid); else next.add(gid);
+      if (next.has(fid)) next.delete(fid); else next.add(fid);
       return next;
     });
   }, []);
@@ -440,14 +440,14 @@ export default function Dashboard() {
         </button>
 
         <button
-          className={`btn-sm inline-flex items-center gap-1.5 ${groupView ? '!border-accent !text-accent' : ''}`}
-          onClick={() => setGroupView(!groupView)}
-          title={groupView ? 'Flat list view' : 'Group by folder'}
+          className={`btn-sm inline-flex items-center gap-1.5 ${folderView ? '!border-accent !text-accent' : ''}`}
+          onClick={() => setFolderView(!folderView)}
+          title={folderView ? 'Flat list view' : 'Group by folder'}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={groupView ? 'var(--color-accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={folderView ? 'var(--color-accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
           </svg>
-          Groups
+          Folders
         </button>
 
         {checked.size >= 2 && (
@@ -478,21 +478,20 @@ export default function Dashboard() {
               <th>Connection Name</th>
               <th>Type</th>
               <th>Details</th>
-              <th>Last Accessed</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {groupView && groupedConnections ? (
+            {folderView && groupedConnections ? (
               <>
-                {groupedConnections.groups.map(([gid, group]) => (
-                  <ConnectionGroupRows
-                    key={gid}
-                    groupId={gid}
-                    groupName={group.name}
-                    connections={group.connections}
-                    collapsed={collapsedGroups.has(gid)}
-                    onToggleCollapse={() => toggleGroupCollapse(gid)}
+                {groupedConnections.folders.map(([fid, folder]) => (
+                  <ConnectionFolderRows
+                    key={fid}
+                    folderId={fid}
+                    folderName={folder.name}
+                    connections={folder.connections}
+                    collapsed={collapsedFolders.has(fid)}
+                    onToggleCollapse={() => toggleFolderCollapse(fid)}
                     checked={checked}
                     toggleChecked={toggleChecked}
                     favorites={favorites}
@@ -505,13 +504,13 @@ export default function Dashboard() {
                   />
                 ))}
                 {groupedConnections.ungrouped.length > 0 && (
-                  <ConnectionGroupRows
+                  <ConnectionFolderRows
                     key="__ungrouped"
-                    groupId="__ungrouped"
-                    groupName="Ungrouped"
+                    folderId="__ungrouped"
+                    folderName="Ungrouped"
                     connections={groupedConnections.ungrouped}
-                    collapsed={collapsedGroups.has('__ungrouped')}
-                    onToggleCollapse={() => toggleGroupCollapse('__ungrouped')}
+                    collapsed={collapsedFolders.has('__ungrouped')}
+                    onToggleCollapse={() => toggleFolderCollapse('__ungrouped')}
                     checked={checked}
                     toggleChecked={toggleChecked}
                     favorites={favorites}
@@ -767,11 +766,11 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
   );
 }
 
-// ── Connection Group Rows ───────────────────────────────────────────
+// ── Connection Folder Rows ───────────────────────────────────────────
 
-function ConnectionGroupRows({ groupId: _gid, groupName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, connProfileMap, onProfileChange, navigate }: {
-  groupId: string;
-  groupName: string;
+function ConnectionFolderRows({ folderId: _fid, folderName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, connProfileMap, onProfileChange, navigate }: {
+  folderId: string;
+  folderName: string;
   connections: Connection[];
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -796,7 +795,7 @@ function ConnectionGroupRows({ groupId: _gid, groupName, connections, collapsed,
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
             </svg>
-            <span>{groupName}</span>
+            <span>{folderName}</span>
             <span className="text-txt-tertiary font-normal">({connections.length})</span>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="ml-auto" style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>
               <polyline points="6 9 12 15 18 9"/>

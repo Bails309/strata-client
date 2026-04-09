@@ -407,4 +407,73 @@ mod tests {
         let result = cfg.sign("GET", 0, "", "", "/acct/rec/file.bin");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn blob_url_encodes_special_chars() {
+        let cfg = AzureBlobConfig {
+            account_name: "acct".into(),
+            container_name: "rec".into(),
+            access_key: String::new(),
+        };
+        let url = cfg.blob_url("file with spaces.guac");
+        assert!(url.contains("file%20with%20spaces.guac"));
+    }
+
+    #[test]
+    fn sign_empty_content_length_for_get() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        let key_bytes = [1u8; 32];
+        let cfg = AzureBlobConfig {
+            account_name: "acct".into(),
+            container_name: "rec".into(),
+            access_key: B64.encode(key_bytes),
+        };
+        let sig = cfg.sign("GET", 0, "", "x-ms-date:now", "/acct/rec/f.bin").unwrap();
+        assert!(sig.starts_with("SharedKey acct:"));
+        assert!(sig.len() > "SharedKey acct:".len());
+    }
+
+    #[test]
+    fn sign_different_verbs_produce_different_signatures() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        let key_bytes = [42u8; 32];
+        let cfg = AzureBlobConfig {
+            account_name: "acct".into(),
+            container_name: "rec".into(),
+            access_key: B64.encode(key_bytes),
+        };
+        let sig_put = cfg.sign("PUT", 100, "text/plain", "x-ms-date:now", "/acct/rec/f").unwrap();
+        let sig_get = cfg.sign("GET", 0, "", "x-ms-date:now", "/acct/rec/f").unwrap();
+        assert_ne!(sig_put, sig_get);
+    }
+
+    #[test]
+    fn storage_type_clone() {
+        let a = StorageType::AzureBlob;
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn azure_blob_config_clone() {
+        let cfg = AzureBlobConfig {
+            account_name: "a".into(),
+            container_name: "b".into(),
+            access_key: "c".into(),
+        };
+        let cloned = cfg.clone();
+        assert_eq!(cloned.account_name, "a");
+        assert_eq!(cloned.container_name, "b");
+    }
+
+    #[test]
+    fn recording_config_disabled() {
+        let cfg = RecordingConfig {
+            enabled: false,
+            retention_days: 0,
+            storage_type: StorageType::Local,
+        };
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.storage_type, StorageType::Local);
+    }
 }

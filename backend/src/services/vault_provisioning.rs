@@ -337,4 +337,45 @@ mod tests {
         assert!(resp.data.contains_key("transit/"));
         assert!(resp.data.contains_key("secret/"));
     }
+
+    #[test]
+    fn unseal_response_sealed_true() {
+        let json = r#"{"sealed":true}"#;
+        let resp: UnsealResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.sealed);
+    }
+
+    #[test]
+    fn health_response_uninitialized() {
+        let json = r#"{"initialized":false,"sealed":true}"#;
+        let resp: HealthResponse = serde_json::from_str(json).unwrap();
+        assert!(!resp.initialized);
+        assert!(resp.sealed);
+    }
+
+    #[test]
+    fn init_response_multiple_keys() {
+        let json = r#"{"keys":["key1","key2","key3"],"root_token":"s.multi"}"#;
+        let resp: InitResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.keys.len(), 3);
+        assert_eq!(resp.root_token, "s.multi");
+    }
+
+    #[test]
+    fn mounts_response_empty_data() {
+        let json = r#"{"data":{}}"#;
+        let resp: MountsResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.data.is_empty());
+        assert!(!resp.data.contains_key("transit/"));
+    }
+
+    #[test]
+    fn vault_init_result_fields() {
+        let result = VaultInitResult {
+            root_token: "hvs.long-root-token-value".into(),
+            unseal_key: "base64-unseal-key-data".into(),
+        };
+        assert!(result.root_token.starts_with("hvs."));
+        assert!(!result.unseal_key.is_empty());
+    }
 }

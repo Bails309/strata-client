@@ -49,6 +49,12 @@ pub async fn me(
         .await
         .unwrap_or(None)
         .unwrap_or_default();
+
+    let vault_configured = {
+        let s = state.read().await;
+        s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some()
+    };
+
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -56,6 +62,16 @@ pub async fn me(
         "sub": user.sub,
         "client_ip": client_ip,
         "watermark_enabled": watermark_enabled == "true",
+        "vault_configured": vault_configured,
+        "can_manage_system": user.can_manage_system,
+        "can_manage_users": user.can_manage_users,
+        "can_manage_connections": user.can_manage_connections,
+        "can_view_audit_logs": user.can_view_audit_logs,
+        "can_create_users": user.can_create_users,
+        "can_create_user_groups": user.can_create_user_groups,
+        "can_create_connections": user.can_create_connections,
+        "can_create_connection_folders": user.can_create_connection_folders,
+        "can_create_sharing_profiles": user.can_create_sharing_profiles,
     })))
 }
 
@@ -69,8 +85,8 @@ pub struct UserConnectionRow {
     pub hostname: String,
     pub port: i32,
     pub description: String,
-    pub group_id: Option<Uuid>,
-    pub group_name: Option<String>,
+    pub folder_id: Option<Uuid>,
+    pub folder_name: Option<String>,
     pub last_accessed: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -84,9 +100,9 @@ pub async fn my_connections(
         // Admins see all connections regardless of role assignment
         sqlx::query_as(
             "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.group_id, cg.name AS group_name, c.last_accessed
+                    c.folder_id, cf.name AS folder_name, c.last_accessed
              FROM connections c
-             LEFT JOIN connection_groups cg ON cg.id = c.group_id
+             LEFT JOIN connection_folders cf ON cf.id = c.folder_id
              WHERE c.soft_deleted_at IS NULL
              ORDER BY c.name",
         )
@@ -94,13 +110,17 @@ pub async fn my_connections(
         .await?
     } else {
         sqlx::query_as(
-            "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.group_id, cg.name AS group_name, c.last_accessed
+            "SELECT DISTINCT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
+                    c.folder_id, cf.name AS folder_name, c.last_accessed
              FROM connections c
-             JOIN role_connections rc ON rc.connection_id = c.id
-             JOIN users u ON u.role_id = rc.role_id
-             LEFT JOIN connection_groups cg ON cg.id = c.group_id
-             WHERE u.id = $1 AND c.soft_deleted_at IS NULL
+             LEFT JOIN connection_folders cf ON cf.id = c.folder_id
+             JOIN users u ON u.id = $1
+             WHERE c.soft_deleted_at IS NULL
+             AND (
+                 EXISTS (SELECT 1 FROM role_connections rc WHERE rc.role_id = u.role_id AND rc.connection_id = c.id)
+                 OR
+                 EXISTS (SELECT 1 FROM role_folders rf WHERE rf.role_id = u.role_id AND rf.folder_id = c.folder_id)
+             )
              ORDER BY c.name",
         )
         .bind(user.id)
@@ -999,5 +1019,141 @@ mod tests {
             !filename.contains("..") && !filename.contains('/') && !filename.contains('\\'),
             "dots (not ..) should be allowed"
         );
+    }
+
+    // ── Struct serialization ───────────────────────────────────────────
+
+    #[test]
+    fn user_connection_row_serializes() {
+        let r = UserConnectionRow {
+            id: Uuid::nil(),
+            name: "server-1".into(),
+            protocol: "rdp".into(),
+            hostname: "10.0.0.1".into(),
+            port: 3389,
+            description: "Prod".into(),
+            group_id: None,
+            group_name: Some("Production".into()),
+            last_accessed: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["name"], "server-1");
+        assert_eq!(v["protocol"], "rdp");
+        assert_eq!(v["group_name"], "Production");
+        assert!(v["last_accessed"].is_null());
+    }
+
+    #[test]
+    fn credential_profile_row_serializes() {
+        let r = CredentialProfileRow {
+            id: Uuid::nil(),
+            label: "Work".into(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now(),
+            expired: false,
+            ttl_hours: 8,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["label"], "Work");
+        assert_eq!(v["expired"], false);
+        assert_eq!(v["ttl_hours"], 8);
+    }
+
+    #[test]
+    fn update_credential_request_deser() {
+        let j = json!({
+            "connection_id": "550e8400-e29b-41d4-a716-446655440000",
+            "password": "new-pass"
+        });
+        let req: UpdateCredentialRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.password, "new-pass");
+    }
+
+    #[test]
+    fn create_profile_request_all_fields() {
+        let j = json!({
+            "label": "Admin",
+            "username": "root",
+            "password": "p@ss!",
+            "ttl_hours": 24
+        });
+        let req: CreateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.label, "Admin");
+        assert_eq!(req.ttl_hours.unwrap(), 24);
+    }
+
+    #[test]
+    fn update_profile_all_fields() {
+        let j = json!({
+            "label": "Updated",
+            "username": "newuser",
+            "password": "newpass",
+            "ttl_hours": 12
+        });
+        let req: UpdateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.label.as_deref(), Some("Updated"));
+        assert_eq!(req.username.as_deref(), Some("newuser"));
+        assert_eq!(req.password.as_deref(), Some("newpass"));
+        assert_eq!(req.ttl_hours, Some(12));
+    }
+
+    #[test]
+    fn set_mapping_request_deser() {
+        let j = json!({
+            "profile_id": "550e8400-e29b-41d4-a716-446655440000",
+            "connection_id": "660e8400-e29b-41d4-a716-446655440000"
+        });
+        let req: SetMappingRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(
+            req.profile_id.to_string(),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
+
+    #[test]
+    fn mapping_row_full_serialization() {
+        let r = MappingRow {
+            connection_id: Uuid::nil(),
+            connection_name: "Server A".into(),
+            protocol: "ssh".into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["protocol"], "ssh");
+        assert_eq!(v["connection_name"], "Server A");
+    }
+
+    #[tokio::test]
+    async fn require_running_returns_error_in_setup_phase() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: crate::services::app_state::SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: crate::services::app_state::BootPhase::Setup,
+                config: None,
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        let result = require_running(&state).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn require_running_returns_error_when_no_db() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: crate::services::app_state::SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: crate::services::app_state::BootPhase::Running,
+                config: None,
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        let result = require_running(&state).await;
+        assert!(result.is_err());
     }
 }

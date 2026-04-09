@@ -37,7 +37,7 @@ import Layout from '../components/Layout';
 function renderLayout(route = '/') {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <Layout onLogout={vi.fn()} />
+      <Layout user={null} onLogout={vi.fn()} />
     </MemoryRouter>,
   );
 }

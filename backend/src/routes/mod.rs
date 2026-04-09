@@ -70,8 +70,11 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/admin/settings/vault", put(admin::update_vault))
         .route("/api/admin/health", get(health::service_health))
-        .route("/api/admin/roles", get(admin::list_roles))
-        .route("/api/admin/roles", post(admin::create_role))
+        .route("/api/admin/roles", get(admin::list_roles).post(admin::create_role))
+        .route(
+            "/api/admin/roles/:id",
+            put(admin::update_role).delete(admin::delete_role),
+        )
         .route("/api/admin/connections", get(admin::list_connections))
         .route("/api/admin/connections", post(admin::create_connection))
         .route("/api/admin/connections/:id", put(admin::update_connection))
@@ -80,29 +83,34 @@ pub fn build_router(state: SharedState) -> Router {
             delete(admin::delete_connection),
         )
         .route(
-            "/api/admin/connection-groups",
-            get(admin::list_connection_groups),
+            "/api/admin/connection-folders",
+            get(admin::list_connection_folders),
         )
         .route(
-            "/api/admin/connection-groups",
-            post(admin::create_connection_group),
+            "/api/admin/connection-folders",
+            post(admin::create_connection_folder),
         )
         .route(
-            "/api/admin/connection-groups/:id",
-            put(admin::update_connection_group),
+            "/api/admin/connection-folders/:id",
+            put(admin::update_connection_folder),
         )
         .route(
-            "/api/admin/connection-groups/:id",
-            delete(admin::delete_connection_group),
+            "/api/admin/connection-folders/:id",
+            delete(admin::delete_connection_folder),
         )
         .route(
-            "/api/admin/role-connections",
-            put(admin::update_role_connections),
+            "/api/admin/role-mappings/:id",
+            get(admin::get_role_mappings),
+        )
+        .route(
+            "/api/admin/role-mappings",
+            put(admin::update_role_mappings),
         )
         .route(
             "/api/admin/users",
             get(admin::list_users).post(admin::create_user),
         )
+        .route("/api/admin/users/:id", delete(admin::delete_user))
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
         .route("/api/admin/sessions", get(admin::list_active_sessions))
         .route(
@@ -313,5 +321,23 @@ mod tests {
         std::env::set_var("STRATA_DOMAIN", ":80");
         let _layer = build_cors_layer();
         std::env::remove_var("STRATA_DOMAIN");
+    }
+
+    #[test]
+    fn build_router_does_not_panic() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: crate::services::app_state::BootPhase::Setup,
+                config: None,
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        std::env::remove_var("STRATA_ALLOWED_ORIGINS");
+        std::env::remove_var("STRATA_DOMAIN");
+        let _router = build_router(state);
     }
 }

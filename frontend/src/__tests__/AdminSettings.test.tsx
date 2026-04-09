@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
@@ -26,14 +26,16 @@ vi.mock('../api', () => ({
   getMetrics: vi.fn(),
   getRoles: vi.fn(),
   createRole: vi.fn(),
+  getRoleMappings: vi.fn(),
+  updateRoleMappings: vi.fn(),
   getConnections: vi.fn(),
   createConnection: vi.fn(),
   updateConnection: vi.fn(),
   deleteConnection: vi.fn(),
-  getConnectionGroups: vi.fn(),
-  createConnectionGroup: vi.fn(),
-  updateConnectionGroup: vi.fn(),
-  deleteConnectionGroup: vi.fn(),
+  getConnectionFolders: vi.fn(),
+  createConnectionFolder: vi.fn(),
+  updateConnectionFolder: vi.fn(),
+  deleteConnectionFolder: vi.fn(),
   getUsers: vi.fn(),
   getActiveSessions: vi.fn(),
   getAdSyncConfigs: vi.fn(),
@@ -48,11 +50,11 @@ vi.mock('../api', () => ({
 
 import AdminSettings from '../pages/AdminSettings';
 import {
-  getSettings, getRoles, getConnections, getConnectionGroups, getUsers,
+  getSettings, getRoles, getConnections, getConnectionFolders, getUsers,
   getServiceHealth, getMetrics, testSsoConnection, updateSso, updateRecordings, updateVault,
   getKerberosRealms, createKerberosRealm, updateKerberosRealm, deleteKerberosRealm,
   createRole, createConnection, updateConnection, deleteConnection,
-  createConnectionGroup, deleteConnectionGroup,
+  createConnectionFolder, deleteConnectionFolder,
   getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
   updateAuthMethods, updateSettings,
@@ -78,10 +80,28 @@ const metricsOk = {
   guacd_pool_size: 2,
 };
 
+const defaultUser: import('../api').MeResponse = {
+  id: 'u1',
+  username: 'admin',
+  role: 'admin',
+  client_ip: '127.0.0.1',
+  watermark_enabled: false,
+  vault_configured: true,
+  can_manage_system: true,
+  can_manage_users: true,
+  can_manage_connections: true,
+  can_view_audit_logs: true,
+  can_create_users: true,
+  can_create_user_groups: true,
+  can_create_connections: true,
+  can_create_connection_folders: true,
+  can_create_sharing_profiles: true,
+};
+
 function renderAdmin() {
   return render(
     <BrowserRouter>
-      <AdminSettings />
+      <AdminSettings user={defaultUser} />
     </BrowserRouter>,
   );
 }
@@ -90,7 +110,7 @@ function setupDefaults() {
   vi.mocked(getSettings).mockResolvedValue({});
   vi.mocked(getRoles).mockResolvedValue([]);
   vi.mocked(getConnections).mockResolvedValue([]);
-  vi.mocked(getConnectionGroups).mockResolvedValue([]);
+  vi.mocked(getConnectionFolders).mockResolvedValue([]);
   vi.mocked(getUsers).mockResolvedValue([]);
   vi.mocked(getServiceHealth).mockResolvedValue(healthOk);
   vi.mocked(getMetrics).mockResolvedValue(metricsOk);
@@ -140,7 +160,7 @@ describe('HealthTab', () => {
     vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
     vi.mocked(getMetrics).mockReturnValue(new Promise(() => {}));
     renderAdmin();
-    expect(screen.getByText('Loading service health…')).toBeInTheDocument();
+    expect(screen.getByText('Loading service healthâ€¦')).toBeInTheDocument();
   });
 
   it('shows connected/reachable badges when healthy', async () => {
@@ -214,14 +234,14 @@ describe('HealthTab', () => {
     vi.mocked(getMetrics).mockResolvedValue(metricsOk);
     const user = userEvent.setup();
     renderAdmin();
-    // loading initially shows "Loading service health…"
-    expect(screen.getByText('Loading service health…')).toBeInTheDocument();
+    // loading initially shows "Loading service healthâ€¦"
+    expect(screen.getByText('Loading service healthâ€¦')).toBeInTheDocument();
     resolveHealth(healthOk);
     await screen.findByText('Connected');
     // Now trigger refresh
     vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
     await user.click(screen.getByText('Refresh'));
-    expect(screen.getByText('Refreshing…')).toBeInTheDocument();
+    expect(screen.getByText('Refreshingâ€¦')).toBeInTheDocument();
   });
 
   it('shows pool size pluralization for single instance', async () => {
@@ -316,14 +336,14 @@ describe('SsoTab', () => {
     });
   });
 
-  it('shows Testing… text while test is in progress', async () => {
+  it('shows Testingâ€¦ text while test is in progress', async () => {
     vi.mocked(testSsoConnection).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('SSO / OIDC'));
     await screen.findByDisplayValue('strata-client');
     await user.click(screen.getByText('Test Connection'));
-    expect(screen.getByText('Testing…')).toBeInTheDocument();
+    expect(screen.getByText('Testingâ€¦')).toBeInTheDocument();
   });
 
   it('renders callback URL', async () => {
@@ -474,14 +494,14 @@ describe('KerberosTab', () => {
     await screen.findByText(/No Kerberos realms/);
     await user.click(screen.getByText('Add Realm'));
     // Initially one KDC field, no remove button since only 1
-    expect(screen.queryByText('✕')).not.toBeInTheDocument();
+    expect(screen.queryByText('âœ•')).not.toBeInTheDocument();
     await user.click(screen.getByText('+ Add KDC'));
     // Now 2 KDC fields, should have remove buttons
-    const removeButtons = screen.getAllByText('✕');
+    const removeButtons = screen.getAllByText('âœ•');
     expect(removeButtons.length).toBe(2);
     await user.click(removeButtons[0]);
     // Back to 1
-    expect(screen.queryByText('✕')).not.toBeInTheDocument();
+    expect(screen.queryByText('âœ•')).not.toBeInTheDocument();
   });
 
   it('handles load error', async () => {
@@ -502,7 +522,7 @@ describe('KerberosTab', () => {
     expect(await screen.findByText('Delete failed')).toBeInTheDocument();
   });
 
-  it('shows Saving… text during save', async () => {
+  it('shows Savingâ€¦ text during save', async () => {
     vi.mocked(createKerberosRealm).mockReturnValue(new Promise(() => {}));
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
@@ -512,7 +532,7 @@ describe('KerberosTab', () => {
     await user.click(screen.getByText('Add Realm'));
     await user.type(screen.getByPlaceholderText('EXAMPLE.COM'), 'TEST.COM');
     await user.click(screen.getByText('Create Realm'));
-    expect(screen.getByText('Saving…')).toBeInTheDocument();
+    expect(screen.getByText('Savingâ€¦')).toBeInTheDocument();
   });
 
   it('auto-sets is_default when first realm', async () => {
@@ -664,14 +684,14 @@ describe('VaultTab', () => {
     }));
   });
 
-  it('shows Saving… during vault save', async () => {
+  it('shows Savingâ€¦ during vault save', async () => {
     vi.mocked(updateVault).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Vault'));
     await screen.findByText('Vault Configuration');
     await user.click(screen.getByText('Save Vault Settings'));
-    expect(screen.getByText('Saving…')).toBeInTheDocument();
+    expect(screen.getByText('Savingâ€¦')).toBeInTheDocument();
   });
 
   it('shows current vault mode from health data', async () => {
@@ -704,8 +724,8 @@ describe('VaultTab', () => {
     await user.click(screen.getByText('Vault'));
     await screen.findByText('Credential Password Expiry');
     await user.click(screen.getByText('Save Expiry Setting'));
-    // The button should show Saving… while TTL is being saved
-    const savingBtns = screen.getAllByText('Saving…');
+    // The button should show Savingâ€¦ while TTL is being saved
+    const savingBtns = screen.getAllByText('Savingâ€¦');
     expect(savingBtns.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -730,13 +750,13 @@ describe('AccessTab', () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getRoles).mockResolvedValue([
-      { id: 'r1', name: 'admin' },
-      { id: 'r2', name: 'user' },
+      { id: 'r1', name: 'admin', can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true },
+      { id: 'r2', name: 'user', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false },
     ]);
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: 'RDP server', group_id: undefined, extra: {} },
+      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: 'RDP server', folder_id: undefined, extra: {} },
     ]);
-    vi.mocked(getConnectionGroups).mockResolvedValue([]);
+    vi.mocked(getConnectionFolders).mockResolvedValue([]);
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -749,7 +769,7 @@ describe('AccessTab', () => {
   });
 
   it('creates a new role', async () => {
-    vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer' });
+    vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
@@ -789,8 +809,8 @@ describe('AccessTab', () => {
 
   it('filters connections by search', async () => {
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', group_id: undefined, extra: {} },
-      { id: 'c2', name: 'Server B', protocol: 'ssh', hostname: '10.0.0.2', port: 22, domain: '', description: '', group_id: undefined, extra: {} },
+      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} },
+      { id: 'c2', name: 'Server B', protocol: 'ssh', hostname: '10.0.0.2', port: 22, domain: '', description: '', folder_id: undefined, extra: {} },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -802,7 +822,7 @@ describe('AccessTab', () => {
   });
 
   it('creates a connection', async () => {
-    vi.mocked(createConnection).mockResolvedValue({ id: 'c2', name: 'New', protocol: 'rdp', hostname: '1.2.3.4', port: 3389, domain: '', description: '', group_id: undefined, extra: {} });
+    vi.mocked(createConnection).mockResolvedValue({ id: 'c2', name: 'New', protocol: 'rdp', hostname: '1.2.3.4', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
@@ -846,9 +866,9 @@ describe('AccessTab', () => {
   });
 
   it('shows group name for grouped connections', async () => {
-    vi.mocked(getConnectionGroups).mockResolvedValue([{ id: 'g1', name: 'Servers', parent_id: undefined }]);
+    vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'Servers', parent_id: undefined }]);
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server G', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', group_id: 'g1', extra: {} },
+      { id: 'c1', name: 'Server G', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: 'g1', extra: {} },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -862,13 +882,13 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const dashes = screen.getAllByText('—');
+    const dashes = screen.getAllByText('â€”');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows pagination for many connections', async () => {
     const manyConns = Array.from({ length: 25 }, (_, i) => ({
-      id: `c${i}`, name: `Server ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, domain: '', description: '', group_id: undefined, extra: {},
+      id: `c${i}`, name: `Server ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, domain: '', description: '', folder_id: undefined, extra: {},
     }));
     vi.mocked(getConnections).mockResolvedValue(manyConns);
     const user = userEvent.setup();
@@ -876,24 +896,24 @@ describe('AccessTab', () => {
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server 0');
     expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
-    expect(screen.getByText('← Prev')).toBeDisabled();
-    await user.click(screen.getByText('Next →'));
+    expect(screen.getByText('â† Prev')).toBeDisabled();
+    await user.click(screen.getByText('Next â†’'));
     expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
-    expect(screen.getByText('Next →')).toBeDisabled();
-    await user.click(screen.getByText('← Prev'));
+    expect(screen.getByText('Next â†’')).toBeDisabled();
+    await user.click(screen.getByText('â† Prev'));
     expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
   });
 
   it('resets page on search', async () => {
     const manyConns = Array.from({ length: 25 }, (_, i) => ({
-      id: `c${i}`, name: `Server ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, domain: '', description: '', group_id: undefined, extra: {},
+      id: `c${i}`, name: `Server ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, domain: '', description: '', folder_id: undefined, extra: {},
     }));
     vi.mocked(getConnections).mockResolvedValue(manyConns);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server 0');
-    await user.click(screen.getByText('Next →'));
+    await user.click(screen.getByText('Next â†’'));
     expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
     // Search resets to page 1
     await user.type(screen.getByPlaceholderText(/Search connections/), 'Server 1');
@@ -909,8 +929,8 @@ describe('AccessTab', () => {
 
   it('shows filtered count', async () => {
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', group_id: undefined, extra: {} },
-      { id: 'c2', name: 'Server B', protocol: 'ssh', hostname: '10.0.0.2', port: 22, domain: '', description: '', group_id: undefined, extra: {} },
+      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} },
+      { id: 'c2', name: 'Server B', protocol: 'ssh', hostname: '10.0.0.2', port: 22, domain: '', description: '', folder_id: undefined, extra: {} },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -921,7 +941,7 @@ describe('AccessTab', () => {
   });
 
   it('updates connection via edit form', async () => {
-    vi.mocked(updateConnection).mockResolvedValue({ id: 'c1', name: 'Server Updated', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', group_id: undefined, extra: {} });
+    vi.mocked(updateConnection).mockResolvedValue({ id: 'c1', name: 'Server Updated', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
@@ -982,8 +1002,8 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('bob');
-    // OIDC sub column shows — for empty sub
-    const dashes = screen.getAllByText('—');
+    // OIDC sub column shows â€” for empty sub
+    const dashes = screen.getAllByText('â€”');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -995,7 +1015,7 @@ describe('AccessTab', () => {
   });
 
   it('renders groups table', async () => {
-    vi.mocked(getConnectionGroups).mockResolvedValue([
+    vi.mocked(getConnectionFolders).mockResolvedValue([
       { id: 'g1', name: 'Production', parent_id: undefined },
       { id: 'g2', name: 'Staging', parent_id: 'g1' },
     ]);
@@ -1009,19 +1029,19 @@ describe('AccessTab', () => {
   });
 
   it('creates a group', async () => {
-    vi.mocked(createConnectionGroup).mockResolvedValue({ id: 'g1', name: 'DevOps', parent_id: undefined });
+    vi.mocked(createConnectionFolder).mockResolvedValue({ id: 'g1', name: 'DevOps', parent_id: undefined });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText(/No groups created yet/);
     await user.type(screen.getByPlaceholderText('Group name...'), 'DevOps');
     await user.click(screen.getByText('Add Group'));
-    expect(createConnectionGroup).toHaveBeenCalledWith(expect.objectContaining({ name: 'DevOps' }));
+    expect(createConnectionFolder).toHaveBeenCalledWith(expect.objectContaining({ name: 'DevOps' }));
   });
 
   it('deletes a group with confirm', async () => {
-    vi.mocked(getConnectionGroups).mockResolvedValue([{ id: 'g1', name: 'ToDelete', parent_id: undefined }]);
-    vi.mocked(deleteConnectionGroup).mockResolvedValue({ status: 'success' });
+    vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'ToDelete', parent_id: undefined }]);
+    vi.mocked(deleteConnectionFolder).mockResolvedValue({ status: 'success' });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
     renderAdmin();
@@ -1030,7 +1050,7 @@ describe('AccessTab', () => {
     // Find the group delete button
     const groupDeleteBtns = screen.getAllByText('Delete');
     await user.click(groupDeleteBtns[groupDeleteBtns.length - 1]);
-    expect(deleteConnectionGroup).toHaveBeenCalledWith('g1');
+    expect(deleteConnectionFolder).toHaveBeenCalledWith('g1');
   });
 
   it('disables Add Role button when role name is empty', async () => {
@@ -1132,8 +1152,8 @@ describe('SessionsTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Sessions'));
     await screen.findByText('Server A');
-    expect(screen.getByText('● Live')).toBeInTheDocument();
-    expect(screen.getByText('⏪ Rewind')).toBeInTheDocument();
+    expect(screen.getByText('â— Live')).toBeInTheDocument();
+    expect(screen.getByText('âª Rewind')).toBeInTheDocument();
   });
 
   it('disables refresh while loading', async () => {
@@ -1142,7 +1162,7 @@ describe('SessionsTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Sessions'));
     await waitFor(() => {
-      const btns = screen.getAllByText('Refreshing…');
+      const btns = screen.getAllByText('Refreshingâ€¦');
       expect(btns.length).toBeGreaterThanOrEqual(1);
     });
   });
@@ -1160,7 +1180,7 @@ describe('AdSyncTab', () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Corp AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      { id: 'ad1', label: 'Corp AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
     ]);
   });
   afterEach(() => vi.restoreAllMocks());
@@ -1189,7 +1209,7 @@ describe('AdSyncTab', () => {
 
   it('shows disabled badge', async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Disabled AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: false },
+      { id: 'ad1', label: 'Disabled AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: false },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1277,18 +1297,18 @@ describe('AdSyncTab', () => {
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText('Corp AD');
-    await user.click(screen.getByText('⟳ Sync Now'));
+    await user.click(screen.getByText('âŸ³ Sync Now'));
     expect(triggerAdSync).toHaveBeenCalledWith('ad1');
   });
 
-  it('shows Syncing… while sync in progress', async () => {
+  it('shows Syncingâ€¦ while sync in progress', async () => {
     vi.mocked(triggerAdSync).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText('Corp AD');
-    await user.click(screen.getByText('⟳ Sync Now'));
-    expect(screen.getByText('Syncing…')).toBeInTheDocument();
+    await user.click(screen.getByText('âŸ³ Sync Now'));
+    expect(screen.getByText('Syncingâ€¦')).toBeInTheDocument();
   });
 
   it('shows sync history', async () => {
@@ -1323,7 +1343,7 @@ describe('AdSyncTab', () => {
     await screen.findByText('Corp AD');
     await user.click(screen.getByText('History'));
     await screen.findByText(/No sync runs yet/);
-    await user.click(screen.getByText('← Back'));
+    await user.click(screen.getByText('â† Back'));
     expect(await screen.findByText('Corp AD')).toBeInTheDocument();
   });
 
@@ -1340,7 +1360,7 @@ describe('AdSyncTab', () => {
 
   it('shows kerberos auth fields when kerberos method selected', async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Kerb AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: '', bind_password: '', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'kerberos', keytab_path: '/etc/krb5/strata.keytab', krb5_principal: 'svc@CORP.COM', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      { id: 'ad1', label: 'Kerb AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: '', bind_password: '', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'kerberos', keytab_path: '/etc/krb5/strata.keytab', krb5_principal: 'svc@CORP.COM', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1360,7 +1380,7 @@ describe('AdSyncTab', () => {
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText(/no AD sync sources/i);
     await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('⚡ Test Connection'));
+    await user.click(screen.getByText('âš¡ Test Connection'));
     expect(await screen.findByText('Found 10 computers')).toBeInTheDocument();
     expect(screen.getByText('Server1')).toBeInTheDocument();
     expect(screen.getByText('Server2')).toBeInTheDocument();
@@ -1375,11 +1395,11 @@ describe('AdSyncTab', () => {
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText(/no AD sync sources/i);
     await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('⚡ Test Connection'));
+    await user.click(screen.getByText('âš¡ Test Connection'));
     expect(await screen.findByText('LDAP bind failed')).toBeInTheDocument();
   });
 
-  it('shows Testing… during test', async () => {
+  it('shows Testingâ€¦ during test', async () => {
     vi.mocked(testAdSyncConnection).mockReturnValue(new Promise(() => {}));
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
@@ -1387,13 +1407,13 @@ describe('AdSyncTab', () => {
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText(/no AD sync sources/i);
     await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('⚡ Test Connection'));
-    expect(screen.getByText('Testing…')).toBeInTheDocument();
+    await user.click(screen.getByText('âš¡ Test Connection'));
+    expect(screen.getByText('Testingâ€¦')).toBeInTheDocument();
   });
 
   it('shows config with CA cert and TLS skip verify info', async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'TLS Skip', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: true, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      { id: 'ad1', label: 'TLS Skip', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: true, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1403,12 +1423,12 @@ describe('AdSyncTab', () => {
 
   it('shows config with CA cert loaded', async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'CA Cert', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: 'CERT_DATA', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      { id: 'ad1', label: 'CA Cert', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: 'CERT_DATA', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
     ]);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
-    expect(await screen.findByText(/CA Cert ✓/)).toBeInTheDocument();
+    expect(await screen.findByText(/CA Cert âœ“/)).toBeInTheDocument();
   });
 
   it('shows search base management in edit form', async () => {
@@ -1533,7 +1553,7 @@ describe('AdSyncTab', () => {
 
   it('hides CA cert option when TLS skip verify is checked', async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Skip TLS', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: true, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      { id: 'ad1', label: 'Skip TLS', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: true, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1545,7 +1565,7 @@ describe('AdSyncTab', () => {
 
   it('shows replace certificate button when ca_cert is loaded in edit', async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'With Cert', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, group_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: 'CERT_DATA', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      { id: 'ad1', label: 'With Cert', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: 'CERT_DATA', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1670,7 +1690,7 @@ describe('SecurityTab', () => {
     expect(watermarkCheckbox).toBeChecked();
   });
 
-  it('shows Saving… during save', async () => {
+  it('shows Savingâ€¦ during save', async () => {
     vi.mocked(updateSettings).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
@@ -1678,7 +1698,7 @@ describe('SecurityTab', () => {
     await screen.findByText('Session Watermark');
     const saveBtns = screen.getAllByText(/save/i);
     await user.click(saveBtns[saveBtns.length - 1]);
-    expect(screen.getByText('Saving…')).toBeInTheDocument();
+    expect(screen.getByText('Savingâ€¦')).toBeInTheDocument();
   });
 
   it('sends watermark and auth settings on save', async () => {

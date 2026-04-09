@@ -168,4 +168,55 @@ mod tests {
             other => panic!("expected Internal, got {other:?}"),
         }
     }
+
+    #[test]
+    fn error_display_messages() {
+        assert_eq!(
+            format!("{}", AppError::Config("bad config".into())),
+            "Configuration error: bad config"
+        );
+        assert_eq!(
+            format!("{}", AppError::Vault("vault down".into())),
+            "Vault error: vault down"
+        );
+        assert_eq!(
+            format!("{}", AppError::Auth("no token".into())),
+            "Authentication error: no token"
+        );
+        assert_eq!(
+            format!("{}", AppError::Validation("missing field".into())),
+            "Validation error: missing field"
+        );
+        assert_eq!(
+            format!("{}", AppError::NotFound("item".into())),
+            "Not found: item"
+        );
+        assert_eq!(format!("{}", AppError::Forbidden), "Forbidden");
+        assert_eq!(format!("{}", AppError::SetupRequired), "Setup required");
+        assert_eq!(
+            format!("{}", AppError::Internal("oops".into())),
+            "oops"
+        );
+    }
+
+    #[test]
+    fn error_debug_format() {
+        let err = AppError::Auth("test".into());
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Auth"));
+        assert!(debug.contains("test"));
+    }
+
+    #[test]
+    fn reqwest_error_returns_502() {
+        // Build a reqwest error by parsing an invalid URL
+        let err = reqwest::Client::new()
+            .get("not-a-url")
+            .build();
+        if let Err(e) = err {
+            let app_err: AppError = e.into();
+            let (status, _) = error_response(app_err);
+            assert_eq!(status, StatusCode::BAD_GATEWAY);
+        }
+    }
 }

@@ -123,4 +123,32 @@ mod tests {
         revoke("final-pressure-token", now_secs() + 86400);
         assert!(is_revoked("final-pressure-token"));
     }
+
+    #[test]
+    fn token_hash_is_hex_64_chars() {
+        let h = token_hash("any-token");
+        assert_eq!(h.len(), 64); // SHA-256 = 32 bytes = 64 hex chars
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn now_secs_returns_recent() {
+        let ts = now_secs();
+        // After 2020-01-01
+        assert!(ts > 1_577_836_800);
+    }
+
+    #[test]
+    fn revoke_same_token_twice() {
+        let token = "double-revoke-test-token";
+        let exp = now_secs() + 3600;
+        revoke(token, exp);
+        revoke(token, exp);
+        assert!(is_revoked(token));
+    }
+
+    #[test]
+    fn max_entries_constant() {
+        assert_eq!(MAX_ENTRIES, 100_000);
+    }
 }

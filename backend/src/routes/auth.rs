@@ -124,6 +124,26 @@ fn extract_client_ip(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// Helper to get the base URL for redirect URIs, respecting proxy headers.
+fn get_base_url(headers: &HeaderMap) -> String {
+    let protocol = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+
+    if host.contains(':') {
+        format!("{}://{}", protocol, host)
+    } else {
+        // If no port and default protocol, keep it clean
+        format!("{}://{}", protocol, host)
+    }
+}
+
 /// POST /api/auth/login – authenticate with local username/password.
 /// Returns a signed JWT for subsequent API calls.
 pub async fn login(
@@ -211,17 +231,20 @@ pub async fn login(
             .ok_or(AppError::Internal("Database not available".into()))?
     };
 
-    let row: Option<(Uuid, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, u.password_hash, r.name
+    let row: Option<(Uuid, String, Option<String>, String, bool, bool, bool, bool, bool, bool, bool, bool, bool)> = sqlx::query_as(
+        "SELECT u.id, u.username, u.password_hash, r.name,
+                r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
+                r.can_create_users, r.can_create_user_groups, r.can_create_connections,
+                r.can_create_connection_folders, r.can_create_sharing_profiles
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE (u.username = $1 OR u.email = $1) AND u.auth_type = 'local'",
+         WHERE (u.username = $1 OR u.email = $1) AND u.auth_type = 'local' AND u.deleted_at IS NULL",
     )
     .bind(&body.username)
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, password_hash, role) =
+    let (user_id, username, password_hash, role, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles) =
         row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
     let hash = password_hash
@@ -272,6 +295,15 @@ pub async fn login(
             "id": user_id,
             "username": username,
             "role": role,
+            "can_manage_system": can_manage_system,
+            "can_manage_users": can_manage_users,
+            "can_manage_connections": can_manage_connections,
+            "can_view_audit_logs": can_view_audit_logs,
+            "can_create_users": can_create_users,
+            "can_create_user_groups": can_create_user_groups,
+            "can_create_connections": can_create_connections,
+            "can_create_connection_folders": can_create_connection_folders,
+            "can_create_sharing_profiles": can_create_sharing_profiles,
         }
     })))
 }
@@ -366,7 +398,10 @@ pub async fn logout(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppEr
 // ── SSO / OIDC ─────────────────────────────────────────────────────────
 
 /// GET /api/auth/sso/login – redirect to the OIDC provider.
-pub async fn sso_login(State(state): State<SharedState>) -> Result<Redirect, AppError> {
+pub async fn sso_login(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Redirect, AppError> {
     let db = {
         let s = state.read().await;
         s.db.clone()
@@ -396,11 +431,8 @@ pub async fn sso_login(State(state): State<SharedState>) -> Result<Redirect, App
     let discovery = fetch_oidc_discovery(&issuer_url).await?;
 
     // Construct authorization URL with CSRF state parameter
-    let redirect_uri = format!(
-        "{}://{}/api/auth/sso/callback",
-        "https",
-        std::env::var("STRATA_DOMAIN").unwrap_or_else(|_| "localhost".into())
-    );
+    let base_url = get_base_url(&headers);
+    let redirect_uri = format!("{}/api/auth/sso/callback", base_url);
 
     let state = Uuid::new_v4().to_string();
     {
@@ -431,6 +463,7 @@ pub struct SsoCallbackParams {
 /// GET /api/auth/sso/callback – handle the OIDC callback.
 pub async fn sso_callback(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Query(params): Query<SsoCallbackParams>,
 ) -> Result<Redirect, AppError> {
     // Validate CSRF state parameter
@@ -487,11 +520,8 @@ pub async fn sso_callback(
     let discovery = fetch_oidc_discovery(&issuer_url).await?;
     let client = reqwest::Client::new();
 
-    let redirect_uri = format!(
-        "{}://{}/api/auth/sso/callback",
-        "https",
-        std::env::var("STRATA_DOMAIN").unwrap_or_else(|_| "localhost".into())
-    );
+    let base_url = get_base_url(&headers);
+    let redirect_uri = format!("{}/api/auth/sso/callback", base_url);
 
     // Exchange code for token
     let token_res: serde_json::Value = client
@@ -510,13 +540,13 @@ pub async fn sso_callback(
         .await
         .map_err(|e| AppError::Auth(format!("Token response parse error: {e}")))?;
 
-    let access_token = token_res["access_token"]
+    let id_token = token_res["id_token"]
         .as_str()
-        .ok_or_else(|| AppError::Auth("Missing access_token in response".into()))?;
+        .ok_or_else(|| AppError::Auth("Missing id_token in response".into()))?;
 
     // Validate token and get claims
     let claims =
-        crate::services::auth::validate_token(&issuer_url, &client_id, access_token).await?;
+        crate::services::auth::validate_token(&issuer_url, &client_id, id_token).await?;
 
     // Extract email from claims
     let user_email = claims.email.as_ref().ok_or_else(|| {
@@ -531,7 +561,7 @@ pub async fn sso_callback(
         role_name: String,
         sub: Option<String>,
         #[allow(dead_code)]
-        _full_name: Option<String>,
+        full_name: Option<String>,
     }
 
     let row: Option<SsoUserRow> = sqlx::query_as(
@@ -671,5 +701,142 @@ mod tests {
         let req: LoginRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.username, "admin");
         assert_eq!(req.password, "secret");
+    }
+
+    #[test]
+    fn extract_client_ip_empty_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "".parse().unwrap());
+        assert_eq!(extract_client_ip(&headers), "unknown");
+    }
+
+    #[test]
+    fn extract_client_ip_ipv6() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "::1".parse().unwrap());
+        assert_eq!(extract_client_ip(&headers), "::1");
+    }
+
+    #[test]
+    fn extract_client_ip_many_entries() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "10.0.0.1, 172.16.0.1, 192.168.0.1, 203.0.113.50".parse().unwrap(),
+        );
+        assert_eq!(extract_client_ip(&headers), "203.0.113.50");
+    }
+
+    #[test]
+    fn create_local_jwt_exp_is_24h_from_iat() {
+        let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
+        let uid = Uuid::new_v4();
+        let token = create_local_jwt(uid, "carol", "admin").unwrap();
+        use base64::Engine;
+        let parts: Vec<&str> = token.split('.').collect();
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(parts[1]))
+            .unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        let iat = claims["iat"].as_u64().unwrap();
+        let exp = claims["exp"].as_u64().unwrap();
+        assert_eq!(exp - iat, 86400);
+    }
+
+    #[test]
+    fn rate_limit_constants() {
+        assert_eq!(MAX_ATTEMPTS, 5);
+        assert_eq!(WINDOW_SECS, 60);
+        assert_eq!(MAX_IP_ATTEMPTS, 20);
+        assert_eq!(IP_WINDOW_SECS, 300);
+        assert_eq!(MAX_RATE_LIMIT_ENTRIES, 50_000);
+        assert_eq!(SSO_STATE_TTL_SECS, 300);
+        assert_eq!(OIDC_DISCOVERY_TTL_SECS, 600);
+    }
+
+    #[test]
+    fn login_request_rejects_missing_fields() {
+        let json = r#"{"username":"admin"}"#;
+        let res: Result<LoginRequest, _> = serde_json::from_str(json);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn get_base_url_with_forwarded_proto_and_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("host", "example.com".parse().unwrap());
+        assert_eq!(get_base_url(&headers), "https://example.com");
+    }
+
+    #[test]
+    fn get_base_url_with_port_in_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
+        headers.insert("host", "example.com:8080".parse().unwrap());
+        assert_eq!(get_base_url(&headers), "http://example.com:8080");
+    }
+
+    #[test]
+    fn get_base_url_defaults() {
+        let headers = HeaderMap::new();
+        assert_eq!(get_base_url(&headers), "http://localhost");
+    }
+
+    #[test]
+    fn get_base_url_missing_proto() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "myhost.com".parse().unwrap());
+        assert_eq!(get_base_url(&headers), "http://myhost.com");
+    }
+
+    #[tokio::test]
+    async fn logout_missing_auth_header() {
+        let headers = HeaderMap::new();
+        let result = logout(headers).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn logout_invalid_auth_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic dXNlcjpwYXNz".parse().unwrap(),
+        );
+        let result = logout(headers).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn logout_with_bearer_token() {
+        let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
+        let mut headers = HeaderMap::new();
+        // Use a fake JWT-like token (won't decode but that's OK - it goes to the else branch)
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer some.fake.token".parse().unwrap(),
+        );
+        let result = logout(headers).await;
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        assert_eq!(json.0["status"], "logged_out");
+    }
+
+    #[tokio::test]
+    async fn logout_with_valid_local_jwt() {
+        let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
+        let uid = Uuid::new_v4();
+        let token = create_local_jwt(uid, "test_user", "admin").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+        let result = logout(headers).await;
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        assert_eq!(json.0["status"], "logged_out");
     }
 }

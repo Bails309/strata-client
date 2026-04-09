@@ -35,7 +35,7 @@ import {
 function renderCredentials() {
   return render(
     <BrowserRouter>
-      <Credentials />
+      <Credentials vaultConfigured={true} />
     </BrowserRouter>,
   );
 }

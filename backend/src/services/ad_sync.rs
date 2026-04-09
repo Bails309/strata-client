@@ -18,7 +18,7 @@ pub struct AdSyncConfig {
     pub protocol: String,
     pub default_port: i32,
     pub domain_override: Option<String>,
-    pub group_id: Option<Uuid>,
+    pub folder_id: Option<Uuid>,
     pub tls_skip_verify: bool,
     pub sync_interval_minutes: i32,
     pub enabled: bool,
@@ -155,7 +155,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
             SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS t(dn, hostname, name, description)
         ),
         upserted AS (
-            INSERT INTO connections (name, protocol, hostname, port, domain, description, group_id, ad_source_id, ad_dn, extra)
+            INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, ad_source_id, ad_dn, extra)
             SELECT name, $5, hostname, $6, $7, description, $8, $9, dn, '{}'::jsonb
             FROM discovered
             ON CONFLICT (ad_source_id, ad_dn) DO UPDATE SET
@@ -185,7 +185,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     .bind(&config.protocol)
     .bind(config.default_port)
     .bind(&config.domain_override)
-    .bind(config.group_id)
+    .bind(config.folder_id)
     .bind(config.id)
     .fetch_one(pool)
     .await?;
@@ -724,7 +724,7 @@ mod tests {
             protocol: "rdp".to_string(),
             default_port: 3389,
             domain_override: None,
-            group_id: None,
+            folder_id: None,
             tls_skip_verify: false,
             sync_interval_minutes: 60,
             enabled: true,
@@ -763,7 +763,7 @@ mod tests {
             "protocol": "rdp",
             "default_port": 3389,
             "domain_override": null,
-            "group_id": null,
+            "folder_id": null,
             "tls_skip_verify": true,
             "sync_interval_minutes": 30,
             "enabled": false,
@@ -786,7 +786,7 @@ mod tests {
     fn ad_sync_config_optional_fields() {
         let config = sample_config();
         assert!(config.domain_override.is_none());
-        assert!(config.group_id.is_none());
+        assert!(config.folder_id.is_none());
         assert!(config.keytab_path.is_none());
         assert!(config.krb5_principal.is_none());
         assert!(config.ca_cert_pem.is_none());
@@ -893,5 +893,131 @@ mod tests {
         let ldif = "# This is a comment\ndn: CN=PC1,DC=corp\ncn: PC1\n\n";
         let result = parse_ldif(ldif).unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn parse_ldif_uses_name_fallback() {
+        // When cn is absent, fall back to 'name' attribute
+        let ldif = "dn: CN=PC1,DC=corp\nname: MyPC\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "MyPC");
+    }
+
+    #[test]
+    fn parse_ldif_uses_dn_as_name_fallback() {
+        // When neither cn nor name is present, use DN as name
+        let ldif = "dn: CN=PC1,DC=corp\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "CN=PC1,DC=corp");
+    }
+
+    #[test]
+    fn parse_ldif_continuation_on_attribute() {
+        // Continuation lines on non-DN attributes
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\ndescription: Long desc\n ription continued\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].description.as_deref(), Some("Long description continued"));
+    }
+
+    #[test]
+    fn parse_ldif_flush_at_end_without_trailing_newline() {
+        // Entry at end of file without trailing blank line
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "PC1");
+    }
+
+    #[test]
+    fn parse_ldif_dns_host_name() {
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\ndNSHostName: pc1.corp.local\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result[0].dns_host_name.as_deref(), Some("pc1.corp.local"));
+    }
+
+    #[test]
+    fn parse_ldif_only_comments() {
+        let ldif = "# comment 1\n# comment 2\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_ldif_multiple_continuation_lines() {
+        let ldif = "dn: CN=PC1,\n OU=Computers,\n DC=corp,DC=com\ncn: PC1\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].dn.contains("DC=com"));
+    }
+
+    #[test]
+    fn ad_sync_run_completed_with_counts() {
+        let run = AdSyncRun {
+            id: Uuid::nil(),
+            config_id: Uuid::nil(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            status: "completed".to_string(),
+            created: 50,
+            updated: 25,
+            soft_deleted: 10,
+            hard_deleted: 5,
+            error_message: None,
+        };
+        let v = serde_json::to_value(&run).unwrap();
+        assert_eq!(v["created"], 50);
+        assert_eq!(v["hard_deleted"], 5);
+    }
+
+    // ── DiscoveredComputer ────────────────────────────────────────────
+
+    #[test]
+    fn discovered_computer_without_optional_fields() {
+        let dc = DiscoveredComputer {
+            dn: "CN=PC1,DC=test".to_string(),
+            name: "PC1".to_string(),
+            dns_host_name: None,
+            description: None,
+        };
+        assert!(dc.dns_host_name.is_none());
+        assert!(dc.description.is_none());
+    }
+
+    // ── AdSyncConfig extra fields ─────────────────────────────────────
+
+    #[test]
+    fn ad_sync_config_with_all_optional_fields() {
+        let config = AdSyncConfig {
+            domain_override: Some("CORP".to_string()),
+            group_id: Some(Uuid::new_v4()),
+            keytab_path: Some("/etc/krb5.keytab".to_string()),
+            krb5_principal: Some("svc@CORP.LOCAL".to_string()),
+            ca_cert_pem: Some("-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----".to_string()),
+            ..sample_config()
+        };
+        assert_eq!(config.domain_override.as_deref(), Some("CORP"));
+        assert!(config.group_id.is_some());
+        assert_eq!(config.keytab_path.as_deref(), Some("/etc/krb5.keytab"));
+        assert_eq!(config.krb5_principal.as_deref(), Some("svc@CORP.LOCAL"));
+        assert!(config.ca_cert_pem.is_some());
+    }
+
+    #[test]
+    fn build_tls_config_empty_pem_fails() {
+        let result = build_tls_config_with_ca("");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("No certificates found"));
+    }
+
+    #[test]
+    fn build_tls_config_invalid_pem_fails() {
+        let result = build_tls_config_with_ca("this is not a PEM");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("No certificates found"));
     }
 }

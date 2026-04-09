@@ -472,4 +472,30 @@ mod tests {
         assert_eq!(q.height.unwrap(), 1080);
         assert_eq!(q.dpi.unwrap(), 144);
     }
+
+    #[test]
+    fn shared_tunnel_query_partial() {
+        let q: SharedTunnelQuery = serde_json::from_str(r#"{"width":2560}"#).unwrap();
+        assert_eq!(q.width.unwrap(), 2560);
+        assert!(q.height.is_none());
+        assert!(q.dpi.is_none());
+    }
+
+    #[test]
+    fn share_link_response_control_mode() {
+        let resp = ShareLinkResponse {
+            share_token: "tok-456".into(),
+            share_url: "/shared/tok-456?mode=control".into(),
+            mode: "control".into(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["mode"], "control");
+        assert!(json["share_url"].as_str().unwrap().contains("mode=control"));
+    }
+
+    #[test]
+    fn create_share_request_arbitrary_string() {
+        let r: CreateShareRequest = serde_json::from_str(r#"{"mode":"other"}"#).unwrap();
+        assert_eq!(r.mode, "other");
+    }
 }

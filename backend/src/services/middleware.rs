@@ -18,6 +18,15 @@ pub struct AuthUser {
     pub sub: String,
     pub username: String,
     pub role: String,
+    pub can_manage_system: bool,
+    pub can_manage_users: bool,
+    pub can_manage_connections: bool,
+    pub can_view_audit_logs: bool,
+    pub can_create_users: bool,
+    pub can_create_user_groups: bool,
+    pub can_create_connections: bool,
+    pub can_create_connection_folders: bool,
+    pub can_create_sharing_profiles: bool,
 }
 
 /// Axum middleware that validates the Bearer token (local JWT or OIDC),
@@ -127,23 +136,36 @@ async fn try_local_jwt(
         .parse()
         .map_err(|_| AppError::Auth("Invalid token subject".into()))?;
 
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name
+    let row: Option<(Uuid, String, String, bool, bool, bool, bool, bool, bool, bool, bool, bool)> = sqlx::query_as(
+        "SELECT u.id, u.username, r.name,
+                r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
+                r.can_create_users, r.can_create_user_groups, r.can_create_connections,
+                r.can_create_connection_folders, r.can_create_sharing_profiles
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.id = $1",
+         WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
     .bind(user_id)
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
 
-    let (id, username, role) = row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
+    let (id, username, role, sys, users, conn, audit, cr_users, cr_ugroups, cr_conn, cr_cgroups, cr_share) =
+        row.ok_or_else(|| AppError::Auth("User no longer exists or has been deleted".into()))?;
 
     Ok(Some(AuthUser {
         id,
         sub: claims.sub,
         username,
         role,
+        can_manage_system: sys,
+        can_manage_users: users,
+        can_manage_connections: conn,
+        can_view_audit_logs: audit,
+        can_create_users: cr_users,
+        can_create_user_groups: cr_ugroups,
+        can_create_connections: cr_conn,
+        can_create_connection_folders: cr_cgroups,
+        can_create_sharing_profiles: cr_share,
     }))
 }
 
@@ -164,24 +186,36 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
 
     let claims = auth::validate_token(&issuer_url, &client_id, token).await?;
 
-    let user: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name
+    let user: Option<(Uuid, String, String, bool, bool, bool, bool, bool, bool, bool, bool, bool)> = sqlx::query_as(
+        "SELECT u.id, u.username, r.name,
+                r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
+                r.can_create_users, r.can_create_user_groups, r.can_create_connections,
+                r.can_create_connection_folders, r.can_create_sharing_profiles
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.sub = $1",
+         WHERE u.sub = $1 AND u.deleted_at IS NULL",
     )
     .bind(&claims.sub)
     .fetch_optional(&db.pool)
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, role) = user
-        .ok_or_else(|| AppError::Auth(format!("No user found for OIDC subject: {}", claims.sub)))?;
+    let (user_id, username, role, sys, users, conn, audit, cr_users, cr_ugroups, cr_conn, cr_cgroups, cr_share) = user
+        .ok_or_else(|| AppError::Auth(format!("No active user found for OIDC subject: {}", claims.sub)))?;
 
     Ok(AuthUser {
         id: user_id,
         sub: claims.sub,
         username,
         role,
+        can_manage_system: sys,
+        can_manage_users: users,
+        can_manage_connections: conn,
+        can_view_audit_logs: audit,
+        can_create_users: cr_users,
+        can_create_user_groups: cr_ugroups,
+        can_create_connections: cr_conn,
+        can_create_connection_folders: cr_cgroups,
+        can_create_sharing_profiles: cr_share,
     })
 }
 
@@ -194,7 +228,17 @@ pub async fn require_admin(req: Request, next: Next) -> Result<Response, AppErro
         .cloned()
         .ok_or(AppError::Auth("Not authenticated".into()))?;
 
-    if user.role != "admin" {
+    let has_any_admin_perm = user.can_manage_system
+        || user.can_manage_users
+        || user.can_manage_connections
+        || user.can_view_audit_logs
+        || user.can_create_users
+        || user.can_create_user_groups
+        || user.can_create_connections
+        || user.can_create_connection_folders
+        || user.can_create_sharing_profiles;
+
+    if !has_any_admin_perm {
         return Err(AppError::Forbidden);
     }
 
@@ -231,5 +275,35 @@ mod tests {
         let debug = format!("{:?}", user);
         assert!(debug.contains("bob"));
         assert!(debug.contains("user"));
+    }
+
+    #[test]
+    fn auth_user_fields_accessible() {
+        let id = Uuid::new_v4();
+        let user = AuthUser {
+            id,
+            sub: "oidc|12345".into(),
+            username: "charlie".into(),
+            role: "admin".into(),
+        };
+        assert_eq!(user.id, id);
+        assert_eq!(user.sub, "oidc|12345");
+        assert_eq!(user.username, "charlie");
+        assert_eq!(user.role, "admin");
+    }
+
+    #[test]
+    fn auth_user_clone_independence() {
+        let user = AuthUser {
+            id: Uuid::new_v4(),
+            sub: "sub-abc".into(),
+            username: "dave".into(),
+            role: "viewer".into(),
+        };
+        let mut cloned = user.clone();
+        cloned.username = "eve".into();
+        // Original unaffected
+        assert_eq!(user.username, "dave");
+        assert_eq!(cloned.username, "eve");
     }
 }

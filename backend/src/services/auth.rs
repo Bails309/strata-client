@@ -178,4 +178,50 @@ mod tests {
         assert_eq!(disc.issuer, "https://idp.example.com");
         assert!(disc.jwks_uri.contains("jwks.json"));
     }
+
+    #[test]
+    fn claims_clone() {
+        let claims = Claims {
+            sub: "user1".into(),
+            preferred_username: Some("alice".into()),
+            email: Some("a@b.com".into()),
+            name: Some("Alice".into()),
+            exp: 9999999999,
+            iat: 1000000000,
+        };
+        let cloned = claims.clone();
+        assert_eq!(cloned.sub, "user1");
+        assert_eq!(cloned.preferred_username.as_deref(), Some("alice"));
+        assert_eq!(cloned.email.as_deref(), Some("a@b.com"));
+        assert_eq!(cloned.name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn claims_deserialize_from_json() {
+        let json = r#"{
+            "sub": "user-42",
+            "preferred_username": "bob",
+            "email": null,
+            "name": null,
+            "exp": 9999999999,
+            "iat": 1000000000
+        }"#;
+        let claims: Claims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.sub, "user-42");
+        assert_eq!(claims.preferred_username.as_deref(), Some("bob"));
+        assert!(claims.email.is_none());
+    }
+
+    #[test]
+    fn oidc_discovery_clone() {
+        let disc = OidcDiscovery {
+            jwks_uri: "https://example.com/jwks".into(),
+            issuer: "https://example.com".into(),
+            authorization_endpoint: "https://example.com/auth".into(),
+            token_endpoint: "https://example.com/token".into(),
+        };
+        let cloned = disc.clone();
+        assert_eq!(cloned.issuer, disc.issuer);
+        assert_eq!(cloned.jwks_uri, disc.jwks_uri);
+    }
 }

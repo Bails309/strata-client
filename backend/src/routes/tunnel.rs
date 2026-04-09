@@ -448,4 +448,41 @@ mod tests {
         const { assert!(MAX_WIDTH >= 3840) }; // at least 4K
         const { assert!(MAX_HEIGHT >= 2160) }; // at least 4K
     }
+
+    #[test]
+    fn clamp_dimension_height_variants() {
+        assert_eq!(clamp_dimension(0, MIN_DIM, MAX_HEIGHT, 1080), 1080);
+        assert_eq!(clamp_dimension(30, MIN_DIM, MAX_HEIGHT, 1080), MIN_DIM);
+        assert_eq!(clamp_dimension(5000, MIN_DIM, MAX_HEIGHT, 1080), MAX_HEIGHT);
+        assert_eq!(clamp_dimension(720, MIN_DIM, MAX_HEIGHT, 1080), 720);
+    }
+
+    #[test]
+    fn clamp_dimension_boundary_values() {
+        assert_eq!(clamp_dimension(1, MIN_DIM, MAX_WIDTH, 1920), MIN_DIM);
+        assert_eq!(clamp_dimension(63, MIN_DIM, MAX_WIDTH, 1920), MIN_DIM);
+        assert_eq!(clamp_dimension(65, MIN_DIM, MAX_WIDTH, 1920), 65);
+        assert_eq!(clamp_dimension(7679, MIN_DIM, MAX_WIDTH, 1920), 7679);
+        assert_eq!(clamp_dimension(7681, MIN_DIM, MAX_WIDTH, 1920), MAX_WIDTH);
+    }
+
+    #[test]
+    fn tunnel_query_partial_values() {
+        let q: TunnelQuery = serde_json::from_str(r#"{"width":2560}"#).unwrap();
+        assert_eq!(q.width.unwrap(), 2560);
+        assert!(q.height.is_none());
+        assert!(q.dpi.is_none());
+        assert!(q.username.is_none());
+    }
+
+    #[test]
+    fn create_ticket_request_full() {
+        let json = r#"{"connection_id":"550e8400-e29b-41d4-a716-446655440000","username":"admin","password":"secret","width":3840,"height":2160,"dpi":192}"#;
+        let r: CreateTicketRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.username.as_deref(), Some("admin"));
+        assert_eq!(r.password.as_deref(), Some("secret"));
+        assert_eq!(r.width, Some(3840));
+        assert_eq!(r.height, Some(2160));
+        assert_eq!(r.dpi, Some(192));
+    }
 }

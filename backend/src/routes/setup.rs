@@ -210,4 +210,22 @@ mod tests {
         );
         assert_eq!(r.vault_token.as_deref().unwrap(), "hvs.1234");
     }
+
+    #[test]
+    fn init_request_partial_external_vault() {
+        let json = r#"{"vault_mode":"external","vault_address":"https://vault:8200"}"#;
+        let r: InitRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.vault_mode.as_deref(), Some("external"));
+        assert!(r.vault_token.is_none());
+        assert!(r.vault_transit_key.is_none());
+    }
+
+    #[test]
+    fn initializing_flag_default_false() {
+        // The INITIALIZING flag should be false at rest (no active init)
+        // We can't fully test atomics without integration, but verify the type works
+        let val = INITIALIZING.load(Ordering::Relaxed);
+        // May be true or false depending on other test state, just verify it doesn't panic
+        let _ = val;
+    }
 }

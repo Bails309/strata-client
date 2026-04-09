@@ -44,6 +44,7 @@ export interface StatusResponse {
   phase: 'setup' | 'running';
   sso_enabled: boolean;
   local_auth_enabled: boolean;
+  vault_configured: boolean;
 }
 
 export const getStatus = () => request<StatusResponse>('/status');
@@ -62,6 +63,15 @@ export interface LoginResponse {
     id: string;
     username: string;
     role: string;
+    can_manage_system: boolean;
+    can_manage_users: boolean;
+    can_manage_connections: boolean;
+    can_view_audit_logs: boolean;
+    can_create_users: boolean;
+    can_create_user_groups: boolean;
+    can_create_connections: boolean;
+    can_create_connection_folders: boolean;
+    can_create_sharing_profiles: boolean;
   };
 }
 
@@ -92,6 +102,16 @@ export interface MeResponse {
   sub?: string;
   client_ip: string;
   watermark_enabled: boolean;
+  vault_configured: boolean;
+  can_manage_system: boolean;
+  can_manage_users: boolean;
+  can_manage_connections: boolean;
+  can_view_audit_logs: boolean;
+  can_create_users: boolean;
+  can_create_user_groups: boolean;
+  can_create_connections: boolean;
+  can_create_connection_folders: boolean;
+  can_create_sharing_profiles: boolean;
 }
 
 export const getMe = () => request<MeResponse>('/user/me');
@@ -180,7 +200,7 @@ export interface AdSyncConfig {
   protocol: string;
   default_port: number;
   domain_override?: string;
-  group_id?: string;
+  folder_id?: string;
   tls_skip_verify: boolean;
   sync_interval_minutes: number;
   enabled: boolean;
@@ -271,11 +291,27 @@ export const getServiceHealth = () => request<ServiceHealth>('/admin/health');
 export interface Role {
   id: string;
   name: string;
+  can_manage_system: boolean;
+  can_manage_users: boolean;
+  can_manage_connections: boolean;
+  can_view_audit_logs: boolean;
+  can_create_users: boolean;
+  can_create_user_groups: boolean;
+  can_create_connections: boolean;
+  can_create_connection_folders: boolean;
+  can_create_sharing_profiles: boolean;
 }
 
 export const getRoles = () => request<Role[]>('/admin/roles');
-export const createRole = (name: string) =>
-  request<Role>('/admin/roles', { method: 'POST', body: JSON.stringify({ name }) });
+
+export const createRole = (data: Omit<Role, 'id'>) =>
+  request<Role>('/admin/roles', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateRole = (id: string, data: Partial<Omit<Role, 'id'>>) =>
+  request<Role>(`/admin/roles/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const deleteRole = (id: string) =>
+  request<{ status: string }>(`/admin/roles/${id}`, { method: 'DELETE' });
 
 // ── Connections ─────────────────────────────────────────────────────
 
@@ -287,8 +323,8 @@ export interface Connection {
   port: number;
   domain?: string;
   description?: string;
-  group_id?: string;
-  group_name?: string;
+  folder_id?: string;
+  folder_name?: string;
   extra?: Record<string, string>;
   last_accessed?: string;
 }
@@ -306,24 +342,24 @@ export const updateConnection = (id: string, data: Omit<Connection, 'id'>) =>
 export const deleteConnection = (id: string) =>
   request<{ status: string }>(`/admin/connections/${id}`, { method: 'DELETE' });
 
-// ── Connection Groups ───────────────────────────────────────────────
+// ── Connection Folders ───────────────────────────────────────────────
 
-export interface ConnectionGroup {
+export interface ConnectionFolder {
   id: string;
   name: string;
   parent_id?: string;
 }
 
-export const getConnectionGroups = () => request<ConnectionGroup[]>('/admin/connection-groups');
+export const getConnectionFolders = () => request<ConnectionFolder[]>('/admin/connection-folders');
 
-export const createConnectionGroup = (data: { name: string; parent_id?: string }) =>
-  request<ConnectionGroup>('/admin/connection-groups', { method: 'POST', body: JSON.stringify(data) });
+export const createConnectionFolder = (data: { name: string; parent_id?: string }) =>
+  request<ConnectionFolder>('/admin/connection-folders', { method: 'POST', body: JSON.stringify(data) });
 
-export const updateConnectionGroup = (id: string, data: { name: string; parent_id?: string }) =>
-  request<ConnectionGroup>(`/admin/connection-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const updateConnectionFolder = (id: string, data: { name: string; parent_id?: string }) =>
+  request<ConnectionFolder>(`/admin/connection-folders/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
-export const deleteConnectionGroup = (id: string) =>
-  request<{ status: string }>(`/admin/connection-groups/${id}`, { method: 'DELETE' });
+export const deleteConnectionFolder = (id: string) =>
+  request<{ status: string }>(`/admin/connection-folders/${id}`, { method: 'DELETE' });
 
 export const updateRoleConnections = (role_id: string, connection_ids: string[]) =>
   request('/admin/role-connections', {
@@ -332,6 +368,20 @@ export const updateRoleConnections = (role_id: string, connection_ids: string[])
   });
 
 // ── Users ───────────────────────────────────────────────────────────
+
+export interface RoleMappings {
+  connection_ids: string[];
+  folder_ids: string[];
+}
+
+export const getRoleMappings = (roleId: string) =>
+  request<RoleMappings>(`/admin/roles/${roleId}/mappings`);
+
+export const updateRoleMappings = (roleId: string, connection_ids: string[], folder_ids: string[]) =>
+  request<{ status: string }>(`/admin/roles/${roleId}/mappings`, {
+    method: 'PUT',
+    body: JSON.stringify({ connection_ids, folder_ids }),
+  });
 
 export interface User {
   id: string;
@@ -347,7 +397,7 @@ export interface CreateUserRequest {
   username: string;
   email: string;
   full_name?: string;
-  role_name: string;
+  role_id: string;
   auth_type: 'local' | 'sso';
 }
 
@@ -361,6 +411,9 @@ export const getUsers = () => request<User[]>('/admin/users');
 
 export const createUser = (data: CreateUserRequest) =>
   request<CreateUserResponse>('/admin/users', { method: 'POST', body: JSON.stringify(data) });
+
+export const deleteUser = (id: string) =>
+  request<{ status: string }>(`/admin/users/${id}`, { method: 'DELETE' });
 
 // ── Credentials ─────────────────────────────────────────────────────
 

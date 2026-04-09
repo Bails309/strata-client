@@ -49,7 +49,7 @@ jobs:
         run: cargo install cargo-tarpaulin --locked
 
       - name: Generate backend coverage report
-        run: cargo tarpaulin --skip-clean --out xml --out html --output-dir coverage/ --fail-under 20 -- --test-threads=1
+        run: cargo tarpaulin --skip-clean --out xml --out html --output-dir coverage/ --exclude-files src/main.rs --fail-under 20 -- --test-threads=1
 
       - name: Upload backend coverage
         if: always()

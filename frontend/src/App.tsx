@@ -12,9 +12,11 @@ import NvrPlayer from './pages/NvrPlayer';
 import Layout from './components/Layout';
 import { SessionManagerProvider } from './components/SessionManager';
 import SessionBar from './components/SessionBar';
+import { getMe, MeResponse } from './api';
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [user, setUser] = useState<MeResponse | null>(null);
   const navigate = useNavigate();
 
   const checkAuth = useCallback(async () => {
@@ -25,19 +27,13 @@ export default function App() {
     }
 
     try {
-      // Validate the token by calling /api/user/me
-      const res = await fetch('/api/user/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        setAuthenticated(true);
-      } else {
-        localStorage.removeItem('access_token');
-        setAuthenticated(false);
-      }
+      const data = await getMe();
+      setUser(data);
+      setAuthenticated(true);
     } catch {
-      // Backend unreachable
+      localStorage.removeItem('access_token');
       setAuthenticated(false);
+      setUser(null);
     }
   }, []);
 
@@ -45,14 +41,15 @@ export default function App() {
     checkAuth();
   }, [checkAuth]);
 
-  function handleLogin() {
-    setAuthenticated(true);
+  async function handleLogin() {
+    await checkAuth();
     navigate('/');
   }
 
   function handleLogout() {
     localStorage.removeItem('access_token');
     setAuthenticated(false);
+    setUser(null);
     navigate('/login');
   }
 
@@ -81,14 +78,14 @@ export default function App() {
   return (
     <SessionManagerProvider>
       <Routes>
-        <Route element={<Layout onLogout={handleLogout} />}>
+        <Route element={<Layout user={user} onLogout={handleLogout} />}>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/credentials" element={<Credentials />} />
-          <Route path="/admin" element={<AdminSettings />} />
+          <Route path="/credentials" element={user?.vault_configured ? <Credentials vaultConfigured={true} /> : <Navigate to="/" replace />} />
+          <Route path="/admin" element={(user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections || user?.can_create_users || user?.can_create_user_groups || user?.can_create_connections || user?.can_create_connection_folders || user?.can_create_sharing_profiles) ? <AdminSettings user={user} /> : <Navigate to="/" replace />} />
           <Route path="/session/:connectionId" element={<SessionClient />} />
           <Route path="/tiled" element={<TiledView />} />
           <Route path="/observe/:sessionId" element={<NvrPlayer />} />
-          <Route path="/audit" element={<AuditLogs />} />
+          <Route path="/audit" element={user?.can_view_audit_logs ? <AuditLogs /> : <Navigate to="/" replace />} />
         </Route>
         <Route path="/shared/:shareToken" element={<SharedViewer />} />
         <Route path="/login" element={<Navigate to="/" replace />} />

@@ -119,15 +119,41 @@ pub async fn update_settings(
 #[derive(Deserialize)]
 pub struct SsoTestRequest {
     pub issuer_url: String,
+    pub client_id: String,
+    pub client_secret: String,
 }
 
 pub async fn test_sso_connection(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Json(body): Json<SsoTestRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Validate issuer URL uses HTTPS
     if !body.issuer_url.starts_with("https://") {
         return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
+    }
+
+    let mut client_secret = body.client_secret.clone();
+
+    // If secret is masked or empty, try to recover from saved settings
+    if client_secret == "********" || client_secret.is_empty() {
+        let db = require_running(&state).await?;
+        if let Some(saved) = settings::get(&db.pool, "sso_client_secret").await? {
+            if saved.starts_with("vault:") {
+                let vault_cfg = {
+                    let s = state.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                if let Some(ref vc) = vault_cfg {
+                    client_secret = crate::services::vault::unseal_setting(vc, &saved).await?;
+                } else {
+                    return Err(AppError::Validation(
+                        "Vault must be configured to retrieve saved credentials".into(),
+                    ));
+                }
+            } else {
+                client_secret = saved;
+            }
+        }
     }
 
     let client = reqwest::Client::builder()
@@ -152,21 +178,60 @@ pub async fn test_sso_connection(
     let config: serde_json::Value = resp.json().await?;
 
     // Basic validation of the OIDC configuration
-    let has_auth = config.get("authorization_endpoint").is_some();
-    let has_token = config.get("token_endpoint").is_some();
-    let has_jwks = config.get("jwks_uri").is_some();
+    let auth_endpoint = config.get("authorization_endpoint").and_then(|v| v.as_str());
+    let token_endpoint = config.get("token_endpoint").and_then(|v| v.as_str());
+    let jwks_uri = config.get("jwks_uri").and_then(|v| v.as_str());
 
-    if has_auth && has_token && has_jwks {
-        Ok(Json(json!({
-            "success": true,
-            "msg": "Successfully connected to OIDC issuer and validated configuration."
-        })))
-    } else {
-        Err(AppError::Validation(
+    if auth_endpoint.is_none() || token_endpoint.is_none() || jwks_uri.is_none() {
+        return Err(AppError::Validation(
             "OIDC configuration is missing required endpoints (authorization, token, or jwks)."
                 .into(),
-        ))
+        ));
     }
+
+    // Attempt to validate credentials if we have a secret
+    if !client_secret.is_empty() && client_secret != "********" {
+        if let Some(token_url) = token_endpoint {
+            let token_resp = client
+                .post(token_url)
+                .basic_auth(&body.client_id, Some(&client_secret))
+                .form(&[
+                    ("grant_type", "authorization_code"),
+                    ("code", "verify-secret-test"),
+                    ("redirect_uri", "http://localhost/callback"),
+                ])
+                .send()
+                .await?;
+
+            let status = token_resp.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(AppError::Validation(
+                    "OIDC provider rejected credentials (401 Unauthorized). Check Client ID and Secret.".into(),
+                ));
+            }
+
+            // If we get 400 Bad Request with an invalid_grant error, it means the 
+            // Client ID and Secret were accepted, but the dummy code was rejected.
+            // This counts as a successful credential verification.
+            if status.is_client_error() && status != reqwest::StatusCode::UNAUTHORIZED {
+                let error_body: serde_json::Value = token_resp.json().await.unwrap_or_default();
+                let error_code = error_body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+                
+                // If it's a client authentication error, it's a failure.
+                // Otherwise, if it's a grant/code error, it means the secret was correct.
+                if error_code == "invalid_client" || error_code == "unauthorized_client" {
+                     return Err(AppError::Validation(
+                        format!("OIDC provider rejected client: {error_code}. Check settings in Keycloak.").into(),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "status": "success",
+        "message": "Successfully connected to OIDC issuer and validated configuration."
+    })))
 }
 
 #[derive(Deserialize)]
@@ -852,19 +917,38 @@ pub async fn update_recordings(
 pub struct RoleRow {
     pub id: Uuid,
     pub name: String,
+    pub can_manage_system: bool,
+    pub can_manage_users: bool,
+    pub can_manage_connections: bool,
+    pub can_view_audit_logs: bool,
+    pub can_create_users: bool,
+    pub can_create_user_groups: bool,
+    pub can_create_connections: bool,
+    pub can_create_connection_folders: bool,
+    pub can_create_sharing_profiles: bool,
 }
 
 pub async fn list_roles(State(state): State<SharedState>) -> Result<Json<Vec<RoleRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<RoleRow> = sqlx::query_as("SELECT id, name FROM roles ORDER BY name")
-        .fetch_all(&db.pool)
-        .await?;
+    let rows: Vec<RoleRow> =
+        sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles FROM roles ORDER BY name")
+            .fetch_all(&db.pool)
+            .await?;
     Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
 pub struct CreateRoleRequest {
     pub name: String,
+    pub can_manage_system: Option<bool>,
+    pub can_manage_users: Option<bool>,
+    pub can_manage_connections: Option<bool>,
+    pub can_view_audit_logs: Option<bool>,
+    pub can_create_users: Option<bool>,
+    pub can_create_user_groups: Option<bool>,
+    pub can_create_connections: Option<bool>,
+    pub can_create_connection_folders: Option<bool>,
+    pub can_create_sharing_profiles: Option<bool>,
 }
 
 pub async fn create_role(
@@ -872,10 +956,23 @@ pub async fn create_role(
     Json(body): Json<CreateRoleRequest>,
 ) -> Result<Json<RoleRow>, AppError> {
     let db = require_running(&state).await?;
-    let row: RoleRow = sqlx::query_as("INSERT INTO roles (name) VALUES ($1) RETURNING id, name")
-        .bind(&body.name)
-        .fetch_one(&db.pool)
-        .await?;
+    let row: RoleRow = sqlx::query_as(
+        "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+         RETURNING id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles",
+    )
+    .bind(&body.name)
+    .bind(body.can_manage_system.unwrap_or(false))
+    .bind(body.can_manage_users.unwrap_or(false))
+    .bind(body.can_manage_connections.unwrap_or(false))
+    .bind(body.can_view_audit_logs.unwrap_or(false))
+    .bind(body.can_create_users.unwrap_or(false))
+    .bind(body.can_create_user_groups.unwrap_or(false))
+    .bind(body.can_create_connections.unwrap_or(false))
+    .bind(body.can_create_connection_folders.unwrap_or(false))
+    .bind(body.can_create_sharing_profiles.unwrap_or(false))
+    .fetch_one(&db.pool)
+    .await?;
     audit::log(
         &db.pool,
         None,
@@ -884,6 +981,162 @@ pub async fn create_role(
     )
     .await?;
     Ok(Json(row))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateRoleRequest {
+    pub name: Option<String>,
+    pub can_manage_system: Option<bool>,
+    pub can_manage_users: Option<bool>,
+    pub can_manage_connections: Option<bool>,
+    pub can_view_audit_logs: Option<bool>,
+    pub can_create_users: Option<bool>,
+    pub can_create_user_groups: Option<bool>,
+    pub can_create_connections: Option<bool>,
+    pub can_create_connection_folders: Option<bool>,
+    pub can_create_sharing_profiles: Option<bool>,
+}
+
+pub async fn update_role(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateRoleRequest>,
+) -> Result<Json<RoleRow>, AppError> {
+    let db = require_running(&state).await?;
+
+    let mut tx = db.pool.begin().await?;
+
+    if let Some(ref name) = body.name {
+        sqlx::query("UPDATE roles SET name = $1 WHERE id = $2")
+            .bind(name)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    if let Some(v) = body.can_manage_system {
+        sqlx::query("UPDATE roles SET can_manage_system = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_manage_users {
+        sqlx::query("UPDATE roles SET can_manage_users = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_manage_connections {
+        sqlx::query("UPDATE roles SET can_manage_connections = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_view_audit_logs {
+        sqlx::query("UPDATE roles SET can_view_audit_logs = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_create_users {
+        sqlx::query("UPDATE roles SET can_create_users = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_create_user_groups {
+        sqlx::query("UPDATE roles SET can_create_user_groups = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_create_connections {
+        sqlx::query("UPDATE roles SET can_create_connections = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_create_connection_folders {
+        sqlx::query("UPDATE roles SET can_create_connection_folders = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(v) = body.can_create_sharing_profiles {
+        sqlx::query("UPDATE roles SET can_create_sharing_profiles = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+
+    let row: RoleRow = sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles FROM roles WHERE id = $1")
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await?;
+
+    audit::log(
+        &db.pool,
+        None,
+        "role.updated",
+        &json!({ "id": id.to_string(), "name": row.name }),
+    )
+    .await?;
+
+    Ok(Json(row))
+}
+
+pub async fn delete_role(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Protect system roles
+    let role_name: String = sqlx::query_scalar("SELECT name FROM roles WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&db.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Role not found".into()))?;
+
+    if role_name == "admin" || role_name == "user" {
+        return Err(AppError::Validation("System roles cannot be deleted".into()));
+    }
+
+    // Check if any users are using this role
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role_id = $1")
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await?;
+
+    if count > 0 {
+        return Err(AppError::Validation("Cannot delete role while users are assigned to it".into()));
+    }
+
+    sqlx::query("DELETE FROM roles WHERE id = $1")
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
+
+    audit::log(
+        &db.pool,
+        None,
+        "role.deleted",
+        &json!({ "id": id.to_string(), "name": role_name }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "deleted" })))
 }
 
 // ── Connections ────────────────────────────────────────────────────────
@@ -897,7 +1150,7 @@ pub struct ConnectionRow {
     pub port: i32,
     pub domain: Option<String>,
     pub description: String,
-    pub group_id: Option<Uuid>,
+    pub folder_id: Option<Uuid>,
     pub extra: serde_json::Value,
     pub last_accessed: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -907,7 +1160,7 @@ pub async fn list_connections(
 ) -> Result<Json<Vec<ConnectionRow>>, AppError> {
     let db = require_running(&state).await?;
     let rows: Vec<ConnectionRow> = sqlx::query_as(
-        "SELECT id, name, protocol, hostname, port, domain, description, group_id, extra, last_accessed FROM connections WHERE soft_deleted_at IS NULL ORDER BY name",
+        "SELECT id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed FROM connections WHERE soft_deleted_at IS NULL ORDER BY name",
     )
     .fetch_all(&db.pool)
     .await?;
@@ -923,7 +1176,7 @@ pub struct CreateConnectionRequest {
     pub domain: Option<String>,
     #[serde(default)]
     pub description: String,
-    pub group_id: Option<Uuid>,
+    pub folder_id: Option<Uuid>,
     #[serde(default)]
     pub extra: serde_json::Value,
 }
@@ -940,9 +1193,9 @@ pub async fn create_connection(
         body.extra.clone()
     };
     let row: ConnectionRow = sqlx::query_as(
-        "INSERT INTO connections (name, protocol, hostname, port, domain, description, group_id, extra)
+        "INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, extra)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, name, protocol, hostname, port, domain, description, group_id, extra, last_accessed",
+         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed",
     )
     .bind(&body.name)
     .bind(&body.protocol)
@@ -950,7 +1203,7 @@ pub async fn create_connection(
     .bind(port)
     .bind(&body.domain)
     .bind(&body.description)
-    .bind(body.group_id)
+    .bind(body.folder_id)
     .bind(&extra)
     .fetch_one(&db.pool)
     .await?;
@@ -977,9 +1230,9 @@ pub async fn update_connection(
         body.extra.clone()
     };
     let row: ConnectionRow = sqlx::query_as(
-        "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, group_id = $7, extra = $8, updated_at = now()
+        "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, folder_id = $7, extra = $8, updated_at = now()
          WHERE id = $9 AND soft_deleted_at IS NULL
-         RETURNING id, name, protocol, hostname, port, domain, description, group_id, extra, last_accessed",
+         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed",
     )
     .bind(&body.name)
     .bind(&body.protocol)
@@ -987,7 +1240,7 @@ pub async fn update_connection(
     .bind(port)
     .bind(&body.domain)
     .bind(&body.description)
-    .bind(body.group_id)
+    .bind(body.folder_id)
     .bind(&extra)
     .bind(id)
     .fetch_optional(&db.pool)
@@ -1030,19 +1283,47 @@ pub async fn delete_connection(
 // ── Role-Connection mapping ────────────────────────────────────────────
 
 #[derive(Deserialize)]
-pub struct RoleConnectionUpdate {
+pub struct RoleMappingUpdate {
     pub role_id: Uuid,
     pub connection_ids: Vec<Uuid>,
+    pub folder_ids: Vec<Uuid>,
 }
 
-pub async fn update_role_connections(
+#[derive(Serialize)]
+pub struct RoleMappings {
+    pub connection_ids: Vec<Uuid>,
+    pub folder_ids: Vec<Uuid>,
+}
+
+pub async fn get_role_mappings(
     State(state): State<SharedState>,
-    Json(body): Json<RoleConnectionUpdate>,
+    axum::extract::Path(role_id): axum::extract::Path<Uuid>,
+) -> Result<Json<RoleMappings>, AppError> {
+    let db = require_running(&state).await?;
+
+    let connection_ids: Vec<Uuid> = sqlx::query_scalar("SELECT connection_id FROM role_connections WHERE role_id = $1")
+        .bind(role_id)
+        .fetch_all(&db.pool)
+        .await?;
+
+    let folder_ids: Vec<Uuid> = sqlx::query_scalar("SELECT folder_id FROM role_folders WHERE role_id = $1")
+        .bind(role_id)
+        .fetch_all(&db.pool)
+        .await?;
+
+    Ok(Json(RoleMappings { connection_ids, folder_ids }))
+}
+
+pub async fn update_role_mappings(
+    State(state): State<SharedState>,
+    Json(body): Json<RoleMappingUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
     // Replace all mappings for this role
     let mut tx = db.pool.begin().await?;
+
+    // Connections
     sqlx::query("DELETE FROM role_connections WHERE role_id = $1")
         .bind(body.role_id)
         .execute(&mut *tx)
@@ -1054,14 +1335,30 @@ pub async fn update_role_connections(
             .execute(&mut *tx)
             .await?;
     }
+
+    // Folders
+    sqlx::query("DELETE FROM role_folders WHERE role_id = $1")
+        .bind(body.role_id)
+        .execute(&mut *tx)
+        .await?;
+    for fid in &body.folder_ids {
+        sqlx::query("INSERT INTO role_folders (role_id, folder_id) VALUES ($1, $2)")
+            .bind(body.role_id)
+            .bind(fid)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     tx.commit().await?;
+
     audit::log(
         &db.pool,
         None,
-        "role_connections.updated",
+        "role_mappings.updated",
         &json!({ "role_id": body.role_id.to_string() }),
     )
     .await?;
+
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -1080,6 +1377,7 @@ pub struct UserRow {
 
 #[derive(Deserialize)]
 pub struct CreateUserRequest {
+    pub username: String,
     pub email: String,
     pub full_name: Option<String>,
     pub role_id: Uuid,
@@ -1091,11 +1389,37 @@ pub async fn list_users(State(state): State<SharedState>) -> Result<Json<Vec<Use
     let rows: Vec<UserRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name
          FROM users u JOIN roles r ON u.role_id = r.id
+         WHERE u.deleted_at IS NULL
          ORDER BY u.email",
     )
     .fetch_all(&db.pool)
     .await?;
     Ok(Json(rows))
+}
+
+pub async fn delete_user(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let result = sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("User not found".into()));
+    }
+
+    audit::log(
+        &db.pool,
+        None,
+        "user.deleted",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "deleted" })))
 }
 
 pub async fn create_user(
@@ -1117,12 +1441,7 @@ pub async fn create_user(
         )));
     }
 
-    let username = body
-        .email
-        .split('@')
-        .next()
-        .unwrap_or(&body.email)
-        .to_string();
+    let username = body.username.clone();
 
     let (password_hash, plaintext_password) = if body.auth_type == "local" {
         use rand::{distributions::Alphanumeric, Rng};
@@ -1217,39 +1536,39 @@ pub async fn list_audit_logs(
     Ok(Json(rows))
 }
 
-// ── Connection Groups ──────────────────────────────────────────────────
+// ── Connection Folders ──────────────────────────────────────────────────
 
 #[derive(Serialize, sqlx::FromRow)]
-pub struct ConnectionGroupRow {
+pub struct ConnectionFolderRow {
     pub id: Uuid,
     pub name: String,
     pub parent_id: Option<Uuid>,
 }
 
-pub async fn list_connection_groups(
+pub async fn list_connection_folders(
     State(state): State<SharedState>,
-) -> Result<Json<Vec<ConnectionGroupRow>>, AppError> {
+) -> Result<Json<Vec<ConnectionFolderRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<ConnectionGroupRow> =
-        sqlx::query_as("SELECT id, name, parent_id FROM connection_groups ORDER BY name")
+    let rows: Vec<ConnectionFolderRow> =
+        sqlx::query_as("SELECT id, name, parent_id FROM connection_folders ORDER BY name")
             .fetch_all(&db.pool)
             .await?;
     Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
-pub struct CreateGroupRequest {
+pub struct CreateFolderRequest {
     pub name: String,
     pub parent_id: Option<Uuid>,
 }
 
-pub async fn create_connection_group(
+pub async fn create_connection_folder(
     State(state): State<SharedState>,
-    Json(body): Json<CreateGroupRequest>,
-) -> Result<Json<ConnectionGroupRow>, AppError> {
+    Json(body): Json<CreateFolderRequest>,
+) -> Result<Json<ConnectionFolderRow>, AppError> {
     let db = require_running(&state).await?;
-    let row: ConnectionGroupRow = sqlx::query_as(
-        "INSERT INTO connection_groups (name, parent_id) VALUES ($1, $2) RETURNING id, name, parent_id",
+    let row: ConnectionFolderRow = sqlx::query_as(
+        "INSERT INTO connection_folders (name, parent_id) VALUES ($1, $2) RETURNING id, name, parent_id",
     )
     .bind(&body.name)
     .bind(body.parent_id)
@@ -1258,7 +1577,7 @@ pub async fn create_connection_group(
     audit::log(
         &db.pool,
         None,
-        "connection_group.created",
+        "connection_folder.created",
         &json!({ "name": body.name }),
     )
     .await?;
@@ -1266,45 +1585,45 @@ pub async fn create_connection_group(
 }
 
 #[derive(Deserialize)]
-pub struct UpdateGroupRequest {
+pub struct UpdateFolderRequest {
     pub name: String,
     pub parent_id: Option<Uuid>,
 }
 
-pub async fn update_connection_group(
+pub async fn update_connection_folder(
     State(state): State<SharedState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
-    Json(body): Json<UpdateGroupRequest>,
-) -> Result<Json<ConnectionGroupRow>, AppError> {
+    Json(body): Json<UpdateFolderRequest>,
+) -> Result<Json<ConnectionFolderRow>, AppError> {
     let db = require_running(&state).await?;
-    let row: ConnectionGroupRow = sqlx::query_as(
-        "UPDATE connection_groups SET name = $1, parent_id = $2 WHERE id = $3 RETURNING id, name, parent_id",
+    let row: ConnectionFolderRow = sqlx::query_as(
+        "UPDATE connection_folders SET name = $1, parent_id = $2 WHERE id = $3 RETURNING id, name, parent_id",
     )
     .bind(&body.name)
     .bind(body.parent_id)
     .bind(id)
     .fetch_optional(&db.pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("Group not found".into()))?;
+    .ok_or_else(|| AppError::NotFound("Folder not found".into()))?;
     Ok(Json(row))
 }
 
-pub async fn delete_connection_group(
+pub async fn delete_connection_folder(
     State(state): State<SharedState>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let result = sqlx::query("DELETE FROM connection_groups WHERE id = $1")
+    let result = sqlx::query("DELETE FROM connection_folders WHERE id = $1")
         .bind(id)
         .execute(&db.pool)
         .await?;
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Group not found".into()));
+        return Err(AppError::NotFound("Folder not found".into()));
     }
     audit::log(
         &db.pool,
         None,
-        "connection_group.deleted",
+        "connection_folder.deleted",
         &json!({ "id": id.to_string() }),
     )
     .await?;
@@ -1446,7 +1765,7 @@ pub struct CreateAdSyncConfigRequest {
     pub protocol: Option<String>,
     pub default_port: Option<i32>,
     pub domain_override: Option<String>,
-    pub group_id: Option<Uuid>,
+    pub folder_id: Option<Uuid>,
     pub tls_skip_verify: Option<bool>,
     pub sync_interval_minutes: Option<i32>,
     pub enabled: Option<bool>,
@@ -1497,7 +1816,7 @@ pub async fn create_ad_sync_config(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, group_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem)
+        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id",
     )
     .bind(&body.label)
@@ -1510,7 +1829,7 @@ pub async fn create_ad_sync_config(
     .bind(body.protocol.as_deref().unwrap_or("rdp"))
     .bind(body.default_port.unwrap_or(3389))
     .bind(body.domain_override.as_deref())
-    .bind(body.group_id)
+    .bind(body.folder_id)
     .bind(body.tls_skip_verify.unwrap_or(false))
     .bind(body.sync_interval_minutes.unwrap_or(60))
     .bind(body.enabled.unwrap_or(true))
@@ -1544,7 +1863,7 @@ pub struct UpdateAdSyncConfigRequest {
     pub protocol: Option<String>,
     pub default_port: Option<i32>,
     pub domain_override: Option<String>,
-    pub group_id: Option<Uuid>,
+    pub folder_id: Option<Uuid>,
     pub tls_skip_verify: Option<bool>,
     pub sync_interval_minutes: Option<i32>,
     pub enabled: Option<bool>,
@@ -1690,8 +2009,8 @@ pub async fn update_ad_sync_config(
         .execute(&mut *tx)
         .await?;
     }
-    if let Some(v) = body.group_id {
-        sqlx::query("UPDATE ad_sync_configs SET group_id = $1, updated_at = now() WHERE id = $2")
+    if let Some(v) = body.folder_id {
+        sqlx::query("UPDATE ad_sync_configs SET folder_id = $1, updated_at = now() WHERE id = $2")
             .bind(v)
             .bind(id)
             .execute(&mut *tx)
@@ -1858,7 +2177,7 @@ pub async fn test_ad_sync_connection(
         protocol: body.protocol.clone().unwrap_or_else(|| "rdp".into()),
         default_port: body.default_port.unwrap_or(3389),
         domain_override: body.domain_override.clone(),
-        group_id: body.group_id,
+        folder_id: body.folder_id,
         tls_skip_verify: body.tls_skip_verify.unwrap_or(false),
         sync_interval_minutes: body.sync_interval_minutes.unwrap_or(60),
         enabled: body.enabled.unwrap_or(true),
@@ -2065,8 +2384,8 @@ mod tests {
     }
 
     #[test]
-    fn create_group_request_deser() {
-        let r: CreateGroupRequest = serde_json::from_str(r#"{"name":"servers"}"#).unwrap();
+    fn create_folder_request_deser() {
+        let r: CreateFolderRequest = serde_json::from_str(r#"{"name":"servers"}"#).unwrap();
         assert_eq!(r.name, "servers");
         assert!(r.parent_id.is_none());
     }
@@ -2109,8 +2428,166 @@ mod tests {
     }
 
     #[test]
-    fn observe_query_defaults() {
-        let q: ObserveQuery = serde_json::from_str("{}").unwrap();
-        assert!(q.offset.is_none());
+    fn sso_test_request_deser() {
+        let json = r#"{"issuer_url":"https://sso.example.com","client_id":"id","client_secret":"********"}"#;
+        let r: SsoTestRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.issuer_url, "https://sso.example.com");
+        assert_eq!(r.client_id, "id");
+        assert_eq!(r.client_secret, "********");
+    }
+
+    // ── Serialization tests for Serialize-derived structs ──────────
+
+    #[test]
+    fn role_row_serializes() {
+        let r = RoleRow {
+            id: Uuid::nil(),
+            name: "admin".into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["name"], "admin");
+    }
+
+    #[test]
+    fn connection_row_serializes() {
+        let r = ConnectionRow {
+            id: Uuid::nil(),
+            name: "server-1".into(),
+            protocol: "rdp".into(),
+            hostname: "10.0.0.1".into(),
+            port: 3389,
+            domain: Some("CORP".into()),
+            description: "Prod".into(),
+            group_id: None,
+            extra: serde_json::json!({"color-depth": "24"}),
+            last_accessed: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["hostname"], "10.0.0.1");
+        assert_eq!(v["port"], 3389);
+        assert_eq!(v["domain"], "CORP");
+        assert!(v["last_accessed"].is_null());
+    }
+
+    #[test]
+    fn connection_group_row_serializes() {
+        let r = ConnectionGroupRow {
+            id: Uuid::nil(),
+            name: "Production".into(),
+            parent_id: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["name"], "Production");
+        assert!(v["parent_id"].is_null());
+    }
+
+    #[test]
+    fn kerberos_realm_row_serializes() {
+        let r = KerberosRealmRow {
+            id: Uuid::nil(),
+            realm: "CORP.LOCAL".into(),
+            kdc_servers: "kdc1.corp.local,kdc2.corp.local".into(),
+            admin_server: "admin.corp.local".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["realm"], "CORP.LOCAL");
+        assert_eq!(v["is_default"], true);
+    }
+
+    #[test]
+    fn user_row_serializes() {
+        let r = UserRow {
+            id: Uuid::nil(),
+            username: "admin".into(),
+            email: "admin@corp.local".into(),
+            full_name: Some("Admin User".into()),
+            auth_type: "local".into(),
+            sub: None,
+            role_name: "admin".into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["username"], "admin");
+        assert_eq!(v["auth_type"], "local");
+        assert!(v["sub"].is_null());
+    }
+
+    #[test]
+    fn create_user_request_deser() {
+        let json = r#"{"username":"newuser","email":"new@corp.local","role_id":"550e8400-e29b-41d4-a716-446655440000","auth_type":"local"}"#;
+        let r: CreateUserRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.username, "newuser");
+        assert_eq!(r.auth_type, "local");
+    }
+
+    #[test]
+    fn update_kerberos_realm_request_deser() {
+        let json = r#"{"realm":"CORP","kdc_servers":["kdc1"]}"#;
+        let r: UpdateKerberosRealmRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.realm.as_deref(), Some("CORP"));
+        assert!(r.admin_server.is_none());
+        assert!(r.ticket_lifetime.is_none());
+    }
+
+    #[test]
+    fn create_connection_request_rejects_missing_name() {
+        let json = r#"{"protocol":"rdp","hostname":"10.0.0.1"}"#;
+        let r: Result<CreateConnectionRequest, _> = serde_json::from_str(json);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn recordings_update_request_full() {
+        let json = r#"{"enabled":true,"retention_days":30,"storage_type":"azure","azure_account_name":"acc","azure_container_name":"cont","azure_access_key":"key"}"#;
+        let r: RecordingsUpdateRequest = serde_json::from_str(json).unwrap();
+        assert!(r.enabled);
+        assert_eq!(r.retention_days.unwrap(), 30);
+        assert_eq!(r.storage_type.as_deref(), Some("azure"));
+        assert_eq!(r.azure_account_name.as_deref(), Some("acc"));
+    }
+
+    #[test]
+    fn is_safe_hostname_allows_underscores() {
+        assert!(is_safe_hostname("my_host_name"));
+    }
+
+    #[test]
+    fn is_safe_hostname_allows_dots_and_ports() {
+        assert!(is_safe_hostname("kdc.corp.local:88"));
+        assert!(is_safe_hostname("192.168.1.1:389"));
+    }
+
+    #[tokio::test]
+    async fn require_running_returns_error_in_setup_phase() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
+            phase: crate::services::app_state::BootPhase::Setup,
+            config: None,
+            db: None,
+            session_registry: crate::services::session_registry::SessionRegistry::new(),
+            guacd_pool: None,
+        }));
+        let result = require_running(&state).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn require_running_returns_error_when_no_db() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
+            phase: crate::services::app_state::BootPhase::Running,
+            config: None,
+            db: None,
+            session_registry: crate::services::session_registry::SessionRegistry::new(),
+            guacd_pool: None,
+        }));
+        let result = require_running(&state).await;
+        assert!(result.is_err());
     }
 }

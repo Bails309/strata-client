@@ -9,7 +9,6 @@ import {
   setCredentialMapping,
   removeCredentialMapping,
   getMyConnections,
-  getServiceHealth,
   CredentialProfile,
   CredentialMapping,
   Connection,
@@ -23,7 +22,7 @@ interface EditingProfile {
   ttl_hours: number;
 }
 
-export default function Credentials() {
+export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
   const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mappings, setMappings] = useState<Record<string, CredentialMapping[]>>({});
@@ -31,7 +30,6 @@ export default function Credentials() {
   const [editing, setEditing] = useState<EditingProfile | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [vaultConfigured, setVaultConfigured] = useState(false);
   const [mappingProfileId, setMappingProfileId] = useState<string | null>(null);
   const [mappingConnectionIds, setMappingConnectionIds] = useState<string[]>([]);
   const [mappingSearch, setMappingSearch] = useState('');
@@ -43,14 +41,12 @@ export default function Credentials() {
 
   const load = useCallback(async () => {
     try {
-      const [profs, conns, health] = await Promise.all([
+      const [profs, conns] = await Promise.all([
         getCredentialProfiles(),
         getMyConnections(),
-        getServiceHealth(),
       ]);
       setProfiles(profs);
       setConnections(conns);
-      setVaultConfigured(health.vault.configured);
 
       // Load mappings for all profiles
       const m: Record<string, CredentialMapping[]> = {};

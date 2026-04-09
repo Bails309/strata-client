@@ -290,4 +290,113 @@ mod tests {
         let resp: VaultDecryptResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.data.plaintext, "dGVzdA==");
     }
+
+    #[test]
+    fn sealed_credential_non_empty() {
+        let sc = SealedCredential {
+            ciphertext: vec![10, 20, 30, 40],
+            encrypted_dek: vec![50, 60],
+            nonce: vec![70, 80, 90, 100, 110, 120],
+        };
+        assert!(!sc.ciphertext.is_empty());
+        assert!(!sc.encrypted_dek.is_empty());
+        assert_eq!(sc.nonce.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_empty_string_passthrough() {
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "test-token".into(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let result = unseal_setting(&vault_cfg, "").await.unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_vault_prefix_missing_fields() {
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "test-token".into(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        // Valid JSON but missing expected fields — the base64 decode will fail on empty
+        let result = unseal_setting(&vault_cfg, r#"vault:{"ct":"","dek":"","n":""}"#).await;
+        // This will attempt to unseal with empty data, which should fail at the Vault call
+        // or AES decryption. Either way it produces an error.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn vault_encrypt_request_roundtrip() {
+        let req = VaultEncryptRequest {
+            plaintext: "aGVsbG8=".into(),
+        };
+        let json_str = serde_json::to_string(&req).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["plaintext"], "aGVsbG8=");
+    }
+
+    #[test]
+    fn vault_decrypt_request_roundtrip() {
+        let req = VaultDecryptRequest {
+            ciphertext: "vault:v1:xyz".into(),
+        };
+        let json_str = serde_json::to_string(&req).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["ciphertext"], "vault:v1:xyz");
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_bad_base64_ct() {
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "t".into(),
+            transit_key: "k".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let result =
+            unseal_setting(&vault_cfg, r#"vault:{"ct":"!!!invalid!!!","dek":"dGVzdA==","n":"dGVzdA=="}"#)
+                .await;
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("ct decode"));
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_bad_base64_dek() {
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "t".into(),
+            transit_key: "k".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let result =
+            unseal_setting(&vault_cfg, r#"vault:{"ct":"dGVzdA==","dek":"!!!bad!!!","n":"dGVzdA=="}"#)
+                .await;
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("dek decode"));
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_bad_base64_nonce() {
+        let vault_cfg = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "t".into(),
+            transit_key: "k".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        };
+        let result =
+            unseal_setting(&vault_cfg, r#"vault:{"ct":"dGVzdA==","dek":"dGVzdA==","n":"!!!bad!!!"}"#)
+                .await;
+        assert!(result.is_err());
+        assert!(format!("{}", result.unwrap_err()).contains("nonce decode"));
+    }
 }

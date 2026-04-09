@@ -844,4 +844,238 @@ mod tests {
         assert_eq!(opcode, "args");
         assert_eq!(args, vec!["hostname", "port"]);
     }
+
+    // ── Additional coverage: guac_instruction multibyte ─────────────
+    #[test]
+    fn guac_instruction_with_unicode_content() {
+        let bytes = guac_instruction("key", &["café"]);
+        let s = String::from_utf8(bytes).unwrap();
+        // "café" is 4 chars / 5 bytes – guac uses byte-length encoding
+        assert_eq!(s, "3.key,5.café;");
+    }
+
+    #[test]
+    fn guac_instruction_long_opcode() {
+        let bytes = guac_instruction("disconnect", &[]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "10.disconnect;");
+    }
+
+    #[test]
+    fn guac_instruction_many_args() {
+        let bytes = guac_instruction("size", &["1920", "1080", "96", "0", "0"]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert!(s.starts_with("4.size,"));
+        assert!(s.ends_with(";"));
+        assert_eq!(s.matches(',').count(), 5);
+    }
+
+    // ── parse_instruction: more edge cases ─────────────────────────
+    #[test]
+    fn parse_instruction_single_char_opcode() {
+        let (op, args) = parse_instruction("1.x;").unwrap();
+        assert_eq!(op, "x");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parse_instruction_large_length() {
+        let long_val = "a".repeat(100);
+        let input = format!("100.{long_val};");
+        let (op, args) = parse_instruction(&input).unwrap();
+        assert_eq!(op, long_val);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parse_instruction_multiple_empty_args() {
+        let (op, args) = parse_instruction("4.noop,0.,0.,0.;").unwrap();
+        assert_eq!(op, "noop");
+        assert_eq!(args, vec!["", "", ""]);
+    }
+
+    #[test]
+    fn parse_instruction_error_message_contains_input() {
+        let result = parse_instruction("bad;");
+        match result {
+            Err(AppError::Internal(msg)) => assert!(msg.contains("bad;")),
+            other => panic!("expected Internal error, got {:?}", other),
+        }
+    }
+
+    // ── HandshakeParams: VNC protocol ──────────────────────────────
+    #[test]
+    fn full_param_map_vnc_defaults() {
+        let hp = HandshakeParams {
+            protocol: "vnc".into(),
+            hostname: "vnc-host".into(),
+            port: 5900,
+            username: None,
+            password: Some("vncpass".into()),
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 1024,
+            height: 768,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.full_param_map();
+        // VNC should NOT have RDP-specific or SSH-specific params
+        assert!(!m.contains_key("enable-drive"));
+        assert!(!m.contains_key("enable-gfx"));
+        assert!(!m.contains_key("enable-sftp"));
+        // Should still have clipboard and resize-method
+        assert_eq!(m["disable-copy"], "false");
+        assert_eq!(m["disable-paste"], "false");
+        assert_eq!(m["resize-method"], "display-update");
+        assert_eq!(m["hostname"], "vnc-host");
+        assert_eq!(m["port"], "5900");
+        assert_eq!(m["password"], "vncpass");
+    }
+
+    #[test]
+    fn full_param_map_extra_blocked_params_ignored() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("password".into(), "evil".into());
+        extra.insert("recording-path".into(), "/tmp/evil".into());
+        extra.insert("drive-path".into(), "/tmp/evil".into());
+
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: Some("real-pw".into()),
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra,
+        };
+        let m = hp.full_param_map();
+        // password should remain the real one, not overridden
+        assert_eq!(m["password"], "real-pw");
+        // blocked extra params should not override defaults
+        assert_ne!(m.get("drive-path").map(|s| s.as_str()), Some("/tmp/evil"));
+    }
+
+    #[test]
+    fn full_param_map_ignore_cert_false_omits_key() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.full_param_map();
+        assert!(!m.contains_key("ignore-cert"));
+    }
+
+    #[test]
+    fn full_param_map_recording_path_without_create() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: Some("/recordings".into()),
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["recording-path"], "/recordings");
+        assert!(!m.contains_key("create-recording-path"));
+    }
+
+    // ── is_allowed_guacd_param: more specifics ─────────────────────
+    #[test]
+    fn allowed_params_full_whitelist() {
+        let allowed = [
+            "enable-theming",
+            "enable-font-smoothing",
+            "enable-full-window-drag",
+            "enable-desktop-composition",
+            "enable-menu-animations",
+            "enable-printing",
+            "server-layout",
+            "console",
+            "initial-program",
+            "timezone",
+            "client-name",
+            "enable-audio",
+            "enable-audio-input",
+            "disable-audio",
+            "enable-touch",
+            "swap-red-blue",
+            "cursor",
+            "read-only",
+            "scrollback",
+            "font-name",
+            "backspace",
+            "terminal-type",
+            "typescript-path",
+            "typescript-name",
+            "create-typescript-path",
+            "wol-send-packet",
+            "wol-mac-addr",
+            "wol-broadcast-addr",
+            "wol-udp-port",
+            "wol-wait-time",
+            "disable-glyph-caching",
+        ];
+        for param in &allowed {
+            assert!(is_allowed_guacd_param(param), "expected allowed: {param}");
+        }
+    }
+
+    // ── read_instruction from a stream ─────────────────────────────
+    #[tokio::test]
+    async fn read_instruction_from_cursor() {
+        let data = b"4.args,8.hostname,4.port;";
+        let mut cursor = std::io::Cursor::new(data);
+        let (op, args) = read_instruction(&mut cursor).await.unwrap();
+        assert_eq!(op, "args");
+        assert_eq!(args, vec!["hostname", "port"]);
+    }
+
+    #[tokio::test]
+    async fn read_instruction_eof_returns_error() {
+        let data = b""; // empty — EOF immediately
+        let mut cursor = std::io::Cursor::new(data);
+        let result = read_instruction(&mut cursor).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_instruction_ready() {
+        let data = b"5.ready,36.abc12345-1234-1234-1234-123456789012;";
+        let mut cursor = std::io::Cursor::new(data);
+        let (op, args) = read_instruction(&mut cursor).await.unwrap();
+        assert_eq!(op, "ready");
+        assert_eq!(args.len(), 1);
+    }
 }

@@ -289,7 +289,7 @@ describe('SessionClient', () => {
     const connId = 'test-rdp-with-domain';
     vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
     vi.mocked(getConnections).mockResolvedValue([
-      { id: connId, name: 'RDP Server', protocol: 'rdp', hostname: '10.0.0.3', port: 3389, description: '', domain: 'MYDOMAIN', group_id: undefined, group_name: undefined },
+      { id: connId, name: 'RDP Server', protocol: 'rdp', hostname: '10.0.0.3', port: 3389, description: '', domain: 'MYDOMAIN', folder_id: undefined, folder_name: undefined },
     ]);
     renderSessionClient(connId);
     await waitFor(() => {

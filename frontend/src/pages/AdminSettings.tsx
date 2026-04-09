@@ -17,16 +17,21 @@ import {
   getMetrics,
   getRoles,
   createRole,
+  updateRole,
+  deleteRole,
+  deleteConnection,
+  getConnectionFolders,
+  createConnectionFolder,
+  updateConnectionFolder as _updateConnectionFolder,
+  deleteConnectionFolder,
   getConnections,
   createConnection,
   updateConnection,
-  deleteConnection,
-  getConnectionGroups,
-  createConnectionGroup,
-  updateConnectionGroup as _updateConnectionGroup,
-  deleteConnectionGroup,
+  getRoleMappings,
+  updateRoleMappings,
   getUsers,
   createUser,
+  deleteUser,
   getActiveSessions,
   getAdSyncConfigs,
   createAdSyncConfig,
@@ -40,21 +45,26 @@ import {
   AdSyncRun,
   Role,
   Connection,
-  ConnectionGroup,
+  ConnectionFolder,
   User,
   ServiceHealth,
   ActiveSession,
   MetricsSummary,
+  MeResponse,
 } from '../api';
 
 type Tab = 'health' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'ad-sync' | 'sessions' | 'security';
 
-export default function AdminSettings() {
-  const [tab, setTab] = useState<Tab>('health');
+export default function AdminSettings({ user }: { user: MeResponse }) {
+  const [tab, setTab] = useState<Tab>(
+    user.can_manage_system ? 'health' : 
+    (user.can_manage_users || user.can_manage_connections) ? 'access' :
+    user.can_view_audit_logs ? 'sessions' : 'health'
+  );
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [roles, setRoles] = useState<Role[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [groups, setGroups] = useState<ConnectionGroup[]>([]);
+  const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [msg, setMsg] = useState('');
   const [loadError, setLoadError] = useState('');
@@ -65,7 +75,7 @@ export default function AdminSettings() {
       getSettings().then(setSettings),
       getRoles().then(setRoles),
       getConnections().then(setConnections),
-      getConnectionGroups().then(setGroups),
+      getConnectionFolders().then(setFolders),
       getUsers().then(setUsers),
     ]).catch(() => setLoadError('Failed to load settings'));
   }, []);
@@ -92,11 +102,24 @@ export default function AdminSettings() {
       )}
 
       <div className="tabs">
-        {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'ad-sync', 'sessions', 'security'] as Tab[]).map((t) => (
-          <button key={t} className={`tab ${tab === t ? 'tab-active' : ''}`} onClick={() => setTab(t)}>
-            {t === 'sso' ? 'SSO / OIDC' : t === 'health' ? 'Health' : t === 'ad-sync' ? 'AD Sync' : t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
+        {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'ad-sync', 'sessions', 'security'] as Tab[])
+          .filter(t => {
+            if (t === 'access') return user.can_manage_users || user.can_manage_connections
+              || user.can_create_users || user.can_create_user_groups
+              || user.can_create_connections || user.can_create_connection_folders
+              || user.can_create_sharing_profiles;
+            if (t === 'sessions') return user.can_view_audit_logs;
+            // All other tabs are system management
+            return user.can_manage_system;
+          })
+          .map((t) => (
+            <button key={t} className={`tab ${tab === t ? 'tab-active' : ''}`} onClick={() => setTab(t)}>
+              {t === 'sso' ? 'SSO / OIDC' : 
+               t === 'ad-sync' ? 'AD Sync' : 
+               t === 'sessions' ? 'Audit Logs' : 
+               t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
       </div>
 
       {/* ── Health ── */}
@@ -127,22 +150,23 @@ export default function AdminSettings() {
       {/* ── Access Control ── */}
       {tab === 'access' && (
         <AccessTab
+          user={user}
           roles={roles}
           connections={connections}
-          groups={groups}
+          folders={folders}
           users={users}
-          onRoleCreated={(r) => setRoles([...roles, r])}
+          onRolesChanged={setRoles}
           onConnectionCreated={(c) => setConnections([...connections, c])}
           onConnectionUpdated={(c) => setConnections(connections.map((x) => x.id === c.id ? c : x))}
           onConnectionDeleted={(id) => setConnections(connections.filter((x) => x.id !== id))}
-          onGroupsChanged={(g) => setGroups(g)}
+          onFoldersChanged={(f) => setFolders(f)}
           onUsersChanged={(u) => setUsers(u)}
         />
       )}
 
       {/* ── AD Sync ── */}
       {tab === 'ad-sync' && (
-        <AdSyncTab groups={groups} onSave={() => flash('AD Sync updated')} />
+        <AdSyncTab folders={folders} onSave={() => flash('AD Sync updated')} />
       )}
 
       {/* ── Active Sessions (NVR) ── */}
@@ -315,13 +339,14 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
 function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
   const [issuer, setIssuer] = useState(settings.sso_issuer_url || '');
   const [clientId, setClientId] = useState(settings.sso_client_id || '');
-  const [clientSecret, setClientSecret] = useState('');
+  const [clientSecret, setClientSecret] = useState(settings.sso_client_secret || '');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     setIssuer(settings.sso_issuer_url || '');
     setClientId(settings.sso_client_id || '');
+    setClientSecret(settings.sso_client_secret || '');
   }, [settings]);
 
   async function handleTest() {
@@ -337,7 +362,7 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
     }
   }
 
-  const callbackUrl = `${window.location.origin}/api/auth/oidc/callback`;
+  const callbackUrl = `${window.location.origin}/api/auth/sso/callback`;
 
   return (
     <div className="card">
@@ -361,7 +386,7 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
       </div>
       <div className="form-group">
         <label>Client Secret</label>
-        <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
+        <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={settings.sso_client_secret ? '********' : ''} />
       </div>
 
       {testResult && (
@@ -392,7 +417,7 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
         <button 
           className="btn" 
           onClick={handleTest} 
-          disabled={testing || !issuer || !clientId}
+          disabled={testing || !issuer || !clientId || !clientSecret}
         >
           {testing ? 'Testing…' : 'Test Connection'}
         </button>
@@ -869,26 +894,83 @@ function VaultTab({ settings, onSave }: { settings: Record<string, string>; onSa
 }
 
 function AccessTab({
-  roles, connections, groups, users, onRoleCreated, onConnectionCreated, onConnectionUpdated, onConnectionDeleted, onGroupsChanged, onUsersChanged,
+  user, roles, connections, folders, users, onRolesChanged, onConnectionCreated, onConnectionUpdated, onConnectionDeleted, onFoldersChanged, onUsersChanged,
 }: {
+  user: MeResponse;
   roles: Role[];
   connections: Connection[];
-  groups: ConnectionGroup[];
+  folders: ConnectionFolder[];
   users: User[];
-  onRoleCreated: (r: Role) => void;
+  onRolesChanged: (r: Role[]) => void;
   onConnectionCreated: (c: Connection) => void;
   onConnectionUpdated: (c: Connection) => void;
   onConnectionDeleted: (id: string) => void;
-  onGroupsChanged: (g: ConnectionGroup[]) => void;
+  onFoldersChanged: (f: ConnectionFolder[]) => void;
   onUsersChanged: (u: User[]) => void;
 }) {
-  const [newRoleName, setNewRoleName] = useState('');
+  const [newRole, setNewRole] = useState<{
+    name: string;
+    can_manage_system: boolean;
+    can_manage_users: boolean;
+    can_manage_connections: boolean;
+    can_view_audit_logs: boolean;
+    can_create_users: boolean;
+    can_create_user_groups: boolean;
+    can_create_connections: boolean;
+    can_create_connection_folders: boolean;
+    can_create_sharing_profiles: boolean;
+  }>({
+    name: '',
+    can_manage_system: false,
+    can_manage_users: false,
+    can_manage_connections: false,
+    can_view_audit_logs: false,
+    can_create_users: false,
+    can_create_user_groups: false,
+    can_create_connections: false,
+    can_create_connection_folders: false,
+    can_create_sharing_profiles: false,
+  });
+  const [roleModalOpen, setRoleModalOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<Role | null>(null);
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [roleModalTab, setRoleModalTab] = useState<'permissions' | 'assignments'>('permissions');
+  const [assignmentConnectionIds, setAssignmentConnectionIds] = useState<string[]>([]);
+  const [assignmentFolderIds, setAssignmentFolderIds] = useState<string[]>([]);
+
+  const handleEditRole = async (r: Role) => {
+    setEditingRole(r);
+    setNewRole({
+      name: r.name,
+      can_manage_system: r.can_manage_system,
+      can_manage_users: r.can_manage_users,
+      can_manage_connections: r.can_manage_connections,
+      can_view_audit_logs: r.can_view_audit_logs,
+      can_create_users: r.can_create_users,
+      can_create_user_groups: r.can_create_user_groups,
+      can_create_connections: r.can_create_connections,
+      can_create_connection_folders: r.can_create_connection_folders,
+      can_create_sharing_profiles: r.can_create_sharing_profiles,
+    });
+    setRoleModalTab('permissions');
+    setAssignmentConnectionIds([]);
+    setAssignmentFolderIds([]);
+    setRoleModalOpen(true);
+    
+    try {
+      const mappings = await getRoleMappings(r.id);
+      setAssignmentConnectionIds(mappings.connection_ids);
+      setAssignmentFolderIds(mappings.folder_ids);
+    } catch (err) {
+      console.error('Failed to fetch role mappings:', err);
+    }
+  };
   const [formMode, setFormMode] = useState<'closed' | 'add' | 'edit'>('closed');
   const [formId, setFormId] = useState<string | null>(null);
-  const [formCore, setFormCore] = useState({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', group_id: '' });
+  const [formCore, setFormCore] = useState({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', folder_id: '' });
   const [formExtra, setFormExtra] = useState<Record<string, string>>({});
-  const [newGroupName, setNewGroupName] = useState('');
-  const [newGroupParent, setNewGroupParent] = useState('');
+  const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderParent, setNewFolderParent] = useState('');
   const [connSearch, setConnSearch] = useState('');
   const [connPage, setConnPage] = useState(1);
   const connPerPage = 20;
@@ -900,9 +982,9 @@ function AccessTab({
     username: string;
     email: string;
     full_name: string;
-    role_name: string;
+    role_id: string;
     auth_type: 'local' | 'sso';
-  }>({ username: '', email: '', full_name: '', role_name: 'user', auth_type: 'local' });
+  }>({ username: '', email: '', full_name: '', role_id: '', auth_type: 'local' });
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
   const [userError, setUserError] = useState('');
   const [userSaving, setUserSaving] = useState(false);
@@ -914,7 +996,7 @@ function AccessTab({
       || c.hostname.toLowerCase().includes(q)
       || c.protocol.toLowerCase().includes(q)
       || (c.description || '').toLowerCase().includes(q)
-      || (groups.find(g => g.id === c.group_id)?.name || '').toLowerCase().includes(q);
+      || (folders.find(f => f.id === c.folder_id)?.name || '').toLowerCase().includes(q);
   });
   const connTotalPages = Math.max(1, Math.ceil(filteredConnections.length / connPerPage));
   const safeConnPage = Math.min(connPage, connTotalPages);
@@ -923,7 +1005,7 @@ function AccessTab({
   function openAdd() {
     setFormMode('add');
     setFormId(null);
-    setFormCore({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', group_id: '' });
+    setFormCore({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', folder_id: '' });
     setFormExtra({ 'server-layout': 'en-gb-qwerty', 'timezone': 'Europe/London' });
     setTimeout(() => connFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
@@ -931,7 +1013,7 @@ function AccessTab({
   function openEdit(c: Connection) {
     setFormMode('edit');
     setFormId(c.id);
-    setFormCore({ name: c.name, protocol: c.protocol, hostname: c.hostname, port: c.port, domain: c.domain || '', description: c.description || '', group_id: c.group_id || '' });
+    setFormCore({ name: c.name, protocol: c.protocol, hostname: c.hostname, port: c.port, domain: c.domain || '', description: c.description || '', folder_id: c.folder_id || '' });
     setFormExtra(c.extra ? { ...c.extra } : {});
     setTimeout(() => connFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
@@ -940,6 +1022,9 @@ function AccessTab({
     setFormMode('closed');
     setFormId(null);
   }
+
+  const ex = (k: string) => formExtra[k] || '';
+  const setEx = (k: string, v: string) => setFormExtra({ ...formExtra, [k]: v });
 
   // Strip empty values from extra before saving
   function cleanExtra(): Record<string, string> {
@@ -951,142 +1036,352 @@ function AccessTab({
   }
 
   async function handleSave() {
-    const payload = {
-      ...formCore,
-      group_id: formCore.group_id || undefined,
-      extra: cleanExtra(),
-    };
-    if (formMode === 'add') {
-      const c = await createConnection(payload);
-      onConnectionCreated(c);
-    } else if (formMode === 'edit' && formId) {
-      const c = await updateConnection(formId, payload);
-      onConnectionUpdated(c);
+    try {
+      const payload = {
+        ...formCore,
+        folder_id: formCore.folder_id || undefined,
+        extra: cleanExtra(),
+      };
+      let c;
+      if (formMode === 'add') {
+        c = await createConnection(payload);
+        onConnectionCreated(c);
+      } else if (formMode === 'edit' && formId) {
+        c = await updateConnection(formId, payload);
+        onConnectionUpdated(c);
+      }
+      if (c) {
+        setFormExtra(c.extra || {});
+      }
+      closeForm();
+    } catch (err: any) {
+      alert(err.message || 'Failed to save connection');
     }
-    closeForm();
   }
 
-  async function handleDelete(id: string) {
-    if (!window.confirm('Delete this connection? This cannot be undone.')) return;
-    await deleteConnection(id);
-    onConnectionDeleted(id);
-    if (formId === id) closeForm();
-  }
-
-  const ex = (key: string) => formExtra[key] || '';
-  const setEx = (key: string, val: string) => setFormExtra({ ...formExtra, [key]: val });
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this connection?')) return;
+    try {
+      await deleteConnection(id);
+      onConnectionDeleted(id);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete connection');
+    }
+  };
 
   return (
     <div className="grid gap-6">
       {/* Roles */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="!mb-0">Roles</h2>
-          <p className="text-txt-tertiary text-xs">Standard RBAC roles for platform access</p>
-        </div>
-        
-        <table className="mb-4">
-          <thead><tr><th>Name</th><th>ID</th></tr></thead>
-          <tbody>
-            {roles.map((r) => (
-              <tr key={r.id}>
-                <td><span className="font-semibold text-accent">{r.name}</span></td>
-                <td className="font-mono text-[0.8rem] text-txt-secondary">{r.id}</td>
+      {user.can_manage_users && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="!mb-0">Roles</h2>
+            <p className="text-txt-tertiary text-xs">Standard RBAC roles for platform access</p>
+          </div>
+          
+          <table className="mb-4">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Permissions</th>
+                <th className="w-[120px]">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {roles.map((r) => (
+                <tr key={r.id}>
+                  <td><span className="font-semibold text-accent">{r.name}</span></td>
+                  <td>
+                    <div className="flex flex-wrap gap-1">
+                      {r.can_manage_system && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">System</span>}
+                      {r.can_view_audit_logs && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Audit</span>}
+                      {r.can_create_users && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Users</span>}
+                      {r.can_create_user_groups && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">User Groups</span>}
+                      {r.can_create_connections && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Connections</span>}
+                      {r.can_create_connection_folders && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Folders</span>}
+                      {r.can_create_sharing_profiles && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Sharing</span>}
+                      {!r.can_manage_system && !r.can_manage_users && !r.can_manage_connections && !r.can_view_audit_logs && !r.can_create_users && !r.can_create_user_groups && !r.can_create_connections && !r.can_create_connection_folders && !r.can_create_sharing_profiles && (
+                        <span className="text-txt-tertiary text-[10px] italic">No permissions</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="flex gap-2">
+                      <button className="btn-ghost text-[0.8125rem] px-2 py-0.5" onClick={() => handleEditRole(r)}>Edit</button>
+                      {r.name !== 'admin' && r.name !== 'user' && (
+                        <button className="btn-ghost text-[0.8125rem] px-2 py-0.5 text-danger" onClick={async () => {
+                          if (!window.confirm(`Delete role "${r.name}"?`)) return;
+                          try {
+                            await deleteRole(r.id);
+                            getRoles().then(onRolesChanged);
+                          } catch (err: any) {
+                            alert(err.message || 'Failed to delete role');
+                          }
+                        }}>Delete</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
 
-        <div className="bg-surface-secondary/50 p-3 rounded-lg border border-border/50">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1 max-w-[400px]">
-              <input 
-                value={newRoleName} 
-                onChange={(e) => setNewRoleName(e.target.value)} 
-                placeholder="New role name..."
-                className="w-full pr-10" 
-              />
-            </div>
+          <div className="bg-surface-secondary/50 p-3 rounded-lg border border-border/50">
             <button 
-              className="btn-primary flex items-center gap-2 whitespace-nowrap shadow-sm"
-              disabled={!newRoleName.trim()}
-              onClick={async () => { 
-                const r = await createRole(newRoleName); 
-                onRoleCreated(r); 
-                setNewRoleName(''); 
+              className="btn-primary flex items-center gap-2 whitespace-nowrap shadow-sm mx-auto"
+              onClick={() => {
+                setEditingRole(null);
+                setNewRole({
+                  name: '',
+                  can_manage_system: false,
+                  can_manage_users: false,
+                  can_manage_connections: false,
+                  can_view_audit_logs: false,
+                  can_create_users: false,
+                  can_create_user_groups: false,
+                  can_create_connections: false,
+                  can_create_connection_folders: false,
+                  can_create_sharing_profiles: false,
+                });
+                setAssignmentConnectionIds([]);
+                setAssignmentFolderIds([]);
+                setRoleModalTab('permissions');
+                setRoleModalOpen(true);
               }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
               </svg>
-              Add Role
+              Create New Role
             </button>
           </div>
+
+          {/* Role Modal */}
+          {roleModalOpen && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <div className="card w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-bold mb-4">{editingRole ? 'Edit Role' : 'Create New Role'}</h3>
+                
+                <div className="flex gap-2 mb-4 border-b border-border">
+                  <button 
+                    className={`pb-2 px-1 text-xs font-bold uppercase tracking-wider transition-colors ${roleModalTab === 'permissions' ? 'text-accent border-b-2 border-accent' : 'text-txt-tertiary hover:text-txt-primary'}`}
+                    onClick={() => setRoleModalTab('permissions')}
+                  >
+                    Permissions
+                  </button>
+                  <button 
+                    className={`pb-2 px-1 text-xs font-bold uppercase tracking-wider transition-colors ${roleModalTab === 'assignments' ? 'text-accent border-b-2 border-accent' : 'text-txt-tertiary hover:text-txt-primary'}`}
+                    onClick={() => setRoleModalTab('assignments')}
+                  >
+                    Assignments
+                  </button>
+                </div>
+
+                {roleModalTab === 'permissions' ? (
+                  <>
+                    <div className="form-group mb-4">
+                      <label>Role Name</label>
+                      <input 
+                        value={newRole.name} 
+                        onChange={e => setNewRole({...newRole, name: e.target.value})}
+                        placeholder="e.g. Helpdesk"
+                        disabled={editingRole?.name === 'admin' || editingRole?.name === 'user'}
+                      />
+                    </div>
+
+                    <div className="space-y-3 mb-6">
+                      <label className="text-xs font-bold uppercase tracking-wider text-txt-tertiary">Permissions</label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_manage_system} onChange={e => setNewRole({...newRole, can_manage_system: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Administer system</span>
+                          <span className="text-[10px] text-txt-tertiary">Settings, Auth, Vault, Infrastructure</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_view_audit_logs} onChange={e => setNewRole({...newRole, can_view_audit_logs: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Audit system</span>
+                          <span className="text-[10px] text-txt-tertiary">Monitor administrative activity</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_create_users} onChange={e => setNewRole({...newRole, can_create_users: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Create new users</span>
+                          <span className="text-[10px] text-txt-tertiary">Provisioning and user lifecycle</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_create_user_groups} onChange={e => setNewRole({...newRole, can_create_user_groups: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Create new user groups</span>
+                          <span className="text-[10px] text-txt-tertiary">Organize users into groups</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_create_connections} onChange={e => setNewRole({...newRole, can_create_connections: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Create new connections</span>
+                          <span className="text-[10px] text-txt-tertiary">Hosts, protocols, shared drive configs</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_create_connection_folders} onChange={e => setNewRole({...newRole, can_create_connection_folders: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Create connection folders</span>
+                          <span className="text-[10px] text-txt-tertiary">Organize connections into folders</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_create_sharing_profiles} onChange={e => setNewRole({...newRole, can_create_sharing_profiles: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Create new sharing profiles</span>
+                          <span className="text-[10px] text-txt-tertiary">Define connection sharing rules</span>
+                        </div>
+                      </label>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-4 mb-6 max-h-[400px] overflow-y-auto pr-1">
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wider text-txt-tertiary block mb-2">Assigned Folders</label>
+                      <div className="space-y-1 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
+                        {folders.length === 0 ? (
+                          <div className="text-[10px] text-txt-tertiary italic p-1">No folders created yet</div>
+                        ) : folders.map(f => (
+                          <label key={f.id} className="flex items-center gap-2 cursor-pointer py-1 px-1.5 hover:bg-surface-secondary rounded transition-colors group">
+                            <input 
+                              type="checkbox" 
+                              className="checkbox checkbox-sm" 
+                              checked={assignmentFolderIds.includes(f.id)}
+                              onChange={e => {
+                                if (e.target.checked) setAssignmentFolderIds([...assignmentFolderIds, f.id]);
+                                else setAssignmentFolderIds(assignmentFolderIds.filter(id => id !== f.id));
+                              }}
+                            />
+                            <span className="text-xs font-medium group-hover:text-accent transition-colors">{f.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold uppercase tracking-wider text-txt-tertiary block mb-2">Individual Connections</label>
+                      <div className="space-y-1 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
+                        {connections.length === 0 ? (
+                          <div className="text-[10px] text-txt-tertiary italic p-1">No connections created yet</div>
+                        ) : connections.map(c => (
+                          <label key={c.id} className="flex items-center gap-2 cursor-pointer py-1 px-1.5 hover:bg-surface-secondary rounded transition-colors group">
+                            <input 
+                              type="checkbox" 
+                              className="checkbox checkbox-sm" 
+                              checked={assignmentConnectionIds.includes(c.id)}
+                              onChange={e => {
+                                if (e.target.checked) setAssignmentConnectionIds([...assignmentConnectionIds, c.id]);
+                                else setAssignmentConnectionIds(assignmentConnectionIds.filter(id => id !== c.id));
+                              }}
+                            />
+                            <div className="flex flex-col">
+                              <span className="text-xs font-medium group-hover:text-accent transition-colors">{c.name}</span>
+                              <span className="text-[9px] text-txt-tertiary">{c.protocol.toUpperCase()} • {c.hostname}</span>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button className="btn w-full" onClick={() => setRoleModalOpen(false)}>Cancel</button>
+                  <button 
+                    className="btn-primary w-full" 
+                    disabled={roleSaving || !newRole.name.trim()}
+                    onClick={async () => {
+                      setRoleSaving(true);
+                      try {
+                        if (editingRole) {
+                          const r = await updateRole(editingRole.id, newRole);
+                          await updateRoleMappings(r.id, assignmentConnectionIds, assignmentFolderIds);
+                          onRolesChanged(roles.map(x => x.id === r.id ? r : x));
+                        } else {
+                          const r = await createRole(newRole);
+                          await updateRoleMappings(r.id, assignmentConnectionIds, assignmentFolderIds);
+                          onRolesChanged([...roles, r]);
+                        }
+                        setRoleModalOpen(false);
+                      } catch (err: any) {
+                        alert(err.message || 'Failed to save role');
+                      } finally {
+                        setRoleSaving(false);
+                      }
+                    }}
+                  >
+                    {roleSaving ? 'Saving…' : editingRole ? 'Save Changes' : 'Create Role'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Connections */}
-      <div className="card">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="!mb-0">Connections</h2>
-          <button className="btn-primary text-[0.8rem] px-3 py-1" onClick={openAdd}>
-            + Add Connection
-          </button>
-        </div>
-        <div className="mb-3">
-          <input
-            value={connSearch}
-            onChange={(e) => { setConnSearch(e.target.value); setConnPage(1); }}
-            placeholder="Search connections by name, host, protocol, description, or group…"
-            className="input w-full"
-          />
-        </div>
-        <p className="text-sm text-txt-secondary mb-2">
-          Showing {filteredConnections.length === connections.length ? connections.length : `${filteredConnections.length} of ${connections.length}`} connection{connections.length !== 1 ? 's' : ''}
-        </p>
-        <table>
-          <thead><tr><th>Name</th><th>Protocol</th><th>Host</th><th>Port</th><th>Group</th><th className="w-[140px]">Actions</th></tr></thead>
-          <tbody>
-            {pagedConnections.map((c) => (
-              <tr key={c.id} className={formId === c.id ? 'bg-surface-secondary' : ''}>
-                <td>
-                  <div>{c.name}</div>
-                  {c.description && <div className="text-[0.75rem] text-txt-tertiary">{c.description}</div>}
-                </td>
-                <td>{c.protocol.toUpperCase()}</td>
-                <td>{c.hostname}</td>
-                <td>{c.port}</td>
-                <td>{c.group_id ? (groups.find(g => g.id === c.group_id)?.name || '—') : '—'}</td>
-                <td>
-                  <div className="flex gap-1">
-                    <button className="btn text-[0.8rem] px-2 py-1" onClick={() => openEdit(c)}>Edit</button>
-                    <button className="btn text-[0.8rem] px-2 py-1 text-danger" onClick={() => handleDelete(c.id)}>Delete</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {connTotalPages > 1 && (
-          <div className="flex items-center justify-between mt-3">
-            <span className="text-sm text-txt-secondary">Page {safeConnPage} of {connTotalPages}</span>
-            <div className="flex gap-1">
-              <button className="btn text-[0.8rem] px-2 py-1" disabled={safeConnPage <= 1} onClick={() => setConnPage(safeConnPage - 1)}>← Prev</button>
-              <button className="btn text-[0.8rem] px-2 py-1" disabled={safeConnPage >= connTotalPages} onClick={() => setConnPage(safeConnPage + 1)}>Next →</button>
-            </div>
+      {user.can_manage_connections && (
+        <div className="card">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="!mb-0">Connections</h2>
+            <button className="btn-primary text-[0.8rem] px-3 py-1" onClick={openAdd}>
+              + Add Connection
+            </button>
           </div>
-        )}
-      </div>
+          <div className="mb-3">
+            <input
+              value={connSearch}
+              onChange={(e) => { setConnSearch(e.target.value); setConnPage(1); }}
+              placeholder="Search connections by name, host, protocol, description, or folder…"
+              className="input w-full"
+            />
+          </div>
+          <p className="text-sm text-txt-secondary mb-2">
+            Showing {filteredConnections.length === connections.length ? connections.length : `${filteredConnections.length} of ${connections.length}`} connection{connections.length !== 1 ? 's' : ''}
+          </p>
+          <div className="table-responsive">
+            <table>
+              <thead><tr><th>Name</th><th>Protocol</th><th>Host</th><th>Port</th><th>Folder</th><th className="w-[140px]">Actions</th></tr></thead>
+              <tbody>
+                {pagedConnections.map((c) => (
+                  <tr key={c.id} className={formId === c.id ? 'bg-surface-secondary' : ''}>
+                    <td>
+                      <div className="font-medium text-txt-primary">{c.name}</div>
+                      {c.description && <div className="text-[0.75rem] text-txt-tertiary">{c.description}</div>}
+                    </td>
+                    <td><span className="badge badge-secondary py-0 px-1 text-[10px]">{c.protocol.toUpperCase()}</span></td>
+                    <td>{c.hostname}</td>
+                    <td>{c.port}</td>
+                    <td>{c.folder_id ? (folders.find(f => f.id === c.folder_id)?.name || '—') : '—'}</td>
+                    <td>
+                      <div className="flex gap-1">
+                        <button className="btn-ghost text-[0.8rem] px-2 py-1" onClick={() => openEdit(c)}>Edit</button>
+                        <button className="btn-ghost text-[0.8rem] px-2 py-1 text-danger" onClick={() => handleDelete(c.id)}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Connection Editor Form */}
-      {formMode !== 'closed' && (
+      {user.can_manage_connections && formMode !== 'closed' && (
         <div className="card" ref={connFormRef}>
           <div className="flex justify-between items-center mb-4">
             <h2 className="!mb-0">{formMode === 'add' ? 'Add Connection' : 'Edit Connection'}</h2>
             <button className="btn text-[0.8rem] px-2 py-1" onClick={closeForm}>Cancel</button>
           </div>
-
-          {/* Core fields */}
           <div className="mb-4" style={{ display: 'grid', gridTemplateColumns: '1fr 100px 1fr 80px 1fr', gap: '0.5rem' }}>
             <div className="form-group !mb-0">
               <label>Name</label>
@@ -1120,37 +1415,31 @@ function AccessTab({
               <input value={formCore.domain} onChange={(e) => setFormCore({ ...formCore, domain: e.target.value })} placeholder="EXAMPLE.COM" />
             </div>
           </div>
-
           <div className="mb-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             <div className="form-group !mb-0">
               <label>Description</label>
-              <input value={formCore.description} onChange={(e) => setFormCore({ ...formCore, description: e.target.value })} placeholder="Optional description shown on the connections page" />
+              <input value={formCore.description} onChange={(e) => setFormCore({ ...formCore, description: e.target.value })} placeholder="Optional description" />
             </div>
             <div className="form-group !mb-0">
-              <label>Group</label>
+              <label>Folder</label>
               <Select
-                value={formCore.group_id}
-                onChange={(v) => setFormCore({ ...formCore, group_id: v })}
-                placeholder="No group"
+                value={formCore.folder_id}
+                onChange={(v) => setFormCore({ ...formCore, folder_id: v })}
+                placeholder="No folder"
                 options={[
-                  { value: '', label: 'No group' },
-                  ...groups.map(g => ({ value: g.id, label: g.parent_id ? `  └ ${g.name}` : g.name })),
+                  { value: '', label: 'No folder' },
+                  ...folders.map(f => ({ value: f.id, label: f.parent_id ? `  └ ${f.name}` : f.name })),
                 ]}
               />
             </div>
           </div>
 
-          {/* Protocol-specific sections */}
-          {formCore.protocol === 'rdp' && (
-            <RdpSections extra={formExtra} setExtra={setFormExtra} ex={ex} setEx={setEx} />
-          )}
-          {formCore.protocol === 'ssh' && (
-            <SshSections ex={ex} setEx={setEx} />
-          )}
-          {formCore.protocol === 'vnc' && (
-            <VncSections ex={ex} setEx={setEx} />
-          )}
-
+          <div className="mt-6">
+            <h4 className="text-sm font-bold uppercase tracking-widest text-txt-tertiary mb-3">Protocol Parameters</h4>
+            {formCore.protocol === 'rdp' && <RdpSections extra={formExtra} setExtra={setFormExtra} ex={ex} setEx={setEx} />}
+            {formCore.protocol === 'ssh' && <SshSections ex={ex} setEx={setEx} />}
+            {formCore.protocol === 'vnc' && <VncSections ex={ex} setEx={setEx} />}
+          </div>
           <div className="flex gap-2 mt-4">
             <button className="btn-primary" onClick={handleSave}>
               {formMode === 'add' ? 'Create Connection' : 'Save Changes'}
@@ -1160,132 +1449,150 @@ function AccessTab({
         </div>
       )}
 
-      {/* Connection Groups */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="!mb-0">Connection Groups</h2>
-          <p className="text-txt-tertiary text-xs">Organize your connections into hierarchical folders</p>
-        </div>
-
-        {groups.length > 0 ? (
-          <table className="mb-4">
-            <thead><tr><th>Name</th><th>Parent</th><th className="w-[100px]">Actions</th></tr></thead>
-            <tbody>
-              {groups.map((g) => (
-                <tr key={g.id}>
-                  <td><span className="font-medium">{g.name}</span></td>
-                  <td>{g.parent_id ? (groups.find(p => p.id === g.parent_id)?.name || '—') : <span className="text-txt-tertiary italic">Root</span>}</td>
-                  <td>
-                    <button className="btn-ghost text-[0.8rem] px-2 py-1 text-danger hover:bg-danger/10" onClick={async () => {
-                      if (!window.confirm(`Delete group "${g.name}"? Connections in this group will become ungrouped.`)) return;
-                      await deleteConnectionGroup(g.id);
-                      onGroupsChanged(groups.filter(x => x.id !== g.id));
-                    }}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div className="text-center py-6 bg-surface-secondary/30 rounded-lg border border-dashed border-border mb-4">
-            <p className="text-txt-secondary text-sm">No groups created yet.</p>
+      {/* Connection Folders */}
+      {user.can_manage_connections && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="!mb-0">Connection Folders</h2>
+            <p className="text-txt-tertiary text-xs">Organize connections into hierarchy</p>
           </div>
-        )}
 
-        <div className="bg-surface-secondary/50 p-3 rounded-lg border border-border/50">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 max-w-[300px]">
-              <input 
-                value={newGroupName} 
-                onChange={(e) => setNewGroupName(e.target.value)} 
-                placeholder="Group name..." 
-                className="w-full"
-              />
+          {folders.length > 0 ? (
+            <table className="mb-4">
+              <thead><tr><th>Name</th><th>Parent</th><th className="w-[100px]">Actions</th></tr></thead>
+              <tbody>
+                {folders.map((f) => (
+                  <tr key={f.id}>
+                    <td><span className="font-medium">{f.name}</span></td>
+                    <td>{f.parent_id ? (folders.find(p => p.id === f.parent_id)?.name || '—') : <span className="text-txt-tertiary italic">Root</span>}</td>
+                    <td>
+                      <button className="btn-ghost text-[0.8rem] px-2 py-1 text-danger hover:bg-danger/10" onClick={async () => {
+                        if (!window.confirm(`Delete folder "${f.name}"?`)) return;
+                        await deleteConnectionFolder(f.id);
+                        onFoldersChanged(folders.filter(x => x.id !== f.id));
+                      }}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="text-center py-6 bg-surface-secondary/30 rounded-lg border border-dashed border-border mb-4">
+              <p className="text-txt-secondary text-sm">No folders created yet.</p>
             </div>
-            <div className="w-[200px]">
-              <Select
-                value={newGroupParent}
-                onChange={setNewGroupParent}
-                placeholder="Root Level"
-                options={[
-                  { value: '', label: 'Root Level' },
-                  ...groups.filter(g => !g.parent_id).map(g => ({ value: g.id, label: g.name })),
-                ]}
-              />
+          )}
+
+          <div className="bg-surface-secondary/50 p-3 rounded-lg border border-border/50">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 max-w-[300px]">
+                <input 
+                  value={newFolderName} 
+                  onChange={(e) => setNewFolderName(e.target.value)} 
+                  placeholder="Folder name..." 
+                  className="w-full"
+                />
+              </div>
+              <div className="w-[200px]">
+                <Select
+                  value={newFolderParent}
+                  onChange={setNewFolderParent}
+                  placeholder="Root Level"
+                  options={[
+                    { value: '', label: 'Root Level' },
+                    ...folders.filter(f => !f.parent_id).map(f => ({ value: f.id, label: f.name })),
+                  ]}
+                />
+              </div>
+              <button 
+                className="btn-primary flex items-center gap-2 whitespace-nowrap shadow-sm"
+                disabled={!newFolderName.trim()}
+                onClick={async () => {
+                  if (!newFolderName.trim()) return;
+                  const f = await createConnectionFolder({ name: newFolderName.trim(), parent_id: newFolderParent || undefined });
+                  onFoldersChanged([...folders, f]);
+                  setNewFolderName('');
+                  setNewFolderParent('');
+                }}
+              >
+                Add Folder
+              </button>
             </div>
-            <button 
-              className="btn-primary flex items-center gap-2 whitespace-nowrap shadow-sm"
-              disabled={!newGroupName.trim()}
-              onClick={async () => {
-                if (!newGroupName.trim()) return;
-                const g = await createConnectionGroup({ name: newGroupName.trim(), parent_id: newGroupParent || undefined });
-                onGroupsChanged([...groups, g]);
-                setNewGroupName('');
-                setNewGroupParent('');
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-              Add Group
-            </button>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Users */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="!mb-0">Users</h2>
-          <button 
-            className="btn-primary text-xs py-1 px-3 shadow-sm"
-            onClick={() => {
-              setUserForm({ username: '', email: '', full_name: '', role_name: 'user', auth_type: 'local' });
-              setCreatedPassword(null);
-              setUserError('');
-              setUserModalOpen(true);
-            }}
-          >
-            + New User
-          </button>
-        </div>
-        
-        <div className="table-responsive">
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>Username / Name</th>
-                <th>Email</th>
-                <th>Auth Type</th>
-                <th>Role</th>
-                <th>OIDC Sub</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id}>
-                  <td>
-                    <div className="font-medium text-txt-primary">{u.username}</div>
-                    {u.full_name && <div className="text-[10px] text-txt-tertiary uppercase tracking-tighter">{u.full_name}</div>}
-                  </td>
-                  <td className="text-sm">{u.email}</td>
-                  <td>
-                    <span className={`badge text-[10px] uppercase font-bold ${u.auth_type === 'sso' ? 'badge-accent' : 'badge-secondary'}`}>
-                      {u.auth_type}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="text-sm font-medium opacity-80">{u.role_name}</span>
-                  </td>
-                  <td className="font-mono text-[0.7rem] text-txt-tertiary">
-                    {u.sub || <span className="opacity-30">—</span>}
-                  </td>
+      {user.can_manage_users && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="!mb-0">Users</h2>
+            <button 
+              className="btn-primary text-xs py-1 px-3 shadow-sm"
+              onClick={() => {
+                setUserForm({ username: '', email: '', full_name: '', role_id: '', auth_type: 'local' });
+                setCreatedPassword(null);
+                setUserError('');
+                setUserModalOpen(true);
+              }}
+            >
+              + New User
+            </button>
+          </div>
+          
+          <div className="table-responsive">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Username / Name</th>
+                  <th>Email</th>
+                  <th>Auth Type</th>
+                  <th>Role</th>
+                  <th>OIDC Sub</th>
+                  <th className="w-[100px]">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <div className="font-medium text-txt-primary">{u.username}</div>
+                      {u.full_name && <div className="text-[10px] text-txt-tertiary uppercase tracking-tighter">{u.full_name}</div>}
+                    </td>
+                    <td className="text-sm">{u.email}</td>
+                    <td>
+                      <span className={`badge text-[10px] uppercase font-bold ${u.auth_type === 'sso' ? 'badge-accent' : 'badge-secondary'}`}>
+                        {u.auth_type}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="text-sm font-medium opacity-80">{u.role_name}</span>
+                    </td>
+                    <td className="font-mono text-[0.7rem] text-txt-tertiary">
+                      {u.sub || <span className="opacity-30">—</span>}
+                    </td>
+                    <td>
+                      <button 
+                        className="btn-ghost text-xs text-danger py-1 px-2 hover:bg-danger/10"
+                        onClick={async () => {
+                          if (!window.confirm(`Delete user "${u.username}"? (Soft-delete for 7 days)`)) return;
+                          try {
+                            await deleteUser(u.id);
+                            onUsersChanged(users.filter(x => x.id !== u.id));
+                          } catch (err: any) {
+                            alert(err.message || 'Failed to delete user');
+                          }
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Create User Modal */}
       {userModalOpen && (
@@ -1303,9 +1610,6 @@ function AccessTab({
             {createdPassword ? (
               <div className="space-y-4">
                 <div className="p-4 bg-success-dim/20 border border-success/30 rounded-lg text-center">
-                  <div className="w-12 h-12 rounded-full bg-success/20 text-success flex items-center justify-center mx-auto mb-3">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                  </div>
                   <h4 className="font-bold text-success mb-1">User Created Successfully</h4>
                   <p className="text-sm text-txt-secondary">Local account ready for login.</p>
                 </div>
@@ -1317,12 +1621,11 @@ function AccessTab({
                   </div>
                 </div>
 
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs flex gap-3">
-                  <svg className="shrink-0 mt-0.5" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                  <span>This password will <strong>never be shown again</strong>. Please securely share it with the user now.</span>
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded text-amber-500 text-xs text-center">
+                  This password will <strong>never be shown again</strong>.
                 </div>
 
-                <button className="btn-primary w-full py-3" onClick={() => { setUserModalOpen(false); getUsers().then(onUsersChanged); }}>
+                <button className="btn-primary w-full py-3" onClick={() => { setUserModalOpen(false); }}>
                   Done
                 </button>
               </div>
@@ -1361,29 +1664,16 @@ function AccessTab({
                 </div>
 
                 <div className="form-group !mb-0">
-                  <label>Full Name <span className="text-[10px] text-txt-tertiary font-normal ml-1">(Optional)</span></label>
-                  <input 
-                    value={userForm.full_name} 
-                    onChange={e => setUserForm({...userForm, full_name: e.target.value})}
-                    placeholder="John Smith"
-                  />
-                  {userForm.auth_type === 'sso' && (
-                    <p className="text-[10px] text-txt-tertiary mt-1 italic">Will be updated from SSO provider on login if left blank.</p>
-                  )}
-                </div>
-
-                <div className="form-group !mb-0">
                   <label>Initial Role</label>
                   <Select 
-                    value={userForm.role_name}
-                    onChange={v => setUserForm({...userForm, role_name: v})}
-                    options={roles.map(r => ({ value: r.name, label: r.name }))}
+                    value={userForm.role_id}
+                    onChange={v => setUserForm({...userForm, role_id: v})}
+                    options={roles.map(r => ({ value: r.id, label: r.name }))}
                   />
                 </div>
 
                 {userError && (
-                  <div className="p-3 bg-danger-dim text-danger text-sm rounded border border-danger/20 flex gap-2">
-                    <svg className="shrink-0 mt-1" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <div className="p-3 bg-danger-dim text-danger text-sm rounded border border-danger/20">
                     {userError}
                   </div>
                 )}
@@ -1392,7 +1682,7 @@ function AccessTab({
                   <button className="btn w-full" onClick={() => setUserModalOpen(false)}>Cancel</button>
                   <button 
                     className="btn-primary w-full" 
-                    disabled={userSaving || !userForm.username || !userForm.email}
+                    disabled={userSaving || !userForm.username}
                     onClick={async () => {
                       setUserSaving(true);
                       setUserError('');
@@ -1400,8 +1690,7 @@ function AccessTab({
                         const res = await createUser({
                           username: userForm.username,
                           email: userForm.email,
-                          full_name: userForm.full_name || undefined,
-                          role_name: userForm.role_name,
+                          role_id: userForm.role_id,
                           auth_type: userForm.auth_type,
                         });
                         if (res.password) {
@@ -1429,7 +1718,7 @@ function AccessTab({
   );
 }
 
-// ── Collapsible Section ─────────────────────────────────────────────
+// ── Helper: Collapsible Section ─────────────────────────────────────
 
 function Section({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -2380,7 +2669,7 @@ function SessionsTab() {
 
 // ── AD Sync Tab ──────────────────────────────────────────────────────
 
-function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () => void }) {
+function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: () => void }) {
   const [configs, setConfigs] = useState<AdSyncConfig[]>([]);
   const [editing, setEditing] = useState<Partial<AdSyncConfig> | null>(null);
   const [selectedRuns, setSelectedRuns] = useState<{ configId: string; runs: AdSyncRun[] } | null>(null);
@@ -2444,9 +2733,9 @@ function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () =
     }
   };
 
-  const groupOptions = [
-    { value: '', label: '— No group —' },
-    ...groups.map((g) => ({ value: g.id, label: g.name })),
+  const folderOptions = [
+    { value: '', label: '— No folder —' },
+    ...folders.map((f) => ({ value: f.id, label: f.name })),
   ];
 
   const presetFilters = [
@@ -2586,11 +2875,11 @@ function AdSyncTab({ groups, onSave }: { groups: ConnectionGroup[]; onSave: () =
             <input className="input mt-1" value={editing.domain_override || ''} onChange={(e) => setEditing({ ...editing, domain_override: e.target.value || undefined })} placeholder="Optional — force domain on connections" />
           </label>
           <label className="block">
-            <span className="text-sm font-medium">Connection Group</span>
+            <span className="text-sm font-medium">Connection Folder</span>
             <Select
-              value={editing.group_id || ''}
-              onChange={(v) => setEditing({ ...editing, group_id: v || undefined })}
-              options={groupOptions}
+              value={editing.folder_id || ''}
+              onChange={(v) => setEditing({ ...editing, folder_id: v || undefined })}
+              options={folderOptions}
             />
           </label>
           <label className="block">

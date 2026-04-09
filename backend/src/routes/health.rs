@@ -20,6 +20,7 @@ pub struct StatusResponse {
     pub phase: String,
     pub sso_enabled: bool,
     pub local_auth_enabled: bool,
+    pub vault_configured: bool,
 }
 
 pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
@@ -41,6 +42,10 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
         (false, true)
     };
 
+    let vault_configured = {
+        s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some()
+    };
+
     Json(StatusResponse {
         phase: match s.phase {
             BootPhase::Setup => "setup".into(),
@@ -48,6 +53,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
         },
         sso_enabled: sso,
         local_auth_enabled: local,
+        vault_configured,
     })
 }
 
@@ -241,5 +247,199 @@ mod tests {
         // Connect to a port that's almost certainly not listening
         let result = check_tcp("127.0.0.1", 19999).await;
         assert!(!result);
+    }
+
+    #[test]
+    fn sanitize_db_url_complex_password() {
+        let url = "postgresql://admin:p%40ss%23w0rd@db.host:5432/mydb";
+        assert_eq!(sanitize_db_url(url), "db.host:5432/mydb");
+    }
+
+    #[test]
+    fn sanitize_db_url_empty_string() {
+        assert_eq!(sanitize_db_url(""), "");
+    }
+
+    #[test]
+    fn sanitize_db_url_just_host() {
+        assert_eq!(sanitize_db_url("localhost"), "localhost");
+    }
+
+    #[test]
+    fn health_response_debug_status() {
+        let resp = HealthResponse { status: "ok" };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("ok"));
+    }
+
+    #[test]
+    fn database_health_serializes() {
+        let h = DatabaseHealth {
+            connected: false,
+            mode: "external".into(),
+            host: "remote:5432/db".into(),
+        };
+        let json = serde_json::to_value(&h).unwrap();
+        assert_eq!(json["connected"], false);
+        assert_eq!(json["mode"], "external");
+        assert_eq!(json["host"], "remote:5432/db");
+    }
+
+    #[test]
+    fn guacd_health_serializes() {
+        let h = GuacdHealth {
+            reachable: true,
+            host: "guacd".into(),
+            port: 4822,
+        };
+        let json = serde_json::to_value(&h).unwrap();
+        assert_eq!(json["reachable"], true);
+        assert_eq!(json["host"], "guacd");
+    }
+
+    #[test]
+    fn vault_health_serializes() {
+        let h = VaultHealth {
+            configured: false,
+            address: String::new(),
+            mode: String::new(),
+        };
+        let json = serde_json::to_value(&h).unwrap();
+        assert_eq!(json["configured"], false);
+    }
+
+    #[test]
+    fn status_response_setup_phase() {
+        let resp = StatusResponse {
+            phase: "setup".into(),
+            sso_enabled: false,
+            local_auth_enabled: true,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["phase"], "setup");
+        assert_eq!(json["sso_enabled"], false);
+        assert_eq!(json["local_auth_enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn health_check_returns_ok() {
+        let result = health_check().await;
+        assert_eq!(result.status, "ok");
+    }
+
+    #[tokio::test]
+    async fn status_in_setup_phase() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: BootPhase::Setup,
+                config: None,
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        let result = status(axum::extract::State(state)).await;
+        assert_eq!(result.phase, "setup");
+        assert!(!result.sso_enabled);
+        assert!(result.local_auth_enabled);
+    }
+
+    #[tokio::test]
+    async fn service_health_no_config_no_db() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let state: SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: BootPhase::Setup,
+                config: None,
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        let axum::Json(result) = service_health(axum::extract::State(state)).await;
+        assert!(!result.database.connected);
+        assert_eq!(result.database.mode, "unknown");
+        assert_eq!(result.database.host, "—");
+        assert_eq!(result.guacd.host, "guacd");
+        assert_eq!(result.guacd.port, 4822);
+        assert!(!result.guacd.reachable);
+        assert!(!result.vault.configured);
+    }
+
+    #[tokio::test]
+    async fn service_health_with_config_no_vault() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let cfg = crate::config::AppConfig {
+            database_url: "postgresql://user:pass@dbhost:5432/testdb".into(),
+            database_mode: crate::config::DatabaseMode::External,
+            database_ssl_mode: None,
+            database_ca_cert: None,
+            vault: None,
+            guacd_host: Some("my-guacd".into()),
+            guacd_port: Some(9999),
+            guacd_instances: vec![],
+            jwt_secret: None,
+        };
+        let state: SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: BootPhase::Running,
+                config: Some(cfg),
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        let axum::Json(result) = service_health(axum::extract::State(state)).await;
+        assert!(!result.database.connected);
+        assert_eq!(result.database.mode, "external");
+        assert_eq!(result.database.host, "dbhost:5432/testdb");
+        assert_eq!(result.guacd.host, "my-guacd");
+        assert_eq!(result.guacd.port, 9999);
+        assert!(!result.vault.configured);
+    }
+
+    #[tokio::test]
+    async fn service_health_with_local_vault() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        let cfg = crate::config::AppConfig {
+            database_url: "postgresql://u:p@host:5432/db".into(),
+            database_mode: crate::config::DatabaseMode::Local,
+            database_ssl_mode: None,
+            database_ca_cert: None,
+            vault: Some(crate::config::VaultConfig {
+                address: "http://vault:8200".into(),
+                token: String::new(),
+                transit_key: "strata".into(),
+                mode: crate::config::VaultMode::Local,
+                unseal_key: None,
+            }),
+            guacd_host: None,
+            guacd_port: None,
+            guacd_instances: vec![],
+            jwt_secret: None,
+        };
+        let state: SharedState = Arc::new(RwLock::new(
+            crate::services::app_state::AppState {
+                phase: BootPhase::Running,
+                config: Some(cfg),
+                db: None,
+                session_registry: crate::services::session_registry::SessionRegistry::new(),
+                guacd_pool: None,
+            },
+        ));
+        let axum::Json(result) = service_health(axum::extract::State(state)).await;
+        assert_eq!(result.database.mode, "local");
+        assert_eq!(result.database.host, "host:5432/db");
+        assert!(result.vault.configured);
+        assert_eq!(result.vault.address, "http://vault:8200");
+        assert_eq!(result.vault.mode, "local");
+        // Default guacd values
+        assert_eq!(result.guacd.host, "guacd");
+        assert_eq!(result.guacd.port, 4822);
     }
 }

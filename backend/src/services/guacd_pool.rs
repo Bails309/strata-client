@@ -91,4 +91,35 @@ mod tests {
         assert_eq!(host, "guacd2");
         assert_eq!(port, 4822);
     }
+
+    #[test]
+    fn pool_clone() {
+        let pool = GuacdPool::new("guacd", 4822, &[]);
+        let cloned = pool.clone();
+        assert_eq!(cloned.len(), 1);
+        let (h, p) = cloned.next();
+        assert_eq!(h, "guacd");
+        assert_eq!(p, 4822);
+    }
+
+    #[test]
+    fn pool_many_calls_wrap() {
+        let extras = vec!["g2:5000".into()];
+        let pool = GuacdPool::new("g1", 4822, &extras);
+        for _ in 0..100 {
+            let (h, _) = pool.next();
+            assert!(h == "g1" || h == "g2");
+        }
+    }
+
+    #[test]
+    fn extras_with_invalid_port_defaults() {
+        let extras = vec!["host:notaport".into()];
+        let pool = GuacdPool::new("primary", 4822, &extras);
+        assert_eq!(pool.len(), 2);
+        let _ = pool.next();
+        let (h, p) = pool.next();
+        assert_eq!(h, "host");
+        assert_eq!(p, 4822); // defaults because parse failed
+    }
 }

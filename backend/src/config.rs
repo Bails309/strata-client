@@ -304,4 +304,88 @@ mod tests {
 
         std::env::remove_var("CONFIG_PATH");
     }
+
+    #[test]
+    fn vault_mode_serde() {
+        let json = serde_json::to_string(&VaultMode::Local).unwrap();
+        assert_eq!(json, "\"local\"");
+        let json = serde_json::to_string(&VaultMode::External).unwrap();
+        assert_eq!(json, "\"external\"");
+    }
+
+    #[test]
+    fn vault_mode_equality() {
+        assert_eq!(VaultMode::Local, VaultMode::Local);
+        assert_ne!(VaultMode::Local, VaultMode::External);
+    }
+
+    #[test]
+    fn vault_config_debug() {
+        let vc = VaultConfig {
+            address: "http://vault:8200".into(),
+            token: "secret".into(),
+            transit_key: "key".into(),
+            mode: VaultMode::Local,
+            unseal_key: None,
+        };
+        let debug = format!("{:?}", vc);
+        assert!(debug.contains("vault:8200"));
+    }
+
+    #[test]
+    fn app_config_debug() {
+        let cfg = AppConfig {
+            database_url: "postgresql://localhost/test".into(),
+            database_mode: DatabaseMode::Local,
+            database_ssl_mode: Some("require".into()),
+            database_ca_cert: Some("/path/to/ca.pem".into()),
+            vault: None,
+            guacd_host: None,
+            guacd_port: None,
+            guacd_instances: vec![],
+            jwt_secret: None,
+        };
+        let debug = format!("{:?}", cfg);
+        assert!(debug.contains("Local"));
+        assert!(debug.contains("require"));
+    }
+
+    #[test]
+    fn app_config_ssl_mode_serialized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let path_str = path.to_str().unwrap();
+
+        let cfg = AppConfig {
+            database_url: "postgresql://localhost/test".into(),
+            database_mode: DatabaseMode::External,
+            database_ssl_mode: Some("verify-full".into()),
+            database_ca_cert: Some("/etc/ssl/ca.pem".into()),
+            vault: None,
+            guacd_host: None,
+            guacd_port: None,
+            guacd_instances: vec![],
+            jwt_secret: None,
+        };
+        cfg.save(path_str).unwrap();
+        let loaded = AppConfig::load(path_str).unwrap();
+        assert_eq!(loaded.database_ssl_mode.as_deref(), Some("verify-full"));
+        assert_eq!(loaded.database_ca_cert.as_deref(), Some("/etc/ssl/ca.pem"));
+        assert_eq!(loaded.database_mode, DatabaseMode::External);
+    }
+
+    #[test]
+    fn local_vault_secrets_debug() {
+        let s = LocalVaultSecrets {
+            token: "tok".into(),
+            unseal_key: "key".into(),
+        };
+        let debug = format!("{:?}", s);
+        assert!(debug.contains("tok"));
+    }
+
+    #[test]
+    fn default_vault_mode_is_external() {
+        assert_eq!(default_vault_mode(), VaultMode::External);
+    }
 }

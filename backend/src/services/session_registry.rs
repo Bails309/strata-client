@@ -422,4 +422,114 @@ mod tests {
         assert!(registry.get(&session_id).await.is_some());
         assert!(registry.get("nonexistent").await.is_none());
     }
+
+    #[test]
+    fn filter_only_connect_and_args() {
+        let input = "4.sync,1.0;3.nop;7.connect,3.vnc;4.args,2.10,3.foo;3.end;";
+        let result = filter_sensitive_instructions(input);
+        assert!(result.contains("sync"));
+        assert!(result.contains("nop"));
+        assert!(result.contains("end"));
+        assert!(!result.contains("connect"));
+        assert!(!result.contains("args"));
+    }
+
+    #[test]
+    fn session_buffer_frames_from_offset_zero() {
+        let mut buf = SessionBuffer::new();
+        buf.push("4.size,1.0,4.1920,4.1080;".into());
+        buf.push("3.img,1.0,2.12;".into());
+        let frames = buf.frames_from_offset(300);
+        assert_eq!(frames.len(), 2);
+    }
+
+    #[test]
+    fn session_buffer_push_filtered_out_entirely() {
+        let mut buf = SessionBuffer::new();
+        // Only sensitive instructions — should result in nothing buffered
+        buf.push("7.connect,3.rdp,10.myhost.com;".into());
+        assert_eq!(buf.frames.len(), 0);
+        assert_eq!(buf.total_bytes, 0);
+    }
+
+    #[test]
+    fn session_info_serializes() {
+        let info = SessionInfo {
+            session_id: "s1".into(),
+            connection_id: Uuid::new_v4(),
+            connection_name: "conn".into(),
+            protocol: "rdp".into(),
+            user_id: Uuid::new_v4(),
+            username: "admin".into(),
+            started_at: chrono::Utc::now(),
+            buffer_depth_secs: 120,
+            bytes_from_guacd: 5000,
+            bytes_to_guacd: 2000,
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["protocol"], "rdp");
+        assert_eq!(json["buffer_depth_secs"], 120);
+        assert_eq!(json["bytes_from_guacd"], 5000);
+    }
+
+    #[test]
+    fn metrics_summary_serializes() {
+        let m = MetricsSummary {
+            active_sessions: 3,
+            total_bytes_from_guacd: 1024,
+            total_bytes_to_guacd: 512,
+            sessions_by_protocol: {
+                let mut map = HashMap::new();
+                map.insert("rdp".into(), 2);
+                map.insert("vnc".into(), 1);
+                map
+            },
+            guacd_pool_size: 5,
+        };
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["active_sessions"], 3);
+        assert_eq!(json["guacd_pool_size"], 5);
+    }
+
+    #[test]
+    fn constants_are_sensible() {
+        assert_eq!(MAX_BUFFER_DURATION, Duration::from_secs(300));
+        assert_eq!(MAX_BUFFER_BYTES, 50 * 1024 * 1024);
+        assert_eq!(BROADCAST_CAPACITY, 8192);
+        assert_eq!(MAX_SESSIONS, 500);
+    }
+
+    #[tokio::test]
+    async fn registry_metrics_empty() {
+        let registry = SessionRegistry::new();
+        let m = registry.metrics().await;
+        assert_eq!(m.active_sessions, 0);
+        assert_eq!(m.total_bytes_from_guacd, 0);
+        assert_eq!(m.total_bytes_to_guacd, 0);
+        assert!(m.sessions_by_protocol.is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_metrics_with_sessions() {
+        let registry = SessionRegistry::new();
+        registry
+            .register("m1".into(), Uuid::new_v4(), "C1".into(), "rdp".into(), Uuid::new_v4(), "u1".into())
+            .await;
+        registry
+            .register("m2".into(), Uuid::new_v4(), "C2".into(), "vnc".into(), Uuid::new_v4(), "u2".into())
+            .await;
+        let m = registry.metrics().await;
+        assert_eq!(m.active_sessions, 2);
+        assert_eq!(*m.sessions_by_protocol.get("rdp").unwrap(), 1);
+        assert_eq!(*m.sessions_by_protocol.get("vnc").unwrap(), 1);
+    }
+
+    #[test]
+    fn session_buffer_updates_last_size() {
+        let mut buf = SessionBuffer::new();
+        buf.push("4.size,1.0,4.1920,4.1080;".into());
+        assert_eq!(buf.last_size(), Some("4.size,1.0,4.1920,4.1080;"));
+        buf.push("4.size,1.0,4.2560,4.1440;".into());
+        assert_eq!(buf.last_size(), Some("4.size,1.0,4.2560,4.1440;"));
+    }
 }

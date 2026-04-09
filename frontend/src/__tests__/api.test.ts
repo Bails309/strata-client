@@ -33,10 +33,10 @@ import {
   createConnection,
   updateConnection,
   deleteConnection,
-  getConnectionGroups,
-  createConnectionGroup,
-  updateConnectionGroup,
-  deleteConnectionGroup,
+  getConnectionFolders,
+  createConnectionFolder,
+  updateConnectionFolder,
+  deleteConnectionFolder,
   updateRoleConnections,
   getUsers,
   updateCredential,
@@ -380,11 +380,11 @@ describe('API endpoint functions', () => {
 
   it('createRole sends POST with name', async () => {
     const fn = mockFetch({ id: '1', name: 'editors' });
-    await createRole('editors');
+    await createRole({ name: 'editors', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
     const c = lastCall(fn);
     expect(c.url).toBe('/api/admin/roles');
     expect(c.method).toBe('POST');
-    expect(JSON.parse(c.body!)).toEqual({ name: 'editors' });
+    expect(JSON.parse(c.body!)).toEqual({ name: 'editors', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
   });
 
   // ── Connections ───────────────────────────────────
@@ -422,32 +422,32 @@ describe('API endpoint functions', () => {
     expect(lastCall(fn).method).toBe('DELETE');
   });
 
-  // ── Connection Groups ─────────────────────────────
+  // ── Connection Folders ─────────────────────────────
 
-  it('getConnectionGroups sends GET', async () => {
+  it('getConnectionFolders sends GET', async () => {
     const fn = mockFetch([]);
-    await getConnectionGroups();
-    expect(lastCall(fn).url).toBe('/api/admin/connection-groups');
+    await getConnectionFolders();
+    expect(lastCall(fn).url).toBe('/api/admin/connection-folders');
   });
 
-  it('createConnectionGroup sends POST', async () => {
+  it('createConnectionFolder sends POST', async () => {
     const fn = mockFetch({ id: 'g1', name: 'grp' });
-    await createConnectionGroup({ name: 'grp' });
-    expect(lastCall(fn).url).toBe('/api/admin/connection-groups');
+    await createConnectionFolder({ name: 'grp' });
+    expect(lastCall(fn).url).toBe('/api/admin/connection-folders');
     expect(lastCall(fn).method).toBe('POST');
   });
 
-  it('updateConnectionGroup sends PUT with id', async () => {
+  it('updateConnectionFolder sends PUT with id', async () => {
     const fn = mockFetch({ id: 'g1', name: 'new' });
-    await updateConnectionGroup('g1', { name: 'new' });
-    expect(lastCall(fn).url).toBe('/api/admin/connection-groups/g1');
+    await updateConnectionFolder('g1', { name: 'new' });
+    expect(lastCall(fn).url).toBe('/api/admin/connection-folders/g1');
     expect(lastCall(fn).method).toBe('PUT');
   });
 
-  it('deleteConnectionGroup sends DELETE with id', async () => {
+  it('deleteConnectionFolder sends DELETE with id', async () => {
     const fn = mockFetch({ status: 'ok' });
-    await deleteConnectionGroup('g1');
-    expect(lastCall(fn).url).toBe('/api/admin/connection-groups/g1');
+    await deleteConnectionFolder('g1');
+    expect(lastCall(fn).url).toBe('/api/admin/connection-folders/g1');
     expect(lastCall(fn).method).toBe('DELETE');
   });
 

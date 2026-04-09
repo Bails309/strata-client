@@ -92,4 +92,60 @@ mod tests {
         let id = create(ticket);
         assert!(consume(&id).is_none());
     }
+
+    #[test]
+    fn ticket_ttl_constant() {
+        assert_eq!(TICKET_TTL_SECS, 30);
+    }
+
+    #[test]
+    fn ticket_fields_preserved() {
+        let uid = Uuid::new_v4();
+        let cid = Uuid::new_v4();
+        let ticket = TunnelTicket {
+            user_id: uid,
+            connection_id: cid,
+            username: Some("alice".into()),
+            password: Some("pass123".into()),
+            width: 2560,
+            height: 1440,
+            dpi: 144,
+            created_at: Instant::now(),
+        };
+        let id = create(ticket);
+        let consumed = consume(&id).unwrap();
+        assert_eq!(consumed.user_id, uid);
+        assert_eq!(consumed.connection_id, cid);
+        assert_eq!(consumed.username.as_deref(), Some("alice"));
+        assert_eq!(consumed.password.as_deref(), Some("pass123"));
+        assert_eq!(consumed.width, 2560);
+        assert_eq!(consumed.height, 1440);
+        assert_eq!(consumed.dpi, 144);
+    }
+
+    #[test]
+    fn ticket_without_credentials() {
+        let ticket = TunnelTicket {
+            user_id: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            username: None,
+            password: None,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            created_at: Instant::now(),
+        };
+        let id = create(ticket);
+        let consumed = consume(&id).unwrap();
+        assert!(consumed.username.is_none());
+        assert!(consumed.password.is_none());
+    }
+
+    #[test]
+    fn create_returns_uuid_format() {
+        let id = create(make_ticket());
+        // UUIDs are 36 chars: 8-4-4-4-12
+        assert_eq!(id.len(), 36);
+        assert!(Uuid::parse_str(&id).is_ok());
+    }
 }

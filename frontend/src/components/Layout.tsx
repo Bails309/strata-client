@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useTheme } from './ThemeProvider';
-import { getMe, MeResponse } from '../api';
+import { MeResponse } from '../api';
 
 /* ── Sidebar context so other components can read the width ── */
 const SidebarContext = createContext(180);
@@ -33,16 +33,11 @@ const NAV_ITEMS = [
   )},
 ];
 
-export default function Layout({ onLogout }: { onLogout: () => void }) {
+export default function Layout({ user, onLogout }: { user: MeResponse | null, onLogout: () => void }) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
-  const [user, setUser] = useState<MeResponse | null>(null);
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
   const { theme, preference, cycle } = useTheme();
-
-  useEffect(() => {
-    getMe().then(setUser).catch(() => null);
-  }, []);
 
   const initial = user?.username?.charAt(0).toUpperCase() || 'S';
 
@@ -71,7 +66,21 @@ export default function Layout({ onLogout }: { onLogout: () => void }) {
 
             {/* Navigation */}
             <nav className="flex flex-col gap-0.5">
-              {NAV_ITEMS.map((item) => {
+              {NAV_ITEMS.filter((item) => {
+                if (item.to === '/admin') {
+                  return user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections
+                    || user?.can_create_users || user?.can_create_user_groups
+                    || user?.can_create_connections || user?.can_create_connection_folders
+                    || user?.can_create_sharing_profiles;
+                }
+                if (item.to === '/audit') {
+                  return user?.can_view_audit_logs;
+                }
+                if (item.to === '/credentials') {
+                  return user?.vault_configured;
+                }
+                return true;
+              }).map((item) => {
                 const active = item.to === '/'
                   ? location.pathname === '/' || location.pathname.startsWith('/session/')
                   : location.pathname.startsWith(item.to);

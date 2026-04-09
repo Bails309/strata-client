@@ -10,5 +10,6 @@ pub mod session_registry;
 pub mod settings;
 pub mod token_revocation;
 pub mod tunnel_tickets;
+pub mod user_cleanup;
 pub mod vault;
 pub mod vault_provisioning;

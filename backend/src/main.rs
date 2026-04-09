@@ -159,6 +159,9 @@ async fn main() -> anyhow::Result<()> {
     // ── Spawn AD sync scheduler ──
     services::ad_sync::spawn_sync_scheduler(state.clone());
 
+    // ── Spawn User cleanup background task ──
+    services::user_cleanup::spawn_cleanup_task(state.clone());
+
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
 

@@ -88,9 +88,19 @@ nano .env
 - `DEFAULT_ADMIN_PASSWORD`: Set a strong initial password.
 
 ### 4.3 Launch the Stack
-Start all services in the background:
+
+Start the application services in the background.
+
+**Scenario A: Using an External Database**  
+Ensure `DATABASE_URL` is set in your `.env`, then run:
 ```bash
 docker compose up -d
+```
+
+**Scenario B: Using the Bundled Local Database**  
+If you did not provide an external connection string, you must enable the local database profile to start the internal PostgreSQL container:
+```bash
+docker compose --profile local-db up -d
 ```
 
 Check the status of the containers:

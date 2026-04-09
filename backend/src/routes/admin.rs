@@ -2255,10 +2255,11 @@ pub async fn test_ad_sync_connection(
     // Resolve password: if it's a mask, fetch from DB. Then unseal.
     let mut bind_password = body.bind_password.clone().unwrap_or_default();
     if (bind_password == DOT_MASK || bind_password == STAR_MASK) && body.id.is_some() {
-        let existing: Option<String> = sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-            .bind(body.id.unwrap())
-            .fetch_optional(&db.pool)
-            .await?;
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
+                .bind(body.id.unwrap())
+                .fetch_optional(&db.pool)
+                .await?;
         if let Some(pw) = existing {
             bind_password = pw;
         }

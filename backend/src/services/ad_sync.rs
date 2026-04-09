@@ -158,7 +158,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
             INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, ad_source_id, ad_dn, extra)
             SELECT name, $5, hostname, $6, $7, description, $8, $9, dn, '{}'::jsonb
             FROM discovered
-            ON CONFLICT (ad_source_id, ad_dn) DO UPDATE SET
+            ON CONFLICT (ad_source_id, ad_dn) WHERE ad_source_id IS NOT NULL AND ad_dn IS NOT NULL DO UPDATE SET
                 soft_deleted_at = NULL,
                 hostname = EXCLUDED.hostname,
                 name = EXCLUDED.name,

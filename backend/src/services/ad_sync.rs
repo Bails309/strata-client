@@ -96,7 +96,7 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
             .await?;
         }
         Err(e) => {
-            let msg = format!("{e:#}");
+            let msg = format!("{e:#}").replace('\0', "");
             tracing::error!("AD sync failed for '{}': {msg}", config.label);
             sqlx::query(
                 "UPDATE ad_sync_runs SET status = 'error', finished_at = now(), error_message = $1 WHERE id = $2",
@@ -113,15 +113,17 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
 
 async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> anyhow::Result<()> {
     // Phase 1: Query LDAP for computers
+    tracing::info!("AD sync '{}' (Phase 1/4): Querying LDAP for computers...", config.label);
     let computers = ldap_query(config).await?;
     tracing::info!(
-        "AD sync '{}': discovered {} computer(s) in {:?}",
+        "AD sync '{}': discovered {} computer(s) under {:?}",
         config.label,
         computers.len(),
         config.search_bases,
     );
 
-    // Phase 2: Compute stats and perform bulk upsert
+    // Phase 2: Processing computer list
+    tracing::info!("AD sync '{}' (Phase 2/4): Processing computer list...", config.label);
     let mut dns = Vec::with_capacity(computers.len());
     let mut hostnames = Vec::with_capacity(computers.len());
     let mut names = Vec::with_capacity(computers.len());
@@ -147,6 +149,8 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         descriptions.push(description);
     }
 
+    // Phase 3: Bulk upsert using UNNEST and ON CONFLICT
+    tracing::info!("AD sync '{}' (Phase 3/4): Performing bulk database upsert...", config.label);
     // High performance bulk upsert using UNNEST and ON CONFLICT.
     // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
     let stats: (i64, i64) = sqlx::query_as(
@@ -193,7 +197,8 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     let created = stats.0 as i32;
     let updated = stats.1 as i32;
 
-    // Phase 3: Bulk soft-delete connections whose DN vanished from LDAP
+    // Phase 4: Bulk soft-delete connections whose DN vanished from LDAP
+    tracing::info!("AD sync '{}' (Phase 4/4): Cleaning up abandoned entries...", config.label);
     let soft_deleted_res = sqlx::query(
         "UPDATE connections SET soft_deleted_at = now() 
          WHERE ad_source_id = $1 
@@ -366,8 +371,9 @@ async fn ldap_query_simple(
         &config.search_filter
     };
 
-    let (results, _res) = ldap
-        .search(
+    let (results, _res) = tokio::time::timeout(
+        Duration::from_secs(60),
+        ldap.search(
             search_base,
             scope,
             filter,
@@ -378,9 +384,11 @@ async fn ldap_query_simple(
                 "name",
                 "description",
             ],
-        )
-        .await?
-        .success()?;
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("LDAP search timed out after 60s"))??
+    .success()?;
 
     let mut computers = Vec::new();
     for entry in results {
@@ -478,6 +486,8 @@ async fn ldap_query_kerberos(
         "-s",
         scope_arg,
         "-LLL",
+        "-l",
+        "60", // 60s time limit
         filter,
         "cn",
         "dNSHostName",

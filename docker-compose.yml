@@ -84,7 +84,7 @@ services:
       - krb5-config:/etc/krb5
     environment:
       - RUST_LOG=${RUST_LOG:-info}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}}
       - GUACD_HOST=guacd
       - GUACD_PORT=4822
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
@@ -96,8 +96,6 @@ services:
           cpus: "2"
           memory: 2G
     depends_on:
-      postgres-local:
-        condition: service_healthy
       guacd:
         condition: service_healthy
 
@@ -120,47 +118,23 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    ports:
+      - "80:80"
+      - "443:443"
     networks:
       - guac-internal
+    volumes:
+      - ./certs:/etc/nginx/ssl:ro
     depends_on:
       - backend
 
-  # ── 4. Caddy Reverse Proxy (gateway) ────────────────────────────────
-  # All traffic flows through Caddy. Set STRATA_DOMAIN for auto-HTTPS.
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    ports:
-      - "${HTTP_PORT:-8080}:80"
-      - "${HTTPS_PORT:-443}:443"
-      - "${HTTPS_PORT:-443}:443/udp"
-    networks:
-      - guac-internal
-    environment:
-      - STRATA_DOMAIN
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - backend
-      - frontend
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
 
   # ── 5. Local PostgreSQL ─────────────────────────────────────────────
   postgres-local:
     image: postgres:16-alpine
     restart: unless-stopped
+    profiles:
+      - local-db
     networks:
       - guac-internal
     security_opt:
@@ -250,10 +224,6 @@ volumes:
   backend-config:
     driver: local
   vault-data:
-    driver: local
-  caddy-data:
-    driver: local
-  caddy-config:
     driver: local
 
 networks:

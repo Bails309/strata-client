@@ -21,5 +21,5 @@ RUN mkdir -p /var/cache/nginx/client_temp /var/cache/nginx/proxy_temp \
     touch /var/run/nginx.pid && chown nginx:nginx /var/run/nginx.pid
 USER nginx
 
-EXPOSE 80
+EXPOSE 80 443
 CMD ["nginx", "-g", "daemon off;"]

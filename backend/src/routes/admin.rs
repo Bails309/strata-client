@@ -2601,6 +2601,37 @@ mod tests {
         assert_eq!(v["username"], "admin");
         assert_eq!(v["auth_type"], "local");
         assert!(v["sub"].is_null());
+        assert!(v["deleted_at"].is_null());
+    }
+
+    #[test]
+    fn user_row_serializes_with_deleted_at() {
+        let deleted_at = chrono::Utc::now();
+        let r = UserRow {
+            id: Uuid::nil(),
+            username: "deleted-user".into(),
+            email: "deleted@corp.local".into(),
+            full_name: None,
+            auth_type: "local".into(),
+            sub: None,
+            role_name: "user".into(),
+            deleted_at: Some(deleted_at),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["username"], "deleted-user");
+        assert!(v["deleted_at"].is_string());
+    }
+
+    #[test]
+    fn user_list_query_deser() {
+        let q: UserListQuery = serde_json::from_str("{}").unwrap();
+        assert!(q.include_deleted.is_none());
+
+        let q: UserListQuery = serde_json::from_str(r#"{"include_deleted":true}"#).unwrap();
+        assert!(q.include_deleted.unwrap());
+
+        let q: UserListQuery = serde_json::from_str(r#"{"include_deleted":false}"#).unwrap();
+        assert!(!q.include_deleted.unwrap());
     }
 
     #[test]

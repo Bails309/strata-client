@@ -1074,7 +1074,7 @@ mod tests {
         let input = "Error with\0 null\0 bytes".to_string();
         let expected = "Error with null bytes".to_string();
         assert_eq!(sanitize_error(input), expected);
-        
+
         let clean = "Clean string".to_string();
         assert_eq!(sanitize_error(clean.clone()), clean);
     }

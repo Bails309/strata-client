@@ -3,9 +3,9 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('guacamole-common-js', () => {
-  function MockStringWriter() {
-    (this as any).sendText = vi.fn();
-    (this as any).sendEnd = vi.fn();
+  function MockStringWriter(this: any) {
+    this.sendText = vi.fn();
+    this.sendEnd = vi.fn();
   }
   return {
     default: {

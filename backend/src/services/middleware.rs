@@ -166,7 +166,8 @@ async fn try_local_jwt(
     .await
     .map_err(AppError::Database)?;
 
-    let user = row.ok_or_else(|| AppError::Auth("User no longer exists or has been deleted".into()))?;
+    let user =
+        row.ok_or_else(|| AppError::Auth("User no longer exists or has been deleted".into()))?;
 
     Ok(Some(AuthUser {
         id: user.id,

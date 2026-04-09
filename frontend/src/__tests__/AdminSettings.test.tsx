@@ -1758,7 +1758,7 @@ describe('ConnectionForm protocol sections', () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'ssh', hostname: '10.0.0.1', port: 22, description: 'SSH server', folder_id: null, folder_name: null, domain: '', extra: {}, updated_at: '' },
+      { id: 'c1', name: 'Server A', protocol: 'ssh', hostname: '10.0.0.1', port: 22, description: 'SSH server', folder_id: undefined, folder_name: undefined, domain: '', extra: {}, updated_at: '' },
     ]);
   });
   afterEach(() => vi.restoreAllMocks());
@@ -1813,7 +1813,7 @@ describe('ConnectionForm protocol sections', () => {
   it('calls createConnection on form submit', async () => {
     vi.mocked(createConnection).mockResolvedValue({
       id: 'c2', name: 'New SSH', protocol: 'ssh', hostname: '10.0.0.5', port: 22,
-      description: '', folder_id: null, folder_name: null, domain: '', extra: {}, updated_at: '',
+      description: '', folder_id: undefined, folder_name: undefined, domain: '', extra: {}, updated_at: '',
     });
     const user = userEvent.setup();
     renderAdmin();

@@ -1,7 +1,11 @@
 use axum::extract::{Extension, Path, Query, State, WebSocketUpgrade};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -9,6 +13,17 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{recordings, tunnel_tickets, vault};
 use crate::tunnel::{self, HandshakeParams, NvrContext};
+
+/// Per-user rate limiter for WebSocket tunnel connections.
+static TUNNEL_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<Uuid, Vec<Instant>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Maximum tunnel connections per user within the window.
+const MAX_TUNNEL_PER_USER: usize = 30;
+/// Rate limit window in seconds.
+const TUNNEL_WINDOW_SECS: u64 = 60;
+/// Maximum entries in the tunnel rate limiter to prevent OOM.
+const MAX_TUNNEL_RATE_ENTRIES: usize = 50_000;
 
 /// Clamp display dimensions to safe bounds.
 fn clamp_dimension(val: u32, min: u32, max: u32, default: u32) -> u32 {
@@ -80,6 +95,30 @@ pub async fn ws_tunnel(
     Path(connection_id): Path<Uuid>,
     Query(query): Query<TunnelQuery>,
 ) -> Result<impl IntoResponse, AppError> {
+    // ── Per-user tunnel rate limiting ──
+    {
+        let mut map = TUNNEL_RATE_LIMIT.lock().unwrap();
+        if map.len() > MAX_TUNNEL_RATE_ENTRIES {
+            let cutoff = Instant::now() - std::time::Duration::from_secs(TUNNEL_WINDOW_SECS);
+            map.retain(|_, attempts| {
+                attempts.retain(|t| *t > cutoff);
+                !attempts.is_empty()
+            });
+            if map.len() > MAX_TUNNEL_RATE_ENTRIES {
+                map.clear();
+            }
+        }
+        let cutoff = Instant::now() - std::time::Duration::from_secs(TUNNEL_WINDOW_SECS);
+        let attempts = map.entry(user.id).or_default();
+        attempts.retain(|t| *t > cutoff);
+        if attempts.len() >= MAX_TUNNEL_PER_USER {
+            return Err(AppError::Validation(
+                "Too many tunnel connections. Please try again later.".into(),
+            ));
+        }
+        attempts.push(Instant::now());
+    }
+
     // Read state
     let (db, config, guacd_pool) = {
         let s = state.read().await;

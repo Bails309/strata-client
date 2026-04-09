@@ -82,10 +82,10 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/credentials" element={user?.vault_configured ? <Credentials vaultConfigured={true} /> : <Navigate to="/" replace />} />
           <Route path="/admin" element={(user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections || user?.can_create_users || user?.can_create_user_groups || user?.can_create_connections || user?.can_create_connection_folders || user?.can_create_sharing_profiles) ? <AdminSettings user={user} /> : <Navigate to="/" replace />} />
-          <Route path="/session/:connectionId" element={<SessionClient />} />
+          <Route path="/session/:connectionId" element={<SessionClient canShare={user?.can_manage_system || user?.can_create_sharing_profiles || false} />} />
           <Route path="/tiled" element={<TiledView />} />
           <Route path="/observe/:sessionId" element={<NvrPlayer />} />
-          <Route path="/audit" element={user?.can_view_audit_logs ? <AuditLogs /> : <Navigate to="/" replace />} />
+          <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
         </Route>
         <Route path="/shared/:shareToken" element={<SharedViewer />} />
         <Route path="/login" element={<Navigate to="/" replace />} />

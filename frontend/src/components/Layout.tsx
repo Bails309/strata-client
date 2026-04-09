@@ -74,7 +74,7 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
                     || user?.can_create_sharing_profiles;
                 }
                 if (item.to === '/audit') {
-                  return user?.can_view_audit_logs;
+                  return user?.can_manage_system || user?.can_view_audit_logs;
                 }
                 if (item.to === '/credentials') {
                   return user?.vault_configured;

@@ -144,7 +144,7 @@ The `audit_logs` table is designed as an append-only, tamper-evident log:
 
 ### LDAP Credentials
 
-AD sync bind passwords are stored in the `ad_sync_configs` table in plaintext. This is within the same trust boundary as the admin API (only admin users can create/view configs, and the password is never returned in API responses). Future enhancement: Vault envelope encryption for bind passwords.
+AD sync bind passwords are encrypted at rest using the same Vault Transit envelope encryption as user credentials. When Vault is configured, bind passwords are sealed via `vault::seal_setting()` before storage and unsealed via `vault::unseal_setting()` at sync time. Passwords are stored in the `vault:{json}` envelope format and are never returned in API responses. Without Vault configured, bind passwords fall back to plaintext storage within the same trust boundary as the admin API.
 
 ### TLS / Certificate Handling
 
@@ -182,9 +182,7 @@ For production external databases, use `require` at minimum. Use `verify-full` w
 
 ### Container Isolation
 
-All containers communicate over an internal Docker bridge network (`guac-internal`). Only the frontend (port 3000) and backend (port 8080) expose host-mapped ports.
-
-`guacd` and `postgres-local` are **not** exposed to the host network.
+All containers communicate over an internal Docker bridge network (`guac-internal`). Only the Caddy reverse proxy exposes host-mapped ports (`HTTP_PORT` default 8080, `HTTPS_PORT` default 443). The frontend, backend, `guacd`, `postgres-local`, and Vault are **not** exposed to the host network.
 
 ### guacd Communication
 
@@ -212,6 +210,20 @@ The bundled Vault container runs on the internal Docker bridge network and is **
 - **Path traversal:** Recording file downloads reject filenames containing `..`, `/`, or `\`
 - **JSON parsing:** All request bodies are deserialized with `serde` into strongly-typed structs
 - **CORS:** Configured via `tower-http` (currently permissive — tighten for production)
+
+---
+
+## Container Hardening
+
+All services in the Docker Compose stack apply security constraints:
+
+| Measure | Applied to |
+|---|---|
+| `security_opt: no-new-privileges:true` | All services |
+| `cap_drop: ALL` | All services |
+| `cap_add` (minimal) | `frontend` / `caddy` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
+| `read_only: true` + `tmpfs` | `frontend` |
+| Resource limits (`cpus`, `memory`) | `guacd`, `backend`, `postgres-local` |
 
 ---
 

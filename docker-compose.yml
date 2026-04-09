@@ -69,6 +69,14 @@ services:
       - guac-internal
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     volumes:
       - backend-config:/app/config
       - guac-recordings:/var/lib/guacamole/recordings:ro
@@ -108,6 +116,10 @@ services:
       - /run:uid=101,gid=101
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     networks:
       - guac-internal
     depends_on:
@@ -118,6 +130,12 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     ports:
       - "${HTTP_PORT:-8080}:80"
       - "${HTTPS_PORT:-443}:443"
@@ -147,6 +165,14 @@ services:
       - guac-internal
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     volumes:
       - postgres-data:/var/lib/postgresql/data
     environment:
@@ -170,10 +196,19 @@ services:
     restart: unless-stopped
     networks:
       - guac-internal
-    volumes:
-      - vault-data:/vault/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     cap_add:
       - IPC_LOCK
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    volumes:
+      - vault-data:/vault/data
     environment:
       VAULT_ADDR: "http://127.0.0.1:8200"
       VAULT_API_ADDR: "http://vault:8200"

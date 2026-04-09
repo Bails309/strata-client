@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -48,39 +48,44 @@ describe('SessionToolbar', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders share button', () => {
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+  it('renders share button when canShare is true', () => {
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     expect(screen.getByTitle('Share this connection')).toBeInTheDocument();
   });
 
+  it('hides share button when canShare is false', () => {
+    render(<SessionToolbar canShare={false} session={createMockSession() as any} connectionId="conn-1" />);
+    expect(screen.queryByTitle('Share this connection')).not.toBeInTheDocument();
+  });
+
   it('renders fullscreen button', () => {
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     expect(screen.getByTitle(/Fullscreen/)).toBeInTheDocument();
   });
 
   it('does not render file browser button when no filesystems', () => {
-    render(<SessionToolbar session={createMockSession({ filesystems: [] }) as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession({ filesystems: [] }) as any} connectionId="conn-1" />);
     expect(screen.queryByTitle('Browse files')).toBeNull();
   });
 
   it('renders file browser button when filesystems exist', () => {
     const session = createMockSession({ filesystems: [{ name: 'Drive', object: {} }] });
-    render(<SessionToolbar session={session as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={session as any} connectionId="conn-1" />);
     expect(screen.getByTitle('Browse files')).toBeInTheDocument();
   });
 
   it('renders pop-out button when onPopOut is provided', () => {
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" onPopOut={vi.fn()} />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" onPopOut={vi.fn()} />);
     expect(screen.getByTitle('Pop out to separate window')).toBeInTheDocument();
   });
 
   it('shows pop-in button when isPoppedOut and onPopIn', () => {
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" isPoppedOut onPopIn={vi.fn()} />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" isPoppedOut onPopIn={vi.fn()} />);
     expect(screen.getByTitle('Return to main window')).toBeInTheDocument();
   });
 
   it('does not show pop-out button when neither handler provided', () => {
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     expect(screen.queryByTitle('Pop out to separate window')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Return to main window')).not.toBeInTheDocument();
   });
@@ -88,7 +93,7 @@ describe('SessionToolbar', () => {
   it('calls onPopOut when pop-out button clicked', async () => {
     const onPopOut = vi.fn();
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" onPopOut={onPopOut} />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" onPopOut={onPopOut} />);
     await user.click(screen.getByTitle('Pop out to separate window'));
     expect(onPopOut).toHaveBeenCalled();
   });
@@ -96,14 +101,14 @@ describe('SessionToolbar', () => {
   it('calls onPopIn when pop-in button clicked', async () => {
     const onPopIn = vi.fn();
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" isPoppedOut onPopIn={onPopIn} />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" isPoppedOut onPopIn={onPopIn} />);
     await user.click(screen.getByTitle('Return to main window'));
     expect(onPopIn).toHaveBeenCalled();
   });
 
   it('opens share popover with mode choices', async () => {
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     expect(screen.getByText('Share Connection')).toBeInTheDocument();
     expect(screen.getByText('View Only')).toBeInTheDocument();
@@ -113,7 +118,7 @@ describe('SessionToolbar', () => {
   it('generates a view-only share link', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => {
@@ -125,7 +130,7 @@ describe('SessionToolbar', () => {
   it('generates a control share link', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'control' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('Control'));
     await waitFor(() => {
@@ -137,7 +142,7 @@ describe('SessionToolbar', () => {
   it('shows share URL in input field', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => {
@@ -148,7 +153,7 @@ describe('SessionToolbar', () => {
   it('shows copy button for share URL', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => screen.getByTitle('Copy link'));
@@ -162,7 +167,7 @@ describe('SessionToolbar', () => {
   it('shows Generate new link after URL is created', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => expect(screen.getByText('Generate new link')).toBeInTheDocument());
@@ -171,7 +176,7 @@ describe('SessionToolbar', () => {
   it('resets URL when Generate new link clicked', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => screen.getByText('Generate new link'));
@@ -183,7 +188,7 @@ describe('SessionToolbar', () => {
   it('handles share API failure gracefully', async () => {
     vi.mocked(createShareLink).mockRejectedValue(new Error('Unavailable'));
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => {
@@ -195,18 +200,18 @@ describe('SessionToolbar', () => {
     let resolve: (v: any) => void;
     vi.mocked(createShareLink).mockReturnValue(new Promise((r) => { resolve = r; }));
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
-    expect(screen.getByText('Generating…')).toBeInTheDocument();
+    expect(screen.getByText('Generatingâ€¦')).toBeInTheDocument();
     resolve!({ share_url: '/shared/abc', share_token: 'abc', mode: 'view' });
-    await waitFor(() => expect(screen.queryByText('Generating…')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Generatingâ€¦')).not.toBeInTheDocument());
   });
 
   it('opens file browser panel', async () => {
     const session = createMockSession({ filesystems: [{ name: 'SFTP', object: {} }] });
     const user = userEvent.setup();
-    render(<SessionToolbar session={session as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={session as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Browse files'));
     expect(screen.getByText('Files')).toBeInTheDocument();
     expect(screen.getByTestId('file-browser')).toBeInTheDocument();
@@ -215,7 +220,7 @@ describe('SessionToolbar', () => {
   it('closes file browser panel', async () => {
     const session = createMockSession({ filesystems: [{ name: 'SFTP', object: {} }] });
     const user = userEvent.setup();
-    render(<SessionToolbar session={session as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={session as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Browse files'));
     expect(screen.getByText('Files')).toBeInTheDocument();
     await user.click(screen.getByTitle('Close file browser'));
@@ -226,7 +231,7 @@ describe('SessionToolbar', () => {
     const requestFullscreen = vi.fn().mockResolvedValue(undefined);
     document.documentElement.requestFullscreen = requestFullscreen;
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle(/fullscreen/i));
     expect(requestFullscreen).toHaveBeenCalled();
   });
@@ -234,7 +239,7 @@ describe('SessionToolbar', () => {
   it('shows view description text', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
     await waitFor(() => expect(screen.getByText(/read-only view access/)).toBeInTheDocument());
@@ -243,7 +248,7 @@ describe('SessionToolbar', () => {
   it('shows control description text', async () => {
     vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'control' });
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('Control'));
     await waitFor(() => expect(screen.getByText(/temporary control access/)).toBeInTheDocument());
@@ -257,14 +262,14 @@ describe('SessionToolbar', () => {
       ],
     });
     const user = userEvent.setup();
-    render(<SessionToolbar session={session as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={session as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Browse files'));
     expect(screen.getByTestId('select')).toBeInTheDocument();
   });
 
   it('closes share popover on second click of share button', async () => {
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     expect(screen.getByText('Share Connection')).toBeInTheDocument();
     await user.click(screen.getByTitle('Share this connection'));
@@ -290,7 +295,7 @@ describe('SessionToolbar', () => {
 
   it('button hover applies background style', async () => {
     const user = userEvent.setup();
-    render(<SessionToolbar session={createMockSession() as any} connectionId="conn-1" />);
+    render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     const btn = screen.getByTitle('Share this connection');
     await user.hover(btn);
     // After hover, inline style should be updated. Check it doesn't crash.
@@ -299,3 +304,4 @@ describe('SessionToolbar', () => {
     expect(btn).toBeInTheDocument();
   });
 });
+

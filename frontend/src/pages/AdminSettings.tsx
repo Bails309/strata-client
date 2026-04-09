@@ -58,7 +58,7 @@ type Tab = 'health' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | '
 export default function AdminSettings({ user }: { user: MeResponse }) {
   const [tab, setTab] = useState<Tab>(
     user.can_manage_system ? 'health' : 
-    (user.can_manage_users || user.can_manage_connections) ? 'access' :
+    (user.can_manage_users || user.can_manage_connections || user.can_create_users || user.can_create_user_groups || user.can_create_connections || user.can_create_connection_folders || user.can_create_sharing_profiles) ? 'access' :
     user.can_view_audit_logs ? 'sessions' : 'health'
   );
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -104,11 +104,11 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       <div className="tabs">
         {(['health', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'ad-sync', 'sessions', 'security'] as Tab[])
           .filter(t => {
-            if (t === 'access') return user.can_manage_users || user.can_manage_connections
+            if (t === 'access') return user.can_manage_system || user.can_manage_users || user.can_manage_connections
               || user.can_create_users || user.can_create_user_groups
               || user.can_create_connections || user.can_create_connection_folders
               || user.can_create_sharing_profiles;
-            if (t === 'sessions') return user.can_view_audit_logs;
+            if (t === 'sessions') return user.can_manage_system || user.can_view_audit_logs;
             // All other tabs are system management
             return user.can_manage_system;
           })
@@ -1072,7 +1072,7 @@ function AccessTab({
   return (
     <div className="grid gap-6">
       {/* Roles */}
-      {user.can_manage_users && (
+      {(user.can_manage_system || user.can_create_user_groups) && (
         <div className="card">
           <div className="flex items-center justify-between mb-3">
             <h2 className="!mb-0">Roles</h2>
@@ -1096,7 +1096,7 @@ function AccessTab({
                       {r.can_manage_system && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">System</span>}
                       {r.can_view_audit_logs && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Audit</span>}
                       {r.can_create_users && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Users</span>}
-                      {r.can_create_user_groups && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">User Groups</span>}
+                      {r.can_create_user_groups && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Roles</span>}
                       {r.can_create_connections && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Connections</span>}
                       {r.can_create_connection_folders && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Folders</span>}
                       {r.can_create_sharing_profiles && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Sharing</span>}
@@ -1215,8 +1215,8 @@ function AccessTab({
                       <label className="flex items-center gap-3 cursor-pointer group">
                         <input type="checkbox" className="checkbox" checked={newRole.can_create_user_groups} onChange={e => setNewRole({...newRole, can_create_user_groups: e.target.checked})} />
                         <div className="flex flex-col">
-                          <span className="text-sm font-medium">Create new user groups</span>
-                          <span className="text-[10px] text-txt-tertiary">Organize users into groups</span>
+                          <span className="text-sm font-medium">Create new roles</span>
+                          <span className="text-[10px] text-txt-tertiary">Create and manage platform roles</span>
                         </div>
                       </label>
                       <label className="flex items-center gap-3 cursor-pointer group">
@@ -1236,8 +1236,8 @@ function AccessTab({
                       <label className="flex items-center gap-3 cursor-pointer group">
                         <input type="checkbox" className="checkbox" checked={newRole.can_create_sharing_profiles} onChange={e => setNewRole({...newRole, can_create_sharing_profiles: e.target.checked})} />
                         <div className="flex flex-col">
-                          <span className="text-sm font-medium">Create new sharing profiles</span>
-                          <span className="text-[10px] text-txt-tertiary">Define connection sharing rules</span>
+                          <span className="text-sm font-medium">Sharing Connections</span>
+                          <span className="text-[10px] text-txt-tertiary">Share active RDP / SSH sessions with others</span>
                         </div>
                       </label>
                     </div>
@@ -1328,7 +1328,7 @@ function AccessTab({
       )}
 
       {/* Connections */}
-      {user.can_manage_connections && (
+      {(user.can_manage_system || user.can_create_connections) && (
         <div className="card">
           <div className="flex justify-between items-center mb-4">
             <h2 className="!mb-0">Connections</h2>
@@ -1376,7 +1376,7 @@ function AccessTab({
       )}
 
       {/* Connection Editor Form */}
-      {user.can_manage_connections && formMode !== 'closed' && (
+      {(user.can_manage_system || user.can_create_connections) && formMode !== 'closed' && (
         <div className="card" ref={connFormRef}>
           <div className="flex justify-between items-center mb-4">
             <h2 className="!mb-0">{formMode === 'add' ? 'Add Connection' : 'Edit Connection'}</h2>
@@ -1450,7 +1450,7 @@ function AccessTab({
       )}
 
       {/* Connection Folders */}
-      {user.can_manage_connections && (
+      {(user.can_manage_system || user.can_create_connection_folders) && (
         <div className="card">
           <div className="flex items-center justify-between mb-3">
             <h2 className="!mb-0">Connection Folders</h2>
@@ -1522,7 +1522,7 @@ function AccessTab({
       )}
 
       {/* Users */}
-      {user.can_manage_users && (
+      {(user.can_manage_system || user.can_create_users) && (
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="!mb-0">Users</h2>

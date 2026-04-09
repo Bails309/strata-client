@@ -9,6 +9,11 @@ use zeroize::Zeroize;
 use crate::config::VaultConfig;
 use crate::error::AppError;
 
+/// Maximum number of retry attempts for Vault API calls.
+const VAULT_MAX_RETRIES: u32 = 3;
+/// Base delay between retries (doubles each attempt).
+const VAULT_RETRY_BASE_MS: u64 = 200;
+
 /// Result of encrypting a credential using envelope encryption.
 pub struct SealedCredential {
     pub ciphertext: Vec<u8>,
@@ -46,6 +51,58 @@ struct VaultDecryptData {
     plaintext: String,
 }
 
+/// Send a POST request to Vault with retry and exponential backoff.
+/// Retries on network errors and 5xx responses; does not retry on 4xx.
+async fn vault_post_with_retry<T: Serialize>(
+    url: &str,
+    token: &str,
+    body: &T,
+) -> Result<reqwest::Response, AppError> {
+    let client = Client::new();
+    let mut last_err = None;
+
+    for attempt in 0..=VAULT_MAX_RETRIES {
+        if attempt > 0 {
+            let delay = VAULT_RETRY_BASE_MS * 2u64.pow(attempt - 1);
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        }
+
+        match client
+            .post(url)
+            .header("X-Vault-Token", token)
+            .json(body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_server_error() => {
+                let status = resp.status();
+                let body_text = resp.text().await.unwrap_or_default();
+                last_err = Some(format!("Vault {status}: {body_text}"));
+                tracing::warn!(
+                    "Vault request failed (attempt {}/{}): {status}",
+                    attempt + 1,
+                    VAULT_MAX_RETRIES + 1
+                );
+                continue;
+            }
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                last_err = Some(format!("Vault request failed: {e}"));
+                tracing::warn!(
+                    "Vault request error (attempt {}/{}): {e}",
+                    attempt + 1,
+                    VAULT_MAX_RETRIES + 1
+                );
+                continue;
+            }
+        }
+    }
+
+    Err(AppError::Vault(
+        last_err.unwrap_or_else(|| "Vault request failed after retries".into()),
+    ))
+}
+
 /// Encrypt a credential using envelope encryption:
 /// 1. Generate random DEK
 /// 2. Encrypt plaintext with DEK (AES-256-GCM)
@@ -69,23 +126,21 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
         .encrypt(nonce, plaintext)
         .map_err(|e| AppError::Internal(format!("AES encrypt: {e}")))?;
 
-    // 3. Wrap DEK via Vault Transit engine
-    let client = Client::new();
+    // 3. Wrap DEK via Vault Transit engine (with retry)
     let url = format!(
         "{}/v1/transit/encrypt/{}",
         vault.address.trim_end_matches('/'),
         vault.transit_key
     );
 
-    let resp = client
-        .post(&url)
-        .header("X-Vault-Token", &vault.token)
-        .json(&VaultEncryptRequest {
+    let resp = vault_post_with_retry(
+        &url,
+        &vault.token,
+        &VaultEncryptRequest {
             plaintext: b64.encode(dek),
-        })
-        .send()
-        .await
-        .map_err(|e| AppError::Vault(format!("Vault request failed: {e}")))?;
+        },
+    )
+    .await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -123,8 +178,7 @@ pub async fn unseal(
 ) -> Result<Vec<u8>, AppError> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
-    // 1. Unwrap DEK via Vault Transit
-    let client = Client::new();
+    // 1. Unwrap DEK via Vault Transit (with retry)
     let url = format!(
         "{}/v1/transit/decrypt/{}",
         vault.address.trim_end_matches('/'),
@@ -134,15 +188,14 @@ pub async fn unseal(
     let vault_ciphertext = String::from_utf8(encrypted_dek.to_vec())
         .map_err(|e| AppError::Vault(format!("DEK encoding: {e}")))?;
 
-    let resp = client
-        .post(&url)
-        .header("X-Vault-Token", &vault.token)
-        .json(&VaultDecryptRequest {
+    let resp = vault_post_with_retry(
+        &url,
+        &vault.token,
+        &VaultDecryptRequest {
             ciphertext: vault_ciphertext,
-        })
-        .send()
-        .await
-        .map_err(|e| AppError::Vault(format!("Vault request failed: {e}")))?;
+        },
+    )
+    .await?;
 
     if !resp.status().is_success() {
         let status = resp.status();

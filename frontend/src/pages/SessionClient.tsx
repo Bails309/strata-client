@@ -28,7 +28,7 @@ const RECONNECT_MAX_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY = 1000; // 1 second
 const RECONNECT_MAX_DELAY = 30000; // 30 seconds
 
-export default function SessionClient() {
+export default function SessionClient({ canShare = false }: { canShare?: boolean }) {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -452,6 +452,7 @@ export default function SessionClient() {
           <SessionToolbar
             session={currentSession}
             connectionId={connectionId}
+            canShare={canShare}
             isPoppedOut={isPoppedOut}
             onPopOut={popOut}
             onPopIn={returnDisplay}

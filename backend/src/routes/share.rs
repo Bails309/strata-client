@@ -60,6 +60,11 @@ pub async fn create_share(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
+    // Only users with sharing permission can create share links
+    if !user.can_manage_system && !user.can_create_sharing_profiles {
+        return Err(AppError::Forbidden);
+    }
+
     // Verify user has access to this connection
     let has_access: bool = if user.role == "admin" {
         // Admins can share any connection

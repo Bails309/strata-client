@@ -10,7 +10,6 @@ pub enum StorageType {
 
 pub struct RecordingConfig {
     pub enabled: bool,
-    #[allow(dead_code)]
     pub retention_days: u32,
     pub storage_type: StorageType,
 }
@@ -273,47 +272,85 @@ async fn sync_pass(
     vault: Option<&crate::config::VaultConfig>,
 ) -> anyhow::Result<()> {
     let config = get_config(pool).await?;
-    if !config.enabled || config.storage_type != StorageType::AzureBlob {
+    if !config.enabled {
         return Ok(());
     }
 
-    let azure = match get_azure_config(pool, vault).await? {
-        Some(c) => c,
-        None => return Ok(()),
-    };
-
     let dir = "/var/lib/guacamole/recordings";
-    let mut entries = match tokio::fs::read_dir(dir).await {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
 
-    while let Some(entry) = entries.next_entry().await? {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || synced.contains(&name) {
-            continue;
-        }
+    // ── Azure Blob sync (if configured) ──
+    if config.storage_type == StorageType::AzureBlob {
+        let azure = match get_azure_config(pool, vault).await? {
+            Some(c) => c,
+            None => return Ok(()),
+        };
 
-        // Skip files still being written (modified < 30 s ago)
-        if let Ok(meta) = entry.metadata().await {
-            if let Ok(modified) = meta.modified() {
-                if modified.elapsed().unwrap_or_default() < std::time::Duration::from_secs(30) {
-                    continue;
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || synced.contains(&name) {
+                continue;
+            }
+
+            // Skip files still being written (modified < 30 s ago)
+            if let Ok(meta) = entry.metadata().await {
+                if let Ok(modified) = meta.modified() {
+                    if modified.elapsed().unwrap_or_default() < std::time::Duration::from_secs(30) {
+                        continue;
+                    }
                 }
             }
-        }
 
-        let path = format!("{dir}/{name}");
-        match upload_file_to_azure(&azure, &name, &path).await {
-            Ok(_) => {
-                synced.insert(name.clone());
-                // Delete local file after successful upload to prevent disk growth
-                if let Err(e) = tokio::fs::remove_file(&path).await {
-                    tracing::warn!("Failed to delete local recording after upload: {name}: {e}");
+            let path = format!("{dir}/{name}");
+            match upload_file_to_azure(&azure, &name, &path).await {
+                Ok(_) => {
+                    synced.insert(name.clone());
+                    // Delete local file after successful upload to prevent disk growth
+                    if let Err(e) = tokio::fs::remove_file(&path).await {
+                        tracing::warn!(
+                            "Failed to delete local recording after upload: {name}: {e}"
+                        );
+                    }
+                    tracing::info!("Synced recording to Azure Blob: {name}");
                 }
-                tracing::info!("Synced recording to Azure Blob: {name}");
+                Err(e) => tracing::warn!("Azure Blob upload failed for {name}: {e}"),
             }
-            Err(e) => tracing::warn!("Azure Blob upload failed for {name}: {e}"),
+        }
+    }
+
+    // ── Retention-based cleanup for local recordings ──
+    if config.retention_days > 0 {
+        let max_age = std::time::Duration::from_secs(config.retention_days as u64 * 86_400);
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata().await {
+                if let Ok(modified) = meta.modified() {
+                    if modified.elapsed().unwrap_or_default() > max_age {
+                        let path = format!("{dir}/{name}");
+                        if let Err(e) = tokio::fs::remove_file(&path).await {
+                            tracing::warn!("Failed to delete expired recording: {name}: {e}");
+                        } else {
+                            synced.remove(&name);
+                            tracing::info!(
+                                "Deleted expired recording (>{} days): {name}",
+                                config.retention_days
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

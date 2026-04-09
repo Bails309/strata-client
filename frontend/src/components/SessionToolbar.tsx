@@ -7,6 +7,7 @@ import Select from './Select';
 interface Props {
   session: GuacSession;
   connectionId: string;
+  canShare?: boolean;
   isPoppedOut?: boolean;
   onPopOut?: () => void;
   onPopIn?: () => void;
@@ -16,7 +17,7 @@ interface Props {
  * Floating toolbar rendered over the session view.
  * Provides access to connection sharing and file browser.
  */
-export default function SessionToolbar({ session, connectionId, isPoppedOut, onPopOut, onPopIn }: Props) {
+export default function SessionToolbar({ session, connectionId, canShare = false, isPoppedOut, onPopOut, onPopIn }: Props) {
   const [shareOpen, setShareOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareMode, setShareMode] = useState<'view' | 'control'>('view');
@@ -98,7 +99,8 @@ export default function SessionToolbar({ session, connectionId, isPoppedOut, onP
         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {/* Share button */}
+        {/* Share button — only shown if user has sharing permission */}
+        {canShare && (
         <button
           onClick={() => setShareOpen(!shareOpen)}
           disabled={shareLoading}
@@ -131,6 +133,7 @@ export default function SessionToolbar({ session, connectionId, isPoppedOut, onP
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
           </svg>
         </button>
+        )}
 
         {/* File browser button — only shown when filesystems exist */}
         {hasFilesystems && (

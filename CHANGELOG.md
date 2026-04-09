@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-04-09
+
+### Added
+
+#### Granular RBAC Permissions
+- **9 role-based permissions**: `can_manage_system`, `can_manage_users`, `can_manage_connections`, `can_view_audit_logs`, `can_create_users`, `can_create_user_groups`, `can_create_connections`, `can_create_connection_folders`, `can_create_sharing_profiles`.
+- **Role-folder assignments**: New `role_folders` table for many-to-many role-to-folder mapping with dedicated list/update endpoints.
+- Permissions are extracted from the database at authentication time and exposed on the `/api/auth/me` response.
+
+#### Connection Folders
+- **Renamed `connection_groups` to `connection_folders`** across the full stack (database, API, frontend) for clarity.
+- CRUD endpoints for connection folders with proper authorization checks.
+- Frontend folder view with collapsible folder headers and per-folder connection counts.
+
+#### Database Migrations
+- **020**: `email`, `full_name`, `auth_type` columns on `users` table for strict SSO matching.
+- **021**: Soft-delete (`deleted_at`) on users; granular `can_manage_*` / `can_view_*` permission columns on roles.
+- **022**: Extended creation permissions (`can_create_users`, `can_create_user_groups`, `can_create_connections`, `can_create_connection_groups`, `can_create_sharing_profiles`).
+- **023**: Rename `connection_groups` → `connection_folders` and `can_create_connection_groups` → `can_create_connection_folders` across all tables, indexes, and foreign keys.
+- **024**: `role_folders` table for role-based folder access control.
+
+#### Backend — Extracted Pure Functions & Input Validation
+- **`redact_settings()`** — redacts sensitive config values (`sso_client_secret`, `vault_token`, `vault_unseal_key`, `ad_bind_password`, `azure_storage_access_key`) from API responses.
+- **`validate_no_restricted_keys()`** — prevents updates to security-critical keys (`jwt_secret`, `sso_issuer_url`, `kerberos_realm`, `local_auth_enabled`) through the generic settings endpoint.
+- **`is_safe_recording_filename()`** — prevents path traversal in recording download filenames (rejects `..`, `/`, `\`, empty strings).
+- **`is_safe_hostname()`** — validates Kerberos hostnames to prevent `krb5.conf` injection.
+- Unit tests for all extracted functions (14 new backend tests).
+
+#### Docker Security Hardening
+- **Backend**: Runs as non-root `strata:strata` user; pre-creates Guacamole recording and drive directories with correct ownership; `entrypoint.sh` fixes volume permissions before dropping privileges.
+- **Frontend**: Runs nginx as non-root `nginx:nginx` user; pre-creates all cache/temp directories and PID file with correct ownership.
+
+#### Documentation
+- **`docs/security.md`**: Comprehensive security architecture covering OIDC authentication flow, local auth with Argon2id, authentication method enforcement, route protection matrix, envelope encryption with Vault Transit, and memory zeroization.
+
+### Changed
+
+#### Dependencies
+- **sqlx** upgraded from 0.7.x to **0.8** with `runtime-tokio-rustls` feature set.
+- **jsonwebtoken** upgraded from v9 to **v10** (`rust_crypto` feature).
+
+#### Frontend Test Coverage
+- **634 tests across 24 test files** (up from 605), all passing.
+- Coverage thresholds enforced: statements 74%, branches 69%, functions 62%, lines 75%.
+- New test suites: **Layout** (sidebar collapse, `useSidebarWidth`, nav highlighting), **AuditLogs** (pagination with Previous/Next), **Dashboard** (Previous page navigation).
+- Expanded: **SessionMenu** (clipboard debounce send to remote after timer).
+
+### Fixed
+- **Settings redaction**: Sensitive settings are now automatically masked in all API responses.
+- **Settings restriction**: Generic settings update endpoint no longer allows modification of security-critical keys.
+- **Recording path traversal**: Filename validation prevents directory traversal attacks on recording downloads.
+- **Kerberos hostname injection**: Hostname validation prevents shell injection in `krb5.conf` generation.
+
 ## [0.6.2] — 2026-04-09
 
 ### Changed

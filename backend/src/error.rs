@@ -193,10 +193,7 @@ mod tests {
         );
         assert_eq!(format!("{}", AppError::Forbidden), "Forbidden");
         assert_eq!(format!("{}", AppError::SetupRequired), "Setup required");
-        assert_eq!(
-            format!("{}", AppError::Internal("oops".into())),
-            "oops"
-        );
+        assert_eq!(format!("{}", AppError::Internal("oops".into())), "oops");
     }
 
     #[test]
@@ -210,9 +207,7 @@ mod tests {
     #[test]
     fn reqwest_error_returns_502() {
         // Build a reqwest error by parsing an invalid URL
-        let err = reqwest::Client::new()
-            .get("not-a-url")
-            .build();
+        let err = reqwest::Client::new().get("not-a-url").build();
         if let Err(e) = err {
             let app_err: AppError = e.into();
             let (status, _) = error_response(app_err);

@@ -259,29 +259,38 @@ fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::
     let mut root_store = rustls::RootCertStore::empty();
 
     // Load system root certificates
-    for cert in rustls_native_certs::load_native_certs().unwrap_or_else(|_| vec![]) {
-        let _ = root_store.add(&rustls::Certificate(cert.0));
+    // rustls-native-certs 0.8 returns Result<Vec<CertificateDer>>
+    let native_certs = rustls_native_certs::load_native_certs()
+        .map_err(|e| anyhow::anyhow!("Failed to load native certificates: {e}"))?;
+    for cert in native_certs {
+        let _ = root_store.add(cert);
     }
 
     // Parse and add custom CA cert(s) from PEM
     let mut reader = std::io::BufReader::new(pem.as_bytes());
-    let certs = rustls_pemfile::certs(&mut reader)
-        .map_err(|e| anyhow::anyhow!("Failed to parse CA certificate PEM: {e}"))?;
+    // rustls-pemfile 2.x certs() returns an iterator of Result<CertificateDer>
+    let certs = rustls_pemfile::certs(&mut reader);
 
-    if certs.is_empty() {
+    let mut added = 0;
+    for cert in certs {
+        let cert_der =
+            cert.map_err(|e| anyhow::anyhow!("Failed to parse CA certificate PEM: {e}"))?;
+        root_store
+            .add(cert_der)
+            .map_err(|e| anyhow::anyhow!("Failed to add CA certificate: {e}"))?;
+        added += 1;
+    }
+
+    if added == 0 {
         anyhow::bail!("No certificates found in the provided PEM data");
     }
 
-    for cert_der in certs {
-        root_store
-            .add(&rustls::Certificate(cert_der))
-            .map_err(|e| anyhow::anyhow!("Failed to add CA certificate: {e}"))?;
-    }
-
-    let config = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    // rustls 0.23 builder requires a crypto provider.
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
 
     Ok(std::sync::Arc::new(config))
 }
@@ -919,7 +928,10 @@ mod tests {
         let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\ndescription: Long desc\n ription continued\n\n";
         let result = parse_ldif(ldif).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].description.as_deref(), Some("Long description continued"));
+        assert_eq!(
+            result[0].description.as_deref(),
+            Some("Long description continued")
+        );
     }
 
     #[test]
@@ -995,7 +1007,9 @@ mod tests {
             group_id: Some(Uuid::new_v4()),
             keytab_path: Some("/etc/krb5.keytab".to_string()),
             krb5_principal: Some("svc@CORP.LOCAL".to_string()),
-            ca_cert_pem: Some("-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----".to_string()),
+            ca_cert_pem: Some(
+                "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----".to_string(),
+            ),
             ..sample_config()
         };
         assert_eq!(config.domain_override.as_deref(), Some("CORP"));

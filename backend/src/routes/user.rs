@@ -1127,15 +1127,14 @@ mod tests {
     async fn require_running_returns_error_in_setup_phase() {
         use std::sync::Arc;
         use tokio::sync::RwLock;
-        let state: crate::services::app_state::SharedState = Arc::new(RwLock::new(
-            crate::services::app_state::AppState {
+        let state: crate::services::app_state::SharedState =
+            Arc::new(RwLock::new(crate::services::app_state::AppState {
                 phase: crate::services::app_state::BootPhase::Setup,
                 config: None,
                 db: None,
                 session_registry: crate::services::session_registry::SessionRegistry::new(),
                 guacd_pool: None,
-            },
-        ));
+            }));
         let result = require_running(&state).await;
         assert!(result.is_err());
     }
@@ -1144,15 +1143,14 @@ mod tests {
     async fn require_running_returns_error_when_no_db() {
         use std::sync::Arc;
         use tokio::sync::RwLock;
-        let state: crate::services::app_state::SharedState = Arc::new(RwLock::new(
-            crate::services::app_state::AppState {
+        let state: crate::services::app_state::SharedState =
+            Arc::new(RwLock::new(crate::services::app_state::AppState {
                 phase: crate::services::app_state::BootPhase::Running,
                 config: None,
                 db: None,
                 session_registry: crate::services::session_registry::SessionRegistry::new(),
                 guacd_pool: None,
-            },
-        ));
+            }));
         let result = require_running(&state).await;
         assert!(result.is_err());
     }

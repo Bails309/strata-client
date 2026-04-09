@@ -98,9 +98,9 @@ async fn vault_post_with_retry<T: Serialize>(
         }
     }
 
-    Err(AppError::Vault(
-        last_err.unwrap_or_else(|| "Vault request failed after retries".into()),
-    ))
+    Err(AppError::Vault(last_err.unwrap_or_else(|| {
+        "Vault request failed after retries".into()
+    })))
 }
 
 /// Encrypt a credential using envelope encryption:
@@ -414,9 +414,11 @@ mod tests {
             mode: crate::config::VaultMode::Local,
             unseal_key: None,
         };
-        let result =
-            unseal_setting(&vault_cfg, r#"vault:{"ct":"!!!invalid!!!","dek":"dGVzdA==","n":"dGVzdA=="}"#)
-                .await;
+        let result = unseal_setting(
+            &vault_cfg,
+            r#"vault:{"ct":"!!!invalid!!!","dek":"dGVzdA==","n":"dGVzdA=="}"#,
+        )
+        .await;
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("ct decode"));
     }
@@ -430,9 +432,11 @@ mod tests {
             mode: crate::config::VaultMode::Local,
             unseal_key: None,
         };
-        let result =
-            unseal_setting(&vault_cfg, r#"vault:{"ct":"dGVzdA==","dek":"!!!bad!!!","n":"dGVzdA=="}"#)
-                .await;
+        let result = unseal_setting(
+            &vault_cfg,
+            r#"vault:{"ct":"dGVzdA==","dek":"!!!bad!!!","n":"dGVzdA=="}"#,
+        )
+        .await;
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("dek decode"));
     }
@@ -446,9 +450,11 @@ mod tests {
             mode: crate::config::VaultMode::Local,
             unseal_key: None,
         };
-        let result =
-            unseal_setting(&vault_cfg, r#"vault:{"ct":"dGVzdA==","dek":"dGVzdA==","n":"!!!bad!!!"}"#)
-                .await;
+        let result = unseal_setting(
+            &vault_cfg,
+            r#"vault:{"ct":"dGVzdA==","dek":"dGVzdA==","n":"!!!bad!!!"}"#,
+        )
+        .await;
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("nonce decode"));
     }

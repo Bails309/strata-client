@@ -244,8 +244,21 @@ pub async fn login(
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, password_hash, role, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles) =
-        row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
+    let (
+        user_id,
+        username,
+        password_hash,
+        role,
+        can_manage_system,
+        can_manage_users,
+        can_manage_connections,
+        can_view_audit_logs,
+        can_create_users,
+        can_create_user_groups,
+        can_create_connections,
+        can_create_connection_folders,
+        can_create_sharing_profiles,
+    ) = row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
     let hash = password_hash
         .ok_or_else(|| AppError::Auth("This account does not support local login".into()))?;
@@ -545,8 +558,7 @@ pub async fn sso_callback(
         .ok_or_else(|| AppError::Auth("Missing id_token in response".into()))?;
 
     // Validate token and get claims
-    let claims =
-        crate::services::auth::validate_token(&issuer_url, &client_id, id_token).await?;
+    let claims = crate::services::auth::validate_token(&issuer_url, &client_id, id_token).await?;
 
     // Extract email from claims
     let user_email = claims.email.as_ref().ok_or_else(|| {
@@ -722,7 +734,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-forwarded-for",
-            "10.0.0.1, 172.16.0.1, 192.168.0.1, 203.0.113.50".parse().unwrap(),
+            "10.0.0.1, 172.16.0.1, 192.168.0.1, 203.0.113.50"
+                .parse()
+                .unwrap(),
         );
         assert_eq!(extract_client_ip(&headers), "203.0.113.50");
     }

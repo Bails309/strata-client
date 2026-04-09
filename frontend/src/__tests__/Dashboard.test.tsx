@@ -67,9 +67,9 @@ const mockConnections = [
 ];
 
 const mockGroupedConnections = [
-  { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', group_id: 'g1', group_name: 'Production' },
-  { id: '2', name: 'Server Beta', protocol: 'ssh', hostname: '10.0.0.2', port: 22, description: '', group_id: 'g1', group_name: 'Production' },
-  { id: '3', name: 'DB Server', protocol: 'db', hostname: '10.0.0.3', port: 5432, description: '', group_id: undefined, group_name: undefined },
+  { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', folder_id: 'g1', folder_name: 'Production' },
+  { id: '2', name: 'Server Beta', protocol: 'ssh', hostname: '10.0.0.2', port: 22, description: '', folder_id: 'g1', folder_name: 'Production' },
+  { id: '3', name: 'DB Server', protocol: 'db', hostname: '10.0.0.3', port: 5432, description: '', folder_id: undefined, folder_name: undefined },
 ];
 
 describe('Dashboard', () => {
@@ -257,25 +257,25 @@ describe('Dashboard', () => {
     expect(screen.getByText(/Open Tiled/)).toBeInTheDocument();
   });
 
-  it('toggles group view', async () => {
+  it('toggles folder view', async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
     await screen.findByText('Server Alpha');
-    await userEvent.click(screen.getByText('Groups'));
-    // Group view should display group headers
+    await userEvent.click(screen.getByText('Folders'));
+    // Folder view should display folder headers
     await waitFor(() => {
       expect(screen.getByText('Production')).toBeInTheDocument();
       expect(screen.getByText('Ungrouped')).toBeInTheDocument();
     });
   });
 
-  it('collapses and expands groups', async () => {
+  it('collapses and expands folders', async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
     await screen.findByText('Server Alpha');
-    await userEvent.click(screen.getByText('Groups'));
+    await userEvent.click(screen.getByText('Folders'));
     await waitFor(() => expect(screen.getByText('Production')).toBeInTheDocument());
-    // Click Production group header to collapse (it has (2) count)
+    // Click Production folder header to collapse (it has (2) count)
     await userEvent.click(screen.getByText('Production'));
     // Connections inside should be hidden
     await waitFor(() => {
@@ -403,11 +403,11 @@ describe('Dashboard', () => {
     });
   });
 
-  it('groups connections in group view with counts', async () => {
+  it('groups connections in folder view with counts', async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
     await screen.findByText('Server Alpha');
-    await userEvent.click(screen.getByText('Groups'));
+    await userEvent.click(screen.getByText('Folders'));
     await waitFor(() => {
       expect(screen.getByText('(2)')).toBeInTheDocument(); // Production has 2
       expect(screen.getByText('(1)')).toBeInTheDocument(); // Ungrouped has 1

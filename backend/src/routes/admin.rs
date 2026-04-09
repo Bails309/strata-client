@@ -178,7 +178,9 @@ pub async fn test_sso_connection(
     let config: serde_json::Value = resp.json().await?;
 
     // Basic validation of the OIDC configuration
-    let auth_endpoint = config.get("authorization_endpoint").and_then(|v| v.as_str());
+    let auth_endpoint = config
+        .get("authorization_endpoint")
+        .and_then(|v| v.as_str());
     let token_endpoint = config.get("token_endpoint").and_then(|v| v.as_str());
     let jwks_uri = config.get("jwks_uri").and_then(|v| v.as_str());
 
@@ -210,13 +212,15 @@ pub async fn test_sso_connection(
                 ));
             }
 
-            // If we get 400 Bad Request with an invalid_grant error, it means the 
+            // If we get 400 Bad Request with an invalid_grant error, it means the
             // Client ID and Secret were accepted, but the dummy code was rejected.
             // This counts as a successful credential verification.
             if status.is_client_error() && status != reqwest::StatusCode::UNAUTHORIZED {
                 let error_body: serde_json::Value = token_resp.json().await.unwrap_or_default();
-                let error_code = error_body.get("error").and_then(|v| v.as_str()).unwrap_or("");
-                
+                let error_code = error_body
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 // If it's a client authentication error, it's a failure.
                 // Otherwise, if it's a grant/code error, it means the secret was correct.
                 if error_code == "invalid_client" || error_code == "unauthorized_client" {
@@ -1110,7 +1114,9 @@ pub async fn delete_role(
         .ok_or_else(|| AppError::NotFound("Role not found".into()))?;
 
     if role_name == "admin" || role_name == "user" {
-        return Err(AppError::Validation("System roles cannot be deleted".into()));
+        return Err(AppError::Validation(
+            "System roles cannot be deleted".into(),
+        ));
     }
 
     // Check if any users are using this role
@@ -1120,7 +1126,9 @@ pub async fn delete_role(
         .await?;
 
     if count > 0 {
-        return Err(AppError::Validation("Cannot delete role while users are assigned to it".into()));
+        return Err(AppError::Validation(
+            "Cannot delete role while users are assigned to it".into(),
+        ));
     }
 
     sqlx::query("DELETE FROM roles WHERE id = $1")
@@ -1301,17 +1309,22 @@ pub async fn get_role_mappings(
 ) -> Result<Json<RoleMappings>, AppError> {
     let db = require_running(&state).await?;
 
-    let connection_ids: Vec<Uuid> = sqlx::query_scalar("SELECT connection_id FROM role_connections WHERE role_id = $1")
-        .bind(role_id)
-        .fetch_all(&db.pool)
-        .await?;
+    let connection_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT connection_id FROM role_connections WHERE role_id = $1")
+            .bind(role_id)
+            .fetch_all(&db.pool)
+            .await?;
 
-    let folder_ids: Vec<Uuid> = sqlx::query_scalar("SELECT folder_id FROM role_folders WHERE role_id = $1")
-        .bind(role_id)
-        .fetch_all(&db.pool)
-        .await?;
+    let folder_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT folder_id FROM role_folders WHERE role_id = $1")
+            .bind(role_id)
+            .fetch_all(&db.pool)
+            .await?;
 
-    Ok(Json(RoleMappings { connection_ids, folder_ids }))
+    Ok(Json(RoleMappings {
+        connection_ids,
+        folder_ids,
+    }))
 }
 
 pub async fn update_role_mappings(
@@ -1402,10 +1415,11 @@ pub async fn delete_user(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let result = sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
+    let result =
+        sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("User not found".into()));

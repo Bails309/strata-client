@@ -42,9 +42,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
         (false, true)
     };
 
-    let vault_configured = {
-        s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some()
-    };
+    let vault_configured = { s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some() };
 
     Json(StatusResponse {
         phase: match s.phase {
@@ -331,15 +329,13 @@ mod tests {
     async fn status_in_setup_phase() {
         use std::sync::Arc;
         use tokio::sync::RwLock;
-        let state: SharedState = Arc::new(RwLock::new(
-            crate::services::app_state::AppState {
-                phase: BootPhase::Setup,
-                config: None,
-                db: None,
-                session_registry: crate::services::session_registry::SessionRegistry::new(),
-                guacd_pool: None,
-            },
-        ));
+        let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
+            phase: BootPhase::Setup,
+            config: None,
+            db: None,
+            session_registry: crate::services::session_registry::SessionRegistry::new(),
+            guacd_pool: None,
+        }));
         let result = status(axum::extract::State(state)).await;
         assert_eq!(result.phase, "setup");
         assert!(!result.sso_enabled);
@@ -350,15 +346,13 @@ mod tests {
     async fn service_health_no_config_no_db() {
         use std::sync::Arc;
         use tokio::sync::RwLock;
-        let state: SharedState = Arc::new(RwLock::new(
-            crate::services::app_state::AppState {
-                phase: BootPhase::Setup,
-                config: None,
-                db: None,
-                session_registry: crate::services::session_registry::SessionRegistry::new(),
-                guacd_pool: None,
-            },
-        ));
+        let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
+            phase: BootPhase::Setup,
+            config: None,
+            db: None,
+            session_registry: crate::services::session_registry::SessionRegistry::new(),
+            guacd_pool: None,
+        }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
         assert!(!result.database.connected);
         assert_eq!(result.database.mode, "unknown");
@@ -384,15 +378,13 @@ mod tests {
             guacd_instances: vec![],
             jwt_secret: None,
         };
-        let state: SharedState = Arc::new(RwLock::new(
-            crate::services::app_state::AppState {
-                phase: BootPhase::Running,
-                config: Some(cfg),
-                db: None,
-                session_registry: crate::services::session_registry::SessionRegistry::new(),
-                guacd_pool: None,
-            },
-        ));
+        let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
+            phase: BootPhase::Running,
+            config: Some(cfg),
+            db: None,
+            session_registry: crate::services::session_registry::SessionRegistry::new(),
+            guacd_pool: None,
+        }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
         assert!(!result.database.connected);
         assert_eq!(result.database.mode, "external");
@@ -423,15 +415,13 @@ mod tests {
             guacd_instances: vec![],
             jwt_secret: None,
         };
-        let state: SharedState = Arc::new(RwLock::new(
-            crate::services::app_state::AppState {
-                phase: BootPhase::Running,
-                config: Some(cfg),
-                db: None,
-                session_registry: crate::services::session_registry::SessionRegistry::new(),
-                guacd_pool: None,
-            },
-        ));
+        let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {
+            phase: BootPhase::Running,
+            config: Some(cfg),
+            db: None,
+            session_registry: crate::services::session_registry::SessionRegistry::new(),
+            guacd_pool: None,
+        }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
         assert_eq!(result.database.mode, "local");
         assert_eq!(result.database.host, "host:5432/db");

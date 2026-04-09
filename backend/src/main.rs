@@ -24,6 +24,11 @@ async fn main() -> anyhow::Result<()> {
         .json()
         .init();
 
+    // Initialize rustls crypto provider
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     tracing::info!("Strata Backend starting …");
 
     // ── Resolve configuration from environment + persisted config ──

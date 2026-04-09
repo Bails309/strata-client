@@ -513,10 +513,24 @@ mod tests {
     async fn registry_metrics_with_sessions() {
         let registry = SessionRegistry::new();
         registry
-            .register("m1".into(), Uuid::new_v4(), "C1".into(), "rdp".into(), Uuid::new_v4(), "u1".into())
+            .register(
+                "m1".into(),
+                Uuid::new_v4(),
+                "C1".into(),
+                "rdp".into(),
+                Uuid::new_v4(),
+                "u1".into(),
+            )
             .await;
         registry
-            .register("m2".into(), Uuid::new_v4(), "C2".into(), "vnc".into(), Uuid::new_v4(), "u2".into())
+            .register(
+                "m2".into(),
+                Uuid::new_v4(),
+                "C2".into(),
+                "vnc".into(),
+                Uuid::new_v4(),
+                "u2".into(),
+            )
             .await;
         let m = registry.metrics().await;
         assert_eq!(m.active_sessions, 2);

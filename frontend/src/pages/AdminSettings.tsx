@@ -202,7 +202,7 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
   if (loading && !health) {
     return (
       <div className="card">
-        <p className="text-txt-secondary">Loading service health…</p>
+        <p className="text-txt-secondary">Loading service health...</p>
       </div>
     );
   }
@@ -231,7 +231,7 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
               <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
               <path d="M21 3v5h-5"/>
             </svg>
-            {loading ? 'Refreshing…' : 'Refresh'}
+            {loading ? 'Refreshing...' : 'Refresh'}
           </span>
         </button>
       </div>
@@ -377,16 +377,16 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
       </div>
 
       <div className="form-group">
-        <label>Issuer URL</label>
-        <input value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="https://keycloak.example.com/realms/strata" />
+        <label htmlFor="sso-issuer">Issuer URL</label>
+        <input id="sso-issuer" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="https://keycloak.example.com/realms/strata" />
       </div>
       <div className="form-group">
-        <label>Client ID</label>
-        <input value={clientId} onChange={(e) => setClientId(e.target.value)} />
+        <label htmlFor="sso-client-id">Client ID</label>
+        <input id="sso-client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} />
       </div>
       <div className="form-group">
-        <label>Client Secret</label>
-        <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={settings.sso_client_secret ? '********' : ''} />
+        <label htmlFor="sso-client-secret">Client Secret</label>
+        <input id="sso-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder={settings.sso_client_secret ? '********' : ''} />
       </div>
 
       {testResult && (
@@ -419,7 +419,7 @@ function SsoTab({ settings, onSave }: { settings: Record<string, string>; onSave
           onClick={handleTest} 
           disabled={testing || !issuer || !clientId || !clientSecret}
         >
-          {testing ? 'Testing…' : 'Test Connection'}
+          {testing ? 'Testing...' : 'Test Connection'}
         </button>
       </div>
     </div>
@@ -561,8 +561,9 @@ function KerberosTab({ onSave }: { onSave: () => void }) {
         <div className="card mb-4" style={{ border: '1px solid var(--color-accent)', boxShadow: 'var(--shadow-accent)' }}>
           <h3 className="!mb-4">{editing.id ? 'Edit Realm' : 'New Kerberos Realm'}</h3>
           <div className="form-group">
-            <label>Realm Name</label>
+            <label htmlFor="krb-realm">Realm Name</label>
             <input
+              id="krb-realm"
               value={editing.realm}
               onChange={(e) => setEditing({ ...editing, realm: e.target.value })}
               placeholder="EXAMPLE.COM"
@@ -573,10 +574,10 @@ function KerberosTab({ onSave }: { onSave: () => void }) {
             <label>KDC Servers</label>
             {editing.kdcs.map((k, i) => (
               <div key={i} className="flex gap-2 mb-[0.4rem]">
-                <input value={k} onChange={(e) => updateKdc(i, e.target.value)} placeholder={`KDC ${i + 1} (e.g. dc${i + 1}.example.com)`} />
+                <input id={`krb-kdc-${i}`} value={k} onChange={(e) => updateKdc(i, e.target.value)} placeholder={`KDC ${i + 1} (e.g. dc${i + 1}.example.com)`} />
                 {editing.kdcs.length > 1 && (
                   <button type="button" className="btn !w-auto px-[0.7rem] py-[0.4rem] shrink-0"
-                    onClick={() => setEditing({ ...editing, kdcs: editing.kdcs.filter((_, j) => j !== i) })}>✕</button>
+                    onClick={() => setEditing({ ...editing, kdcs: editing.kdcs.filter((_, j) => j !== i) })}>X</button>
                 )}
               </div>
             ))}
@@ -584,17 +585,17 @@ function KerberosTab({ onSave }: { onSave: () => void }) {
               onClick={() => setEditing({ ...editing, kdcs: [...editing.kdcs, ''] })}>+ Add KDC</button>
           </div>
           <div className="form-group">
-            <label>Admin Server</label>
-            <input value={editing.admin_server} onChange={(e) => setEditing({ ...editing, admin_server: e.target.value })} placeholder="dc1.example.com" />
+            <label htmlFor="krb-admin">Admin Server</label>
+            <input id="krb-admin" value={editing.admin_server} onChange={(e) => setEditing({ ...editing, admin_server: e.target.value })} placeholder="dc1.example.com" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="form-group">
-              <label>Ticket Lifetime</label>
-              <input value={editing.ticket_lifetime} onChange={(e) => setEditing({ ...editing, ticket_lifetime: e.target.value })} placeholder="10h" />
+              <label htmlFor="krb-ticket">Ticket Lifetime</label>
+              <input id="krb-ticket" value={editing.ticket_lifetime} onChange={(e) => setEditing({ ...editing, ticket_lifetime: e.target.value })} placeholder="10h" />
             </div>
             <div className="form-group">
-              <label>Renew Lifetime</label>
-              <input value={editing.renew_lifetime} onChange={(e) => setEditing({ ...editing, renew_lifetime: e.target.value })} placeholder="7d" />
+              <label htmlFor="krb-renew">Renew Lifetime</label>
+              <input id="krb-renew" value={editing.renew_lifetime} onChange={(e) => setEditing({ ...editing, renew_lifetime: e.target.value })} placeholder="7d" />
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -610,7 +611,7 @@ function KerberosTab({ onSave }: { onSave: () => void }) {
           </div>
           <div className="flex items-center gap-3 mt-4">
             <button className="btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving…' : editing.id ? 'Update Realm' : 'Create Realm'}
+              {saving ? 'Saving...' : editing.id ? 'Update Realm' : 'Create Realm'}
             </button>
             <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
           </div>
@@ -848,7 +849,7 @@ function VaultTab({ settings, onSave }: { settings: Record<string, string>; onSa
       </div>
 
       <button className="btn-primary" onClick={handleSave} disabled={saving}>
-        {saving ? 'Saving…' : 'Save Vault Settings'}
+        {saving ? 'Saving...' : 'Save Vault Settings'}
       </button>
 
       {/* ── Credential Password Expiry ── */}
@@ -886,7 +887,7 @@ function VaultTab({ settings, onSave }: { settings: Record<string, string>; onSa
             finally { setTtlSaving(false); }
           }}
         >
-          {ttlSaving ? 'Saving…' : 'Save Expiry Setting'}
+          {ttlSaving ? 'Saving...' : 'Save Expiry Setting'}
         </button>
       </div>
     </div>
@@ -1064,6 +1065,9 @@ function AccessTab({
     try {
       await deleteConnection(id);
       onConnectionDeleted(id);
+      if (id === formId) {
+        closeForm();
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to delete connection');
     }
@@ -1318,7 +1322,7 @@ function AccessTab({
                       }
                     }}
                   >
-                    {roleSaving ? 'Saving…' : editingRole ? 'Save Changes' : 'Create Role'}
+                    {roleSaving ? 'Saving...' : editingRole ? 'Save Changes' : 'Create Role'}
                   </button>
                 </div>
               </div>
@@ -1340,7 +1344,7 @@ function AccessTab({
             <input
               value={connSearch}
               onChange={(e) => { setConnSearch(e.target.value); setConnPage(1); }}
-              placeholder="Search connections by name, host, protocol, description, or folder…"
+              placeholder="Search connections by name, host, protocol, description, or folder..."
               className="input w-full"
             />
           </div>
@@ -1372,6 +1376,29 @@ function AccessTab({
               </tbody>
             </table>
           </div>
+          {connTotalPages > 1 && (
+            <div className="flex items-center justify-between mt-4 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
+              <div className="text-sm text-txt-tertiary">
+                Page {safeConnPage} of {connTotalPages}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn-ghost text-xs px-2 py-1"
+                  disabled={safeConnPage === 1}
+                  onClick={() => setConnPage(p => Math.max(1, p - 1))}
+                >
+                  ← Prev
+                </button>
+                <button
+                  className="btn-ghost text-xs px-2 py-1"
+                  disabled={safeConnPage === connTotalPages}
+                  onClick={() => setConnPage(p => Math.min(connTotalPages, p + 1))}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1706,7 +1733,7 @@ function AccessTab({
                       }
                     }}
                   >
-                    {userSaving ? 'Creating…' : 'Create User'}
+                    {userSaving ? 'Creating...' : 'Create User'}
                   </button>
                 </div>
               </div>
@@ -2596,7 +2623,7 @@ function SessionsTab() {
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          {loading ? 'Refreshing…' : 'Refresh'}
+          {loading ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
 
@@ -2835,7 +2862,7 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
                 { value: '(&(objectClass=computer)(operatingSystem=*Server*)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'Servers Only' },
                 { value: '(&(objectClass=computer)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'Enabled Computers Only' },
                 { value: '(&(objectClass=computer)(operatingSystem=*Server*)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))', label: 'Enabled Servers Only' },
-                { value: '_custom', label: 'Custom Filter…' },
+                { value: '_custom', label: 'Custom Filter...' },
               ]}
             />
             {!isPresetFilter(editing.search_filter || '') && (
@@ -2936,7 +2963,7 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
             disabled={testing}
             onClick={() => handleTestConnection(editing)}
           >
-            {testing ? 'Testing…' : '⚡ Test Connection'}
+            {testing ? 'Testing...' : '⚡ Test Connection'}
           </button>
           <button className="btn btn-secondary" onClick={() => { setEditing(null); setTestResult(null); }}>Cancel</button>
         </div>
@@ -3064,7 +3091,7 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
                     disabled={syncing === c.id}
                     onClick={() => handleSync(c.id)}
                   >
-                    {syncing === c.id ? 'Syncing…' : '⟳ Sync Now'}
+                    {syncing === c.id ? 'Syncing...' : '⟳ Sync Now'}
                   </button>
                   <button className="btn btn-secondary btn-sm" onClick={() => handleViewRuns(c.id)}>History</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => setEditing(c)}>Edit</button>
@@ -3195,7 +3222,7 @@ function SecurityTab({ settings, onSave }: { settings: Record<string, string>; o
 
       <div className="mt-8 pt-6 border-t border-border/10">
         <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save Security Settings'}
+          {saving ? 'Saving...' : 'Save Security Settings'}
         </button>
       </div>
     </div>

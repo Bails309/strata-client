@@ -149,8 +149,20 @@ async fn try_local_jwt(
     .await
     .map_err(AppError::Database)?;
 
-    let (id, username, role, sys, users, conn, audit, cr_users, cr_ugroups, cr_conn, cr_cgroups, cr_share) =
-        row.ok_or_else(|| AppError::Auth("User no longer exists or has been deleted".into()))?;
+    let (
+        id,
+        username,
+        role,
+        sys,
+        users,
+        conn,
+        audit,
+        cr_users,
+        cr_ugroups,
+        cr_conn,
+        cr_cgroups,
+        cr_share,
+    ) = row.ok_or_else(|| AppError::Auth("User no longer exists or has been deleted".into()))?;
 
     Ok(Some(AuthUser {
         id,
@@ -199,8 +211,25 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
     .await
     .map_err(AppError::Database)?;
 
-    let (user_id, username, role, sys, users, conn, audit, cr_users, cr_ugroups, cr_conn, cr_cgroups, cr_share) = user
-        .ok_or_else(|| AppError::Auth(format!("No active user found for OIDC subject: {}", claims.sub)))?;
+    let (
+        user_id,
+        username,
+        role,
+        sys,
+        users,
+        conn,
+        audit,
+        cr_users,
+        cr_ugroups,
+        cr_conn,
+        cr_cgroups,
+        cr_share,
+    ) = user.ok_or_else(|| {
+        AppError::Auth(format!(
+            "No active user found for OIDC subject: {}",
+            claims.sub
+        ))
+    })?;
 
     Ok(AuthUser {
         id: user_id,

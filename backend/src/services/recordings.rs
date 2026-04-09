@@ -465,7 +465,9 @@ mod tests {
             container_name: "rec".into(),
             access_key: B64.encode(key_bytes),
         };
-        let sig = cfg.sign("GET", 0, "", "x-ms-date:now", "/acct/rec/f.bin").unwrap();
+        let sig = cfg
+            .sign("GET", 0, "", "x-ms-date:now", "/acct/rec/f.bin")
+            .unwrap();
         assert!(sig.starts_with("SharedKey acct:"));
         assert!(sig.len() > "SharedKey acct:".len());
     }
@@ -479,8 +481,12 @@ mod tests {
             container_name: "rec".into(),
             access_key: B64.encode(key_bytes),
         };
-        let sig_put = cfg.sign("PUT", 100, "text/plain", "x-ms-date:now", "/acct/rec/f").unwrap();
-        let sig_get = cfg.sign("GET", 0, "", "x-ms-date:now", "/acct/rec/f").unwrap();
+        let sig_put = cfg
+            .sign("PUT", 100, "text/plain", "x-ms-date:now", "/acct/rec/f")
+            .unwrap();
+        let sig_get = cfg
+            .sign("GET", 0, "", "x-ms-date:now", "/acct/rec/f")
+            .unwrap();
         assert_ne!(sig_put, sig_get);
     }
 

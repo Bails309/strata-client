@@ -1,5 +1,5 @@
-﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 
@@ -26,7 +26,7 @@ vi.mock('../api', () => ({
   getMetrics: vi.fn(),
   getRoles: vi.fn(),
   createRole: vi.fn(),
-  getRoleMappings: vi.fn(),
+  getRoleMappings: vi.fn().mockResolvedValue({ connection_ids: [], folder_ids: [] }),
   updateRoleMappings: vi.fn(),
   getConnections: vi.fn(),
   createConnection: vi.fn(),
@@ -57,7 +57,7 @@ import {
   createConnectionFolder, deleteConnectionFolder,
   getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
-  updateAuthMethods, updateSettings,
+  updateAuthMethods, updateSettings, updateRoleMappings,
 } from '../api';
 
 const healthOk = {
@@ -114,6 +114,7 @@ function setupDefaults() {
   vi.mocked(getUsers).mockResolvedValue([]);
   vi.mocked(getServiceHealth).mockResolvedValue(healthOk);
   vi.mocked(getMetrics).mockResolvedValue(metricsOk);
+  vi.mocked(getActiveSessions).mockResolvedValue([]);
 }
 
 describe('AdminSettings', () => {
@@ -127,7 +128,7 @@ describe('AdminSettings', () => {
 
   it('renders all tab buttons', () => {
     renderAdmin();
-    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Vault', 'Recordings', 'Access', 'AD Sync', 'Sessions', 'Security']) {
+    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Vault', 'Recordings', 'Access', 'AD Sync', 'Audit Logs', 'Security']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
@@ -160,7 +161,7 @@ describe('HealthTab', () => {
     vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
     vi.mocked(getMetrics).mockReturnValue(new Promise(() => {}));
     renderAdmin();
-    expect(screen.getByText('Loading service healthâ€¦')).toBeInTheDocument();
+    expect(screen.getByText('Loading service health...')).toBeInTheDocument();
   });
 
   it('shows connected/reachable badges when healthy', async () => {
@@ -234,14 +235,14 @@ describe('HealthTab', () => {
     vi.mocked(getMetrics).mockResolvedValue(metricsOk);
     const user = userEvent.setup();
     renderAdmin();
-    // loading initially shows "Loading service healthâ€¦"
-    expect(screen.getByText('Loading service healthâ€¦')).toBeInTheDocument();
+    // loading initially shows "Loading service health..."
+    expect(screen.getByText('Loading service health...')).toBeInTheDocument();
     resolveHealth(healthOk);
     await screen.findByText('Connected');
     // Now trigger refresh
     vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
     await user.click(screen.getByText('Refresh'));
-    expect(screen.getByText('Refreshingâ€¦')).toBeInTheDocument();
+    expect(screen.getByText('Refreshing...')).toBeInTheDocument();
   });
 
   it('shows pool size pluralization for single instance', async () => {
@@ -300,9 +301,11 @@ describe('SsoTab', () => {
     vi.mocked(testSsoConnection).mockResolvedValue({ status: 'success', message: 'Issuer validated' });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
+    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
     await screen.findByDisplayValue('strata-client');
-    await user.click(screen.getByText('Test Connection'));
+    const secretInput = screen.getByLabelText('Client Secret');
+    await user.type(secretInput, 'new-secret');
+    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
     expect(await screen.findByText('Issuer validated')).toBeInTheDocument();
   });
 
@@ -310,9 +313,11 @@ describe('SsoTab', () => {
     vi.mocked(testSsoConnection).mockRejectedValue(new Error('Connection refused'));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
+    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
     await screen.findByDisplayValue('strata-client');
-    await user.click(screen.getByText('Test Connection'));
+    const secretInput = screen.getByLabelText('Client Secret');
+    await user.type(secretInput, 'new-secret');
+    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
     expect(await screen.findByText('Connection refused')).toBeInTheDocument();
   });
 
@@ -336,21 +341,23 @@ describe('SsoTab', () => {
     });
   });
 
-  it('shows Testingâ€¦ text while test is in progress', async () => {
+  it('shows Testing... text while test is in progress', async () => {
     vi.mocked(testSsoConnection).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
+    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
     await screen.findByDisplayValue('strata-client');
-    await user.click(screen.getByText('Test Connection'));
-    expect(screen.getByText('Testingâ€¦')).toBeInTheDocument();
+    const secretInput = screen.getByLabelText('Client Secret');
+    await user.type(secretInput, 'new-secret');
+    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
+    expect(screen.getByText('Testing...')).toBeInTheDocument();
   });
 
   it('renders callback URL', async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('SSO / OIDC'));
-    expect(await screen.findByText(/\/api\/auth\/oidc\/callback/)).toBeInTheDocument();
+    expect(await screen.findByText(/\/api\/auth\/sso\/callback/)).toBeInTheDocument();
   });
 
   it('handles non-Error exception in test connection', async () => {
@@ -359,7 +366,11 @@ describe('SsoTab', () => {
     renderAdmin();
     await user.click(screen.getByText('SSO / OIDC'));
     await screen.findByDisplayValue('strata-client');
-    await user.click(screen.getByText('Test Connection'));
+    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
+    await screen.findByDisplayValue('strata-client');
+    const secretInput = screen.getByLabelText('Client Secret');
+    await user.type(secretInput, 'new-secret');
+    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
     expect(await screen.findByText('Test failed')).toBeInTheDocument();
   });
 });
@@ -494,14 +505,14 @@ describe('KerberosTab', () => {
     await screen.findByText(/No Kerberos realms/);
     await user.click(screen.getByText('Add Realm'));
     // Initially one KDC field, no remove button since only 1
-    expect(screen.queryByText('âœ•')).not.toBeInTheDocument();
+    expect(screen.queryByText('X')).not.toBeInTheDocument();
     await user.click(screen.getByText('+ Add KDC'));
     // Now 2 KDC fields, should have remove buttons
-    const removeButtons = screen.getAllByText('âœ•');
+    const removeButtons = screen.getAllByText('X');
     expect(removeButtons.length).toBe(2);
     await user.click(removeButtons[0]);
     // Back to 1
-    expect(screen.queryByText('âœ•')).not.toBeInTheDocument();
+    expect(screen.queryByText('X')).not.toBeInTheDocument();
   });
 
   it('handles load error', async () => {
@@ -522,7 +533,7 @@ describe('KerberosTab', () => {
     expect(await screen.findByText('Delete failed')).toBeInTheDocument();
   });
 
-  it('shows Savingâ€¦ text during save', async () => {
+  it('shows Saving... text during save', async () => {
     vi.mocked(createKerberosRealm).mockReturnValue(new Promise(() => {}));
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
@@ -532,7 +543,7 @@ describe('KerberosTab', () => {
     await user.click(screen.getByText('Add Realm'));
     await user.type(screen.getByPlaceholderText('EXAMPLE.COM'), 'TEST.COM');
     await user.click(screen.getByText('Create Realm'));
-    expect(screen.getByText('Savingâ€¦')).toBeInTheDocument();
+    expect(screen.getByText('Saving...')).toBeInTheDocument();
   });
 
   it('auto-sets is_default when first realm', async () => {
@@ -684,14 +695,14 @@ describe('VaultTab', () => {
     }));
   });
 
-  it('shows Savingâ€¦ during vault save', async () => {
+  it('shows Saving... during vault save', async () => {
     vi.mocked(updateVault).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Vault'));
     await screen.findByText('Vault Configuration');
     await user.click(screen.getByText('Save Vault Settings'));
-    expect(screen.getByText('Savingâ€¦')).toBeInTheDocument();
+    expect(screen.getByText('Saving...')).toBeInTheDocument();
   });
 
   it('shows current vault mode from health data', async () => {
@@ -724,8 +735,8 @@ describe('VaultTab', () => {
     await user.click(screen.getByText('Vault'));
     await screen.findByText('Credential Password Expiry');
     await user.click(screen.getByText('Save Expiry Setting'));
-    // The button should show Savingâ€¦ while TTL is being saved
-    const savingBtns = screen.getAllByText('Savingâ€¦');
+    // The button should show Saving... while TTL is being saved
+    const savingBtns = screen.getAllByText('Saving...');
     expect(savingBtns.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -770,13 +781,23 @@ describe('AccessTab', () => {
 
   it('creates a new role', async () => {
     vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
+    vi.mocked(updateRoleMappings).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('admin');
-    await user.type(screen.getByPlaceholderText('New role name...'), 'viewer');
-    await user.click(screen.getByText('Add Role'));
-    expect(createRole).toHaveBeenCalledWith('viewer');
+    await user.click(screen.getByText('Create New Role'));
+    const input = screen.getByPlaceholderText('e.g. Helpdesk');
+    await user.type(input, 'viewer');
+    await user.click(screen.getByText('Create Role'));
+    expect(createRole).toHaveBeenCalledWith(expect.objectContaining({ name: 'viewer' }));
+  });
+
+  it('switches to sessions tab', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByRole('button', { name: 'Audit Logs' }));
+    expect(await screen.findByText('Active Sessions')).toBeInTheDocument();
   });
 
   it('renders connections table', async () => {
@@ -801,7 +822,9 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const editBtns = screen.getAllByText('Edit');
+    // Target the Edit button specifically in the connections table
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const editBtns = within(connectionsCard).getAllByText('Edit');
     await user.click(editBtns[0]);
     expect(screen.getByText('Edit Connection')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Server A')).toBeInTheDocument();
@@ -865,7 +888,7 @@ describe('AccessTab', () => {
     expect(await screen.findByText('RDP server')).toBeInTheDocument();
   });
 
-  it('shows group name for grouped connections', async () => {
+  it('shows folder_name for foldered connections', async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'Servers', parent_id: undefined }]);
     vi.mocked(getConnections).mockResolvedValue([
       { id: 'c1', name: 'Server G', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: 'g1', extra: {} },
@@ -873,16 +896,18 @@ describe('AccessTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
-    const serversEls = await screen.findAllByText('Servers');
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const table = within(connectionsCard).getByRole('table');
+    const serversEls = await within(table).findAllByText('Servers');
     expect(serversEls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows dash for ungrouped connections', async () => {
+  it('shows dash for unfoldered connections', async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const dashes = screen.getAllByText('â€”');
+    const dashes = screen.getAllByText('—');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -895,13 +920,14 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server 0');
-    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
-    expect(screen.getByText('â† Prev')).toBeDisabled();
-    await user.click(screen.getByText('Next â†’'));
-    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
-    expect(screen.getByText('Next â†’')).toBeDisabled();
-    await user.click(screen.getByText('â† Prev'));
-    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    expect(within(connectionsCard).getByText('Page 1 of 2')).toBeInTheDocument();
+    expect(within(connectionsCard).getByText('← Prev')).toBeDisabled();
+    await user.click(within(connectionsCard).getByText('Next →'));
+    expect(within(connectionsCard).getByText('Page 2 of 2')).toBeInTheDocument();
+    expect(within(connectionsCard).getByText('Next →')).toBeDisabled();
+    await user.click(within(connectionsCard).getByText('← Prev'));
+    expect(within(connectionsCard).getByText('Page 1 of 2')).toBeInTheDocument();
   });
 
   it('resets page on search', async () => {
@@ -913,8 +939,9 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server 0');
-    await user.click(screen.getByText('Next â†’'));
-    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    await user.click(within(connectionsCard).getByText('Next →'));
+    expect(within(connectionsCard).getByText('Page 2 of 2')).toBeInTheDocument();
     // Search resets to page 1
     await user.type(screen.getByPlaceholderText(/Search connections/), 'Server 1');
     expect(screen.queryByText('Page 2')).not.toBeInTheDocument();
@@ -946,7 +973,8 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const editBtns = screen.getAllByText('Edit');
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const editBtns = within(connectionsCard).getAllByText('Edit');
     await user.click(editBtns[0]);
     await screen.findByText('Edit Connection');
     await user.click(screen.getByText('Save Changes'));
@@ -960,15 +988,16 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
     // Open edit first
-    const editBtns = screen.getAllByText('Edit');
+    const editBtns = within(connectionsCard).getAllByText('Edit');
     await user.click(editBtns[0]);
     expect(screen.getByText('Edit Connection')).toBeInTheDocument();
     // Delete while form is open
-    const deleteBtns = screen.getAllByText('Delete');
+    const deleteBtns = within(connectionsCard).getAllByText('Delete');
     await user.click(deleteBtns[0]);
     // Form should be closed
-    expect(screen.queryByText('Edit Connection')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Edit Connection')).not.toBeInTheDocument());
   });
 
   it('cancel closes the add form', async () => {
@@ -1002,19 +1031,19 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('bob');
-    // OIDC sub column shows â€” for empty sub
-    const dashes = screen.getAllByText('â€”');
+    // OIDC sub column shows — for empty sub
+    const dashes = screen.getAllByText('—');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows no groups empty state', async () => {
+  it('shows no folders empty state', async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
-    expect(await screen.findByText(/No groups created yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No folders created yet/)).toBeInTheDocument();
   });
 
-  it('renders groups table', async () => {
+  it('renders folders table', async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([
       { id: 'g1', name: 'Production', parent_id: undefined },
       { id: 'g2', name: 'Staging', parent_id: 'g1' },
@@ -1028,18 +1057,18 @@ describe('AccessTab', () => {
     expect(screen.getByText('Root')).toBeInTheDocument();
   });
 
-  it('creates a group', async () => {
+  it('creates a folder', async () => {
     vi.mocked(createConnectionFolder).mockResolvedValue({ id: 'g1', name: 'DevOps', parent_id: undefined });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
-    await screen.findByText(/No groups created yet/);
-    await user.type(screen.getByPlaceholderText('Group name...'), 'DevOps');
-    await user.click(screen.getByText('Add Group'));
+    await screen.findByText(/No folders created yet/);
+    await user.type(screen.getByPlaceholderText('Folder name...'), 'DevOps');
+    await user.click(screen.getByText('Add Folder'));
     expect(createConnectionFolder).toHaveBeenCalledWith(expect.objectContaining({ name: 'DevOps' }));
   });
 
-  it('deletes a group with confirm', async () => {
+  it('deletes a folder with confirm', async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'ToDelete', parent_id: undefined }]);
     vi.mocked(deleteConnectionFolder).mockResolvedValue({ status: 'success' });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -1047,9 +1076,9 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('ToDelete');
-    // Find the group delete button
-    const groupDeleteBtns = screen.getAllByText('Delete');
-    await user.click(groupDeleteBtns[groupDeleteBtns.length - 1]);
+    // Find the folder delete button
+    const folderDeleteBtns = screen.getAllByText('Delete');
+    await user.click(folderDeleteBtns[folderDeleteBtns.length - 1]);
     expect(deleteConnectionFolder).toHaveBeenCalledWith('g1');
   });
 
@@ -1061,12 +1090,12 @@ describe('AccessTab', () => {
     expect(screen.getByText('Add Role')).toBeDisabled();
   });
 
-  it('disables Add Group button when name is empty', async () => {
+  it('disables Add Folder button when name is empty', async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
-    await screen.findByText('Connection Groups');
-    expect(screen.getByText('Add Group')).toBeDisabled();
+    await screen.findByText('Connection Folders');
+    expect(screen.getByText('Add Folder')).toBeDisabled();
   });
 
   it('highlights currently edited connection row', async () => {
@@ -1074,11 +1103,14 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const editBtns = screen.getAllByText('Edit');
-    await user.click(editBtns[0]);
+    const row = screen.getAllByText('Server A').find(el => el.closest('tr'))?.closest('tr');
+    if (!row) throw new Error('Row not found');
+    await user.click(within(row).getByText('Edit'));
+    
     // The row for the edited connection should have bg-surface-secondary class
-    const row = screen.getByDisplayValue('Server A').closest('tr') || screen.getByText('Server A').closest('tr');
-    expect(row?.className).toContain('bg-surface-secondary');
+    await waitFor(() => {
+      expect(row.className).toContain('bg-surface-secondary');
+    });
   });
 });
 
@@ -1094,7 +1126,7 @@ describe('SessionsTab', () => {
   it('renders active sessions', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     expect(await screen.findByText('Server A')).toBeInTheDocument();
     expect(screen.getByText('admin')).toBeInTheDocument();
   });
@@ -1103,14 +1135,14 @@ describe('SessionsTab', () => {
     vi.mocked(getActiveSessions).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     expect(await screen.findByText(/no active sessions/i)).toBeInTheDocument();
   });
 
   it('shows session duration', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     await screen.findByText('Server A');
     // Duration should be rendered (format varies by time)
     const durationEls = screen.getAllByText(/\d+[hms]/);
@@ -1123,7 +1155,7 @@ describe('SessionsTab', () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     expect(await screen.findByText('2m')).toBeInTheDocument();
   });
 
@@ -1133,7 +1165,7 @@ describe('SessionsTab', () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     expect(await screen.findByText('45s')).toBeInTheDocument();
   });
 
@@ -1143,26 +1175,26 @@ describe('SessionsTab', () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     expect(await screen.findByText('1m 30s')).toBeInTheDocument();
   });
 
   it('renders Live and Rewind buttons', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     await screen.findByText('Server A');
-    expect(screen.getByText('â— Live')).toBeInTheDocument();
-    expect(screen.getByText('âª Rewind')).toBeInTheDocument();
+    expect(screen.getByText('● Live')).toBeInTheDocument();
+    expect(screen.getByText('⏪ Rewind')).toBeInTheDocument();
   });
 
   it('disables refresh while loading', async () => {
     vi.mocked(getActiveSessions).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     await waitFor(() => {
-      const btns = screen.getAllByText('Refreshingâ€¦');
+      const btns = screen.getAllByText('Refreshing...');
       expect(btns.length).toBeGreaterThanOrEqual(1);
     });
   });
@@ -1171,7 +1203,7 @@ describe('SessionsTab', () => {
     vi.mocked(getActiveSessions).mockRejectedValue(new Error('fetch fail'));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText('Audit Logs'));
     expect(await screen.findByText(/no active sessions/i)).toBeInTheDocument();
   });
 });
@@ -1297,18 +1329,18 @@ describe('AdSyncTab', () => {
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText('Corp AD');
-    await user.click(screen.getByText('âŸ³ Sync Now'));
+    await user.click(screen.getByText('⟳ Sync Now'));
     expect(triggerAdSync).toHaveBeenCalledWith('ad1');
   });
 
-  it('shows Syncingâ€¦ while sync in progress', async () => {
+  it('shows Syncing... while sync in progress', async () => {
     vi.mocked(triggerAdSync).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText('Corp AD');
-    await user.click(screen.getByText('âŸ³ Sync Now'));
-    expect(screen.getByText('Syncingâ€¦')).toBeInTheDocument();
+    await user.click(screen.getByText('⟳ Sync Now'));
+    expect(screen.getByText('Syncing...')).toBeInTheDocument();
   });
 
   it('shows sync history', async () => {
@@ -1343,7 +1375,7 @@ describe('AdSyncTab', () => {
     await screen.findByText('Corp AD');
     await user.click(screen.getByText('History'));
     await screen.findByText(/No sync runs yet/);
-    await user.click(screen.getByText('â† Back'));
+    await user.click(screen.getByText('← Back'));
     expect(await screen.findByText('Corp AD')).toBeInTheDocument();
   });
 
@@ -1380,7 +1412,7 @@ describe('AdSyncTab', () => {
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText(/no AD sync sources/i);
     await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('âš¡ Test Connection'));
+    await user.click(screen.getByText('⚡ Test Connection'));
     expect(await screen.findByText('Found 10 computers')).toBeInTheDocument();
     expect(screen.getByText('Server1')).toBeInTheDocument();
     expect(screen.getByText('Server2')).toBeInTheDocument();
@@ -1395,11 +1427,11 @@ describe('AdSyncTab', () => {
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText(/no AD sync sources/i);
     await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('âš¡ Test Connection'));
+    await user.click(screen.getByText('⚡ Test Connection'));
     expect(await screen.findByText('LDAP bind failed')).toBeInTheDocument();
   });
 
-  it('shows Testingâ€¦ during test', async () => {
+  it('shows Testing... during test', async () => {
     vi.mocked(testAdSyncConnection).mockReturnValue(new Promise(() => {}));
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
@@ -1407,8 +1439,8 @@ describe('AdSyncTab', () => {
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText(/no AD sync sources/i);
     await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('âš¡ Test Connection'));
-    expect(screen.getByText('Testingâ€¦')).toBeInTheDocument();
+    await user.click(screen.getByText('⚡ Test Connection'));
+    expect(screen.getByText('Testing...')).toBeInTheDocument();
   });
 
   it('shows config with CA cert and TLS skip verify info', async () => {
@@ -1428,7 +1460,7 @@ describe('AdSyncTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
-    expect(await screen.findByText(/CA Cert âœ“/)).toBeInTheDocument();
+    expect(await screen.findByText(/CA Cert ✓/)).toBeInTheDocument();
   });
 
   it('shows search base management in edit form', async () => {
@@ -1533,13 +1565,13 @@ describe('AdSyncTab', () => {
     expect(screen.getByText('Domain Override')).toBeInTheDocument();
   });
 
-  it('shows connection group select in edit form', async () => {
+  it('shows connection folder select in edit form', async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('AD Sync'));
     await screen.findByText('Corp AD');
     await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Connection Group')).toBeInTheDocument();
+    expect(screen.getByText('Connection Folder')).toBeInTheDocument();
   });
 
   it('shows enabled checkbox in edit form', async () => {
@@ -1690,7 +1722,7 @@ describe('SecurityTab', () => {
     expect(watermarkCheckbox).toBeChecked();
   });
 
-  it('shows Savingâ€¦ during save', async () => {
+  it('shows Saving... during save', async () => {
     vi.mocked(updateSettings).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
@@ -1698,7 +1730,7 @@ describe('SecurityTab', () => {
     await screen.findByText('Session Watermark');
     const saveBtns = screen.getAllByText(/save/i);
     await user.click(saveBtns[saveBtns.length - 1]);
-    expect(screen.getByText('Savingâ€¦')).toBeInTheDocument();
+    expect(screen.getByText('Saving...')).toBeInTheDocument();
   });
 
   it('sends watermark and auth settings on save', async () => {

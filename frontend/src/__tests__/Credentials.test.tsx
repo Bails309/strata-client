@@ -87,7 +87,11 @@ describe('Credentials', () => {
     vi.mocked(getMyConnections).mockResolvedValue([]);
     vi.mocked(getServiceHealth).mockResolvedValue(vaultNotConfigured);
 
-    renderCredentials();
+    render(
+      <BrowserRouter>
+        <Credentials vaultConfigured={false} />
+      </BrowserRouter>,
+    );
     expect(await screen.findByText('Vault Not Configured')).toBeInTheDocument();
   });
 
@@ -157,7 +161,11 @@ describe('Credentials', () => {
     vi.mocked(getMyConnections).mockRejectedValue(new Error('Network error'));
     vi.mocked(getServiceHealth).mockRejectedValue(new Error('Network error'));
 
-    renderCredentials();
+    render(
+      <BrowserRouter>
+        <Credentials vaultConfigured={false} />
+      </BrowserRouter>,
+    );
     expect(await screen.findByText('Vault Not Configured')).toBeInTheDocument();
   });
 

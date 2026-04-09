@@ -1086,8 +1086,8 @@ describe('AccessTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
-    await screen.findByText('Roles');
-    expect(screen.getByText('Add Role')).toBeDisabled();
+    await screen.findByRole('heading', { name: 'Roles' });
+    expect(screen.getByText('Create New Role')).toBeInTheDocument();
   });
 
   it('disables Add Folder button when name is empty', async () => {

@@ -203,9 +203,9 @@ describe('SessionToolbar', () => {
     render(<SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />);
     await user.click(screen.getByTitle('Share this connection'));
     await user.click(screen.getByText('View Only'));
-    expect(screen.getByText('Generatingâ€¦')).toBeInTheDocument();
+    expect(screen.getByText('Generating…')).toBeInTheDocument();
     resolve!({ share_url: '/shared/abc', share_token: 'abc', mode: 'view' });
-    await waitFor(() => expect(screen.queryByText('Generatingâ€¦')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Generating…')).not.toBeInTheDocument());
   });
 
   it('opens file browser panel', async () => {
@@ -281,7 +281,7 @@ describe('SessionToolbar', () => {
     render(
       <div>
         <div data-testid="outside">Outside area</div>
-        <SessionToolbar session={createMockSession() as any} connectionId="conn-1" />
+        <SessionToolbar canShare={true} session={createMockSession() as any} connectionId="conn-1" />
       </div>,
     );
     await user.click(screen.getByTitle('Share this connection'));

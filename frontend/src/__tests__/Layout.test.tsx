@@ -34,10 +34,28 @@ vi.mock('../components/SessionManager', () => ({
 
 import Layout from '../components/Layout';
 
+const adminUser: import('../api').MeResponse = {
+  id: 'u1',
+  username: 'testadmin',
+  role: 'admin',
+  client_ip: '10.0.0.1',
+  watermark_enabled: false,
+  vault_configured: true,
+  can_manage_system: true,
+  can_manage_users: true,
+  can_manage_connections: true,
+  can_view_audit_logs: true,
+  can_create_users: true,
+  can_create_user_groups: true,
+  can_create_connections: true,
+  can_create_connection_folders: true,
+  can_create_sharing_profiles: true,
+};
+
 function renderLayout(route = '/') {
   return render(
     <MemoryRouter initialEntries={[route]}>
-      <Layout user={null} onLogout={vi.fn()} />
+      <Layout user={adminUser} onLogout={vi.fn()} />
     </MemoryRouter>,
   );
 }
@@ -61,10 +79,10 @@ describe('Layout', () => {
     expect(logo).toBeInTheDocument();
   });
 
-  it('shows username and role after loading', async () => {
+  it('shows username and role after loading', () => {
     renderLayout();
-    expect(await screen.findByText('testadmin')).toBeInTheDocument();
-    expect(await screen.findByText('admin')).toBeInTheDocument();
+    expect(screen.getByText('testadmin')).toBeInTheDocument();
+    expect(screen.getByText('admin')).toBeInTheDocument();
   });
 
   it('highlights active nav item based on route', () => {

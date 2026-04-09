@@ -285,6 +285,15 @@ mod tests {
             sub: "sub-123".into(),
             username: "alice".into(),
             role: "admin".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
         };
         let cloned = user.clone();
         assert_eq!(user.id, cloned.id);
@@ -300,6 +309,15 @@ mod tests {
             sub: "sub".into(),
             username: "bob".into(),
             role: "user".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
         };
         let debug = format!("{:?}", user);
         assert!(debug.contains("bob"));
@@ -314,6 +332,15 @@ mod tests {
             sub: "oidc|12345".into(),
             username: "charlie".into(),
             role: "admin".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
         };
         assert_eq!(user.id, id);
         assert_eq!(user.sub, "oidc|12345");
@@ -328,6 +355,15 @@ mod tests {
             sub: "sub-abc".into(),
             username: "dave".into(),
             role: "viewer".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
         };
         let mut cloned = user.clone();
         cloned.username = "eve".into();

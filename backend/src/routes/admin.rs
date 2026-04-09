@@ -2355,8 +2355,8 @@ mod tests {
 
     #[test]
     fn role_connection_update_deser() {
-        let json = r#"{"role_id":"550e8400-e29b-41d4-a716-446655440000","connection_ids":[]}"#;
-        let r: RoleConnectionUpdate = serde_json::from_str(json).unwrap();
+        let json = r#"{"role_id":"550e8400-e29b-41d4-a716-446655440000","connection_ids":[],"folder_ids":[]}"#;
+        let r: RoleMappingUpdate = serde_json::from_str(json).unwrap();
         assert!(r.connection_ids.is_empty());
     }
 
@@ -2457,6 +2457,15 @@ mod tests {
         let r = RoleRow {
             id: Uuid::nil(),
             name: "admin".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "admin");
@@ -2472,7 +2481,7 @@ mod tests {
             port: 3389,
             domain: Some("CORP".into()),
             description: "Prod".into(),
-            group_id: None,
+            folder_id: None,
             extra: serde_json::json!({"color-depth": "24"}),
             last_accessed: None,
         };
@@ -2484,8 +2493,8 @@ mod tests {
     }
 
     #[test]
-    fn connection_group_row_serializes() {
-        let r = ConnectionGroupRow {
+    fn connection_folder_row_serializes() {
+        let r = ConnectionFolderRow {
             id: Uuid::nil(),
             name: "Production".into(),
             parent_id: None,

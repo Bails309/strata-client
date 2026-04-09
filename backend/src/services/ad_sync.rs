@@ -260,9 +260,8 @@ fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::
 
     // Load system root certificates
     // rustls-native-certs 0.8 returns Result<Vec<CertificateDer>>
-    let native_certs = rustls_native_certs::load_native_certs()
-        .map_err(|e| anyhow::anyhow!("Failed to load native certificates: {e}"))?;
-    for cert in native_certs {
+    let native_certs = rustls_native_certs::load_native_certs();
+    for cert in native_certs.certs {
         let _ = root_store.add(cert);
     }
 
@@ -289,6 +288,8 @@ fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::
     let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
         rustls::crypto::ring::default_provider(),
     ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| anyhow::anyhow!("Failed to set TLS protocol versions: {e}"))?
     .with_root_certificates(root_store)
     .with_no_client_auth();
 
@@ -1004,7 +1005,7 @@ mod tests {
     fn ad_sync_config_with_all_optional_fields() {
         let config = AdSyncConfig {
             domain_override: Some("CORP".to_string()),
-            group_id: Some(Uuid::new_v4()),
+            folder_id: Some(Uuid::new_v4()),
             keytab_path: Some("/etc/krb5.keytab".to_string()),
             krb5_principal: Some("svc@CORP.LOCAL".to_string()),
             ca_cert_pem: Some(
@@ -1013,7 +1014,7 @@ mod tests {
             ..sample_config()
         };
         assert_eq!(config.domain_override.as_deref(), Some("CORP"));
-        assert!(config.group_id.is_some());
+        assert!(config.folder_id.is_some());
         assert_eq!(config.keytab_path.as_deref(), Some("/etc/krb5.keytab"));
         assert_eq!(config.krb5_principal.as_deref(), Some("svc@CORP.LOCAL"));
         assert!(config.ca_cert_pem.is_some());

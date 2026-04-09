@@ -1032,14 +1032,14 @@ mod tests {
             hostname: "10.0.0.1".into(),
             port: 3389,
             description: "Prod".into(),
-            group_id: None,
-            group_name: Some("Production".into()),
+            folder_id: None,
+            folder_name: Some("Production".into()),
             last_accessed: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "server-1");
         assert_eq!(v["protocol"], "rdp");
-        assert_eq!(v["group_name"], "Production");
+        assert_eq!(v["folder_name"], "Production");
         assert!(v["last_accessed"].is_null());
     }
 

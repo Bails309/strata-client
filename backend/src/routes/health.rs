@@ -208,6 +208,7 @@ mod tests {
             phase: "running".into(),
             sso_enabled: true,
             local_auth_enabled: false,
+            vault_configured: true,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "running");
@@ -312,6 +313,7 @@ mod tests {
             phase: "setup".into(),
             sso_enabled: false,
             local_auth_enabled: true,
+            vault_configured: false,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "setup");

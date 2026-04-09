@@ -38,6 +38,9 @@ const SENSITIVE_SETTINGS: &[&str] = &[
     "vault_token",
     "vault_unseal_key",
 ];
+ 
+const DOT_MASK: &str = "••••••••";
+const STAR_MASK: &str = "********";
 
 /// Redact sensitive setting values for API responses.
 fn redact_settings(settings: Vec<(String, String)>) -> Vec<(String, String)> {
@@ -117,6 +120,12 @@ pub async fn update_settings(
     validate_no_restricted_keys(&body.settings)?;
 
     for kv in &body.settings {
+        // If it's a sensitive key and matches a redaction mask, skip updating it
+        if SENSITIVE_SETTINGS.iter().any(|s| kv.key.contains(s))
+            && (kv.value == DOT_MASK || kv.value == STAR_MASK)
+        {
+            continue;
+        }
         settings::set(&db.pool, &kv.key, &kv.value).await?;
     }
     audit::log(
@@ -1824,7 +1833,7 @@ pub async fn list_ad_sync_configs(
     // Redact bind_password — never expose encrypted or plaintext secrets to clients
     for r in &mut rows {
         if !r.bind_password.is_empty() {
-            r.bind_password = "••••••••".into();
+            r.bind_password = DOT_MASK.into();
         }
     }
     Ok(Json(rows))
@@ -2012,8 +2021,8 @@ pub async fn update_ad_sync_config(
             .await?;
     }
     if let Some(ref v) = body.bind_password {
-        // Only update if not the redaction marker
-        if v != "••••••••" {
+        // Only update if not one of the redaction markers
+        if v != DOT_MASK && v != STAR_MASK {
             // Encrypt bind_password via Vault if configured
             let stored = if !v.is_empty() {
                 let vault_cfg = {

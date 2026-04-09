@@ -1841,6 +1841,7 @@ pub async fn list_ad_sync_configs(
 
 #[derive(Deserialize)]
 pub struct CreateAdSyncConfigRequest {
+    pub id: Option<Uuid>,
     pub label: String,
     pub ldap_url: String,
     pub bind_dn: Option<String>,
@@ -2249,15 +2250,38 @@ pub async fn test_ad_sync_connection(
     State(state): State<SharedState>,
     Json(body): Json<CreateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _db = require_running(&state).await?;
+    let db = require_running(&state).await?;
+
+    // Resolve password: if it's a mask, fetch from DB. Then unseal.
+    let mut bind_password = body.bind_password.clone().unwrap_or_default();
+    if (bind_password == DOT_MASK || bind_password == STAR_MASK) && body.id.is_some() {
+        let existing: Option<String> = sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
+            .bind(body.id.unwrap())
+            .fetch_optional(&db.pool)
+            .await?;
+        if let Some(pw) = existing {
+            bind_password = pw;
+        }
+    }
+
+    // Now unseal the password if it's vault-prefixed
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config.as_ref().and_then(|c| c.vault.clone())
+    };
+    if let Some(ref vc) = vault_cfg {
+        if bind_password.starts_with("vault:") {
+            bind_password = crate::services::vault::unseal_setting(vc, &bind_password).await?;
+        }
+    }
 
     // Build a temporary AdSyncConfig from the request body
     let config = AdSyncConfig {
-        id: Uuid::nil(),
+        id: body.id.unwrap_or(Uuid::nil()),
         label: body.label.clone(),
         ldap_url: body.ldap_url.clone(),
         bind_dn: body.bind_dn.clone().unwrap_or_default(),
-        bind_password: body.bind_password.clone().unwrap_or_default(),
+        bind_password,
         search_bases: body.search_bases.clone(),
         search_filter: body.search_filter.clone().unwrap_or_else(|| {
             "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))".into()

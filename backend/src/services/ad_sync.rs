@@ -362,6 +362,14 @@ async fn ldap_query_simple(
         }
     }
 
+    // Ensure bind_password is not a mask or encrypted string
+    if config.bind_password.starts_with("vault:") {
+        return Err(anyhow::anyhow!("LDAP bind password is still encrypted (unseal failed)"));
+    }
+    if config.bind_password == "••••••••" || config.bind_password == "********" {
+        return Err(anyhow::anyhow!("LDAP bind password is a redaction mask (not resolved)"));
+    }
+
     let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &config.ldap_url).await?;
     ldap3::drive!(conn);
 

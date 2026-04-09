@@ -391,6 +391,7 @@ export interface User {
   auth_type: 'local' | 'sso';
   sub?: string;
   role_name: string;
+  deleted_at?: string;
 }
 
 export interface CreateUserRequest {
@@ -407,13 +408,17 @@ export interface CreateUserResponse {
   password?: string; // Only for local users
 }
 
-export const getUsers = () => request<User[]>('/admin/users');
+export const getUsers = (includeDeleted = false) => 
+  request<User[]>(`/admin/users${includeDeleted ? '?include_deleted=true' : ''}`);
 
 export const createUser = (data: CreateUserRequest) =>
   request<CreateUserResponse>('/admin/users', { method: 'POST', body: JSON.stringify(data) });
 
 export const deleteUser = (id: string) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: 'DELETE' });
+
+export const restoreUser = (id: string) =>
+  request<{ status: string }>(`/admin/users/${id}`, { method: 'POST' });
 
 // ── Credentials ─────────────────────────────────────────────────────
 

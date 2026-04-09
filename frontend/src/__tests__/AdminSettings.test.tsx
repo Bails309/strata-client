@@ -860,24 +860,29 @@ describe('AccessTab', () => {
 
   it('deletes a connection with confirm', async () => {
     vi.mocked(deleteConnection).mockResolvedValue({ status: 'success' });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
     const deleteBtns = screen.getAllByText('Delete');
     await user.click(deleteBtns[0]);
+    // ConfirmModal appears — click its confirm button (btn-danger)
+    const allDeleteBtns = await screen.findAllByRole('button', { name: 'Delete' });
+    const confirmBtn = allDeleteBtns.find(btn => btn.classList.contains('btn-danger'))!;
+    await user.click(confirmBtn);
     expect(deleteConnection).toHaveBeenCalledWith('c1');
   });
 
   it('does not delete when confirm is cancelled', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
     const deleteBtns = screen.getAllByText('Delete');
     await user.click(deleteBtns[0]);
+    // ConfirmModal appears — click Cancel
+    const cancelBtn = await screen.findByRole('button', { name: 'Cancel' });
+    await user.click(cancelBtn);
     expect(deleteConnection).not.toHaveBeenCalled();
   });
 
@@ -983,7 +988,6 @@ describe('AccessTab', () => {
 
   it('closes form after connection deleted if editing same id', async () => {
     vi.mocked(deleteConnection).mockResolvedValue({ status: 'success' });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
@@ -996,6 +1000,10 @@ describe('AccessTab', () => {
     // Delete while form is open
     const deleteBtns = within(connectionsCard).getAllByText('Delete');
     await user.click(deleteBtns[0]);
+    // ConfirmModal appears — click its confirm button (btn-danger)
+    const allDeleteBtns = await screen.findAllByRole('button', { name: 'Delete' });
+    const confirmBtn = allDeleteBtns.find(btn => btn.classList.contains('btn-danger'))!;
+    await user.click(confirmBtn);
     // Form should be closed
     await waitFor(() => expect(screen.queryByText('Edit Connection')).not.toBeInTheDocument());
   });
@@ -1071,7 +1079,6 @@ describe('AccessTab', () => {
   it('deletes a folder with confirm', async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'ToDelete', parent_id: undefined }]);
     vi.mocked(deleteConnectionFolder).mockResolvedValue({ status: 'success' });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
@@ -1079,6 +1086,10 @@ describe('AccessTab', () => {
     // Find the folder delete button
     const folderDeleteBtns = screen.getAllByText('Delete');
     await user.click(folderDeleteBtns[folderDeleteBtns.length - 1]);
+    // ConfirmModal appears — click its confirm button (btn-danger)
+    const allDeleteBtns = await screen.findAllByRole('button', { name: 'Delete' });
+    const confirmBtn = allDeleteBtns.find(btn => btn.classList.contains('btn-danger'))!;
+    await user.click(confirmBtn);
     expect(deleteConnectionFolder).toHaveBeenCalledWith('g1');
   });
 

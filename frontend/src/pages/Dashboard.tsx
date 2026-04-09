@@ -357,16 +357,14 @@ export default function Dashboard() {
                     {conn.protocol.toUpperCase()} - {conn.hostname}:{conn.port}
                   </p>
                   <div className="recent-card-meta">
-                    {(domainLabel || status !== 'none') && (
-                      <p>
-                        Status: {domainLabel ? `${domainLabel} ` : ''}
-                        <span style={{
-                          color: status === 'active' ? '#22c55e' : status === 'expired' ? '#ef4444' : 'var(--color-txt-tertiary)',
-                        }}>
-                          ({status === 'none' ? 'no profile' : status})
-                        </span>
-                      </p>
-                    )}
+                    <p>
+                      Status: {domainLabel ? `${domainLabel} ` : ''}
+                      <span style={{
+                        color: status === 'active' ? '#22c55e' : status === 'expired' ? '#ef4444' : 'var(--color-txt-tertiary)',
+                      }}>
+                        ({status === 'none' ? 'no profile' : status})
+                      </span>
+                    </p>
                     <p>
                       Last Accessed:{' '}
                       {new Date(conn.last_accessed!).toLocaleDateString('en-GB', {

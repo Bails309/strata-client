@@ -33,6 +33,7 @@ import {
   getUsers,
   createUser,
   deleteUser,
+  restoreUser,
   getActiveSessions,
   getAdSyncConfigs,
   createAdSyncConfig,
@@ -997,6 +998,16 @@ function AccessTab({
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
   const [userError, setUserError] = useState('');
   const [userSaving, setUserSaving] = useState(false);
+  const [showDeletedUsers, setShowDeletedUsers] = useState(false);
+  const [deletedUsers, setDeletedUsers] = useState<User[]>([]);
+
+  useEffect(() => {
+    if (showDeletedUsers) {
+      getUsers(true).then(all => {
+        setDeletedUsers(all.filter(u => !!u.deleted_at));
+      });
+    }
+  }, [showDeletedUsers, users]);
 
   const filteredConnections = connections.filter((c) => {
     if (!connSearch) return true;
@@ -1592,17 +1603,28 @@ function AccessTab({
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="!mb-0">Users</h2>
-            <button 
-              className="btn-primary text-xs py-1 px-3 shadow-sm"
-              onClick={() => {
-                setUserForm({ username: '', email: '', full_name: '', role_id: '', auth_type: 'local' });
-                setCreatedPassword(null);
-                setUserError('');
-                setUserModalOpen(true);
-              }}
-            >
-              + New User
-            </button>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-txt-secondary hover:text-txt-primary transition-colors">
+                <input 
+                  type="checkbox" 
+                  className="checkbox checkbox-sm" 
+                  checked={showDeletedUsers} 
+                  onChange={e => setShowDeletedUsers(e.target.checked)} 
+                />
+                Show Deleted Users
+              </label>
+              <button 
+                className="btn-primary text-xs py-1 px-3 shadow-sm"
+                onClick={() => {
+                  setUserForm({ username: '', email: '', full_name: '', role_id: '', auth_type: 'local' });
+                  setCreatedPassword(null);
+                  setUserError('');
+                  setUserModalOpen(true);
+                }}
+              >
+                + New User
+              </button>
+            </div>
           </div>
           
           <div className="table-responsive">
@@ -1618,7 +1640,7 @@ function AccessTab({
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
+                {(showDeletedUsers ? deletedUsers : users).map((u) => (
                   <tr key={u.id}>
                     <td>
                       <div className="font-medium text-txt-primary">{u.username}</div>
@@ -1637,29 +1659,48 @@ function AccessTab({
                       {u.sub || <span className="opacity-30">—</span>}
                     </td>
                     <td>
-                      <button 
-                        className="btn-ghost text-xs text-danger py-1 px-2 hover:bg-danger/10"
-                        onClick={() => {
-                          setConfirmModal({
-                            title: 'Delete User',
-                            message: `Delete user "${u.username}"? (Soft-delete for 7 days)`,
-                            isDangerous: true,
-                            confirmLabel: 'Delete',
-                            onConfirm: async () => {
+                      <div className="flex gap-1">
+                        {u.deleted_at ? (
+                          <button 
+                            className="btn-ghost text-xs text-accent py-1 px-2 hover:bg-accent/10"
+                            onClick={async () => {
                               try {
-                                await deleteUser(u.id);
-                                onUsersChanged(users.filter(x => x.id !== u.id));
+                                await restoreUser(u.id);
+                                const all = await getUsers();
+                                onUsersChanged(all);
                               } catch (err: any) {
-                                alert(err.message || 'Failed to delete user');
-                              } finally {
-                                setConfirmModal(null);
+                                alert(err.message || 'Failed to restore user');
                               }
-                            },
-                          });
-                        }}
-                      >
-                        Delete
-                      </button>
+                            }}
+                          >
+                            Restore
+                          </button>
+                        ) : (
+                          <button 
+                            className="btn-ghost text-xs text-danger py-1 px-2 hover:bg-danger/10"
+                            onClick={() => {
+                              setConfirmModal({
+                                title: 'Delete User',
+                                message: `Delete user "${u.username}"? (Soft-delete for 7 days)`,
+                                isDangerous: true,
+                                confirmLabel: 'Delete',
+                                onConfirm: async () => {
+                                  try {
+                                    await deleteUser(u.id);
+                                    onUsersChanged(users.filter(x => x.id !== u.id));
+                                  } catch (err: any) {
+                                    alert(err.message || 'Failed to delete user');
+                                  } finally {
+                                    setConfirmModal(null);
+                                  }
+                                },
+                              });
+                            }}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

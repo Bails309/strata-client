@@ -1401,6 +1401,7 @@ pub struct UserRow {
     pub auth_type: String,
     pub sub: Option<String>,
     pub role_name: String,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -1412,17 +1413,63 @@ pub struct CreateUserRequest {
     pub auth_type: String, // "local" or "sso"
 }
 
-pub async fn list_users(State(state): State<SharedState>) -> Result<Json<Vec<UserRow>>, AppError> {
+#[derive(Deserialize)]
+pub struct UserListQuery {
+    pub include_deleted: Option<bool>,
+}
+
+pub async fn list_users(
+    State(state): State<SharedState>,
+    axum::extract::Query(query): axum::extract::Query<UserListQuery>,
+) -> Result<Json<Vec<UserRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<UserRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name
-         FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.deleted_at IS NULL
-         ORDER BY u.email",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let include_deleted = query.include_deleted.unwrap_or(false);
+
+    let rows: Vec<UserRow> = if include_deleted {
+        sqlx::query_as(
+            "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at
+             FROM users u JOIN roles r ON u.role_id = r.id
+             WHERE u.deleted_at IS NOT NULL
+             ORDER BY u.deleted_at DESC",
+        )
+        .fetch_all(&db.pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at
+             FROM users u JOIN roles r ON u.role_id = r.id
+             WHERE u.deleted_at IS NULL
+             ORDER BY u.email",
+        )
+        .fetch_all(&db.pool)
+        .await?
+    };
     Ok(Json(rows))
+}
+
+pub async fn restore_user(
+    State(state): State<SharedState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let result = sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL")
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Deleted user not found".into()));
+    }
+
+    audit::log(
+        &db.pool,
+        None,
+        "user.restored",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "restored" })))
 }
 
 pub async fn delete_user(

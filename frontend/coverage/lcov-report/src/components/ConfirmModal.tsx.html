@@ -3,7 +3,7 @@
 <html lang="en">
 
 <head>
-    <title>Code coverage report for src/pages/AuditLogs.tsx</title>
+    <title>Code coverage report for src/components/ConfirmModal.tsx</title>
     <meta charset="utf-8" />
     <link rel="stylesheet" href="../../prettify.css" />
     <link rel="stylesheet" href="../../base.css" />
@@ -19,34 +19,34 @@
 <body>
 <div class='wrapper'>
     <div class='pad1'>
-        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/pages</a> AuditLogs.tsx</h1>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">src/components</a> ConfirmModal.tsx</h1>
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>8/8</span>
+                <span class='fraction'>5/5</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">81.81% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>9/11</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
-                <span class="quiet">Branches</span>
-                <span class='fraction'>4/4</span>
-            </div>
-        
-            
-            <div class='fl pad1y space-right2'>
-                <span class="strong">83.33% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>5/6</span>
+                <span class='fraction'>3/3</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>8/8</span>
+                <span class='fraction'>4/4</span>
             </div>
         
             
@@ -125,36 +125,12 @@
 <a name='L60'></a><a href='#L60'>60</a>
 <a name='L61'></a><a href='#L61'>61</a>
 <a name='L62'></a><a href='#L62'>62</a>
-<a name='L63'></a><a href='#L63'>63</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">19x</span>
-<span class="cline-any cline-yes">19x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">19x</span>
-<span class="cline-any cline-yes">11x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">19x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">404x</span>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -175,74 +151,113 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">143x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">4x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">4x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { useEffect, useState } from 'react';
-import { getAuditLogs, AuditLog } from '../api';
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">interface ConfirmModalProps {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  onConfirm: () =&gt; void;
+  onCancel: () =&gt; void;
+  isDangerous?: boolean;
+}
 &nbsp;
-export default function AuditLogs() {
-  const [logs, setLogs] = useState&lt;AuditLog[]&gt;([]);
-  const [page, setPage] = useState(1);
-&nbsp;
-  useEffect(() =&gt; {
-    getAuditLogs(page).then(setLogs).<span class="fstat-no" title="function not covered" >catch(() =&gt; {</span>});
-  }, [page]);
+export default function ConfirmModal({
+  isOpen,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+  isDangerous = false,
+}: ConfirmModalProps) {
+  if (!isOpen) return null;
 &nbsp;
   return (
-    &lt;div&gt;
-      &lt;h1&gt;Audit Logs&lt;/h1&gt;
+    &lt;div
+      className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+      onClick={onCancel}
+    &gt;
+      &lt;div
+        className="card w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200"
+        onClick={(e) =&gt; e.stopPropagation()}
+        style={{
+          border: isDangerous ? '1px solid var(--color-danger-dim, rgba(239, 68, 68, 0.2))' : <span class="branch-1 cbranch-no" title="branch not covered" >undefined,</span>
+        }}
+      &gt;
+        &lt;div className="flex items-center gap-3 mb-4"&gt;
+          {isDangerous &amp;&amp; (
+            &lt;div className="flex items-center justify-center w-8 h-8 rounded-full bg-danger/10 text-danger"&gt;
+              &lt;svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"&gt;
+                &lt;path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /&gt;
+              &lt;/svg&gt;
+            &lt;/div&gt;
+          )}
+          &lt;h3 className="text-lg font-bold !mb-0"&gt;{title}&lt;/h3&gt;
+        &lt;/div&gt;
 &nbsp;
-      &lt;div className="card"&gt;
-        &lt;table&gt;
-          &lt;thead&gt;
-            &lt;tr&gt;
-              &lt;th&gt;ID&lt;/th&gt;
-              &lt;th&gt;Timestamp&lt;/th&gt;
-              &lt;th&gt;Action&lt;/th&gt;
-              &lt;th&gt;User&lt;/th&gt;
-              &lt;th&gt;Details&lt;/th&gt;
-              &lt;th&gt;Hash&lt;/th&gt;
-            &lt;/tr&gt;
-          &lt;/thead&gt;
-          &lt;tbody&gt;
-            {logs.map((log) =&gt; (
-              &lt;tr key={log.id}&gt;
-                &lt;td&gt;{log.id}&lt;/td&gt;
-                &lt;td className="text-[0.8rem]"&gt;{new Date(log.created_at).toLocaleString('en-GB')}&lt;/td&gt;
-                &lt;td&gt;
-                  &lt;span className="badge badge-success"&gt;{log.action_type}&lt;/span&gt;
-                &lt;/td&gt;
-                &lt;td className="text-sm"&gt;
-                  {log.username || (log.user_id ? log.user_id.slice(0, 8) : '—')}
-                &lt;/td&gt;
-                &lt;td className="text-[0.8rem] max-w-[300px] overflow-hidden text-ellipsis"&gt;
-                  {JSON.stringify(log.details)}
-                &lt;/td&gt;
-                &lt;td className="font-mono text-[0.7rem] text-txt-secondary"&gt;
-                  {log.current_hash.slice(0, 12)}…
-                &lt;/td&gt;
-              &lt;/tr&gt;
-            ))}
-          &lt;/tbody&gt;
-        &lt;/table&gt;
+        &lt;p className="text-sm text-txt-secondary mb-6 leading-relaxed"&gt;
+          {message}
+        &lt;/p&gt;
 &nbsp;
-        &lt;div className="flex justify-center gap-2 mt-4"&gt;
-          &lt;button className="btn" disabled={page &lt;= 1} onClick={() =&gt; setPage(page - 1)}&gt;
-            Previous
+        &lt;div className="flex gap-3"&gt;
+          &lt;button className="btn flex-1" onClick={onCancel}&gt;
+            {cancelLabel}
           &lt;/button&gt;
-          &lt;span className="py-2 px-2 text-txt-secondary"&gt;Page {page}&lt;/span&gt;
-          &lt;button className="btn" onClick={() =&gt; setPage(page + 1)} disabled={logs.length &lt; 50}&gt;
-            Next
+          &lt;button
+            className={isDangerous ? 'btn-danger flex-1' : <span class="branch-1 cbranch-no" title="branch not covered" >'btn-primary flex-1'}</span>
+            onClick={() =&gt; {
+              onConfirm();
+            }}
+          &gt;
+            {confirmLabel}
           &lt;/button&gt;
         &lt;/div&gt;
       &lt;/div&gt;

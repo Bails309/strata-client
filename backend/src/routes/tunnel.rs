@@ -442,10 +442,10 @@ mod tests {
     // ── Dimension constants make sense ─────────────────────────────
     #[test]
     fn dimension_constants_valid() {
-        assert!(MIN_DIM < MAX_WIDTH);
-        assert!(MIN_DIM < MAX_HEIGHT);
-        assert!(MIN_DIM < MAX_DPI);
-        assert!(MAX_WIDTH >= 3840); // at least 4K
-        assert!(MAX_HEIGHT >= 2160); // at least 4K
+        const { assert!(MIN_DIM < MAX_WIDTH) };
+        const { assert!(MIN_DIM < MAX_HEIGHT) };
+        const { assert!(MIN_DIM < MAX_DPI) };
+        const { assert!(MAX_WIDTH >= 3840) }; // at least 4K
+        const { assert!(MAX_HEIGHT >= 2160) }; // at least 4K
     }
 }

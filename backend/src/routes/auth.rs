@@ -531,7 +531,7 @@ pub async fn sso_callback(
         role_name: String,
         sub: Option<String>,
         #[allow(dead_code)]
-        full_name: Option<String>,
+        _full_name: Option<String>,
     }
 
     let row: Option<SsoUserRow> = sqlx::query_as(

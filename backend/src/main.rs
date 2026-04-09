@@ -264,10 +264,11 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
         .await?;
 
     sqlx::query(
-        "INSERT INTO users (username, password_hash, role_id)
-         VALUES ($1, $2, $3)
+        "INSERT INTO users (username, email, password_hash, auth_type, role_id)
+         VALUES ($1, $2, $3, 'local', $4)
          ON CONFLICT (username) DO NOTHING",
     )
+    .bind(&username)
     .bind(&username)
     .bind(&hash)
     .bind(admin_role.0)

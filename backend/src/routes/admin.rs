@@ -36,9 +36,8 @@ const SENSITIVE_SETTINGS: &[&str] = &[
     "ad_bind_password",
     "azure_storage_access_key",
     "vault_token",
-    "vault_unseal_key",
 ];
- 
+
 const DOT_MASK: &str = "••••••••";
 const STAR_MASK: &str = "********";
 

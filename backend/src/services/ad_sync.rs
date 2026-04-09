@@ -113,7 +113,10 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
 
 async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> anyhow::Result<()> {
     // Phase 1: Query LDAP for computers
-    tracing::info!("AD sync '{}' (Phase 1/4): Querying LDAP for computers...", config.label);
+    tracing::info!(
+        "AD sync '{}' (Phase 1/4): Querying LDAP for computers...",
+        config.label
+    );
     let computers = ldap_query(config).await?;
     tracing::info!(
         "AD sync '{}': discovered {} computer(s) under {:?}",
@@ -123,7 +126,10 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     );
 
     // Phase 2: Processing computer list
-    tracing::info!("AD sync '{}' (Phase 2/4): Processing computer list...", config.label);
+    tracing::info!(
+        "AD sync '{}' (Phase 2/4): Processing computer list...",
+        config.label
+    );
     let mut dns = Vec::with_capacity(computers.len());
     let mut hostnames = Vec::with_capacity(computers.len());
     let mut names = Vec::with_capacity(computers.len());
@@ -150,7 +156,10 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     }
 
     // Phase 3: Bulk upsert using UNNEST and ON CONFLICT
-    tracing::info!("AD sync '{}' (Phase 3/4): Performing bulk database upsert...", config.label);
+    tracing::info!(
+        "AD sync '{}' (Phase 3/4): Performing bulk database upsert...",
+        config.label
+    );
     // High performance bulk upsert using UNNEST and ON CONFLICT.
     // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
     let stats: (i64, i64) = sqlx::query_as(
@@ -198,7 +207,10 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     let updated = stats.1 as i32;
 
     // Phase 4: Bulk soft-delete connections whose DN vanished from LDAP
-    tracing::info!("AD sync '{}' (Phase 4/4): Cleaning up abandoned entries...", config.label);
+    tracing::info!(
+        "AD sync '{}' (Phase 4/4): Cleaning up abandoned entries...",
+        config.label
+    );
     let soft_deleted_res = sqlx::query(
         "UPDATE connections SET soft_deleted_at = now() 
          WHERE ad_source_id = $1 

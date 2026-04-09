@@ -9,23 +9,26 @@ const STORAGE_KEY = 'strata-whats-new-dismissed';
 export const WHATS_NEW_VERSION = '0.7.0';
 
 interface WhatsNewModalProps {
-  /** Only show when the user is authenticated */
-  authenticated: boolean;
+  /** User ID — used to scope dismissal per-user */
+  userId: string | undefined;
 }
 
-export default function WhatsNewModal({ authenticated }: WhatsNewModalProps) {
+export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (!authenticated) return;
-    const dismissed = localStorage.getItem(STORAGE_KEY);
+    if (!userId) return;
+    const key = `${STORAGE_KEY}-${userId}`;
+    const dismissed = localStorage.getItem(key);
     if (dismissed !== WHATS_NEW_VERSION) {
       setVisible(true);
     }
-  }, [authenticated]);
+  }, [userId]);
 
   function dismiss() {
-    localStorage.setItem(STORAGE_KEY, WHATS_NEW_VERSION);
+    if (userId) {
+      localStorage.setItem(`${STORAGE_KEY}-${userId}`, WHATS_NEW_VERSION);
+    }
     setVisible(false);
   }
 

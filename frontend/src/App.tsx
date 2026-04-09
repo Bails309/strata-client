@@ -93,7 +93,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <SessionBar />
-      <WhatsNewModal authenticated={true} />
+      <WhatsNewModal userId={user?.id} />
     </SessionManagerProvider>
   );
 }

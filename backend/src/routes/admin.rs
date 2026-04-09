@@ -1307,7 +1307,6 @@ pub async fn delete_connection(
 
 #[derive(Deserialize)]
 pub struct RoleMappingUpdate {
-    pub role_id: Uuid,
     pub connection_ids: Vec<Uuid>,
     pub folder_ids: Vec<Uuid>,
 }
@@ -1344,6 +1343,7 @@ pub async fn get_role_mappings(
 
 pub async fn update_role_mappings(
     State(state): State<SharedState>,
+    axum::extract::Path(role_id): axum::extract::Path<Uuid>,
     Json(body): Json<RoleMappingUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1353,12 +1353,12 @@ pub async fn update_role_mappings(
 
     // Connections
     sqlx::query("DELETE FROM role_connections WHERE role_id = $1")
-        .bind(body.role_id)
+        .bind(role_id)
         .execute(&mut *tx)
         .await?;
     for cid in &body.connection_ids {
         sqlx::query("INSERT INTO role_connections (role_id, connection_id) VALUES ($1, $2)")
-            .bind(body.role_id)
+            .bind(role_id)
             .bind(cid)
             .execute(&mut *tx)
             .await?;
@@ -1366,12 +1366,12 @@ pub async fn update_role_mappings(
 
     // Folders
     sqlx::query("DELETE FROM role_folders WHERE role_id = $1")
-        .bind(body.role_id)
+        .bind(role_id)
         .execute(&mut *tx)
         .await?;
     for fid in &body.folder_ids {
         sqlx::query("INSERT INTO role_folders (role_id, folder_id) VALUES ($1, $2)")
-            .bind(body.role_id)
+            .bind(role_id)
             .bind(fid)
             .execute(&mut *tx)
             .await?;
@@ -1383,7 +1383,7 @@ pub async fn update_role_mappings(
         &db.pool,
         None,
         "role_mappings.updated",
-        &json!({ "role_id": body.role_id.to_string() }),
+        &json!({ "role_id": role_id.to_string() }),
     )
     .await?;
 

@@ -102,10 +102,9 @@ pub fn build_router(state: SharedState) -> Router {
             delete(admin::delete_connection_folder),
         )
         .route(
-            "/api/admin/role-mappings/:id",
-            get(admin::get_role_mappings),
+            "/api/admin/roles/:id/mappings",
+            get(admin::get_role_mappings).put(admin::update_role_mappings),
         )
-        .route("/api/admin/role-mappings", put(admin::update_role_mappings))
         .route(
             "/api/admin/users",
             get(admin::list_users).post(admin::create_user),

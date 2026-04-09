@@ -2012,27 +2012,30 @@ pub async fn update_ad_sync_config(
             .await?;
     }
     if let Some(ref v) = body.bind_password {
-        // Encrypt bind_password via Vault if configured
-        let stored = if !v.is_empty() {
-            let vault_cfg = {
-                let s = state.read().await;
-                s.config.as_ref().and_then(|c| c.vault.clone())
-            };
-            if let Some(ref vc) = vault_cfg {
-                crate::services::vault::seal_setting(vc, v).await?
+        // Only update if not the redaction marker
+        if v != "••••••••" {
+            // Encrypt bind_password via Vault if configured
+            let stored = if !v.is_empty() {
+                let vault_cfg = {
+                    let s = state.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                if let Some(ref vc) = vault_cfg {
+                    crate::services::vault::seal_setting(vc, v).await?
+                } else {
+                    v.clone()
+                }
             } else {
-                v.clone()
-            }
-        } else {
-            String::new()
-        };
-        sqlx::query(
-            "UPDATE ad_sync_configs SET bind_password = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(&stored)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+                String::new()
+            };
+            sqlx::query(
+                "UPDATE ad_sync_configs SET bind_password = $1, updated_at = now() WHERE id = $2",
+            )
+            .bind(&stored)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
     if let Some(ref v) = body.search_bases {
         sqlx::query(

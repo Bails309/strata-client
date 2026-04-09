@@ -1452,10 +1452,11 @@ pub async fn restore_user(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let result = sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL")
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
+    let result =
+        sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL")
+            .bind(id)
+            .execute(&db.pool)
+            .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Deleted user not found".into()));

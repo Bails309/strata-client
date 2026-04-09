@@ -12,6 +12,7 @@ import NvrPlayer from './pages/NvrPlayer';
 import Layout from './components/Layout';
 import { SessionManagerProvider } from './components/SessionManager';
 import SessionBar from './components/SessionBar';
+import WhatsNewModal from './components/WhatsNewModal';
 import { getMe, MeResponse } from './api';
 
 export default function App() {
@@ -92,6 +93,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <SessionBar />
+      <WhatsNewModal authenticated={true} />
     </SessionManagerProvider>
   );
 }

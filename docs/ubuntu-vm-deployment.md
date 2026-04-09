@@ -84,7 +84,7 @@ nano .env
 ```
 
 **Essential variables to set:**
-- `STRATA_DOMAIN`: Set this to your public domain (e.g., `strata.example.com`) for auto-HTTPS.
+- `STRATA_DOMAIN`: Set this to your domain (e.g., `strata.example.com`). This is used for CORS and SSO callback identification.
 - `DEFAULT_ADMIN_PASSWORD`: Set a strong initial password.
 
 ### 4.3 Launch the Stack
@@ -102,13 +102,17 @@ docker compose ps
 
 ## 5. Phase 4: Domain and SSL
 
-Strata Client uses **Caddy** as a built-in reverse proxy. If you set `STRATA_DOMAIN` in your `.env`, Caddy will automatically provision and renew a Let's Encrypt TLS certificate.
+Strata Client uses **Nginx** as its primary gateway. To enable HTTPS, you must provide your own certificates.
 
-1. Point your domain's **A Record** to your VM's public IP address.
-2. Ensure Port 80 is open (required for Let's Encrypt validation).
-3. Restart Caddy to pick up the domain change:
+1. Create a `certs/` directory in the project root:
    ```bash
-   docker compose up -d caddy
+   mkdir -p certs
+   ```
+2. Place your certificates inside as `cert.pem` and `key.pem`.
+3. Ensure Port 80 is open. Nginx is configured to automatically redirect all port 80 (HTTP) traffic to port 443 (HTTPS).
+4. Restart the stack to pick up the certificates:
+   ```bash
+   docker compose up -d
    ```
 
 ---
@@ -142,6 +146,7 @@ docker compose up -d --build
 ### Viewing Logs
 For troubleshooting:
 ```bash
+docker compose logs -f frontend
 docker compose logs -f backend
 docker compose logs -f guacd
 ```

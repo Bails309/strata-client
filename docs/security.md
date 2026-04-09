@@ -213,6 +213,34 @@ The bundled Vault container runs on the internal Docker bridge network and is **
 
 ---
 
+## Rate Limiting
+
+The backend applies in-memory rate limiting at multiple layers to prevent abuse:
+
+| Endpoint | Key | Limit | Window |
+|---|---|---|---|
+| `/api/auth/login` | Username | 5 attempts | 60 s |
+| `/api/auth/login` | Client IP | 20 attempts | 300 s |
+| `/api/shared/tunnel/:token` | Share token | 10 attempts | 60 s |
+| `/api/tunnel/:id` (WebSocket) | User ID | 30 connections | 60 s |
+
+All rate limiters use a sliding window with automatic OOM protection — entries are pruned when the map exceeds 50,000 (10,000 for share tokens), and cleared entirely if pruning is insufficient.
+
+---
+
+## Vault Resilience
+
+Vault Transit API calls (DEK wrap/unwrap) use automatic retry with exponential backoff:
+
+- **Max retries:** 3 (4 total attempts)
+- **Backoff:** 200 ms → 400 ms → 800 ms
+- **Retry conditions:** Network errors and HTTP 5xx responses
+- **Non-retryable:** HTTP 4xx (client errors) return immediately
+
+This prevents transient Vault hiccups (container restarts, brief network partitions) from failing active tunnel connections.
+
+---
+
 ## Container Hardening
 
 All services in the Docker Compose stack apply security constraints:
@@ -224,6 +252,17 @@ All services in the Docker Compose stack apply security constraints:
 | `cap_add` (minimal) | `frontend` / `caddy` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
 | `read_only: true` + `tmpfs` | `frontend` |
 | Resource limits (`cpus`, `memory`) | `guacd`, `backend`, `postgres-local` |
+
+---
+
+## Session Recording & Retention
+
+Session recording captures are managed by a background sync task:
+
+- **Retention policy** — Recordings older than the configured `retention_days` (default: 30) are automatically deleted from local storage by the background sync task
+- **Azure Blob sync** — When Azure Blob storage is configured, local recordings are uploaded and then deleted locally to prevent disk growth
+- **Write protection** — Files modified within the last 30 seconds are skipped to avoid deleting active recordings
+- **Configurable** — Retention period and storage type (local / Azure Blob) are set via the Admin UI
 
 ---
 

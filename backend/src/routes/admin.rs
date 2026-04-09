@@ -48,7 +48,7 @@ fn redact_settings(settings: Vec<(String, String)>) -> Vec<(String, String)> {
         .into_iter()
         .map(|(k, v)| {
             if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s)) {
-                (k, "********".to_string())
+                (k, STAR_MASK.to_string())
             } else {
                 (k, v)
             }
@@ -2782,5 +2782,19 @@ mod tests {
             value: "https://evil.com".into(),
         }];
         assert!(validate_no_restricted_keys(&settings).is_err());
+    }
+
+    #[test]
+    fn test_redaction_masks() {
+        assert_eq!(DOT_MASK, "••••••••");
+        assert_eq!(STAR_MASK, "********");
+        assert_ne!(DOT_MASK, STAR_MASK);
+    }
+
+    #[test]
+    fn test_redact_settings_uses_constant() {
+        let input = vec![("ad_bind_password".into(), "secret".into())];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, STAR_MASK);
     }
 }

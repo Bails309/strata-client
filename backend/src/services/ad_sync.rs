@@ -96,7 +96,7 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
             .await?;
         }
         Err(e) => {
-            let msg = format!("{e:#}").replace('\0', "");
+            let msg = sanitize_error(format!("{e:#}"));
             tracing::error!("AD sync failed for '{}': {msg}", config.label);
             sqlx::query(
                 "UPDATE ad_sync_runs SET status = 'error', finished_at = now(), error_message = $1 WHERE id = $2",
@@ -547,6 +547,10 @@ async fn ldap_query_kerberos(
 
     let ldif = String::from_utf8_lossy(&output.stdout);
     parse_ldif(&ldif)
+}
+
+fn sanitize_error(msg: String) -> String {
+    msg.replace('\0', "")
 }
 
 /// Parse LDIF output from ldapsearch into DiscoveredComputer entries.
@@ -1056,5 +1060,14 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("No certificates found"));
+    }
+    #[test]
+    fn test_error_sanitization() {
+        let input = "Error with\0 null\0 bytes".to_string();
+        let expected = "Error with null bytes".to_string();
+        assert_eq!(sanitize_error(input), expected);
+        
+        let clean = "Clean string".to_string();
+        assert_eq!(sanitize_error(clean.clone()), clean);
     }
 }

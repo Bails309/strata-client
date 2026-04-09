@@ -781,7 +781,7 @@ describe('AccessTab', () => {
 
   it('creates a new role', async () => {
     vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
-    vi.mocked(updateRoleMappings).mockResolvedValue(undefined);
+    vi.mocked(updateRoleMappings).mockResolvedValue({ status: 'ok' });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
@@ -823,7 +823,7 @@ describe('AccessTab', () => {
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
     // Target the Edit button specifically in the connections table
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
     const editBtns = within(connectionsCard).getAllByText('Edit');
     await user.click(editBtns[0]);
     expect(screen.getByText('Edit Connection')).toBeInTheDocument();
@@ -896,7 +896,7 @@ describe('AccessTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Access'));
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
     const table = within(connectionsCard).getByRole('table');
     const serversEls = await within(table).findAllByText('Servers');
     expect(serversEls.length).toBeGreaterThanOrEqual(1);
@@ -920,7 +920,7 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server 0');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
     expect(within(connectionsCard).getByText('Page 1 of 2')).toBeInTheDocument();
     expect(within(connectionsCard).getByText('← Prev')).toBeDisabled();
     await user.click(within(connectionsCard).getByText('Next →'));
@@ -939,7 +939,7 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server 0');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
     await user.click(within(connectionsCard).getByText('Next →'));
     expect(within(connectionsCard).getByText('Page 2 of 2')).toBeInTheDocument();
     // Search resets to page 1
@@ -973,7 +973,7 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
     const editBtns = within(connectionsCard).getAllByText('Edit');
     await user.click(editBtns[0]);
     await screen.findByText('Edit Connection');
@@ -988,7 +988,7 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('Server A');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card')!;
+    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
     // Open edit first
     const editBtns = within(connectionsCard).getAllByText('Edit');
     await user.click(editBtns[0]);

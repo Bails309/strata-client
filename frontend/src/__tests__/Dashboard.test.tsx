@@ -509,6 +509,23 @@ describe('Dashboard', () => {
     });
   });
 
+  it('navigates back to previous page', async () => {
+    const many = Array.from({ length: 55 }, (_, i) => ({
+      id: `c${i}`, name: `Conn ${i}`, protocol: 'rdp', hostname: `10.0.${i}.1`, port: 3389, description: '',
+    }));
+    vi.mocked(getMyConnections).mockResolvedValue(many);
+    renderDashboard();
+    await screen.findByText('Conn 0');
+    await userEvent.click(screen.getByText('Next'));
+    await waitFor(() => {
+      expect(screen.getByText('Conn 50')).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByText('Previous'));
+    await waitFor(() => {
+      expect(screen.getByText('Conn 0')).toBeInTheDocument();
+    });
+  });
+
   it('deselects all when select-all toggled off', async () => {
     renderDashboard();
     await screen.findByText('Server Alpha');

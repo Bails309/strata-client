@@ -735,10 +735,7 @@ pub async fn connection_info(
 
 /// Validate a recording filename — reject path traversal characters.
 fn is_safe_recording_filename(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains("..")
-        && !name.contains('/')
-        && !name.contains('\\')
+    !name.is_empty() && !name.contains("..") && !name.contains('/') && !name.contains('\\')
 }
 
 pub async fn get_recording(

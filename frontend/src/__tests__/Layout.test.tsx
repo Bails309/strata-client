@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock the api module
@@ -32,7 +33,7 @@ vi.mock('../components/SessionManager', () => ({
   SessionManagerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import Layout from '../components/Layout';
+import Layout, { useSidebarWidth } from '../components/Layout';
 
 const adminUser: import('../api').MeResponse = {
   id: 'u1',
@@ -89,5 +90,21 @@ describe('Layout', () => {
     renderLayout('/admin');
     const adminLink = screen.getByText('Admin').closest('a');
     expect(adminLink?.className).toContain('font-semibold');
+  });
+
+  it('collapses sidebar when collapse button is clicked', async () => {
+    renderLayout();
+    const collapseBtn = screen.getByTitle('Collapse sidebar');
+    expect(collapseBtn).toBeInTheDocument();
+    await userEvent.click(collapseBtn);
+    expect(screen.getByTitle('Expand sidebar')).toBeInTheDocument();
+  });
+});
+
+describe('useSidebarWidth', () => {
+  it('returns default width outside provider', () => {
+    function Inner() { const w = useSidebarWidth(); return <span>{w}</span>; }
+    render(<Inner />);
+    expect(screen.getByText('180')).toBeInTheDocument();
   });
 });

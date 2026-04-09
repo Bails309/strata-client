@@ -95,6 +95,27 @@ describe('AuditLogs', () => {
     expect(screen.getByText('Page 2')).toBeInTheDocument();
   });
 
+  it('Previous button navigates back to page 1', async () => {
+    const fullPage = Array.from({ length: 50 }, (_, i) => ({
+      id: i + 1,
+      created_at: '2026-01-15T10:30:00Z',
+      action_type: 'auth.login',
+      user_id: 'abc-123',
+      username: 'admin',
+      details: { ip: '192.168.1.1' },
+      current_hash: 'abcdef1234567890abcdef1234567890',
+    }));
+    vi.mocked(getAuditLogs).mockResolvedValue(fullPage);
+
+    const user = userEvent.setup();
+    render(<AuditLogs />);
+    await screen.findAllByText('auth.login');
+    await user.click(screen.getByText('Next'));
+    expect(screen.getByText('Page 2')).toBeInTheDocument();
+    await user.click(screen.getByText('Previous'));
+    expect(screen.getByText('Page 1')).toBeInTheDocument();
+  });
+
   it('shows truncated user_id when username is absent', async () => {
     vi.mocked(getAuditLogs).mockResolvedValue([
       {

@@ -2660,17 +2660,24 @@ mod tests {
     #[test]
     fn validate_no_restricted_keys_accepts_safe_keys() {
         let settings = vec![
-            SettingKV { key: "theme".into(), value: "dark".into() },
-            SettingKV { key: "app_name".into(), value: "Test".into() },
+            SettingKV {
+                key: "theme".into(),
+                value: "dark".into(),
+            },
+            SettingKV {
+                key: "app_name".into(),
+                value: "Test".into(),
+            },
         ];
         assert!(validate_no_restricted_keys(&settings).is_ok());
     }
 
     #[test]
     fn validate_no_restricted_keys_rejects_restricted() {
-        let settings = vec![
-            SettingKV { key: "jwt_secret".into(), value: "hack".into() },
-        ];
+        let settings = vec![SettingKV {
+            key: "jwt_secret".into(),
+            value: "hack".into(),
+        }];
         let err = validate_no_restricted_keys(&settings);
         assert!(err.is_err());
         assert!(format!("{}", err.unwrap_err()).contains("jwt_secret"));
@@ -2678,9 +2685,10 @@ mod tests {
 
     #[test]
     fn validate_no_restricted_keys_rejects_sso_issuer() {
-        let settings = vec![
-            SettingKV { key: "sso_issuer_url".into(), value: "https://evil.com".into() },
-        ];
+        let settings = vec![SettingKV {
+            key: "sso_issuer_url".into(),
+            value: "https://evil.com".into(),
+        }];
         assert!(validate_no_restricted_keys(&settings).is_err());
     }
 }

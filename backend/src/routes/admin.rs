@@ -2595,6 +2595,7 @@ mod tests {
             auth_type: "local".into(),
             sub: None,
             role_name: "admin".into(),
+            deleted_at: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "admin");

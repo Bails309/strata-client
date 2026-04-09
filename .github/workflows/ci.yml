@@ -108,7 +108,7 @@ jobs:
 
       - name: Build and start all services
         run: docker compose up -d --build --wait
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           DEFAULT_ADMIN_PASSWORD: admin
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { getConnectionInfo, getConnections, createTunnelTicket } from '../api';
+import { getConnectionInfo, getConnections, createTunnelTicket, getMe } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
@@ -28,7 +28,7 @@ const RECONNECT_MAX_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY = 1000; // 1 second
 const RECONNECT_MAX_DELAY = 30000; // 30 seconds
 
-export default function SessionClient({ canShare = false }: { canShare?: boolean }) {
+export default function SessionClient() {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -43,6 +43,14 @@ export default function SessionClient({ canShare = false }: { canShare?: boolean
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
   const [hasDomain, setHasDomain] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string }>({ username: '', password: '' });
+
+  // Fetch sharing permission from the user's own profile
+  const [canShare, setCanShare] = useState(false);
+  useEffect(() => {
+    getMe().then((me) => {
+      setCanShare(me.can_manage_system || me.can_create_sharing_profiles);
+    }).catch(() => {});
+  }, []);
   const containerFocusedRef = useRef(false);
   const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
   const userDisconnectRef = useRef(false);

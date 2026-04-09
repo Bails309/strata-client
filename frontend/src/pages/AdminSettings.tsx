@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Select from '../components/Select';
+import ConfirmModal from '../components/ConfirmModal';
 import {
   getSettings,
   updateSettings,
@@ -932,6 +933,13 @@ function AccessTab({
     can_create_connection_folders: false,
     can_create_sharing_profiles: false,
   });
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    isDangerous?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
   const [roleModalOpen, setRoleModalOpen] = useState(false);
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [roleSaving, setRoleSaving] = useState(false);
@@ -1060,17 +1068,26 @@ function AccessTab({
     }
   }
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this connection?')) return;
-    try {
-      await deleteConnection(id);
-      onConnectionDeleted(id);
-      if (id === formId) {
-        closeForm();
-      }
-    } catch (err: any) {
-      alert(err.message || 'Failed to delete connection');
-    }
+  const handleDelete = (id: string) => {
+    setConfirmModal({
+      title: 'Delete Connection',
+      message: 'Are you sure you want to delete this connection? This action cannot be undone.',
+      isDangerous: true,
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        try {
+          await deleteConnection(id);
+          onConnectionDeleted(id);
+          if (id === formId) {
+            closeForm();
+          }
+        } catch (err: any) {
+          alert(err.message || 'Failed to delete connection');
+        } finally {
+          setConfirmModal(null);
+        }
+      },
+    });
   };
 
   return (
@@ -1113,14 +1130,23 @@ function AccessTab({
                     <div className="flex gap-2">
                       <button className="btn-ghost text-[0.8125rem] px-2 py-0.5" onClick={() => handleEditRole(r)}>Edit</button>
                       {r.name !== 'admin' && r.name !== 'user' && (
-                        <button className="btn-ghost text-[0.8125rem] px-2 py-0.5 text-danger" onClick={async () => {
-                          if (!window.confirm(`Delete role "${r.name}"?`)) return;
-                          try {
-                            await deleteRole(r.id);
-                            getRoles().then(onRolesChanged);
-                          } catch (err: any) {
-                            alert(err.message || 'Failed to delete role');
-                          }
+                        <button className="btn-ghost text-[0.8125rem] px-2 py-0.5 text-danger" onClick={() => {
+                          setConfirmModal({
+                            title: 'Delete Role',
+                            message: `Are you sure you want to delete the role "${r.name}"? This will remove all associated permissions and mappings.`,
+                            isDangerous: true,
+                            confirmLabel: 'Delete',
+                            onConfirm: async () => {
+                              try {
+                                await deleteRole(r.id);
+                                getRoles().then(onRolesChanged);
+                              } catch (err: any) {
+                                alert(err.message || 'Failed to delete role');
+                              } finally {
+                                setConfirmModal(null);
+                              }
+                            },
+                          });
                         }}>Delete</button>
                       )}
                     </div>
@@ -1493,10 +1519,23 @@ function AccessTab({
                     <td><span className="font-medium">{f.name}</span></td>
                     <td>{f.parent_id ? (folders.find(p => p.id === f.parent_id)?.name || '—') : <span className="text-txt-tertiary italic">Root</span>}</td>
                     <td>
-                      <button className="btn-ghost text-[0.8rem] px-2 py-1 text-danger hover:bg-danger/10" onClick={async () => {
-                        if (!window.confirm(`Delete folder "${f.name}"?`)) return;
-                        await deleteConnectionFolder(f.id);
-                        onFoldersChanged(folders.filter(x => x.id !== f.id));
+                      <button className="btn-ghost text-[0.8rem] px-2 py-1 text-danger hover:bg-danger/10" onClick={() => {
+                        setConfirmModal({
+                          title: 'Delete Folder',
+                          message: `Are you sure you want to delete the folder "${f.name}"? All connections inside this folder will become unassigned.`,
+                          isDangerous: true,
+                          confirmLabel: 'Delete',
+                          onConfirm: async () => {
+                            try {
+                              await deleteConnectionFolder(f.id);
+                              onFoldersChanged(folders.filter(x => x.id !== f.id));
+                            } catch (err: any) {
+                              alert(err.message || 'Failed to delete folder');
+                            } finally {
+                              setConfirmModal(null);
+                            }
+                          },
+                        });
                       }}>Delete</button>
                     </td>
                   </tr>
@@ -1600,14 +1639,23 @@ function AccessTab({
                     <td>
                       <button 
                         className="btn-ghost text-xs text-danger py-1 px-2 hover:bg-danger/10"
-                        onClick={async () => {
-                          if (!window.confirm(`Delete user "${u.username}"? (Soft-delete for 7 days)`)) return;
-                          try {
-                            await deleteUser(u.id);
-                            onUsersChanged(users.filter(x => x.id !== u.id));
-                          } catch (err: any) {
-                            alert(err.message || 'Failed to delete user');
-                          }
+                        onClick={() => {
+                          setConfirmModal({
+                            title: 'Delete User',
+                            message: `Delete user "${u.username}"? (Soft-delete for 7 days)`,
+                            isDangerous: true,
+                            confirmLabel: 'Delete',
+                            onConfirm: async () => {
+                              try {
+                                await deleteUser(u.id);
+                                onUsersChanged(users.filter(x => x.id !== u.id));
+                              } catch (err: any) {
+                                alert(err.message || 'Failed to delete user');
+                              } finally {
+                                setConfirmModal(null);
+                              }
+                            },
+                          });
                         }}
                       >
                         Delete
@@ -1741,6 +1789,15 @@ function AccessTab({
           </div>
         </div>
       )}
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        title={confirmModal?.title || ''}
+        message={confirmModal?.message || ''}
+        confirmLabel={confirmModal?.confirmLabel}
+        isDangerous={confirmModal?.isDangerous}
+        onConfirm={() => confirmModal?.onConfirm()}
+        onCancel={() => setConfirmModal(null)}
+      />
     </div>
   );
 }
@@ -3109,6 +3166,13 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
 // ── Security Tab ───────────────────────────────────────────────────────
 
 function SecurityTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    isDangerous?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
   const [watermarkEnabled, setWatermarkEnabled] = useState(settings.watermark_enabled === 'true');
   const [ssoEnabled, setSsoEnabled] = useState(settings.sso_enabled === 'true');
   const [localAuthEnabled, setLocalAuthEnabled] = useState(settings.local_auth_enabled === undefined ? true : settings.local_auth_enabled === 'true');
@@ -3225,6 +3289,15 @@ function SecurityTab({ settings, onSave }: { settings: Record<string, string>; o
           {saving ? 'Saving...' : 'Save Security Settings'}
         </button>
       </div>
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        title={confirmModal?.title || ''}
+        message={confirmModal?.message || ''}
+        confirmLabel={confirmModal?.confirmLabel}
+        isDangerous={confirmModal?.isDangerous}
+        onConfirm={() => confirmModal?.onConfirm()}
+        onCancel={() => setConfirmModal(null)}
+      />
     </div>
   );
 }

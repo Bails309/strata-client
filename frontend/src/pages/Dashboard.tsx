@@ -325,7 +325,8 @@ export default function Dashboard() {
           <div className="recent-cards-grid">
             {recentConnections.map((conn) => {
               const status = getCredStatus(conn.id);
-              const domain = conn.domain || conn.hostname.split('.').slice(1).join('.');
+              const isIP = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(conn.hostname);
+              const domainLabel = conn.domain || (isIP ? '' : conn.hostname.split('.').slice(1).join('.'));
               return (
                 <div
                   key={conn.id}
@@ -356,9 +357,9 @@ export default function Dashboard() {
                     {conn.protocol.toUpperCase()} - {conn.hostname}:{conn.port}
                   </p>
                   <div className="recent-card-meta">
-                    {domain && (
+                    {(domainLabel || status !== 'none') && (
                       <p>
-                        Status: {domain}{' '}
+                        Status: {domainLabel ? `${domainLabel} ` : ''}
                         <span style={{
                           color: status === 'active' ? '#22c55e' : status === 'expired' ? '#ef4444' : 'var(--color-txt-tertiary)',
                         }}>
@@ -478,6 +479,7 @@ export default function Dashboard() {
               <th>Connection Name</th>
               <th>Type</th>
               <th>Details</th>
+              <th>Last Accessed</th>
               <th>Actions</th>
             </tr>
           </thead>

@@ -230,6 +230,11 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
         let value_start = dot_pos + 1;
         let value_pool = &remaining[value_start..];
 
+        // Ensure the pool has at least 'len' characters
+        if len > 0 && value_pool.chars().nth(len - 1).is_none() {
+            return Err(AppError::Internal(format!("truncated guac element: {raw}")));
+        }
+
         // Find the byte offset of the len-th character
         let byte_offset = value_pool
             .char_indices()

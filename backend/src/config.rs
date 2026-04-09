@@ -183,7 +183,11 @@ mod tests {
         cfg.save(path_str).unwrap();
         let loaded = AppConfig::load(path_str).unwrap();
 
-        assert_eq!(loaded.database_url, "postgresql://localhost/test");
+        // database_url and jwt_secret have #[serde(skip_serializing)] for security,
+        // so they should be empty/default after a config file round-trip.
+        assert_eq!(loaded.database_url, "");
+        assert_eq!(loaded.jwt_secret, None);
+
         assert_eq!(loaded.database_mode, DatabaseMode::Local);
         assert_eq!(loaded.guacd_host.as_deref(), Some("guacd"));
         assert_eq!(loaded.guacd_port, Some(4822));

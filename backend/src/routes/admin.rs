@@ -39,20 +39,42 @@ const SENSITIVE_SETTINGS: &[&str] = &[
     "vault_unseal_key",
 ];
 
+/// Redact sensitive setting values for API responses.
+fn redact_settings(settings: Vec<(String, String)>) -> Vec<(String, String)> {
+    settings
+        .into_iter()
+        .map(|(k, v)| {
+            if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s)) {
+                (k, "********".to_string())
+            } else {
+                (k, v)
+            }
+        })
+        .collect()
+}
+
+/// Validate that no restricted keys appear in the update payload.
+fn validate_no_restricted_keys(settings: &[SettingKV]) -> Result<(), AppError> {
+    for kv in settings {
+        if RESTRICTED_SETTINGS.iter().any(|r| kv.key == *r) {
+            return Err(AppError::Validation(format!(
+                "Setting '{}' cannot be updated through this endpoint",
+                kv.key
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn get_settings(
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
     let all = settings::get_all(&db.pool).await?;
-    let map: serde_json::Map<String, serde_json::Value> = all
+    let redacted = redact_settings(all);
+    let map: serde_json::Map<String, serde_json::Value> = redacted
         .into_iter()
-        .map(|(k, v)| {
-            if SENSITIVE_SETTINGS.iter().any(|s| k.contains(s)) {
-                (k, serde_json::Value::String("********".into()))
-            } else {
-                (k, serde_json::Value::String(v))
-            }
-        })
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
         .collect();
     Ok(Json(serde_json::Value::Object(map)))
 }
@@ -92,14 +114,7 @@ pub async fn update_settings(
     let db = require_running(&state).await?;
 
     // Block restricted keys — must use dedicated endpoints
-    for kv in &body.settings {
-        if RESTRICTED_SETTINGS.iter().any(|r| kv.key == *r) {
-            return Err(AppError::Validation(format!(
-                "Setting '{}' cannot be updated through this endpoint",
-                kv.key
-            )));
-        }
-    }
+    validate_no_restricted_keys(&body.settings)?;
 
     for kv in &body.settings {
         settings::set(&db.pool, &kv.key, &kv.value).await?;
@@ -2612,5 +2627,60 @@ mod tests {
         }));
         let result = require_running(&state).await;
         assert!(result.is_err());
+    }
+
+    // ── redact_settings ────────────────────────────────────────────
+
+    #[test]
+    fn redact_settings_hides_sensitive_values() {
+        let input = vec![
+            ("sso_client_secret".into(), "super-secret".into()),
+            ("app_name".into(), "Strata".into()),
+            ("vault_token".into(), "hvs.12345".into()),
+        ];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, "********");
+        assert_eq!(result[1].1, "Strata");
+        assert_eq!(result[2].1, "********");
+    }
+
+    #[test]
+    fn redact_settings_passes_through_safe_keys() {
+        let input = vec![
+            ("theme".into(), "dark".into()),
+            ("language".into(), "en".into()),
+        ];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, "dark");
+        assert_eq!(result[1].1, "en");
+    }
+
+    // ── validate_no_restricted_keys ────────────────────────────────
+
+    #[test]
+    fn validate_no_restricted_keys_accepts_safe_keys() {
+        let settings = vec![
+            SettingKV { key: "theme".into(), value: "dark".into() },
+            SettingKV { key: "app_name".into(), value: "Test".into() },
+        ];
+        assert!(validate_no_restricted_keys(&settings).is_ok());
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_rejects_restricted() {
+        let settings = vec![
+            SettingKV { key: "jwt_secret".into(), value: "hack".into() },
+        ];
+        let err = validate_no_restricted_keys(&settings);
+        assert!(err.is_err());
+        assert!(format!("{}", err.unwrap_err()).contains("jwt_secret"));
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_rejects_sso_issuer() {
+        let settings = vec![
+            SettingKV { key: "sso_issuer_url".into(), value: "https://evil.com".into() },
+        ];
+        assert!(validate_no_restricted_keys(&settings).is_err());
     }
 }

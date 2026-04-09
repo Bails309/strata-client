@@ -733,6 +733,14 @@ pub async fn connection_info(
 
 // ── Serve a recording file ────────────────────────────────────────────
 
+/// Validate a recording filename — reject path traversal characters.
+fn is_safe_recording_filename(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains("..")
+        && !name.contains('/')
+        && !name.contains('\\')
+}
+
 pub async fn get_recording(
     State(state): State<SharedState>,
     Path(filename): Path<String>,
@@ -743,7 +751,7 @@ pub async fn get_recording(
     use tokio_util::io::ReaderStream;
 
     // Sanitise filename – prevent path traversal
-    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+    if !is_safe_recording_filename(&filename) {
         return Err(AppError::NotFound("Invalid filename".into()));
     }
 
@@ -977,48 +985,33 @@ mod tests {
     // ── Filename sanitization (path traversal prevention) ──────────────
 
     #[test]
-    fn filename_rejects_double_dot() {
-        let filename = "../../etc/passwd";
-        assert!(
-            filename.contains("..") || filename.contains('/') || filename.contains('\\'),
-            "filename with '..' should be rejected"
-        );
-    }
-
-    #[test]
     fn filename_rejects_forward_slash() {
-        let filename = "subdir/recording.guac";
-        assert!(
-            filename.contains('/'),
-            "filename with '/' should be rejected"
-        );
+        assert!(!is_safe_recording_filename("subdir/recording.guac"));
     }
 
     #[test]
     fn filename_rejects_backslash() {
-        let filename = "subdir\\recording.guac";
-        assert!(
-            filename.contains('\\'),
-            "filename with '\\' should be rejected"
-        );
+        assert!(!is_safe_recording_filename("subdir\\recording.guac"));
     }
 
     #[test]
     fn filename_allows_clean_name() {
-        let filename = "session-abc123.guac";
-        assert!(
-            !filename.contains("..") && !filename.contains('/') && !filename.contains('\\'),
-            "clean filename should pass validation"
-        );
+        assert!(is_safe_recording_filename("session-abc123.guac"));
     }
 
     #[test]
     fn filename_allows_dots_in_name() {
-        let filename = "session.2024.01.15.guac";
-        assert!(
-            !filename.contains("..") && !filename.contains('/') && !filename.contains('\\'),
-            "dots (not ..) should be allowed"
-        );
+        assert!(is_safe_recording_filename("session.2024.01.15.guac"));
+    }
+
+    #[test]
+    fn filename_rejects_double_dot() {
+        assert!(!is_safe_recording_filename("../../etc/passwd"));
+    }
+
+    #[test]
+    fn filename_rejects_empty() {
+        assert!(!is_safe_recording_filename(""));
     }
 
     // ── Struct serialization ───────────────────────────────────────────

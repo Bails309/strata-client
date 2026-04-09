@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.2-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.8.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -57,7 +57,7 @@
 - **Connection groups & folders** — Organise connections into nested groups with collapsible group headers and an optional description field
 - **Favorites** — Star connections for quick access with a dedicated favorites filter on the Dashboard
 - **Light / dark theme toggle** — Cycle between System, Light, and Dark themes from the sidebar; refined layered-charcoal dark palette
-- **Auto-HTTPS** — Optional Caddy reverse proxy with automatic Let's Encrypt certificates; activate with `docker compose --profile https up`
+- **Nginx Gateway** — Built-in Nginx gateway handling SSL termination, automatic HTTP/1.1 to HTTPS redirection, and persistent security headers (CSP, HSTS) with no external dependencies required
 - **Health & load metrics** — Real-time bandwidth tracking and `GET /api/admin/metrics` endpoint with session counts by protocol
 - **PWA & tablet support** — Installable Progressive Web App with offline shell, touch toolbar for special key combos (Ctrl+Alt+Del, Win key, Alt+Tab, etc.)
 - **Sidecar guacd scaling** — Round-robin connection pool across multiple guacd instances for horizontal scaling
@@ -70,9 +70,9 @@
 
 ```
                           ┌──────────┐
-              :80/:443    │  Caddy   │
-         ◄───────────────►│ Gateway  │
-              HTTP(S)     └────┬─────┘
+               :80/:443   │  Nginx   │
+          ◄──────────────►│ Gateway  │
+               HTTP(S)    └────┬─────┘
                                │
                   ┌────────────┴────────────┐
                   │ /api/*          /* (SPA) │

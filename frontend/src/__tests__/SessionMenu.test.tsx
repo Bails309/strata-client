@@ -345,6 +345,31 @@ describe('SessionMenu', () => {
     expect(textarea).toHaveValue('hello');
   });
 
+  it('sends clipboard text to remote after debounce', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const session = createMockSession();
+      render(
+        <SessionMenu
+          session={session as any}
+          isOpen={true}
+          onClose={vi.fn()}
+          shareUrl={null}
+          onShare={vi.fn()}
+          sharingEnabled={false}
+        />,
+      );
+      await user.click(screen.getByText('Click to view clipboard contents'));
+      const textarea = screen.getByRole('textbox');
+      await user.type(textarea, 'test');
+      vi.advanceTimersByTime(350);
+      expect(session.client.createClipboardStream).toHaveBeenCalledWith('text/plain');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stops mouse event propagation on the panel', () => {
     const session = createMockSession();
     render(

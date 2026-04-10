@@ -1,6 +1,9 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -89,10 +92,20 @@ async fn handle_recording_stream(
     // Split the socket so we can drain incoming messages (keepalive pings,
     // client handshake responses) while sending recording data.
     let (mut sender, mut receiver) = socket.split();
+
+    // Shared pause flag between drain task and sending loop
+    let paused = Arc::new(AtomicBool::new(false));
+    let paused_for_drain = paused.clone();
+
     let drain_handle = tokio::spawn(async move {
-        while let Some(msg) = receiver.next().await {
-            if msg.is_err() {
-                break;
+        while let Some(Ok(msg)) = receiver.next().await {
+            if let axum::extract::ws::Message::Text(ref text) = msg {
+                let t: &str = text;
+                if t == "8.nvrpause;" {
+                    paused_for_drain.store(true, Ordering::Relaxed);
+                } else if t == "9.nvrresume;" {
+                    paused_for_drain.store(false, Ordering::Relaxed);
+                }
             }
         }
     });
@@ -158,6 +171,7 @@ async fn handle_recording_stream(
     let mut base_guac_ts: Option<u64> = None;
     let mut base_real_ts: Option<std::time::Instant> = None;
     let mut last_progress_sent = std::time::Instant::now();
+    let mut pause_offset = std::time::Duration::ZERO;
 
     let mut buf = [0u8; 16384];
 
@@ -180,16 +194,46 @@ async fn handle_recording_stream(
                                 base_real_ts = Some(std::time::Instant::now());
                             }
                             (Some(b_ts), Some(b_real)) => {
+                                // Handle pause: wait while paused, sending keepalives
+                                {
+                                    let mut pause_start: Option<std::time::Instant> = None;
+                                    while paused.load(Ordering::Relaxed) {
+                                        if pause_start.is_none() {
+                                            pause_start = Some(std::time::Instant::now());
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                        sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                    }
+                                    if let Some(ps) = pause_start {
+                                        pause_offset += std::time::Instant::now().duration_since(ps);
+                                    }
+                                }
+
                                 let guac_elapsed = ts.saturating_sub(b_ts);
+                                let wall_elapsed =
+                                    std::time::Instant::now().duration_since(b_real);
                                 let real_elapsed =
-                                    std::time::Instant::now().duration_since(b_real).as_millis()
+                                    wall_elapsed.saturating_sub(pause_offset).as_millis()
                                         as u64;
 
+                                // Pacing sleep in chunks (max 5s) with keepalives
                                 if guac_elapsed > real_elapsed {
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        guac_elapsed - real_elapsed,
-                                    ))
-                                    .await;
+                                    let mut remaining_ms = guac_elapsed - real_elapsed;
+                                    while remaining_ms > 0 {
+                                        // Check pause during long sleeps
+                                        while paused.load(Ordering::Relaxed) {
+                                            let ps = std::time::Instant::now();
+                                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                            sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                            pause_offset += std::time::Instant::now().duration_since(ps);
+                                        }
+                                        let chunk = remaining_ms.min(5000);
+                                        tokio::time::sleep(std::time::Duration::from_millis(chunk)).await;
+                                        remaining_ms -= chunk;
+                                        if remaining_ms > 0 {
+                                            sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                        }
+                                    }
                                 }
 
                                 // Send progress update periodically (every 500ms at most)

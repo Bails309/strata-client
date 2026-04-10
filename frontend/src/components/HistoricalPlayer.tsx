@@ -14,6 +14,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [playing, setPlaying] = useState(true);
   
   // Progress tracking
   const [progressMs, setProgressMs] = useState(0);
@@ -40,6 +41,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
 
     setLoading(true);
     setErrorMsg('');
+    setPlaying(true);
     recordingEndedRef.current = false;
 
     const url = buildRecordingStreamUrl(recording.id);
@@ -194,13 +196,23 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button 
-                className={`w-10 h-10 flex items-center justify-center rounded-full bg-accent text-white shadow-lg transition-transform active:scale-95 ${loading ? 'opacity-50 pointer-events-none' : ''}`}
+                className={`w-10 h-10 flex items-center justify-center rounded-full bg-accent text-white shadow-lg transition-transform active:scale-95 ${loading || recordingEndedRef.current ? 'opacity-50 pointer-events-none' : ''}`}
                 onClick={() => {
-                   // Pause/Resume would require backend support for static files to pause the stream
-                   // For now it's a live stream of a file.
+                  if (!tunnelRef.current) return;
+                  if (playing) {
+                    tunnelRef.current.sendMessage('nvrpause');
+                    setPlaying(false);
+                  } else {
+                    tunnelRef.current.sendMessage('nvrresume');
+                    setPlaying(true);
+                  }
                 }}
               >
-                <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                {playing ? (
+                  <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+                ) : (
+                  <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                )}
               </button>
 
               <div className="text-sm font-mono text-txt-secondary flex items-center gap-1.5">

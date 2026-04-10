@@ -6,6 +6,14 @@ dist/
 **/playwright-report/
 **/test-results/
 **/blob-report/
+**/coverage/
+
+# Temp debug/test output files
+*.log
+*_output.txt
+*_results*.txt
+fail_check.txt
+final_fail*.txt
 
 # IDE
 .idea/

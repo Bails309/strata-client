@@ -60,9 +60,12 @@ import {
   revokeShareLink,
   getFavorites,
   toggleFavorite,
-  getActiveSessions,
+  killSessions,
+  getRecordings,
+  buildRecordingStreamUrl,
   buildNvrObserveUrl,
   getMetrics,
+  restoreUser,
 } from '../api';
 
 // We test the ApiError class and the request helper's behavior
@@ -628,6 +631,49 @@ describe('API endpoint functions', () => {
     expect(lastCall(fn).url).toBe('/api/admin/metrics');
     expect(res.active_sessions).toBe(5);
   });
+
+  it('killSessions sends POST /api/admin/sessions/kill', async () => {
+    const fn = mockFetch({ status: 'ok', killed_count: 2 });
+    await killSessions(['s1', 's2']);
+    const c = lastCall(fn);
+    expect(c.url).toBe('/api/admin/sessions/kill');
+    expect(c.method).toBe('POST');
+    expect(JSON.parse(c.body!)).toEqual({ session_ids: ['s1', 's2'] });
+  });
+
+  it('getRecordings sends GET with query params', async () => {
+    const fn = mockFetch([]);
+    await getRecordings({ user_id: 'u1', connection_id: 'c1', limit: 10, offset: 20 });
+    const c = lastCall(fn);
+    expect(c.url).toContain('/api/admin/recordings?');
+    expect(c.url).toContain('user_id=u1');
+    expect(c.url).toContain('connection_id=c1');
+    expect(c.url).toContain('limit=10');
+    expect(c.url).toContain('offset=20');
+  });
+});
+
+// ── WebSocket URL Builders (pure functions) ─────────────────────────
+
+describe('buildRecordingStreamUrl', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Object.defineProperty(window, 'location', {
+      value: { protocol: 'https:', host: 'app.example.com' },
+      writable: true,
+    });
+  });
+
+  it('builds wss: URL with token', () => {
+    localStorage.setItem('access_token', 'jwt_rec');
+    const url = buildRecordingStreamUrl('rec_123');
+    expect(url).toBe('wss://app.example.com/api/admin/recordings/rec_123/stream?token=jwt_rec');
+  });
+
+  it('handles encoding of recording ID', () => {
+    const url = buildRecordingStreamUrl('my recording');
+    expect(url).toContain('my%20recording');
+  });
 });
 
 // ── buildNvrObserveUrl (pure function, no fetch) ────────────────────
@@ -718,10 +764,14 @@ describe('buildNvrObserveUrl', () => {
     expect(lastCall(fn).method).toBe('POST');
   });
 
-  it('deleteUser sends DELETE', async () => {
-    const fn = mockFetch({ status: 'ok' });
-    await deleteUser('u1');
     expect(lastCall(fn).url).toBe('/api/admin/users/u1');
     expect(lastCall(fn).method).toBe('DELETE');
+  });
+
+  it('restoreUser sends POST to user endpoint', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await restoreUser('u1');
+    expect(lastCall(fn).url).toBe('/api/admin/users/u1');
+    expect(lastCall(fn).method).toBe('POST');
   });
 });

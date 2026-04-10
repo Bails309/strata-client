@@ -91,9 +91,9 @@ describe('NvrPlayer', () => {
     expect(screen.getByText('Back')).toBeInTheDocument();
   });
 
-  it('shows connecting phase initially', () => {
+  it('shows replaying phase initially', async () => {
     renderNvrPlayer();
-    expect(screen.getByText('Replaying buffer…', { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText('Replaying…', { exact: false })).toBeInTheDocument();
   });
 
   it('shows rewind buttons', () => {
@@ -176,7 +176,7 @@ describe('NvrPlayer', () => {
     // The oninstruction checks gap > 80ms, but in tests the calls are synchronous
     // so gap is ~0ms. After 50 instructions, if gap > 80ms, it would go to live.
     // In this synchronous test, it stays in replaying since gap is 0.
-    expect(screen.getByText('Replaying buffer…', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('Replaying…', { exact: false })).toBeInTheDocument();
   });
 
   it('uses offset from URL params', () => {

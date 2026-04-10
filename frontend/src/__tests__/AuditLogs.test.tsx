@@ -30,15 +30,16 @@ vi.mock('../contexts/SettingsContext', () => ({
 import AuditLogs from '../pages/AuditLogs';
 
 describe('AuditLogs', () => {
-  it('renders heading', () => {
+  it('renders heading', async () => {
     vi.mocked(getAuditLogs).mockResolvedValue([]);
     render(<AuditLogs />);
-    expect(screen.getByText('Audit Logs')).toBeInTheDocument();
+    expect(await screen.findByText('Audit Logs')).toBeInTheDocument();
   });
 
-  it('renders column headers', () => {
+  it('renders column headers', async () => {
     vi.mocked(getAuditLogs).mockResolvedValue([]);
     render(<AuditLogs />);
+    await screen.findByText('Audit Logs');
     expect(screen.getByText('ID')).toBeInTheDocument();
     expect(screen.getByText('Timestamp')).toBeInTheDocument();
     expect(screen.getByText('Action')).toBeInTheDocument();
@@ -77,17 +78,19 @@ describe('AuditLogs', () => {
     expect(adminCells.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders pagination controls', () => {
+  it('renders pagination controls', async () => {
     vi.mocked(getAuditLogs).mockResolvedValue([]);
     render(<AuditLogs />);
+    await screen.findByText('Audit Logs');
     expect(screen.getByText('Previous')).toBeInTheDocument();
     expect(screen.getByText('Next')).toBeInTheDocument();
     expect(screen.getByText('Page 1')).toBeInTheDocument();
   });
 
-  it('Previous button is disabled on page 1', () => {
+  it('Previous button is disabled on page 1', async () => {
     vi.mocked(getAuditLogs).mockResolvedValue([]);
     render(<AuditLogs />);
+    await screen.findByText('Audit Logs');
     const prev = screen.getByText('Previous');
     expect(prev).toBeDisabled();
   });

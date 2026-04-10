@@ -110,6 +110,7 @@ describe('Dashboard', () => {
 
   it('renders connection list', async () => {
     renderDashboard();
+    // Wait for async initialization
     expect(await screen.findByText('Server Alpha')).toBeInTheDocument();
     expect(screen.getByText('Server Beta')).toBeInTheDocument();
     expect(screen.getByText('DB Server')).toBeInTheDocument();

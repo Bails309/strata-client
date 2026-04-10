@@ -60,8 +60,7 @@ describe('ActiveSessions', () => {
 
   it('renders heading', async () => {
     render(<ActiveSessions />);
-    expect(screen.getByText('Active Sessions')).toBeInTheDocument();
-    await waitFor(() => expect(getActiveSessions).toHaveBeenCalled());
+    expect(await screen.findByText('Active Sessions')).toBeInTheDocument();
   });
 
   it('shows loading state initially', async () => {

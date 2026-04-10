@@ -146,15 +146,18 @@ describe('AdminSettings', () => {
     expect(await screen.findByText('Admin Settings')).toBeInTheDocument();
   });
 
-  it('renders all tab buttons', () => {
+  it('renders all tab buttons', async () => {
     renderAdmin();
+    // Wait for async init
+    await screen.findByText('Admin Settings');
     for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Vault', 'Recordings', 'Access', 'AD Sync', 'Sessions', 'Security']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
 
-  it('defaults to health tab', () => {
+  it('defaults to health tab', async () => {
     renderAdmin();
+    await screen.findByText('Admin Settings');
     expect(screen.getByText('Health').className).toContain('tab-active');
   });
 
@@ -177,11 +180,11 @@ describe('HealthTab', () => {
   beforeEach(setupDefaults);
   afterEach(() => vi.restoreAllMocks());
 
-  it('shows loading state initially', () => {
+  it('shows loading state initially', async () => {
     vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
     vi.mocked(getMetrics).mockReturnValue(new Promise(() => {}));
     renderAdmin();
-    expect(screen.getByText('Loading service health...')).toBeInTheDocument();
+    expect(await screen.findByText('Loading service health...')).toBeInTheDocument();
   });
 
   it('shows connected/reachable badges when healthy', async () => {

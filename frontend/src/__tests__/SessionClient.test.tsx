@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, fireEvent } from '@testing-library/react';
+import { render, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // Polyfill ResizeObserver for jsdom
@@ -178,9 +178,11 @@ describe('SessionClient', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders loading state for a connection', () => {
+  it('renders loading state for a connection', async () => {
     const { baseElement } = renderSessionClient();
-    expect(baseElement.querySelector('div')).toBeTruthy();
+    await waitFor(() => {
+      expect(baseElement.querySelector('div')).toBeTruthy();
+    });
   });
 
   it('shows loading text initially', () => {
@@ -558,5 +560,172 @@ describe('SessionClient', () => {
     const focusSpy = vi.spyOn(focusable, 'focus');
     fireEvent.mouseDown(focusable);
     expect(focusSpy).toHaveBeenCalled();
+  });
+
+  it('handles SSH credential requirement', async () => {
+    let requiredCallback: (params: string[]) => void = () => {};
+    const mockSession = {
+      id: 'sess-ssh',
+      connectionId: 'test-conn-id',
+      name: 'Server',
+      protocol: 'ssh',
+      client: {
+        getDisplay: () => ({ getElement: () => document.createElement('div'), getWidth: () => 1920, getHeight: () => 1080, scale: vi.fn() }),
+        connect: vi.fn(), disconnect: vi.fn(), sendSize: vi.fn(), sendKeyEvent: vi.fn(),
+        onerror: null, onstatechange: null, onclipboard: null, onfilesystem: null, onfile: null,
+        set onrequired(fn: any) { requiredCallback = fn; },
+        createArgumentValueStream: vi.fn(() => ({})),
+      },
+      tunnel: { onerror: null, onstatechange: null },
+      displayEl: document.createElement('div'),
+      keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() },
+      createdAt: Date.now(),
+      filesystems: [],
+      current_hash: 'bbb',
+      remoteClipboard: '',
+    };
+    mockGetSession.mockReturnValue(mockSession);
+
+    renderSessionClient();
+    await waitFor(() => {
+      expect(document.getElementById('root')).toBeTruthy();
+    });
+
+    act(() => {
+      requiredCallback(['password']);
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Credentials Required');
+    });
+
+    const passInput = document.querySelector('input[type="password"]');
+    expect(passInput).toBeTruthy();
+    
+    // Fill and submit
+    fireEvent.change(passInput!, { target: { value: 'secret' } });
+    const form = document.querySelector('form')!;
+    fireEvent.submit(form);
+
+    expect(mockSession.client.createArgumentValueStream).toHaveBeenCalledWith('text/plain', 'password');
+  });
+
+  it('handles server-initiated disconnect instruction', async () => {
+    let instructionHandler: (opcode: string, args: string[]) => void = () => {};
+    const mockSession = {
+      id: 'sess-err',
+      connectionId: 'test-conn-id',
+      name: 'Server',
+      protocol: 'ssh',
+      client: {
+        getDisplay: () => ({ getElement: () => document.createElement('div'), getWidth: () => 1920, getHeight: () => 1080, scale: vi.fn() }),
+        connect: vi.fn(), disconnect: vi.fn(), sendSize: vi.fn(), sendKeyEvent: vi.fn(),
+        onerror: null, onstatechange: null, onclipboard: null, onfilesystem: null, onfile: null, onrequired: null,
+      },
+      tunnel: {
+        onerror: null,
+        onstatechange: null,
+        set oninstruction(fn: any) { instructionHandler = fn; },
+      },
+      displayEl: document.createElement('div'),
+      keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() },
+      createdAt: Date.now(),
+      filesystems: [],
+      current_hash: 'ccc',
+      remoteClipboard: '',
+    };
+    mockGetSession.mockReturnValue(mockSession);
+
+    renderSessionClient();
+    
+    act(() => {
+      instructionHandler('disconnect', []);
+    });
+
+    // Simulate tunnel closure following the instruction
+    act(() => {
+      (mockSession.tunnel as any).onstatechange?.(2); // CLOSED
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('session has ended');
+    });
+  });
+
+  it('triggers clipboard sync on mouse enter', async () => {
+    const mockSession = {
+      id: 'sess-clip',
+      connectionId: 'test-conn-id',
+      name: 'Server',
+      protocol: 'ssh',
+      client: {
+        getDisplay: () => ({ getElement: () => document.createElement('div'), getWidth: () => 1920, getHeight: () => 1080, scale: vi.fn() }),
+        connect: vi.fn(), disconnect: vi.fn(), sendSize: vi.fn(), sendKeyEvent: vi.fn(),
+        onerror: null, onstatechange: null, onclipboard: null, onfilesystem: null, onfile: null, onrequired: null,
+        createClipboardStream: vi.fn(() => ({})),
+      },
+      tunnel: { onerror: null, onstatechange: null },
+      displayEl: document.createElement('div'),
+      keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() },
+      createdAt: Date.now(),
+      filesystems: [],
+      current_hash: 'ddd',
+      remoteClipboard: 'old',
+    };
+    mockGetSession.mockReturnValue(mockSession);
+
+    // Mock navigator.clipboard
+    const mockReadText = vi.fn().mockResolvedValue('new-from-local');
+    Object.assign(navigator, {
+      clipboard: { readText: mockReadText },
+    });
+
+    renderSessionClient();
+    
+    const container = document.getElementById('root')!.querySelector('div > div')!;
+    
+    act(() => {
+      fireEvent.mouseEnter(container);
+    });
+
+    await waitFor(() => {
+      expect(mockReadText).toHaveBeenCalled();
+    });
+  });
+
+  it('handles drag-and-drop file upload', async () => {
+    const mockSession = {
+      id: 'sess-drop',
+      connectionId: 'test-conn-id',
+      name: 'Server',
+      protocol: 'ssh',
+      client: {
+        getDisplay: () => ({ getElement: () => document.createElement('div'), getWidth: () => 1920, getHeight: () => 1080, scale: vi.fn() }),
+        connect: vi.fn(), disconnect: vi.fn(), sendSize: vi.fn(), sendKeyEvent: vi.fn(),
+        onerror: null, onstatechange: null, onclipboard: null, onfilesystem: null, onfile: null, onrequired: null,
+      },
+      tunnel: { onerror: null, onstatechange: null },
+      displayEl: document.createElement('div'),
+      keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() },
+      createdAt: Date.now(),
+      filesystems: [
+        { object: { createOutputStream: vi.fn(() => ({})) }, name: 'Drive' }
+      ],
+      current_hash: 'eee',
+      remoteClipboard: '',
+    };
+    mockGetSession.mockReturnValue(mockSession);
+
+    renderSessionClient();
+    
+    const container = document.getElementById('root')!.querySelector('div > div')!;
+    
+    const file = new File(['hello'], 'test.txt', { type: 'text/plain' });
+    const dropEvent = new CustomEvent('drop', { bubbles: true }) as any;
+    dropEvent.dataTransfer = { files: [file] };
+    
+    fireEvent(container, dropEvent);
+
+    expect(mockSession.filesystems[0].object.createOutputStream).toHaveBeenCalledWith('text/plain', '/test.txt');
   });
 });

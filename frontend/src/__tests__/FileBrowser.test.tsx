@@ -57,10 +57,10 @@ describe('FileBrowser', () => {
     capturedReader = null;
   });
 
-  it('renders filesystem name', () => {
+  it('renders filesystem name', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    expect(screen.getByText('Shared Drive')).toBeInTheDocument();
+    expect(await screen.findByText('Shared Drive')).toBeInTheDocument();
   });
 
   it('renders back button', () => {

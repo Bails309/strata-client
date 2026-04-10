@@ -12,7 +12,6 @@ use crate::db::Recording;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 
-
 #[derive(Deserialize)]
 pub struct ListRecordingsQuery {
     pub user_id: Option<uuid::Uuid>,
@@ -106,12 +105,11 @@ async fn handle_recording_stream(
         // Azure storage stream
         let azure = {
             let s = state.read().await;
-            let pool = s
-                .db
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("DB not connected"))?
-                .pool
-                .clone();
+            let pool =
+                s.db.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("DB not connected"))?
+                    .pool
+                    .clone();
             let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
             crate::services::recordings::get_azure_config(&pool, vault.as_ref()).await?
         };
@@ -261,7 +259,7 @@ impl GuacamoleParser {
 
             let content_start_bytes = cursor_bytes + dot_pos + 1;
             let after_prefix = &self.buffer[content_start_bytes..];
-            
+
             // We need 'len' characters. Find the byte offset for 'len' characters.
             let mut char_count = 0;
             let mut content_end_offset = 0;

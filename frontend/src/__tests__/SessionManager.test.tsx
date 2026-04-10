@@ -697,7 +697,53 @@ describe('SessionManager', () => {
     // No crash = success
   });
 
-  it('client error with empty message defaults to Connection failed', () => {
+    expect(session.error).toBe('Connection failed');
+  });
+
+  it('syncs clipboard from remote to local', async () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+    
+    // Mock navigator.clipboard
+    const mockWriteText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText: mockWriteText },
+    });
+
+    let session: any;
+    act(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    // Simulate remote clipboard instruction
+    const mockStream = {} as any;
+    let ontext: ((t: string) => void) = () => {};
+    let onend: (() => void) = () => {};
+    
+    vi.mocked((await import('guacamole-common-js')).default.StringReader).mockImplementation(function() {
+      const reader = {
+        set ontext(fn: any) { ontext = fn; },
+        set onend(fn: any) { onend = fn; },
+      };
+      return reader as any;
+    });
+
+    act(() => {
+      session.client.onclipboard(mockStream, 'text/plain');
+    });
+
+    act(() => {
+      ontext('hello from remote');
+      onend();
+    });
+
+    expect(session.remoteClipboard).toBe('hello from remote');
+    expect(mockWriteText).toHaveBeenCalledWith('hello from remote');
+  });
+
+  it('triggers file download when server sends file', async () => {
     const { result } = renderHook(() => useSessionManager(), { wrapper });
 
     let session: any;
@@ -708,10 +754,72 @@ describe('SessionManager', () => {
       });
     });
 
-    act(() => {
-      session.client.onerror({ message: '' });
+    const mockBlob = new Blob(['data'], { type: 'application/octet-stream' });
+    vi.mocked((await import('guacamole-common-js')).default.BlobReader).mockImplementation(function() {
+      return {
+        set onend(fn: any) { 
+          // Immediately trigger the callback for the test
+          setTimeout(fn, 0);
+        },
+        getBlob: () => mockBlob,
+      } as any;
     });
 
-    expect(session.error).toBe('Connection failed');
+    // Mock DOM elements involved in download
+    const mockA = { click: vi.fn(), setAttribute: vi.fn(), style: {} } as any;
+    const createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(mockA);
+    const appendSpy = vi.spyOn(document.body, 'appendChild').mockImplementation(() => ({} as any));
+    const removeSpy = vi.spyOn(document.body, 'removeChild').mockImplementation(() => ({} as any));
+    const createUrlSpy = vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:url'), revokeObjectURL: vi.fn() });
+
+    act(() => {
+      session.client.onfile({} as any, 'application/octet-stream', 'test.txt');
+    });
+
+    await waitFor(() => {
+      expect(mockA.download).toBe('test.txt');
+      expect(mockA.click).toHaveBeenCalled();
+    });
+
+    createElementSpy.mockRestore();
+    appendSpy.mockRestore();
+    removeSpy.mockRestore();
+  });
+
+  it('fetches sharing permissions on mount', async () => {
+    const { getMe } = await import('../api');
+    vi.mocked(getMe).mockResolvedValue({ can_manage_system: true });
+
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.canShare).toBe(true);
+    });
+  });
+
+  it('scales display on resize', async () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    const parent = document.createElement('div');
+    Object.defineProperties(parent, {
+      clientWidth: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
+
+    let session: any;
+    act(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: parent, connectParams: new URLSearchParams(),
+      });
+    });
+
+    const display = session.client.getDisplay();
+    // Simulate resize callback
+    act(() => {
+      display.onresize();
+    });
+
+    expect(display.scale).toHaveBeenCalled();
   });
 });

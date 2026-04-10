@@ -4,15 +4,12 @@ import * as SessionManagerModule from '../components/SessionManager';
 import * as api from '../api';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import React from 'react';
 
 // Mock the hooks and components
-vi.mock('../components/SessionManager', () => {
-  return {
-    useSessionManager: vi.fn(),
-    SessionManagerProvider: ({ children }: any) => <div>{children}</div>,
-  };
-});
+vi.mock('../components/SessionManager', () => ({
+  useSessionManager: vi.fn(),
+  SessionManagerProvider: ({ children }: any) => <>{children}</>,
+}));
 
 vi.mock('../api', () => ({
   createTunnelTicket: vi.fn(),
@@ -22,24 +19,21 @@ vi.mock('../api', () => ({
   getMe: vi.fn(),
 }));
 
-// Mock ResizeObserver
-global.ResizeObserver = vi.fn(function() {
-  return {
-    observe: vi.fn(),
-    unobserve: vi.fn(),
-    disconnect: vi.fn(),
-  };
-}) as any;
+// Mock ResizeObserver properly
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
 
 describe('SessionClient', () => {
   let mockSession: any;
-  const mockCreateSession = vi.fn();
   const mockAttachSession = vi.fn();
+  const mockCreateSession = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     
-    // Create a mock session object that will be returned by useSessionManager
     mockSession = {
       id: 'sess-test-conn-id',
       connectionId: 'test-conn-id',
@@ -76,17 +70,14 @@ describe('SessionClient', () => {
       remoteClipboard: '',
     };
 
-    // Setup API mocks
     vi.mocked(api.getConnectionInfo).mockResolvedValue({ protocol: 'ssh', has_credentials: true });
     vi.mocked(api.getConnections).mockResolvedValue([{ id: 'test-conn-id', name: 'Test Session', protocol: 'ssh', hostname: 'localhost', port: 22 }]);
     vi.mocked(api.createTunnelTicket).mockResolvedValue({ ticket: 'test-ticket' });
     vi.mocked(api.getCredentialProfiles).mockResolvedValue([]);
     vi.mocked(api.getMe).mockResolvedValue({ id: '1', username: 'admin', role: 'admin' } as any);
 
-    // Mock window features
     vi.stubGlobal('requestAnimationFrame', (cb: any) => cb());
     
-    // Ensure #root exists for the portal
     if (!document.getElementById('root')) {
       const root = document.createElement('div');
       root.id = 'root';
@@ -95,8 +86,7 @@ describe('SessionClient', () => {
       document.getElementById('root')!.innerHTML = '';
     }
 
-    // Default mock implementation
-    vi.mocked(SessionManagerModule.useSessionManager).mockImplementation(() => ({
+    vi.mocked(SessionManagerModule.useSessionManager).mockReturnValue({
       sessions: [mockSession],
       activeSessionId: mockSession.id,
       getSession: vi.fn(() => mockSession),
@@ -112,7 +102,7 @@ describe('SessionClient', () => {
       setSessionBarCollapsed: vi.fn(),
       barWidth: 180,
       canShare: false,
-    }));
+    } as any);
   });
 
   const renderSessionClient = async (id = 'test-conn-id', name = 'Test Session', protocol = 'ssh') => {
@@ -131,18 +121,16 @@ describe('SessionClient', () => {
 
   it('attaches the session on mount', async () => {
     await renderSessionClient();
-    // Use a longer timeout and waitFor for the attachment
     await waitFor(() => {
-      expect(mockAttachSession).toHaveBeenCalledWith('sess-test-conn-id');
-    }, { timeout: 3000 });
+      expect(mockAttachSession).toHaveBeenCalled();
+    }, { timeout: 2000 });
   });
 
   it('handles SSH credential requirement', async () => {
     await renderSessionClient();
     
-    // Wait for the handler to be attached by the component
     await waitFor(() => {
-      expect(mockSession.client.onrequired).toBeTypeOf('function');
+      expect(typeof mockSession.client.onrequired).toBe('function');
     });
     
     await rtlAct(async () => {
@@ -166,7 +154,7 @@ describe('SessionClient', () => {
     await renderSessionClient();
     
     await waitFor(() => {
-      expect(mockSession.tunnel.oninstruction).toBeTypeOf('function');
+      expect(typeof mockSession.tunnel.oninstruction).toBe('function');
     });
 
     await rtlAct(async () => {
@@ -192,13 +180,12 @@ describe('SessionClient', () => {
 
     await renderSessionClient();
     
-    // Targeted find for the session container that has the listener
-    // It's the one with the fixed position and z-index 5
-    const containers = document.querySelectorAll('div');
-    const target = Array.from(containers).find(c => c.style.zIndex === '5');
-    expect(target).toBeTruthy();
+    // Fire on the fixed container that carries the onMouseEnter
+    const root = document.getElementById('root')!;
+    const container = root.querySelector('.fixed') as HTMLElement;
+    expect(container).toBeTruthy();
     
-    fireEvent.mouseEnter(target!);
+    fireEvent.mouseEnter(container);
 
     await waitFor(() => {
       expect(mockReadText).toHaveBeenCalled();

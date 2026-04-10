@@ -337,7 +337,7 @@ pub async fn proxy(
         let msg = format!("  arg '{}' = '{}'", name, display);
         tracing::info!(msg);
     }
-    
+
     let connect_values: Vec<String> = arg_names
         .iter()
         .map(|name| param_map.get(name.as_str()).cloned().unwrap_or_default())

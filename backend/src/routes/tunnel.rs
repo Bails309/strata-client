@@ -360,7 +360,7 @@ pub async fn ws_tunnel(
         .bind(connection_id)
         .execute(&db.pool)
         .await?;
- 
+
     // Extract client IP (X-Forwarded-For > ConnectInfo)
     let client_ip = headers
         .get("x-forwarded-for")

@@ -56,7 +56,7 @@ import {
   getKerberosRealms, createKerberosRealm, updateKerberosRealm, deleteKerberosRealm,
   createRole, createConnection, updateConnection, deleteConnection,
   createConnectionFolder, deleteConnectionFolder,
-  getActiveSessions, killSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
+  getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
   updateAuthMethods, updateSettings, updateRoleMappings,
 } from '../api';

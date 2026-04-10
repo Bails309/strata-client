@@ -432,4 +432,84 @@ mod tests {
     fn default_vault_mode_is_external() {
         assert_eq!(default_vault_mode(), VaultMode::External);
     }
+
+    #[test]
+    fn system_secrets_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
+
+        let secrets = SystemSecrets {
+            jwt_secret: "my-jwt-secret-123".into(),
+        };
+        secrets.save().unwrap();
+
+        let loaded = SystemSecrets::load().unwrap();
+        assert_eq!(loaded.jwt_secret, "my-jwt-secret-123");
+
+        std::env::remove_var("CONFIG_PATH");
+    }
+
+    #[test]
+    fn system_secrets_load_missing_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("nonexistent").join("config.toml");
+        std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
+
+        assert!(SystemSecrets::load().is_none());
+
+        std::env::remove_var("CONFIG_PATH");
+    }
+
+    #[test]
+    fn system_secrets_debug() {
+        let s = SystemSecrets {
+            jwt_secret: "secret".into(),
+        };
+        let debug = format!("{:?}", s);
+        assert!(debug.contains("secret"));
+    }
+
+    #[test]
+    fn system_secrets_path_derives_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
+
+        let path = SystemSecrets::path();
+        assert!(path.ends_with("system-secrets.json"));
+        assert!(path.contains(dir.path().to_str().unwrap()));
+
+        std::env::remove_var("CONFIG_PATH");
+    }
+
+    #[test]
+    fn config_path_default() {
+        std::env::remove_var("CONFIG_PATH");
+        let path = AppConfig::config_path();
+        assert_eq!(path, "/app/config/config.toml");
+    }
+
+    #[test]
+    fn local_vault_secrets_load_missing_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("nonexistent").join("config.toml");
+        std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
+
+        assert!(LocalVaultSecrets::load().is_none());
+
+        std::env::remove_var("CONFIG_PATH");
+    }
+
+    #[test]
+    fn local_vault_secrets_path_derives_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::env::set_var("CONFIG_PATH", config_path.to_str().unwrap());
+
+        let path = LocalVaultSecrets::path();
+        assert!(path.ends_with("vault-secrets.json"));
+
+        std::env::remove_var("CONFIG_PATH");
+    }
 }

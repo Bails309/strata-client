@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Outlet } from 'react-router-dom';
 import App from '../App';
+import React from 'react';
 
 // Mock heavy child components to keep tests fast
 vi.mock('../pages/Dashboard', () => ({ default: () => <div>Dashboard</div> }));
@@ -39,9 +40,6 @@ vi.mock('../components/ThemeProvider', () => ({
 }));
 
 function renderApp(initialRoute = '/') {
-  // We override the BrowserRouter by wrapping App in MemoryRouter.
-  // But App already uses useNavigate which needs a Router ancestor.
-  // Since App doesn't render its own Router, we wrap here.
   return render(
     <MemoryRouter initialEntries={[initialRoute]}>
       <App />
@@ -112,7 +110,6 @@ describe('App routing', () => {
 
   it('shows loading spinner while auth state is pending', () => {
     localStorage.setItem('access_token', 'pending-token');
-    // fetch that never resolves keeps authenticated === null
     globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
 
     renderApp('/');
@@ -136,7 +133,7 @@ describe('App routing', () => {
   });
 
   it('calls handleLogin and navigates to dashboard', async () => {
-    // First call: no token → unauthenticated
+    // Start at login
     globalThis.fetch = vi.fn(async () => {
       return new Response('', { status: 401 });
     }) as unknown as typeof fetch;
@@ -144,16 +141,22 @@ describe('App routing', () => {
     renderApp('/login');
     await screen.findByText('Login Page');
 
-    // Now simulate login: set token and make getMe succeed
+    // Simulate login
     localStorage.setItem('access_token', 'fresh-token');
+    // Success response for getMe and getSettings
     globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
+      return new Response(JSON.stringify({ id: 1, username: 'admin', branding: { name: 'Strata' } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }) as unknown as typeof fetch;
 
-    await userEvent.click(screen.getByText('mock-login'));
-    expect(await screen.findByText('Dashboard')).toBeInTheDocument();
+    await act(async () => {
+      await userEvent.click(screen.getByText('mock-login'));
+    });
+    
+    await waitFor(() => {
+      expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
   });
 });

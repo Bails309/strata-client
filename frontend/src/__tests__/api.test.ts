@@ -61,6 +61,7 @@ import {
   getFavorites,
   toggleFavorite,
   killSessions,
+  getActiveSessions,
   getRecordings,
   buildRecordingStreamUrl,
   buildNvrObserveUrl,
@@ -764,6 +765,9 @@ describe('buildNvrObserveUrl', () => {
     expect(lastCall(fn).method).toBe('POST');
   });
 
+  it('deleteUser sends DELETE with id', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await deleteUser('u1');
     expect(lastCall(fn).url).toBe('/api/admin/users/u1');
     expect(lastCall(fn).method).toBe('DELETE');
   });

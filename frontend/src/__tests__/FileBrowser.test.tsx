@@ -94,7 +94,9 @@ describe('FileBrowser', () => {
   it('shows empty directory when no files', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({});
+    act(() => {
+      simulateDirectoryLoad({});
+    });
     await waitFor(() => {
       expect(screen.getByText('Empty directory')).toBeInTheDocument();
     });
@@ -103,9 +105,11 @@ describe('FileBrowser', () => {
   it('displays file and directory entries', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({
-      'Documents': 'application/vnd.glyptodon.guacamole.stream-index+json',
-      'readme.txt': 'text/plain',
+    act(() => {
+      simulateDirectoryLoad({
+        'Documents': 'application/vnd.glyptodon.guacamole.stream-index+json',
+        'readme.txt': 'text/plain',
+      });
     });
     await waitFor(() => {
       expect(screen.getByText('Documents')).toBeInTheDocument();
@@ -116,10 +120,12 @@ describe('FileBrowser', () => {
   it('sorts directories before files', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({
-      'readme.txt': 'text/plain',
-      'Documents': 'application/vnd.glyptodon.guacamole.stream-index+json',
-      'archive.zip': 'application/zip',
+    act(() => {
+      simulateDirectoryLoad({
+        'readme.txt': 'text/plain',
+        'Documents': 'application/vnd.glyptodon.guacamole.stream-index+json',
+        'archive.zip': 'application/zip',
+      });
     });
     await waitFor(() => {
       const items = document.querySelectorAll('[title]');
@@ -136,9 +142,11 @@ describe('FileBrowser', () => {
   it('shows directory icon for directories and file icon for files', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({
-      'Folder': 'application/vnd.glyptodon.guacamole.stream-index+json',
-      'file.txt': 'text/plain',
+    act(() => {
+      simulateDirectoryLoad({
+        'Folder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+        'file.txt': 'text/plain',
+      });
     });
     await waitFor(() => {
       expect(screen.getByTitle('Double-click to open')).toBeInTheDocument();
@@ -149,8 +157,10 @@ describe('FileBrowser', () => {
   it('navigates into directory on double click', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({
-      'SubFolder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+    act(() => {
+      simulateDirectoryLoad({
+        'SubFolder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+      });
     });
     await waitFor(() => {
       expect(screen.getByText('SubFolder')).toBeInTheDocument();
@@ -163,8 +173,10 @@ describe('FileBrowser', () => {
   it('shows breadcrumb path segments after navigation', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({
-      'SubFolder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+    act(() => {
+      simulateDirectoryLoad({
+        'SubFolder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+      });
     });
     await waitFor(() => expect(screen.getByText('SubFolder')).toBeInTheDocument());
     await userEvent.dblClick(screen.getByText('SubFolder'));
@@ -197,10 +209,12 @@ describe('FileBrowser', () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
     // Simulate bad JSON
-    if (capturedReader) {
-      capturedReader.ontext?.('not-valid-json');
-      capturedReader.onend?.();
-    }
+    act(() => {
+      if (capturedReader) {
+        capturedReader.ontext?.('not-valid-json');
+        capturedReader.onend?.();
+      }
+    });
     await waitFor(() => {
       expect(screen.getByText('Empty directory')).toBeInTheDocument();
     });
@@ -220,7 +234,9 @@ describe('FileBrowser', () => {
       }
     });
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({ 'report.pdf': 'application/pdf' });
+    act(() => {
+      simulateDirectoryLoad({ 'report.pdf': 'application/pdf' });
+    });
     await waitFor(() => expect(screen.getByText('report.pdf')).toBeInTheDocument());
 
     await userEvent.dblClick(screen.getByText('report.pdf'));
@@ -231,8 +247,10 @@ describe('FileBrowser', () => {
   it('navigates up via breadcrumb home button', async () => {
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({
-      'SubFolder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+    act(() => {
+      simulateDirectoryLoad({
+        'SubFolder': 'application/vnd.glyptodon.guacamole.stream-index+json',
+      });
     });
     await waitFor(() => expect(screen.getByText('SubFolder')).toBeInTheDocument());
     await userEvent.dblClick(screen.getByText('SubFolder'));
@@ -274,7 +292,9 @@ describe('FileBrowser', () => {
 
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({ 'existing.txt': 'text/plain' });
+    act(() => {
+      simulateDirectoryLoad({ 'existing.txt': 'text/plain' });
+    });
     await waitFor(() => expect(screen.getByText('existing.txt')).toBeInTheDocument());
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -300,7 +320,9 @@ describe('FileBrowser', () => {
 
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({});
+    act(() => {
+      simulateDirectoryLoad({});
+    });
     await waitFor(() => expect(screen.getByText('Empty directory')).toBeInTheDocument());
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -335,7 +357,9 @@ describe('FileBrowser', () => {
 
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({});
+    act(() => {
+      simulateDirectoryLoad({});
+    });
     await waitFor(() => expect(screen.getByText('Empty directory')).toBeInTheDocument());
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -366,7 +390,9 @@ describe('FileBrowser', () => {
 
     const fs = createMockFilesystem();
     render(<FileBrowser filesystem={fs as any} onClose={vi.fn()} />);
-    simulateDirectoryLoad({});
+    act(() => {
+      simulateDirectoryLoad({});
+    });
     await waitFor(() => expect(screen.getByText('Empty directory')).toBeInTheDocument());
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;

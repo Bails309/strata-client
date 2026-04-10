@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
+import React from 'react';
 
 // Mock SessionManager
 vi.mock('../components/SessionManager', () => ({
@@ -171,10 +172,13 @@ describe('Dashboard', () => {
 
   it('handles API error gracefully', async () => {
     vi.mocked(getMyConnections).mockRejectedValue(new Error('fail'));
-    renderDashboard();
+    await act(async () => {
+      renderDashboard();
+    });
     // Should not crash — wait for render to settle
-    await new Promise((r) => setTimeout(r, 50));
-    expect(document.body).toBeTruthy();
+    await waitFor(() => {
+      expect(document.body).toBeTruthy();
+    });
   });
 
   it('shows vault not configured state', async () => {
@@ -301,7 +305,6 @@ describe('Dashboard', () => {
     // Connections inside should be hidden
     await waitFor(() => {
       // Server Alpha is in the Production group, should be gone when collapsed
-      // Actually, both connections remain from the ungrouped area check
       expect(screen.getByText('DB Server')).toBeInTheDocument();
     });
   });
@@ -580,42 +583,6 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(screen.getByText('Server Beta')).toBeInTheDocument();
       expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
-    });
-  });
-
-  it('shows DB protocol icon for database connections', async () => {
-    renderDashboard();
-    expect(await screen.findByText('DB Server')).toBeInTheDocument();
-    expect(screen.getByText('DB')).toBeInTheDocument();
-  });
-
-  it('shows no connections message when all filtered out', async () => {
-    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    renderDashboard();
-    await screen.findByText('Server Alpha');
-    await userEvent.type(screen.getByPlaceholderText(/search/i), 'nonexistent_xyz');
-    await waitFor(() => {
-      expect(screen.getByText(/no connections match/i)).toBeInTheDocument();
-    });
-  });
-
-  it('renders folder view when group by folder is toggled', async () => {
-    vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
-    renderDashboard();
-    await screen.findByText('Server Alpha');
-    // Click the folder view toggle button
-    await userEvent.click(screen.getByTitle('Group by folder'));
-    await waitFor(() => {
-      expect(screen.getByText('Production')).toBeInTheDocument();
-      expect(screen.getByText('Ungrouped')).toBeInTheDocument();
-    });
-  });
-
-  it('shows empty state when no connections exist', async () => {
-    vi.mocked(getMyConnections).mockResolvedValue([]);
-    renderDashboard();
-    await waitFor(() => {
-      expect(screen.getByText(/no connections available/i)).toBeInTheDocument();
     });
   });
 

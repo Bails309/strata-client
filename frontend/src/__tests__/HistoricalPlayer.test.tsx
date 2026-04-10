@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 
 const resizeObserverMock = vi.fn(function() {
   return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
@@ -81,7 +80,8 @@ describe('HistoricalPlayer', () => {
 
   it('shows loading state initially', () => {
     render(<HistoricalPlayer recording={mockRecording as any} onClose={onClose} />);
-    expect(screen.getByClassName('spinner')).toBeTruthy();
+    // Check for spinner - updated to use class check correctly
+    expect(document.querySelector('.spinner')).toBeTruthy();
   });
 
   it('handles nvrheader instruction to set duration', () => {
@@ -92,7 +92,7 @@ describe('HistoricalPlayer', () => {
     });
 
     expect(screen.getByText('2:00')).toBeInTheDocument();
-    expect(screen.queryByClassName('spinner')).toBeNull();
+    expect(document.querySelector('.spinner')).toBeNull();
   });
 
   it('handles nvrprogress instruction to set current time', () => {
@@ -115,8 +115,8 @@ describe('HistoricalPlayer', () => {
       mockTunnelOninstruction?.('nvrend', []);
     });
 
-    expect(screen.getByText('1:00')).toBeInTheDocument();
-    expect(screen.queryByClassName('spinner')).toBeNull();
+    expect(screen.getAllByText('1:00').length).toBeGreaterThan(0);
+    expect(document.querySelector('.spinner')).toBeNull();
   });
 
   it('shows error on client error', () => {
@@ -158,7 +158,9 @@ describe('HistoricalPlayer', () => {
     const xButton = buttons.find(b => b.innerHTML.includes('M18 6L6 18M6 6l12 12'));
     expect(xButton).toBeTruthy();
     
-    fireEvent.click(xButton!);
+    act(() => {
+      fireEvent.click(xButton!);
+    });
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -171,7 +173,9 @@ describe('HistoricalPlayer', () => {
 
     mockClient.connect.mockClear();
     const retryBtn = screen.getByText('Retry');
-    retryBtn.click();
+    act(() => {
+      fireEvent.click(retryBtn);
+    });
     expect(mockClient.connect).toHaveBeenCalled();
   });
 });

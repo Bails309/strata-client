@@ -174,70 +174,72 @@ struct GuacamoleInstruction {
 }
 
 struct GuacamoleParser {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl GuacamoleParser {
     fn new() -> Self {
-        Self { buffer: String::new() }
+        Self { buffer: Vec::new() }
     }
 
     fn push(&mut self, data: &[u8]) {
-        self.buffer.push_str(&String::from_utf8_lossy(data));
+        self.buffer.extend_from_slice(data);
     }
 
     fn next_instruction(&mut self) -> Option<GuacamoleInstruction> {
         let mut elements = Vec::new();
-        let mut cursor_bytes = 0;
+        let mut cursor = 0;
 
         loop {
-            // Find length prefix
-            let remaining = &self.buffer[cursor_bytes..];
-            let dot_pos = match remaining.find('.') {
-                Some(pos) => pos,
-                None => return None,
-            };
-
-            let len_str = &remaining[..dot_pos];
-            let len: usize = match len_str.parse() {
-                Ok(l) => l,
-                Err(_) => {
-                    // Malformed prefix, clear and stop
-                    self.buffer.clear();
-                    return None;
-                }
-            };
-
-            let content_start_bytes = cursor_bytes + dot_pos + 1;
-            let after_prefix = &self.buffer[content_start_bytes..];
+            let remaining = &self.buffer[cursor..];
+            let dot_pos = remaining.iter().position(|&b| b == b'.')?;
             
-            // We need 'len' characters. Find the byte offset for 'len' characters.
+            let len_str = std::str::from_utf8(&remaining[..dot_pos]).ok()?;
+            let len: usize = len_str.parse().ok()?;
+            
+            let content_start = cursor + dot_pos + 1;
+            
+            // Find the byte-offset for 'len' UTF-8 characters
             let mut char_count = 0;
-            let mut content_end_offset = 0;
-            for (i, _) in after_prefix.char_indices() {
-                if char_count == len {
-                    content_end_offset = i;
-                    break;
+            let mut check_pos = content_start;
+            
+            while char_count < len {
+                if check_pos >= self.buffer.len() {
+                    return None; // Need more data
                 }
-                char_count += 1;
+                
+                // UTF-8 lead byte check: 
+                // 1-byte: 0xxxxxxx
+                // 2-byte: 110xxxxx
+                // 3-byte: 1110xxxx
+                // 4-byte: 11110xxx
+                // Continuation bytes are 10xxxxxx
+                let b = self.buffer[check_pos];
+                if (b & 0xC0) != 0x80 {
+                    char_count += 1;
+                }
+                check_pos += 1;
             }
 
-            if char_count < len {
-                return None; // Need more data
+            // We've found the start of 'len' characters, but we need to consume 
+            // any continuation bytes of the LAST character to reach the terminator.
+            while check_pos < self.buffer.len() && (self.buffer[check_pos] & 0xC0) == 0x80 {
+                check_pos += 1;
             }
 
-            let content = &after_prefix[..content_end_offset];
-            elements.push(content.to_string());
-
-            let terminator_pos = content_start_bytes + content_end_offset;
-            if terminator_pos >= self.buffer.len() {
+            if check_pos >= self.buffer.len() {
                 return None; // Need more data (terminator)
             }
 
-            let terminator = self.buffer.as_bytes()[terminator_pos] as char;
+            let content_bytes = &self.buffer[content_start..check_pos];
+            let content = std::str::from_utf8(content_bytes).ok()?.to_string();
+            elements.push(content);
+
+            let terminator = self.buffer[check_pos] as char;
             if terminator == ';' {
-                let raw = self.buffer[..=terminator_pos].to_string();
-                self.buffer.drain(..=terminator_pos);
+                let total_len = check_pos + 1;
+                let raw = String::from_utf8_lossy(&self.buffer[..total_len]).to_string();
+                self.buffer.drain(..total_len);
                 
                 let opcode = elements.remove(0);
                 return Some(GuacamoleInstruction {
@@ -246,10 +248,10 @@ impl GuacamoleParser {
                     raw,
                 });
             } else if terminator == ',' {
-                cursor_bytes = terminator_pos + 1;
+                cursor = check_pos + 1;
                 continue;
             } else {
-                // Malformed
+                // Malformed instruction, clear buffer
                 self.buffer.clear();
                 return None;
             }

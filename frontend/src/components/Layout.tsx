@@ -89,8 +89,10 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
                 return true;
               }).map((item) => {
                 const active = item.to === '/'
-                  ? location.pathname === '/' || location.pathname.startsWith('/session/')
-                  : location.pathname.startsWith(item.to);
+                  ? (location.pathname === '/' || location.pathname.startsWith('/session/'))
+                  : item.to === '/admin'
+                    ? location.pathname === '/admin' || (location.pathname.startsWith('/admin/') && !location.pathname.startsWith('/admin/sessions'))
+                    : location.pathname.startsWith(item.to);
                 return (
                   <Link
                     key={item.to}

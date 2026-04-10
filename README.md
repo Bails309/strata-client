@@ -59,6 +59,7 @@
 - **Sidecar guacd scaling** — Round-robin connection pool across multiple guacd instances for horizontal scaling
 - **H.264 GFX encoding** — FreeRDP 3 GFX pipeline with H.264 enabled by default for RDP connections, dramatically reducing bandwidth
 - **Modern SPA** — React + TypeScript + Vite frontend with Tailwind CSS v4, setup wizard, admin dashboard, credential vault, and HTML5 Canvas session client
+- **Azure Blob Storage sync** — Automatically sync completed session recordings to Azure Blob Storage for durable, external persistence and memory-efficient streaming playback
 - **Zero-config first boot** — Bundled PostgreSQL and Vault containers; upgrade to external services at any time through the UI
 - **CI/CD** — GitHub Actions workflow for automated weekly upstream `guacd` rebuilds
 

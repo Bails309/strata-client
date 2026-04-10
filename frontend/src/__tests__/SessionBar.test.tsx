@@ -298,7 +298,7 @@ describe('SessionBar', () => {
   });
 
   it('generates share link when mode is selected', async () => {
-    vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123' });
+    vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123', share_token: 'abc123', mode: 'view' });
     const sessions = [makeMockSession('s1', 'Server A')];
     renderSessionBar('/', false, sessions, { canShare: true });
     await userEvent.click(screen.getByTitle('Share connection'));

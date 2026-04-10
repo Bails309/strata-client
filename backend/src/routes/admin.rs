@@ -10,6 +10,8 @@ use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::{audit, kerberos, settings};
 
+pub mod recordings;
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 async fn require_running(state: &SharedState) -> Result<crate::db::Database, AppError> {

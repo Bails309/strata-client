@@ -98,7 +98,9 @@ pub async fn my_connections(
     let db = require_running(&state).await?;
 
     let rows: Vec<UserConnectionRow> = if user.role == "admin" {
-        // Admins see all connections regardless of role assignment
+        // Admins see all connections regardless of role assignment.
+        // History is fetched from user_connection_access (per-user). Note: migration 026
+        // seeded this table from global data; subsequent connections update this per-user.
         sqlx::query_as(
             "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
                     c.folder_id, cf.name AS folder_name, uca.last_accessed

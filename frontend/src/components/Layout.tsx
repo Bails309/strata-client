@@ -75,8 +75,7 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
                 if (item.to === '/admin') {
                   return user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections
                     || user?.can_create_users || user?.can_create_user_groups
-                    || user?.can_create_connections || user?.can_create_connection_folders
-                    || user?.can_create_sharing_profiles;
+                    || user?.can_create_connections || user?.can_create_connection_folders;
                 }
                 if (item.to === '/audit') {
                   return user?.can_manage_system || user?.can_view_audit_logs;

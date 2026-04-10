@@ -117,8 +117,12 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/sessions", get(admin::list_active_sessions))
         .route("/api/admin/sessions/kill", post(admin::kill_sessions))
         .route(
-            "/api/admin/sessions/:session_id/observe",
             get(admin::observe_session),
+        )
+        .route("/api/admin/recordings", get(admin::recordings::list_recordings))
+        .route(
+            "/api/admin/recordings/:id/stream",
+            get(admin::recordings::stream_recording),
         )
         .route("/api/admin/metrics", get(admin::get_metrics))
         .route(

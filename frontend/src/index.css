@@ -818,6 +818,63 @@ html.light .recent-card-btn:hover {
   .checkbox {
     @apply relative shrink-0 cursor-pointer;
     appearance: none;
+  }
+}
+
+/* ── Historical Player ────────────────────────────────────────── */
+.player-overlay {
+  @apply fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md;
+}
+
+.player-card {
+  @apply w-full max-w-5xl rounded-xl overflow-hidden shadow-2xl bg-surface border border-white/10 flex flex-col;
+  max-height: 90vh;
+}
+
+.player-header {
+  @apply flex items-center justify-between px-6 py-4 border-b border-border bg-surface-secondary;
+}
+
+.player-container {
+  @apply flex-1 bg-black relative flex items-center justify-center overflow-hidden min-h-[400px];
+}
+
+.player-controls {
+  @apply px-6 py-4 bg-surface-secondary border-t border-border flex flex-col gap-4;
+}
+
+.player-timeline {
+  @apply relative h-1.5 w-full bg-surface-tertiary rounded-full overflow-hidden;
+}
+
+.player-timeline-progress {
+  @apply absolute top-0 left-0 h-full bg-accent transition-all duration-300;
+}
+
+.player-btn {
+  @apply flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all;
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-txt-secondary);
+}
+
+.player-btn:hover {
+  @apply border-accent text-txt-primary;
+  background: var(--color-accent-dim);
+}
+
+.player-btn-active-replay {
+  @apply border-accent text-accent;
+  background: var(--color-accent-dim);
+}
+
+.player-loading {
+  @apply absolute inset-0 flex items-center justify-center bg-black/40 z-10;
+}
+
+.spinner {
+  @apply w-10 h-10 border-4 border-accent/20 border-t-accent rounded-full animate-spin;
+}
     -webkit-appearance: none;
     width: 18px;
     height: 18px;

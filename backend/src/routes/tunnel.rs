@@ -67,13 +67,37 @@ pub async fn create_tunnel_ticket(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateTicketRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let _db = {
+    let db = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
         }
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
+
+    // Admins bypass this check
+    if user.role != "admin" {
+        let has_access: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM role_connections rc
+                JOIN users u ON u.role_id = rc.role_id
+                WHERE u.id = $1 AND rc.connection_id = $2
+                UNION
+                SELECT 1 FROM role_folders rf
+                JOIN connections c ON c.folder_id = rf.folder_id
+                JOIN users u ON u.role_id = rf.role_id
+                WHERE u.id = $1 AND c.id = $2
+            )",
+        )
+        .bind(user.id)
+        .bind(body.connection_id)
+        .fetch_one(&db.pool)
+        .await?;
+
+        if !has_access {
+            return Err(AppError::Forbidden);
+        }
+    }
 
     let ticket = tunnel_tickets::TunnelTicket {
         user_id: user.id,
@@ -144,6 +168,11 @@ pub async fn ws_tunnel(
                 SELECT 1 FROM role_connections rc
                 JOIN users u ON u.role_id = rc.role_id
                 WHERE u.id = $1 AND rc.connection_id = $2
+                UNION
+                SELECT 1 FROM role_folders rf
+                JOIN connections c ON c.folder_id = rf.folder_id
+                JOIN users u ON u.role_id = rf.role_id
+                WHERE u.id = $1 AND c.id = $2
             )",
         )
         .bind(user.id)
@@ -328,6 +357,10 @@ pub async fn ws_tunnel(
         .try_into()
         .map_err(|_| AppError::Validation("Invalid port number".into()))?;
 
+    let recording_name = recording_path.as_ref().map(|_| {
+        format!("{}-{}.guac", connection_id, chrono::Utc::now().timestamp_millis())
+    });
+
     let handshake = HandshakeParams {
         protocol,
         hostname,
@@ -338,6 +371,7 @@ pub async fn ws_tunnel(
         security,
         ignore_cert,
         recording_path,
+        recording_name: recording_name.clone(),
         create_recording_path: true,
         width: effective_width,
         height: effective_height,
@@ -388,6 +422,38 @@ pub async fn ws_tunnel(
     let nvr_protocol = handshake.protocol.clone();
     let nvr_user_id = user_id;
     let nvr_username = user.username.clone();
+    let started_at = chrono::Utc::now();
+
+    // Log the start of the recording if enabled
+    if let Some(ref rn) = recording_name {
+        let pool_for_init = db.pool.clone();
+        let sid = nvr_session_id.clone();
+        let cid = connection_id;
+        let cname = connection_name.clone();
+        let uid = user_id;
+        let uname = user.username.clone();
+        let rname = rn.clone();
+
+        tokio::spawn(async move {
+            let res = sqlx::query(
+                "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'local', $7)"
+            )
+            .bind(sid)
+            .bind(cid)
+            .bind(cname)
+            .bind(uid)
+            .bind(uname)
+            .bind(rname)
+            .bind(started_at)
+            .execute(&pool_for_init)
+            .await;
+
+            if let Err(e) = res {
+                tracing::error!("Failed to log recording start: {e}");
+            }
+        });
+    }
 
     let audit_pool = db.pool.clone();
     Ok(ws
@@ -403,6 +469,8 @@ pub async fn ws_tunnel(
                 user_id: nvr_user_id,
                 username: nvr_username,
                 client_ip,
+                started_at,
+                db_pool: audit_pool,
             };
             if let Err(e) =
                 tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await

@@ -569,6 +569,7 @@ export interface ActiveSession {
   client_ip: string;
 }
 
+
 export const getActiveSessions = () => request<ActiveSession[]>('/admin/sessions');
 
 export const killSessions = (session_ids: string[]) =>
@@ -576,6 +577,41 @@ export const killSessions = (session_ids: string[]) =>
     method: 'POST',
     body: JSON.stringify({ session_ids }),
   });
+
+// ── Historical Recordings ───────────────────────────────────────────
+
+export interface HistoricalRecording {
+  id: string;
+  session_id: string;
+  connection_id: string;
+  connection_name: string;
+  user_id: string;
+  username: string;
+  started_at: string;
+  duration_secs: number | null;
+  storage_path: string;
+  storage_type: 'local' | 'azure';
+}
+
+export const getRecordings = (params: { user_id?: string; connection_id?: string; limit?: number; offset?: number } = {}) => {
+  const q = new URLSearchParams();
+  if (params.user_id) q.set('user_id', params.user_id);
+  if (params.connection_id) q.set('connection_id', params.connection_id);
+  if (params.limit) q.set('limit', String(params.limit));
+  if (params.offset) q.set('offset', String(params.offset));
+  return request<HistoricalRecording[]>(`/admin/recordings?${q.toString()}`);
+};
+
+/**
+ * Build a WebSocket URL for historical recording playback.
+ */
+export function buildRecordingStreamUrl(recordingId: string): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const token = localStorage.getItem('access_token');
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  return `${proto}//${window.location.host}/api/admin/recordings/${encodeURIComponent(recordingId)}/stream?${params}`;
+}
 
 /**
  * Build a WebSocket URL for the NVR observe endpoint.

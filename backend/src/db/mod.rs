@@ -88,3 +88,20 @@ impl Database {
         Ok(())
     }
 }
+
+// ── Models ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct Recording {
+    pub id: uuid::Uuid,
+    pub session_id: String,
+    pub connection_id: uuid::Uuid,
+    pub connection_name: String,
+    pub user_id: uuid::Uuid,
+    pub username: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub duration_secs: Option<i32>,
+    pub storage_path: String,
+    pub storage_type: String, // 'local' or 'azure'
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}

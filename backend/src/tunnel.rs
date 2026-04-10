@@ -17,6 +17,8 @@ pub struct NvrContext {
     pub user_id: uuid::Uuid,
     pub username: String,
     pub client_ip: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub db_pool: sqlx::Pool<sqlx::Postgres>,
 }
 
 /// Parameters injected into the guacd Guacamole protocol handshake.
@@ -30,6 +32,7 @@ pub struct HandshakeParams {
     pub security: Option<String>,
     pub ignore_cert: bool,
     pub recording_path: Option<String>,
+    pub recording_name: Option<String>,
     pub create_recording_path: bool,
     pub width: u32,
     pub height: u32,
@@ -67,6 +70,9 @@ impl HandshakeParams {
 
         if let Some(ref rp) = self.recording_path {
             m.insert("recording-path", rp.clone());
+            if let Some(ref rn) = self.recording_name {
+                m.insert("recording-name", rn.clone());
+            }
             if self.create_recording_path {
                 m.insert("create-recording-path", "true".into());
             }
@@ -575,6 +581,22 @@ pub async fn proxy(
     if let Some(ref ctx) = nvr {
         ctx.registry.unregister(&ctx.session_id).await;
         tracing::info!("NVR session {} unregistered", ctx.session_id);
+
+        // Update recording duration
+        let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
+        let sid = ctx.session_id.clone();
+        let pool = ctx.db_pool.clone();
+
+        tokio::spawn(async move {
+            let res = sqlx::query("UPDATE recordings SET duration_secs = $1 WHERE session_id = $2")
+                .bind(duration)
+                .bind(sid)
+                .execute(&pool)
+                .await;
+            if let Err(e) = res {
+                tracing::error!("Failed to update recording duration: {e}");
+            }
+        });
     }
 
     tracing::info!("Tunnel closed");

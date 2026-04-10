@@ -309,6 +309,13 @@ async fn sync_pass(
             match upload_file_to_azure(&azure, &name, &path).await {
                 Ok(_) => {
                     synced.insert(name.clone());
+
+                    // Update database metadata to reflect Azure storage
+                    let _ = sqlx::query("UPDATE recordings SET storage_type = 'azure' WHERE storage_path = $1")
+                        .bind(&name)
+                        .execute(pool)
+                        .await;
+
                     // Delete local file after successful upload to prevent disk growth
                     if let Err(e) = tokio::fs::remove_file(&path).await {
                         tracing::warn!(

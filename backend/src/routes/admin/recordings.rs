@@ -84,6 +84,19 @@ async fn handle_recording_stream(
     state: SharedState,
     recording: Recording,
 ) -> anyhow::Result<()> {
+    use futures_util::SinkExt;
+
+    // Split the socket so we can drain incoming messages (keepalive pings,
+    // client handshake responses) while sending recording data.
+    let (mut sender, mut receiver) = socket.split();
+    let drain_handle = tokio::spawn(async move {
+        while let Some(msg) = receiver.next().await {
+            if msg.is_err() {
+                break;
+            }
+        }
+    });
+
     let mut reader = if recording.storage_type == "local" {
         let path = format!("/var/lib/guacamole/recordings/{}", recording.storage_path);
         tracing::info!(
@@ -137,7 +150,7 @@ async fn handle_recording_stream(
         duration_ms.to_string().len(),
         duration_ms
     );
-    socket
+    sender
         .send(axum::extract::ws::Message::Text(header))
         .await?;
 
@@ -187,7 +200,7 @@ async fn handle_recording_stream(
                                         guac_elapsed.to_string().len(),
                                         guac_elapsed
                                     );
-                                    socket.send(axum::extract::ws::Message::Text(prog)).await?;
+                                    sender.send(axum::extract::ws::Message::Text(prog)).await?;
                                     last_progress_sent = std::time::Instant::now();
                                 }
                             }
@@ -198,7 +211,7 @@ async fn handle_recording_stream(
             }
 
             // Send standard instruction
-            socket
+            sender
                 .send(axum::extract::ws::Message::Text(instruction.raw))
                 .await?;
         }
@@ -206,8 +219,10 @@ async fn handle_recording_stream(
 
     // Signal end-of-recording so the frontend can close gracefully
     let end_msg = format!("{}.nvrend;", "nvrend".len());
-    let _ = socket.send(axum::extract::ws::Message::Text(end_msg)).await;
-    let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
+    let _ = sender.send(axum::extract::ws::Message::Text(end_msg)).await;
+    let _ = sender.send(axum::extract::ws::Message::Close(None)).await;
+
+    drain_handle.abort();
 
     Ok(())
 }
@@ -258,9 +273,11 @@ impl GuacamoleParser {
             // We need 'len' characters. Find the byte offset for 'len' characters.
             let mut char_count = 0;
             let mut content_end_offset = 0;
+            let mut found_end = false;
             for (i, _) in after_prefix.char_indices() {
                 if char_count == len {
                     content_end_offset = i;
+                    found_end = true;
                     break;
                 }
                 char_count += 1;
@@ -268,6 +285,11 @@ impl GuacamoleParser {
 
             if char_count < len {
                 return None; // Need more data
+            }
+
+            // Content ends exactly at buffer boundary — terminator not yet available
+            if !found_end {
+                return None;
             }
 
             let content = &after_prefix[..content_end_offset];

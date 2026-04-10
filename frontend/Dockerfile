@@ -18,6 +18,12 @@ COPY http_only.conf /etc/nginx/http_only.conf
 COPY https_enabled.conf /etc/nginx/https_enabled.conf
 COPY ssl-init.sh /docker-entrypoint.d/40-ssl-init.sh
 
+# Ensure Unix line endings on all config files (Windows checkouts may have CRLF)
+RUN sed -i 's/\r$//' /etc/nginx/common.fragment \
+                      /etc/nginx/http_only.conf \
+                      /etc/nginx/https_enabled.conf \
+                      /docker-entrypoint.d/40-ssl-init.sh
+
 # Run as non-root user — pre-create all required dirs
 RUN mkdir -p /var/cache/nginx/client_temp /var/cache/nginx/proxy_temp \
              /var/cache/nginx/fastcgi_temp /var/cache/nginx/uwsgi_temp \

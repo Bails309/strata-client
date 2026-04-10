@@ -112,43 +112,43 @@ test.describe('Role CRUD', () => {
   });
 });
 
-// ── Connection Groups CRUD ───────────────────────────────────────────
+// ── Connection Folder CRUD ───────────────────────────────────────────
 
-test.describe('Connection Group CRUD', () => {
-  let groupId: string;
+test.describe('Connection Folder CRUD', () => {
+  let folderId: string;
 
-  test('create a connection group', async ({ request }) => {
-    const res = await request.post('/api/admin/connection-groups', {
+  test('create a connection folder', async ({ request }) => {
+    const res = await request.post('/api/admin/connection-folders', {
       headers: headers(),
-      data: { name: `e2e-group-${Date.now()}` },
+      data: { name: `e2e-folder-${Date.now()}` },
     });
     expect(res.ok()).toBe(true);
     const body = await res.json();
     expect(body.id).toBeTruthy();
-    groupId = body.id;
+    folderId = body.id;
   });
 
-  test('list groups includes the created one', async ({ request }) => {
-    const res = await request.get('/api/admin/connection-groups', { headers: headers() });
+  test('list folders includes the created one', async ({ request }) => {
+    const res = await request.get('/api/admin/connection-folders', { headers: headers() });
     expect(res.ok()).toBe(true);
     const list = await res.json();
-    expect(list.some((g: any) => g.id === groupId)).toBe(true);
+    expect(list.some((g: any) => g.id === folderId)).toBe(true);
   });
 
-  test('update the group', async ({ request }) => {
-    test.skip(!groupId, 'No group to update');
-    const res = await request.put(`/api/admin/connection-groups/${groupId}`, {
+  test('update the folder', async ({ request }) => {
+    test.skip(!folderId, 'No folder to update');
+    const res = await request.put(`/api/admin/connection-folders/${folderId}`, {
       headers: headers(),
-      data: { name: 'e2e-group-updated' },
+      data: { name: 'e2e-folder-updated' },
     });
     expect(res.ok()).toBe(true);
     const body = await res.json();
-    expect(body.name).toBe('e2e-group-updated');
+    expect(body.name).toBe('e2e-folder-updated');
   });
 
-  test('delete the group', async ({ request }) => {
-    test.skip(!groupId, 'No group to delete');
-    const res = await request.delete(`/api/admin/connection-groups/${groupId}`, {
+  test('delete the folder', async ({ request }) => {
+    test.skip(!folderId, 'No folder to delete');
+    const res = await request.delete(`/api/admin/connection-folders/${folderId}`, {
       headers: headers(),
     });
     expect(res.ok()).toBe(true);

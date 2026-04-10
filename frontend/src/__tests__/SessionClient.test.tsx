@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act as rtlAct } from '@testing-library/react';
+﻿import { render, fireEvent, waitFor, act as rtlAct, within } from '@testing-library/react';
 import SessionClient from '../pages/SessionClient';
 import * as SessionManagerModule from '../components/SessionManager';
 import * as api from '../api';
@@ -19,8 +19,8 @@ vi.mock('../api', () => ({
   getMe: vi.fn(),
 }));
 
-// Mock ResizeObserver properly
-globalThis.ResizeObserver = class {
+// Mock ResizeObserver
+globalThis.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -28,38 +28,42 @@ globalThis.ResizeObserver = class {
 
 describe('SessionClient', () => {
   let mockSession: any;
-  const mockAttachSession = vi.fn();
   const mockCreateSession = vi.fn();
+  const mockSetActiveSessionId = vi.fn();
+
+  // Mutable state that tracks what createSession produces, so the mock
+  // returns the session in `sessions` on subsequent renders.
+  const state = { sessions: [] as any[], activeId: null as string | null };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    
+    state.sessions = [];
+    state.activeId = null;
+
     mockSession = {
       id: 'sess-test-conn-id',
       connectionId: 'test-conn-id',
       name: 'Test Session',
       protocol: 'ssh',
       client: {
-        getDisplay: () => ({ 
-          getElement: () => document.createElement('div'), 
-          getWidth: () => 1920, 
-          getHeight: () => 1080, 
-          scale: vi.fn() 
+        getDisplay: () => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: vi.fn(),
         }),
-        connect: vi.fn(), 
-        disconnect: vi.fn(), 
-        sendSize: vi.fn(), 
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        sendSize: vi.fn(),
         sendKeyEvent: vi.fn(),
-        onerror: null, 
+        onerror: null,
         onstatechange: null,
-        onclipboard: null, 
-        onfilesystem: null, 
-        onfile: null, 
+        onclipboard: null,
+        onfilesystem: null,
+        onfile: null,
         onrequired: null,
-        createArgumentValueStream: vi.fn(() => ({
-          write: vi.fn(),
-          onack: null,
-        })),
+        createArgumentValueStream: vi.fn(() => ({ sendBlob: vi.fn(), sendEnd: vi.fn(), write: vi.fn(), onack: null })),
+        createClipboardStream: vi.fn(() => ({ sendBlob: vi.fn(), sendEnd: vi.fn(), write: vi.fn(), onack: null })),
       },
       tunnel: { onerror: null, onstatechange: null, oninstruction: null },
       displayEl: document.createElement('div'),
@@ -70,89 +74,103 @@ describe('SessionClient', () => {
       remoteClipboard: '',
     };
 
+    // When createSession is called, put the session into mutable state
+    // so subsequent useSessionManager calls see it.
+    mockCreateSession.mockImplementation(() => {
+      state.sessions = [mockSession];
+      state.activeId = mockSession.id;
+      return mockSession;
+    });
+
     vi.mocked(api.getConnectionInfo).mockResolvedValue({ protocol: 'ssh', has_credentials: true });
-    vi.mocked(api.getConnections).mockResolvedValue([{ id: 'test-conn-id', name: 'Test Session', protocol: 'ssh', hostname: 'localhost', port: 22 }]);
+    vi.mocked(api.getConnections).mockResolvedValue([
+      { id: 'test-conn-id', name: 'Test Session', protocol: 'ssh', hostname: 'localhost', port: 22 },
+    ]);
     vi.mocked(api.createTunnelTicket).mockResolvedValue({ ticket: 'test-ticket' });
     vi.mocked(api.getCredentialProfiles).mockResolvedValue([]);
     vi.mocked(api.getMe).mockResolvedValue({ id: '1', username: 'admin', role: 'admin' } as any);
 
-    vi.stubGlobal('requestAnimationFrame', (cb: any) => cb());
-    
-    if (!document.getElementById('root')) {
-      const root = document.createElement('div');
-      root.id = 'root';
-      document.body.appendChild(root);
-    } else {
-      document.getElementById('root')!.innerHTML = '';
-    }
+    vi.stubGlobal('requestAnimationFrame', (cb: any) => {
+      cb();
+      return 0;
+    });
 
-    vi.mocked(SessionManagerModule.useSessionManager).mockReturnValue({
-      sessions: [mockSession],
-      activeSessionId: mockSession.id,
-      getSession: vi.fn(() => mockSession),
-      createSession: mockCreateSession.mockReturnValue(mockSession),
-      attachSession: mockAttachSession,
+    document.body.innerHTML = '<div id="root"></div>';
+
+    // useSessionManager reads from mutable `state` so sessions become
+    // visible after createSession is called.
+    vi.mocked(SessionManagerModule.useSessionManager).mockImplementation(() => ({
+      sessions: state.sessions,
+      activeSessionId: state.activeId,
+      getSession: vi.fn((id: string) => state.sessions.find((s: any) => s.connectionId === id)),
+      createSession: mockCreateSession,
       tiledSessionIds: [],
       setTiledSessionIds: vi.fn(),
       focusedSessionIds: [],
       setFocusedSessionIds: vi.fn(),
-      setActiveSessionId: vi.fn(),
+      setActiveSessionId: mockSetActiveSessionId,
       closeSession: vi.fn(),
       sessionBarCollapsed: false,
       setSessionBarCollapsed: vi.fn(),
       barWidth: 180,
       canShare: false,
-    } as any);
+    } as any));
   });
 
-  const renderSessionClient = async (id = 'test-conn-id', name = 'Test Session', protocol = 'ssh') => {
-    let result: any;
+  const renderSessionClient = async (id = 'test-conn-id') => {
     await rtlAct(async () => {
-      result = render(
-        <MemoryRouter initialEntries={[`/session/${id}?name=${name}&protocol=${protocol}`]}>
+      render(
+        <MemoryRouter initialEntries={[`/session/${id}?name=Test&protocol=ssh`]}>
           <Routes>
             <Route path="/session/:connectionId" element={<SessionClient />} />
           </Routes>
-        </MemoryRouter>
+        </MemoryRouter>,
       );
     });
-    return result;
+    // Let the async Phase 3 effect (createTunnelTicket â†’ createSession) complete
+    await rtlAct(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
   };
 
   it('attaches the session on mount', async () => {
     await renderSessionClient();
     await waitFor(() => {
-      expect(mockAttachSession).toHaveBeenCalled();
-    }, { timeout: 2000 });
+      expect(mockCreateSession).toHaveBeenCalled();
+    });
   });
 
   it('handles SSH credential requirement', async () => {
     await renderSessionClient();
-    
+
+    // wireSessionErrorHandlers sets onrequired on the newly created session
     await waitFor(() => {
       expect(typeof mockSession.client.onrequired).toBe('function');
     });
-    
+
     await rtlAct(async () => {
       mockSession.client.onrequired(['password']);
     });
 
+    const root = within(document.getElementById('root')!);
     await waitFor(() => {
-      expect(screen.getByText(/Credentials Required/i)).toBeInTheDocument();
+      expect(root.getByText(/Credentials Required/i)).toBeInTheDocument();
     });
 
     const passInput = document.querySelector('input[type="password"]');
     fireEvent.change(passInput!, { target: { value: 'secret' } });
-    
-    const submitBtn = screen.getByRole('button', { name: /Connect/i });
-    fireEvent.click(submitBtn);
 
-    expect(mockSession.client.createArgumentValueStream).toHaveBeenCalledWith('text/plain', 'password');
+    const form = document.querySelector('form')!;
+    fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(mockSession.client.createArgumentValueStream).toHaveBeenCalledWith('text/plain', 'password');
+    });
   });
 
   it('handles server-initiated disconnect instruction', async () => {
     await renderSessionClient();
-    
+
     await waitFor(() => {
       expect(typeof mockSession.tunnel.oninstruction).toBe('function');
     });
@@ -167,47 +185,42 @@ describe('SessionClient', () => {
       }
     });
 
+    const root = within(document.getElementById('root')!);
     await waitFor(() => {
-      expect(screen.getByText(/session has ended/i)).toBeInTheDocument();
+      expect(root.getByText(/session has ended/i)).toBeInTheDocument();
     });
   });
 
-  it('triggers clipboard sync on mouse enter', async () => {
-    const mockReadText = vi.fn().mockResolvedValue('new-from-local');
-    Object.assign(navigator, {
-      clipboard: { readText: mockReadText },
-    });
-
+  it('focuses container on mouseDown', async () => {
     await renderSessionClient();
-    
-    // Fire on the fixed container that carries the onMouseEnter
-    const root = document.getElementById('root')!;
-    const container = root.querySelector('.fixed') as HTMLElement;
-    expect(container).toBeTruthy();
-    
-    fireEvent.mouseEnter(container);
 
     await waitFor(() => {
-      expect(mockReadText).toHaveBeenCalled();
+      expect(document.querySelector('[tabindex="0"]')).toBeTruthy();
     });
+
+    const container = document.querySelector('[tabindex="0"]') as HTMLElement;
+    container.focus = vi.fn();
+    fireEvent.mouseDown(container);
+
+    expect(container.focus).toHaveBeenCalled();
   });
 
   it('handles drag-and-drop file upload', async () => {
     await renderSessionClient();
-    
+
     mockSession.filesystems = [
-      { object: { createOutputStream: vi.fn(() => ({ onack: null })) }, name: 'Drive' }
+      { object: { createOutputStream: vi.fn(() => ({ onack: null })) }, name: 'Drive' },
     ];
-    
+
+    await waitFor(() => {
+      expect(document.querySelector('[tabindex="0"]')).toBeTruthy();
+    });
+
     const focusable = document.querySelector('[tabindex="0"]')!;
     const file = new File(['hello'], 'test.txt', { type: 'text/plain' });
-    
+
     fireEvent.dragOver(focusable);
-    fireEvent.drop(focusable, {
-      dataTransfer: {
-        files: [file],
-      },
-    });
+    fireEvent.drop(focusable, { dataTransfer: { files: [file] } });
 
     await waitFor(() => {
       expect(mockSession.filesystems[0].object.createOutputStream).toHaveBeenCalled();

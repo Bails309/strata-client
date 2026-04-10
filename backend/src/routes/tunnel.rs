@@ -355,11 +355,16 @@ pub async fn ws_tunnel(
     )
     .await?;
 
-    // Update last_accessed timestamp on the connection
-    sqlx::query("UPDATE connections SET last_accessed = now() WHERE id = $1")
-        .bind(connection_id)
-        .execute(&db.pool)
-        .await?;
+    // Update per-user last_accessed timestamp
+    sqlx::query(
+        "INSERT INTO user_connection_access (user_id, connection_id, last_accessed)
+         VALUES ($1, $2, now())
+         ON CONFLICT (user_id, connection_id) DO UPDATE SET last_accessed = now()",
+    )
+    .bind(user_id)
+    .bind(connection_id)
+    .execute(&db.pool)
+    .await?;
 
     // Extract client IP (X-Forwarded-For > ConnectInfo)
     let client_ip = headers

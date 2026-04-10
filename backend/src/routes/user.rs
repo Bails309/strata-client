@@ -58,6 +58,7 @@ pub async fn me(
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
+        "full_name": user.full_name,
         "role": user.role,
         "sub": user.sub,
         "client_ip": client_ip,
@@ -100,20 +101,23 @@ pub async fn my_connections(
         // Admins see all connections regardless of role assignment
         sqlx::query_as(
             "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, c.last_accessed
+                    c.folder_id, cf.name AS folder_name, uca.last_accessed
              FROM connections c
              LEFT JOIN connection_folders cf ON cf.id = c.folder_id
+             LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
              WHERE c.soft_deleted_at IS NULL
              ORDER BY c.name",
         )
+        .bind(user.id)
         .fetch_all(&db.pool)
         .await?
     } else {
         sqlx::query_as(
             "SELECT DISTINCT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, c.last_accessed
+                    c.folder_id, cf.name AS folder_name, uca.last_accessed
              FROM connections c
              LEFT JOIN connection_folders cf ON cf.id = c.folder_id
+             LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
              JOIN users u ON u.id = $1
              WHERE c.soft_deleted_at IS NULL
              AND (
@@ -626,9 +630,13 @@ pub async fn set_credential_mapping(
         sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM connections c
-                JOIN role_connections rc ON rc.connection_id = c.id
-                JOIN users u ON u.role_id = rc.role_id
-                WHERE c.id = $1 AND u.id = $2 AND c.soft_deleted_at IS NULL
+                JOIN users u ON u.id = $2
+                WHERE c.id = $1 AND c.soft_deleted_at IS NULL
+                AND (
+                    EXISTS (SELECT 1 FROM role_connections rc WHERE rc.role_id = u.role_id AND rc.connection_id = c.id)
+                    OR
+                    EXISTS (SELECT 1 FROM role_folders rf WHERE rf.role_id = u.role_id AND rf.folder_id = c.folder_id)
+                )
             )",
         )
         .bind(body.connection_id)

@@ -17,6 +17,7 @@ pub struct AuthUser {
     pub id: Uuid,
     pub sub: String,
     pub username: String,
+    pub full_name: Option<String>,
     pub role: String,
     pub can_manage_system: bool,
     pub can_manage_users: bool,
@@ -33,6 +34,7 @@ pub struct AuthUser {
 struct UserPermissionsRow {
     pub id: Uuid,
     pub username: String,
+    pub full_name: Option<String>,
     #[sqlx(rename = "name")]
     pub role: String,
     pub can_manage_system: bool,
@@ -154,7 +156,7 @@ async fn try_local_jwt(
         .map_err(|_| AppError::Auth("Invalid token subject".into()))?;
 
     let row: Option<UserPermissionsRow> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name,
+        "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
                 r.can_create_connection_folders, r.can_create_sharing_profiles
@@ -173,6 +175,7 @@ async fn try_local_jwt(
         id: user.id,
         sub: claims.sub,
         username: user.username,
+        full_name: user.full_name,
         role: user.role,
         can_manage_system: user.can_manage_system,
         can_manage_users: user.can_manage_users,
@@ -204,7 +207,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
     let claims = auth::validate_token(&issuer_url, &client_id, token).await?;
 
     let row: Option<UserPermissionsRow> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name,
+        "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
                 r.can_create_connection_folders, r.can_create_sharing_profiles
@@ -227,6 +230,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         id: user.id,
         sub: claims.sub,
         username: user.username,
+        full_name: user.full_name,
         role: user.role,
         can_manage_system: user.can_manage_system,
         can_manage_users: user.can_manage_users,
@@ -276,6 +280,7 @@ mod tests {
             id: Uuid::new_v4(),
             sub: "sub-123".into(),
             username: "alice".into(),
+            full_name: Some("Alice Smith".into()),
             role: "admin".into(),
             can_manage_system: false,
             can_manage_users: false,
@@ -300,6 +305,7 @@ mod tests {
             id: Uuid::nil(),
             sub: "sub".into(),
             username: "bob".into(),
+            full_name: None,
             role: "user".into(),
             can_manage_system: false,
             can_manage_users: false,
@@ -323,6 +329,7 @@ mod tests {
             id,
             sub: "oidc|12345".into(),
             username: "charlie".into(),
+            full_name: Some("Charlie Brown".into()),
             role: "admin".into(),
             can_manage_system: false,
             can_manage_users: false,
@@ -346,6 +353,7 @@ mod tests {
             id: Uuid::new_v4(),
             sub: "sub-abc".into(),
             username: "dave".into(),
+            full_name: None,
             role: "viewer".into(),
             can_manage_system: false,
             can_manage_users: false,

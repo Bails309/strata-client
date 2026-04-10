@@ -44,7 +44,7 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
   const { theme, preference, cycle } = useTheme();
 
-  const initial = user?.username?.charAt(0).toUpperCase() || 'S';
+  const initial = (user?.full_name || user?.username || 'S').charAt(0).toUpperCase();
 
   return (
     <SidebarContext.Provider value={sidebarWidth}>
@@ -123,7 +123,7 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
               </div>
               {!collapsed && (
                 <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-semibold text-txt-primary truncate">{user?.username || 'Guest'}</span>
+                  <span className="text-xs font-semibold text-txt-primary truncate">{user?.full_name || user?.username || 'Guest'}</span>
                   <span className="text-[0.625rem] text-txt-tertiary uppercase tracking-wider">{user?.role || 'User'}</span>
                 </div>
               )}

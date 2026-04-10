@@ -132,15 +132,6 @@ impl SessionBuffer {
         }
     }
 
-    /// Return all buffered frames from `offset_secs` seconds ago to now.
-    pub fn frames_from_offset(&self, offset_secs: u64) -> Vec<String> {
-        let cutoff = Instant::now() - Duration::from_secs(offset_secs);
-        self.frames
-            .iter()
-            .filter(|f| f.timestamp >= cutoff)
-            .map(|f| f.data.clone())
-            .collect()
-    }
 
     /// Return buffered frames with relative timing (milliseconds since first
     /// frame in the selection).  Used by the observe endpoint to pace replay.
@@ -495,14 +486,6 @@ mod tests {
         assert!(!result.contains("args"));
     }
 
-    #[test]
-    fn session_buffer_frames_from_offset_zero() {
-        let mut buf = SessionBuffer::new();
-        buf.push("4.size,1.0,4.1920,4.1080;".into());
-        buf.push("3.img,1.0,2.12;".into());
-        let frames = buf.frames_from_offset(300);
-        assert_eq!(frames.len(), 2);
-    }
 
     #[test]
     fn session_buffer_push_filtered_out_entirely() {

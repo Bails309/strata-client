@@ -98,6 +98,7 @@ export async function logout() {
 export interface MeResponse {
   id: string;
   username: string;
+  full_name?: string;
   role: string;
   sub?: string;
   client_ip: string;

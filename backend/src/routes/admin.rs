@@ -1768,6 +1768,9 @@ pub async fn kill_sessions(
 pub struct ObserveQuery {
     /// How many seconds back to replay (0 = live only, 300 = full 5-min buffer)
     pub offset: Option<u64>,
+    /// Playback speed multiplier for replay (default: 4.0).
+    /// Values >1 speed up, 1.0 = real-time, 0 = dump as fast as possible.
+    pub speed: Option<f64>,
 }
 
 pub async fn observe_session(
@@ -1788,37 +1791,98 @@ pub async fn observe_session(
         .ok_or_else(|| AppError::NotFound("Active session not found".into()))?;
 
     let offset = query.offset.unwrap_or(300); // default: replay full buffer
+    let speed = query.speed.unwrap_or(4.0).max(0.0); // default 4× speed
 
     // Snapshot the buffer and subscribe to live frames
-    let (buffered_frames, mut rx) = {
+    let (size_inst, timed_frames, mut rx) = {
         let buffer = session.buffer.read().await;
-        let mut frames = Vec::new();
 
-        // Always inject the last known size instruction first
-        if let Some(size_inst) = buffer.last_size() {
-            frames.push(size_inst.to_string());
-        }
+        let size = buffer.last_size().map(|s| s.to_string());
 
         // Always send at least 5 s of recent frames so the observer has a
         // complete initial screen state, even for "Jump to Live" (offset 0).
         let effective_offset = if offset == 0 { 5 } else { offset };
-        frames.extend(buffer.frames_from_offset(effective_offset));
+        let timed = buffer.frames_with_timing(effective_offset);
 
         let rx = session.broadcast_tx.subscribe();
-        (frames, rx)
+        (size, timed, rx)
     };
+
+    // Total replay duration in ms (for progress reporting)
+    let total_replay_ms = timed_frames.last().map(|(t, _)| *t).unwrap_or(0);
 
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |mut socket| async move {
             use axum::extract::ws::Message;
 
-            // Phase 1: Replay buffered frames as fast as possible
-            for frame in buffered_frames {
-                if socket.send(Message::Text(frame)).await.is_err() {
+            // Helper: encode a Guacamole instruction from opcode + args.
+            // Format: "<opcode_len>.<opcode>,<arg1_len>.<arg1>,…;"
+            fn guac_inst(opcode: &str, args: &[&str]) -> String {
+                let mut out = format!("{}.{}", opcode.len(), opcode);
+                for arg in args {
+                    out.push_str(&format!(",{}.{}", arg.len(), arg));
+                }
+                out.push(';');
+                out
+            }
+
+            // Send total replay duration so the frontend can show a progress bar.
+            let total_str = total_replay_ms.to_string();
+            let speed_str = format!("{speed}");
+            let header = guac_inst("nvrheader", &[&total_str, &speed_str]);
+            if socket.send(Message::Text(header)).await.is_err() {
+                return;
+            }
+
+            // Send last-known size instruction first
+            if let Some(size_inst) = size_inst {
+                if socket.send(Message::Text(size_inst)).await.is_err() {
                     return;
                 }
             }
+
+            // Phase 1: Paced replay of buffered frames
+            if !timed_frames.is_empty() {
+                let is_live_only = offset == 0;
+
+                for i in 0..timed_frames.len() {
+                    let (delay_ms, ref frame) = timed_frames[i];
+
+                    // Pace replay: wait the proportional delay between frames
+                    // (skip pacing for live-only mode where we just need the
+                    // latest state, or when speed is 0)
+                    if !is_live_only && speed > 0.0 && i > 0 {
+                        let prev_ms = timed_frames[i - 1].0;
+                        let gap = delay_ms.saturating_sub(prev_ms);
+                        if gap > 0 {
+                            let adjusted = (gap as f64 / speed) as u64;
+                            // Cap individual sleeps to 500ms to stay responsive
+                            let sleep_ms = adjusted.min(500);
+                            if sleep_ms > 5 {
+                                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+                            }
+                        }
+                    }
+
+                    // Send progress marker periodically
+                    if i % 20 == 0 || i == timed_frames.len() - 1 {
+                        let ms_str = delay_ms.to_string();
+                        let progress = guac_inst("nvrprogress", &[&ms_str]);
+                        if socket.send(Message::Text(progress)).await.is_err() {
+                            return;
+                        }
+                    }
+
+                    if socket.send(Message::Text(frame.clone())).await.is_err() {
+                        return;
+                    }
+                }
+            }
+
+            // Send replay-done marker so the frontend knows we're now live
+            let done = guac_inst("nvrreplaydone", &[]);
+            let _ = socket.send(Message::Text(done)).await;
 
             // Phase 2: Forward live frames from the broadcast channel while
             // draining client-sent messages (e.g. Guacamole tunnel pings)

@@ -646,6 +646,7 @@ describe('buildNvrObserveUrl', () => {
     expect(url).toContain('/api/admin/sessions/sess1/observe');
     expect(url).toContain('token=jwt123');
     expect(url).toContain('offset=120');
+    expect(url).toContain('speed=4'); // default speed
   });
 
   it('builds ws: URL when page is http', () => {
@@ -656,6 +657,7 @@ describe('buildNvrObserveUrl', () => {
     const url = buildNvrObserveUrl('sess2');
     expect(url).toContain('ws://localhost:3000');
     expect(url).toContain('offset=300'); // default
+    expect(url).toContain('speed=4');    // default
   });
 
   it('encodes session id in URL', () => {

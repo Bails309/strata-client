@@ -142,6 +142,28 @@ impl SessionBuffer {
             .collect()
     }
 
+    /// Return buffered frames with relative timing (milliseconds since first
+    /// frame in the selection).  Used by the observe endpoint to pace replay.
+    pub fn frames_with_timing(&self, offset_secs: u64) -> Vec<(u64, String)> {
+        let cutoff = Instant::now() - Duration::from_secs(offset_secs);
+        let selected: Vec<&BufferedFrame> = self
+            .frames
+            .iter()
+            .filter(|f| f.timestamp >= cutoff)
+            .collect();
+
+        let origin = selected.first().map(|f| f.timestamp);
+        selected
+            .iter()
+            .map(|f| {
+                let delay = origin
+                    .map(|o| f.timestamp.duration_since(o).as_millis() as u64)
+                    .unwrap_or(0);
+                (delay, f.data.clone())
+            })
+            .collect()
+    }
+
     /// How many seconds of data the buffer currently holds.
     pub fn buffer_depth_secs(&self) -> u64 {
         match (self.frames.front(), self.frames.back()) {

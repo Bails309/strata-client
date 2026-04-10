@@ -18,10 +18,15 @@ export default function NvrPlayer() {
     const o = searchParams.get('offset');
     return o ? parseInt(o, 10) : 300;
   });
+  const [speed, setSpeed] = useState(4);
   const [errorMsg, setErrorMsg] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const elapsedRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+
+  // Replay progress state
+  const [replayTotalMs, setReplayTotalMs] = useState(0);
+  const [replayProgressMs, setReplayProgressMs] = useState(0);
 
   const connectionName = searchParams.get('name') || 'Session';
   const username = searchParams.get('user') || '';
@@ -43,7 +48,7 @@ export default function NvrPlayer() {
   }, []);
 
   // Connect / reconnect
-  const connect = useCallback((rewindSecs: number) => {
+  const connect = useCallback((rewindSecs: number, playbackSpeed: number) => {
     if (!sessionId || !containerRef.current) return;
     cleanup();
 
@@ -53,14 +58,13 @@ export default function NvrPlayer() {
     setPhase('connecting');
     setErrorMsg('');
     setOffset(rewindSecs);
+    setSpeed(playbackSpeed);
+    setReplayTotalMs(0);
+    setReplayProgressMs(0);
     elapsedRef.current = 0;
     setElapsed(0);
 
-    // Guacamole.WebSocketTunnel.connect(data) always appends "?" + data to
-    // the URL.  We must therefore pass only the base path to the constructor
-    // and supply token / offset as the connect-data so that the query string
-    // is not doubled (which would corrupt the `offset` value).
-    const fullUrl = buildNvrObserveUrl(sessionId, rewindSecs);
+    const fullUrl = buildNvrObserveUrl(sessionId, rewindSecs, playbackSpeed);
     const qIdx = fullUrl.indexOf('?');
     const tunnelBase = qIdx >= 0 ? fullUrl.substring(0, qIdx) : fullUrl;
     const tunnelQuery = qIdx >= 0 ? fullUrl.substring(qIdx + 1) : '';
@@ -75,41 +79,38 @@ export default function NvrPlayer() {
     displayEl.style.background = '#000';
     container.appendChild(displayEl);
 
-    // Detect replay→live transition using instruction handler on the tunnel.
-    // During replay, instructions arrive in rapid bursts. Once the backend
-    // switches to live broadcast, the rate drops to real-time.
-    //
-    // IMPORTANT: we must preserve the Guacamole Client's original
-    // oninstruction handler and forward every instruction to it, otherwise
-    // the Client never processes drawing/size/sync instructions and the
-    // display stays blank.
+    // Intercept custom NVR instructions from the backend before they reach
+    // the Guacamole Client (which would ignore them).
+    const clientHandler = tunnel.oninstruction;
+
     if (rewindSecs > 0) {
       setPhase('replaying');
-      let lastInstructionTime = Date.now();
-      let instructionCount = 0;
-
-      const clientHandler = tunnel.oninstruction;
-
-      tunnel.oninstruction = (opcode: string, args: string[]) => {
-        // Always forward to the Client so the display renders
-        if (clientHandler) clientHandler(opcode, args);
-
-        instructionCount++;
-        const now = Date.now();
-        const gap = now - lastInstructionTime;
-        lastInstructionTime = now;
-
-        // After processing a burst of instructions (>50), if the gap
-        // between instructions exceeds 80ms, we've caught up to live.
-        if (instructionCount > 50 && gap > 80) {
-          setPhase('live');
-          // Restore the Client's handler so it continues processing
-          tunnel.oninstruction = clientHandler;
-        }
-      };
     } else {
       setPhase('live');
     }
+
+    tunnel.oninstruction = (opcode: string, args: string[]) => {
+      // Custom: nvrheader — total replay duration + speed
+      if (opcode === 'nvrheader') {
+        const totalMs = parseInt(args[0] || '0', 10);
+        setReplayTotalMs(totalMs);
+        return;
+      }
+      // Custom: nvrprogress — current replay position in ms
+      if (opcode === 'nvrprogress') {
+        const ms = parseInt(args[0] || '0', 10);
+        setReplayProgressMs(ms);
+        return;
+      }
+      // Custom: nvrreplaydone — replay finished, now live
+      if (opcode === 'nvrreplaydone') {
+        setPhase('live');
+        return;
+      }
+
+      // Forward everything else to the Guacamole Client
+      if (clientHandler) clientHandler(opcode, args);
+    };
 
     client.onerror = (status: Guacamole.Status) => {
       setPhase('error');
@@ -141,11 +142,8 @@ export default function NvrPlayer() {
       }
     };
 
-    // Re-scale when the container resizes (window resize, sidebar toggle)
     const resizeObserver = new ResizeObserver(scaleToFit);
     resizeObserver.observe(container);
-
-    // Re-scale when the remote display dimensions change (size instruction)
     display.onresize = scaleToFit;
 
     // Elapsed timer
@@ -163,7 +161,7 @@ export default function NvrPlayer() {
 
   // Initial connect
   useEffect(() => {
-    connect(offset);
+    connect(offset, speed);
     return cleanup;
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -173,10 +171,21 @@ export default function NvrPlayer() {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatMs = (ms: number) => {
+    const totalSecs = Math.floor(ms / 1000);
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const replayPct = replayTotalMs > 0
+    ? Math.min(100, (replayProgressMs / replayTotalMs) * 100)
+    : 0;
+
   return (
     <div className="flex flex-col h-screen bg-black">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-2 bg-surface border-b border-border shrink-0">
+      <div className="flex items-center gap-3 px-4 py-2 bg-surface border-b border-border shrink-0 flex-wrap">
         <button
           onClick={() => navigate(-1)}
           className="text-txt-secondary hover:text-txt-primary text-sm flex items-center gap-1"
@@ -208,11 +217,11 @@ export default function NvrPlayer() {
           )}
           {phase === 'replaying' && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 animate-pulse">
-              ⏪ Replaying buffer…
+              ⏪ Replaying…
             </span>
           )}
           {phase === 'live' && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 animate-pulse">
               ● LIVE
             </span>
           )}
@@ -238,22 +247,69 @@ export default function NvrPlayer() {
             {[30, 60, 180, 300].map((secs) => (
               <button
                 key={secs}
-                onClick={() => connect(secs)}
-                className="text-xs px-2 py-1 rounded bg-surface-elevated hover:bg-accent/20 text-txt-secondary hover:text-accent transition-colors"
+                onClick={() => connect(secs, speed)}
+                className={`text-xs px-2 py-1 rounded transition-colors ${
+                  offset === secs && phase === 'replaying'
+                    ? 'bg-accent/30 text-accent'
+                    : 'bg-surface-elevated hover:bg-accent/20 text-txt-secondary hover:text-accent'
+                }`}
               >
                 {secs < 60 ? `${secs}s` : `${secs / 60}m`}
               </button>
             ))}
           </div>
 
+          <div className="h-4 w-px bg-border" />
+
+          {/* Speed selector */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-txt-secondary">Speed:</span>
+            {[1, 2, 4, 8].map((s) => (
+              <button
+                key={s}
+                onClick={() => connect(offset, s)}
+                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
+                  speed === s
+                    ? 'bg-accent/30 text-accent font-medium'
+                    : 'bg-surface-elevated hover:bg-accent/20 text-txt-secondary hover:text-accent'
+                }`}
+              >
+                {s}×
+              </button>
+            ))}
+          </div>
+
+          <div className="h-4 w-px bg-border" />
+
           <button
-            onClick={() => connect(0)}
+            onClick={() => connect(0, speed)}
             className="text-xs px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors font-medium"
           >
             Jump to Live
           </button>
         </div>
       </div>
+
+      {/* Replay progress bar */}
+      {phase === 'replaying' && replayTotalMs > 0 && (
+        <div className="px-4 py-1.5 bg-surface border-b border-border flex items-center gap-3 shrink-0">
+          <span className="text-xs text-txt-secondary font-mono w-10">
+            {formatMs(replayProgressMs)}
+          </span>
+          <div className="flex-1 h-1.5 bg-surface-elevated rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent rounded-full transition-all duration-300"
+              style={{ width: `${replayPct}%` }}
+            />
+          </div>
+          <span className="text-xs text-txt-secondary font-mono w-10 text-right">
+            {formatMs(replayTotalMs)}
+          </span>
+          <span className="text-xs text-txt-secondary ml-1">
+            ({speed}× speed)
+          </span>
+        </div>
+      )}
 
       {/* Error message */}
       {phase === 'error' && errorMsg && (

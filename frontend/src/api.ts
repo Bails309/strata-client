@@ -580,13 +580,15 @@ export const killSessions = (session_ids: string[]) =>
  * Build a WebSocket URL for the NVR observe endpoint.
  * @param sessionId  The active session to observe
  * @param offsetSecs How many seconds of buffer to replay (0 = live only)
+ * @param speed      Playback speed multiplier (default 4×, 0 = instant)
  */
-export function buildNvrObserveUrl(sessionId: string, offsetSecs = 300): string {
+export function buildNvrObserveUrl(sessionId: string, offsetSecs = 300, speed = 4): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const token = localStorage.getItem('access_token');
   const params = new URLSearchParams();
   if (token) params.set('token', token);
   params.set('offset', String(offsetSecs));
+  params.set('speed', String(speed));
   return `${proto}//${window.location.host}/api/admin/sessions/${encodeURIComponent(sessionId)}/observe?${params}`;
 }
 

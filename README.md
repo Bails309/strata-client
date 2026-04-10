@@ -43,8 +43,9 @@
 - **OIDC / SSO** — Full OpenID Connect flow with dynamic JWKS validation (Keycloak, Entra ID, etc.)
 - **Local authentication** — Built-in username/password auth for environments without an OIDC provider
 - **Kerberos / NLA** — Dynamic `krb5.conf` generation pushed to the `guacd` container at runtime; multi-realm support with per-realm KDCs and lifetimes
-- **Active Directory LDAP sync** — Automatic computer account import from AD via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, multiple search bases per source, filter presets, and gMSA/MSA exclusion
+- **Active Directory LDAP sync** — Automatic computer account import from AD via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, multiple search bases per source, filter presets, gMSA/MSA exclusion, and configurable connection defaults (RDP performance flags, session recording settings)
 - **AD auth methods** — Simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI) per AD source; custom CA certificate upload for internal LDAPS
+- **Connection parameter tooltips** — Hover tooltips on all connection settings sourced from the official [Apache Guacamole documentation](https://guacamole.apache.org/doc/gug/configuring-guacamole.html)
 - **Granular RBAC** — 9-permission role system: administer system, audit logs, create users, create roles, create connections, create connection folders, and sharing connections — with `can_manage_system` as a super-admin override
 - **Credential profiles** — Saved per-user credential profiles with optional TTL expiry and profile selector on the Dashboard
 - **Session recording** — Toggleable Guacamole-native session capture with configurable retention

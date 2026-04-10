@@ -161,6 +161,16 @@ Each AD sync source uses a unique credential cache (`KRB5CCNAME=FILE:/tmp/krb5cc
 
 All preset LDAP filters exclude gMSA (`msDS-GroupManagedServiceAccount`) and MSA (`msDS-ManagedServiceAccount`) accounts to prevent service accounts from being imported as connectable machines. Custom filters bypass this exclusion — administrators are responsible for ensuring appropriate filtering.
 
+### Connection Defaults & Parameter Whitelist
+
+AD sync `connection_defaults` are applied as the `extra` JSONB on synced connections. The backend enforces a strict whitelist of allowed Guacamole parameters via `is_allowed_guacd_param()`. Only safe, non-credential parameters are permitted — sensitive parameters such as passwords, drive paths, and arbitrary command execution are excluded. Allowed categories include:
+
+- **Display & performance**: color-depth, resize-method, force-lossless, cursor, read-only
+- **RDP performance flags**: enable-wallpaper, enable-theming, enable-font-smoothing, enable-full-window-drag, enable-desktop-composition, enable-menu-animations, disable-bitmap-caching, disable-offscreen-caching, disable-glyph-caching, disable-gfx
+- **Session recording**: recording-path, recording-name, create-recording-path, recording-include-keys, recording-exclude-output, recording-exclude-mouse, recording-exclude-touch
+- **Authentication**: ignore-cert (certificate validation bypass only — no credential parameters)
+- **Clipboard, audio, printing, Wake-on-LAN**: various toggle and configuration parameters
+
 ---
 
 ## Network Security

@@ -115,7 +115,7 @@ jobs:
       - name: Wait for backend readiness
         run: |
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/api/status > /dev/null 2>&1; then
+            if curl -sf http://localhost/api/status > /dev/null 2>&1; then
               echo "Backend is ready"
               exit 0
             fi
@@ -141,7 +141,7 @@ jobs:
         working-directory: e2e
         run: npx playwright test
         env:
-          BASE_URL: http://localhost:8080
+          BASE_URL: http://localhost
 
       - name: Upload test report
         if: always()

@@ -209,6 +209,7 @@ export interface AdSyncConfig {
   keytab_path?: string;
   krb5_principal?: string;
   ca_cert_pem?: string;
+  connection_defaults?: Record<string, string>;
   created_at: string;
   updated_at: string;
   clone_from?: string;

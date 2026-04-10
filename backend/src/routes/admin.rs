@@ -1896,6 +1896,9 @@ pub struct CreateAdSyncConfigRequest {
     pub krb5_principal: Option<String>,
     pub ca_cert_pem: Option<String>,
     pub clone_from: Option<Uuid>,
+    /// Default Guacamole parameters applied to every synced connection.
+    #[serde(default)]
+    pub connection_defaults: Option<serde_json::Value>,
 }
 
 pub async fn create_ad_sync_config(
@@ -1958,8 +1961,8 @@ pub async fn create_ad_sync_config(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id",
+        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem, connection_defaults)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id",
     )
     .bind(&body.label)
     .bind(&body.ldap_url)
@@ -1979,6 +1982,7 @@ pub async fn create_ad_sync_config(
     .bind(body.keytab_path.as_deref())
     .bind(body.krb5_principal.as_deref())
     .bind(body.ca_cert_pem.as_deref())
+    .bind(body.connection_defaults.as_ref().unwrap_or(&serde_json::json!({})))
     .fetch_one(&db.pool)
     .await?;
 
@@ -2013,6 +2017,8 @@ pub struct UpdateAdSyncConfigRequest {
     pub keytab_path: Option<String>,
     pub krb5_principal: Option<String>,
     pub ca_cert_pem: Option<String>,
+    /// Default Guacamole parameters applied to every synced connection.
+    pub connection_defaults: Option<serde_json::Value>,
 }
 
 pub async fn update_ad_sync_config(
@@ -2227,6 +2233,15 @@ pub async fn update_ad_sync_config(
         .execute(&mut *tx)
         .await?;
     }
+    if let Some(ref v) = body.connection_defaults {
+        sqlx::query(
+            "UPDATE ad_sync_configs SET connection_defaults = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     tx.commit().await?;
 
@@ -2369,6 +2384,7 @@ pub async fn test_ad_sync_connection(
         keytab_path: body.keytab_path.clone(),
         krb5_principal: body.krb5_principal.clone(),
         ca_cert_pem: body.ca_cert_pem.clone(),
+        connection_defaults: body.connection_defaults.clone().unwrap_or(serde_json::json!({})),
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };

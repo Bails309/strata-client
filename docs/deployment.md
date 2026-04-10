@@ -317,6 +317,9 @@ To automatically import computer accounts from Active Directory:
    - **Protocol / Port** — default protocol and port for imported connections (e.g. RDP/3389)
    - **Group** — optional connection group for imported connections
    - **CA Certificate** — upload an internal CA cert (PEM) if using LDAPS with self-signed certificates
+   - **Connection Defaults** (RDP only) — configure Guacamole parameters applied to all synced connections:
+     - *Display & Performance*: ignore server certificate, enable wallpaper/font smoothing/desktop composition/theming/full-window drag/menu animations, disable bitmap/glyph/offscreen caching, disable GFX pipeline
+     - *Session Recording*: recording path, recording name (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens), auto-create recording path, include key events, exclude mouse/touch/graphical output
 4. Click **⚡ Test Connection** to validate connectivity and preview discovered objects
 5. Click **Save** to create the source
 6. Click **⟳ Sync Now** to trigger the initial import, or wait for the scheduled sync interval

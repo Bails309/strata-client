@@ -1898,7 +1898,7 @@ function RdpSections({
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2 mt-1">
+            <label className="flex items-center gap-2 mt-1" title="Ignore the certificate returned by the server, even if it cannot be validated. Useful when connecting to servers with self-signed certificates.">
               <input type="checkbox" checked={ex('ignore-cert') === 'true'} onChange={(e) => setEx('ignore-cert', e.target.checked ? 'true' : 'false')} className="checkbox" />
 
               Ignore server certificate
@@ -2146,70 +2146,70 @@ function RdpSections({
         <FieldGrid>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Enables rendering of the desktop wallpaper. By default wallpaper is disabled to reduce bandwidth usage.">
               <input type="checkbox" checked={ex('enable-wallpaper') === 'true'} onChange={(e) => setEx('enable-wallpaper', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable wallpaper
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Enables use of theming of windows and controls. By default theming within RDP sessions is disabled.">
               <input type="checkbox" checked={ex('enable-theming') === 'true'} onChange={(e) => setEx('enable-theming', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable theming
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Renders text with smooth edges (ClearType). By default text is rendered with rough edges to reduce bandwidth.">
               <input type="checkbox" checked={ex('enable-font-smoothing') === 'true'} onChange={(e) => setEx('enable-font-smoothing', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable font smoothing (ClearType)
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Displays window contents as windows are moved. By default only the window border is drawn while dragging.">
               <input type="checkbox" checked={ex('enable-full-window-drag') === 'true'} onChange={(e) => setEx('enable-full-window-drag', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable full-window drag
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Allows graphical effects such as transparent windows and shadows (Aero). Disabled by default.">
               <input type="checkbox" checked={ex('enable-desktop-composition') === 'true'} onChange={(e) => setEx('enable-desktop-composition', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable desktop composition (Aero)
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Allows menu open and close animations. Disabled by default.">
               <input type="checkbox" checked={ex('enable-menu-animations') === 'true'} onChange={(e) => setEx('enable-menu-animations', e.target.checked ? 'true' : '')} className="checkbox" />
               Enable menu animations
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Disables RDP's built-in bitmap caching. Usually only needed to work around bugs in specific RDP server implementations.">
               <input type="checkbox" checked={ex('disable-bitmap-caching') === 'true'} onChange={(e) => setEx('disable-bitmap-caching', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable bitmap caching
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Disables caching of off-screen regions. RDP normally caches regions not currently visible to accelerate retrieval when they come into view.">
               <input type="checkbox" checked={ex('disable-offscreen-caching') === 'true'} onChange={(e) => setEx('disable-offscreen-caching', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable offscreen caching
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Disables caching of frequently used symbols and fonts (glyphs). Usually only needed to work around bugs in specific RDP implementations.">
               <input type="checkbox" checked={ex('disable-glyph-caching') === 'true'} onChange={(e) => setEx('disable-glyph-caching', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable glyph caching
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Disables the Graphics Pipeline Extension (GFX) which accelerates display rendering. Enabled by default; disable if the server does not support it.">
               <input type="checkbox" checked={ex('disable-gfx') === 'true'} onChange={(e) => setEx('disable-gfx', e.target.checked ? 'true' : '')} className="checkbox" />
               Disable graphics pipeline (GFX)
             </label>
@@ -2254,44 +2254,44 @@ function RdpSections({
       <Section title="Screen Recording">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <label>Recording Path</label>
-            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} placeholder="/var/lib/guacamole/recordings" />
+            <label title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording.">Recording Path</label>
+            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} placeholder="/var/lib/guacamole/recordings" title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording." />
           </div>
           <div className="form-group !mb-0">
-            <label>Recording Name</label>
-            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} placeholder="recording" />
+            <label title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}.">Recording Name</label>
+            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} placeholder="recording" title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}." />
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Automatically create the recording directory if it does not yet exist.">
               <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create recording path
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Exclude graphical output from the recording, producing a recording that contains only user input events.">
               <input type="checkbox" checked={ex('recording-exclude-output') === 'true'} onChange={(e) => setEx('recording-exclude-output', e.target.checked ? 'true' : '')} className="checkbox" />
               Exclude graphical output
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Exclude user mouse events from the recording, producing a recording without a visible mouse cursor.">
               <input type="checkbox" checked={ex('recording-exclude-mouse') === 'true'} onChange={(e) => setEx('recording-exclude-mouse', e.target.checked ? 'true' : '')} className="checkbox" />
               Exclude mouse events
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Exclude user touch events from the recording.">
               <input type="checkbox" checked={ex('recording-exclude-touch') === 'true'} onChange={(e) => setEx('recording-exclude-touch', e.target.checked ? 'true' : '')} className="checkbox" />
               Exclude touch events
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed.">
               <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="checkbox" />
               Include key events
             </label>
@@ -2520,23 +2520,23 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
       <Section title="Screen Recording">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <label>Recording Path</label>
-            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} />
+            <label title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording.">Recording Path</label>
+            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording." />
           </div>
           <div className="form-group !mb-0">
-            <label>Recording Name</label>
-            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} />
+            <label title="The filename to use for any created recordings. If omitted, the value 'recording' will be used.">Recording Name</label>
+            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} title="The filename to use for any created recordings. If omitted, the value 'recording' will be used." />
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Automatically create the recording directory if it does not yet exist.">
               <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create recording path
             </label>
           </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2" title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed.">
               <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="checkbox" />
               Include key events
             </label>
@@ -2645,16 +2645,16 @@ function VncSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
       <Section title="Screen Recording">
         <FieldGrid>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Recording Path</label>
-            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} />
+            <label title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording.">Recording Path</label>
+            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording." />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Recording Name</label>
-            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} />
+            <label title="The filename to use for any created recordings. If omitted, the value 'recording' will be used.">Recording Name</label>
+            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} title="The filename to use for any created recordings. If omitted, the value 'recording' will be used." />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>&nbsp;</label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} title="Automatically create the recording directory if it does not yet exist.">
               <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
               Auto-create recording path
             </label>
@@ -3065,6 +3065,127 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
             </div>
           )}
         </div>
+
+        {/* ── Connection Defaults ── */}
+        <div className="mt-6 border-t border-border/20 pt-4">
+          <h4 className="text-sm font-semibold uppercase tracking-wider mb-3">Connection Defaults</h4>
+          <p className="text-xs opacity-50 mb-4">These settings are applied to every connection created or updated by this sync source.</p>
+
+          {(editing.protocol || 'rdp') === 'rdp' && (
+            <>
+              <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">RDP Display &amp; Performance</div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 mb-4">
+                {([
+                  ['ignore-cert', 'Ignore server certificate', 'Ignore the certificate returned by the server, even if it cannot be validated. Useful when connecting to servers with self-signed certificates.'],
+                  ['enable-wallpaper', 'Enable wallpaper', 'Enables rendering of the desktop wallpaper. By default wallpaper is disabled to reduce bandwidth usage.'],
+                  ['enable-font-smoothing', 'Enable font smoothing', 'Renders text with smooth edges (ClearType). By default text is rendered with rough edges to reduce bandwidth.'],
+                  ['enable-desktop-composition', 'Enable desktop composition', 'Allows graphical effects such as transparent windows and shadows (Aero). Disabled by default.'],
+                  ['enable-theming', 'Enable theming', 'Enables use of theming of windows and controls. By default theming within RDP sessions is disabled.'],
+                  ['enable-full-window-drag', 'Enable full-window drag', 'Displays window contents as windows are moved. By default only the window border is drawn while dragging.'],
+                  ['enable-menu-animations', 'Enable menu animations', 'Allows menu open and close animations. Disabled by default.'],
+                  ['disable-bitmap-caching', 'Disable bitmap caching', 'Disables RDP\'s built-in bitmap caching. Usually only needed to work around bugs in specific RDP server implementations.'],
+                  ['disable-glyph-caching', 'Disable glyph caching', 'Disables caching of frequently used symbols and fonts (glyphs). Usually only needed to work around bugs in specific RDP implementations.'],
+                  ['disable-offscreen-caching', 'Disable offscreen caching', 'Disables caching of off-screen regions. RDP normally caches regions not currently visible to accelerate retrieval when they come into view.'],
+                  ['disable-gfx', 'Disable graphics pipeline (GFX)', 'Disables the Graphics Pipeline Extension (GFX) which accelerates display rendering. Enabled by default; disable if the server does not support it.'],
+                ] as [string, string, string][]).map(([param, label, tooltip]) => (
+                  <label key={param} className="flex items-center gap-2" title={tooltip}>
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={(editing.connection_defaults ?? {})[param] === 'true'}
+                      onChange={(e) => {
+                        const cd = { ...(editing.connection_defaults ?? {}) };
+                        if (e.target.checked) {
+                          cd[param] = 'true';
+                        } else {
+                          delete cd[param];
+                        }
+                        setEditing({ ...editing, connection_defaults: cd });
+                      }}
+                    />
+                    <span className="text-sm">{label}</span>
+                    <svg className="w-3.5 h-3.5 opacity-40 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" /></svg>
+                  </label>
+                ))}
+              </div>
+
+              <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2 mt-4">Session Recording</div>
+              <div className="grid grid-cols-2 gap-4 mb-2">
+                <label className="block">
+                  <span className="text-sm font-medium flex items-center gap-1">
+                    Recording Path
+                    <span title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording."><svg className="w-3.5 h-3.5 opacity-40 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" /></svg></span>
+                  </span>
+                  <input
+                    className="input mt-1"
+                    value={(editing.connection_defaults ?? {})['recording-path'] || ''}
+                    onChange={(e) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (e.target.value) {
+                        cd['recording-path'] = e.target.value;
+                      } else {
+                        delete cd['recording-path'];
+                      }
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                    placeholder="/recordings"
+                    title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording."
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium flex items-center gap-1">
+                    Recording Name
+                    <span title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}."><svg className="w-3.5 h-3.5 opacity-40 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" /></svg></span>
+                  </span>
+                  <input
+                    className="input mt-1"
+                    value={(editing.connection_defaults ?? {})['recording-name'] || ''}
+                    onChange={(e) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (e.target.value) {
+                        cd['recording-name'] = e.target.value;
+                      } else {
+                        delete cd['recording-name'];
+                      }
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                    placeholder="${GUAC_DATE}-${GUAC_TIME}-${GUAC_USERNAME}"
+                    title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}."
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                {([
+                  ['create-recording-path', 'Auto-create recording path', 'Automatically create the recording directory if it does not yet exist.'],
+                  ['recording-include-keys', 'Include key events', 'Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed.'],
+                  ['recording-exclude-mouse', 'Exclude mouse events', 'Exclude user mouse events from the recording, producing a recording without a visible mouse cursor.'],
+                  ['recording-exclude-touch', 'Exclude touch events', 'Exclude user touch events from the recording.'],
+                  ['recording-exclude-output', 'Exclude graphical output', 'Exclude graphical output from the recording, producing a recording that contains only user input events.'],
+                ] as [string, string, string][]).map(([param, label, tooltip]) => (
+                  <label key={param} className="flex items-center gap-2" title={tooltip}>
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={(editing.connection_defaults ?? {})[param] === 'true'}
+                      onChange={(e) => {
+                        const cd = { ...(editing.connection_defaults ?? {}) };
+                        if (e.target.checked) {
+                          cd[param] = 'true';
+                        } else {
+                          delete cd[param];
+                        }
+                        setEditing({ ...editing, connection_defaults: cd });
+                      }}
+                    />
+                    <span className="text-sm">{label}</span>
+                    <svg className="w-3.5 h-3.5 opacity-40 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" /></svg>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         <div className="flex items-center gap-2 mt-6">
           <button className="btn btn-primary" onClick={handleSave}>Save</button>
           <button

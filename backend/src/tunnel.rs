@@ -128,7 +128,7 @@ impl HandshakeParams {
 }
 
 /// Whitelist of guacd parameters that connections may override via `extra`.
-/// Sensitive parameters (credentials, recording paths, drive paths) are excluded.
+/// Sensitive parameters (credentials, drive paths) are excluded.
 fn is_allowed_guacd_param(name: &str) -> bool {
     matches!(
         name,
@@ -173,7 +173,17 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "wol-wait-time"
             | "force-lossless"
             | "disable-glyph-caching"
+            | "disable-bitmap-caching"
+            | "disable-offscreen-caching"
+            | "disable-gfx"
             | "ignore-cert"
+            | "recording-path"
+            | "recording-name"
+            | "create-recording-path"
+            | "recording-include-keys"
+            | "recording-exclude-output"
+            | "recording-exclude-mouse"
+            | "recording-exclude-touch"
     )
 }
 

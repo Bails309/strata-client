@@ -26,6 +26,10 @@ pub struct AdSyncConfig {
     pub keytab_path: Option<String>,
     pub krb5_principal: Option<String>,
     pub ca_cert_pem: Option<String>,
+    /// Default Guacamole parameters applied to every synced connection.
+    /// Maps directly to allowed guacd param names (e.g. "ignore-cert", "enable-wallpaper").
+    #[serde(default)]
+    pub connection_defaults: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -160,6 +164,13 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         "AD sync '{}' (Phase 3/4): Performing bulk database upsert...",
         config.label
     );
+    // Build the connection_defaults JSONB — filter to only allowed guacd params
+    let defaults = if config.connection_defaults.is_object() {
+        config.connection_defaults.clone()
+    } else {
+        serde_json::json!({})
+    };
+
     // High performance bulk upsert using UNNEST and ON CONFLICT.
     // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
     let stats: (i64, i64) = sqlx::query_as(
@@ -169,7 +180,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         ),
         upserted AS (
             INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, ad_source_id, ad_dn, extra)
-            SELECT name, $5, hostname, $6, $7, description, $8, $9, dn, '{}'::jsonb
+            SELECT name, $5, hostname, $6, $7, description, $8, $9, dn, $10::jsonb
             FROM discovered
             ON CONFLICT (ad_source_id, ad_dn) WHERE ad_source_id IS NOT NULL AND ad_dn IS NOT NULL DO UPDATE SET
                 soft_deleted_at = NULL,
@@ -177,12 +188,14 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
                 domain = EXCLUDED.domain,
+                extra = $10::jsonb,
                 updated_at = now()
             WHERE connections.hostname != EXCLUDED.hostname 
                OR connections.name != EXCLUDED.name 
                OR connections.description IS DISTINCT FROM EXCLUDED.description 
                OR connections.domain IS DISTINCT FROM EXCLUDED.domain
                OR connections.soft_deleted_at IS NOT NULL
+               OR connections.extra IS DISTINCT FROM $10::jsonb
             RETURNING (xmax = 0) AS is_insert
         )
         SELECT 
@@ -200,6 +213,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     .bind(&config.domain_override)
     .bind(config.folder_id)
     .bind(config.id)
+    .bind(&defaults)
     .fetch_one(pool)
     .await?;
 

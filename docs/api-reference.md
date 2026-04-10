@@ -767,6 +767,12 @@ List all AD sync source configurations.
     "auth_method": "simple",
     "tls_skip_verify": false,
     "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+    "connection_defaults": {
+      "ignore-cert": "true",
+      "enable-wallpaper": "true",
+      "recording-path": "/recordings",
+      "create-recording-path": "true"
+    },
     "sync_interval_minutes": 60,
     "enabled": true,
     "created_at": "2026-04-07T10:00:00Z",
@@ -795,7 +801,12 @@ Create a new AD sync source.
   "enabled": true,
   "group_id": "uuid-or-null",
   "tls_skip_verify": false,
-  "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n..."
+  "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "connection_defaults": {
+    "ignore-cert": "true",
+    "enable-wallpaper": "true",
+    "enable-font-smoothing": "true"
+  }
 }
 ```
 
@@ -817,8 +828,34 @@ Create a new AD sync source.
 | `domain_override` | string | No | null | Force domain on imported connections |
 | `tls_skip_verify` | boolean | No | false | Skip TLS certificate verification |
 | `ca_cert_pem` | string | No | null | Custom CA certificate in PEM format |
+| `connection_defaults` | object | No | `{}` | Guacamole connection parameters applied to all synced connections (see below) |
 | `sync_interval_minutes` | integer | No | 60 | Background sync interval (minimum 5) |
 | `enabled` | boolean | No | true | Enable/disable this source |
+
+#### Connection Defaults
+
+The `connection_defaults` field accepts a JSON object of Guacamole parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. Supported RDP parameters include:
+
+| Parameter | Description |
+|---|---|
+| `ignore-cert` | Skip RDP server certificate validation |
+| `enable-wallpaper` | Render desktop wallpaper |
+| `enable-font-smoothing` | Enable ClearType font smoothing |
+| `enable-desktop-composition` | Allow Aero/transparent window effects |
+| `enable-theming` | Enable window theming |
+| `enable-full-window-drag` | Show window contents while dragging |
+| `enable-menu-animations` | Allow menu open/close animations |
+| `disable-bitmap-caching` | Disable RDP bitmap cache |
+| `disable-glyph-caching` | Disable glyph (font symbol) cache |
+| `disable-offscreen-caching` | Disable off-screen region cache |
+| `disable-gfx` | Disable the Graphics Pipeline Extension (GFX) |
+| `recording-path` | Directory for screen recording files |
+| `recording-name` | Filename for recordings (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens) |
+| `create-recording-path` | Auto-create the recording directory |
+| `recording-include-keys` | Include key events in recordings |
+| `recording-exclude-mouse` | Exclude mouse events from recordings |
+| `recording-exclude-touch` | Exclude touch events from recordings |
+| `recording-exclude-output` | Exclude graphical output from recordings |
 
 ### `PUT /api/admin/ad-sync-configs/:id`
 

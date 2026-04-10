@@ -93,7 +93,7 @@ The central orchestrator. Responsibilities:
 - **guacd pool** — round-robin connection distribution across multiple guacd instances (`GuacdPool`)
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
-- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, and gMSA/MSA exclusion filters
+- **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
 - **Audit** — SHA-256 hash-chained append-only log
 
 ### 3. Frontend SPA
@@ -203,7 +203,7 @@ credential_profiles ─ saved credential profiles with optional TTL expiry
 user_favorites ────── user ↔ connection favorites (composite PK)
 connection_shares ── temporary share links with mode (view/control)
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
-ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert)
+ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert, connection_defaults)
 ad_sync_runs ─────── per-config sync run history with stats
 audit_logs ─────── hash-chained append-only event log
 ```

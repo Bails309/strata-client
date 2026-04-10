@@ -120,9 +120,7 @@ async fn handle_recording_stream(
             )
             .await?;
             let reader = tokio_util::io::StreamReader::new(stream.map(
-                |res: reqwest::Result<bytes::Bytes>| {
-                    res.map_err(|e| std::io::Error::other(e))
-                },
+                |res: reqwest::Result<bytes::Bytes>| res.map_err(|e| std::io::Error::other(e)),
             ));
             Box::new(tokio::io::BufReader::new(reader))
                 as Box<dyn tokio::io::AsyncRead + Unpin + Send>

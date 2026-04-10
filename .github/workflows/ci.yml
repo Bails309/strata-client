@@ -107,7 +107,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build and start all services
-        run: docker compose up -d --build --wait
+        run: docker compose --profile local-db up -d --build --wait
         timeout-minutes: 20
         env:
           DEFAULT_ADMIN_PASSWORD: admin
@@ -157,7 +157,7 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose down -v
+        run: docker compose --profile local-db down -v
 
   # ── Docker image builds (no push on PR) ───────────────────────────
   docker-build:

@@ -1,9 +1,6 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -87,8 +84,6 @@ async fn handle_recording_stream(
     state: SharedState,
     recording: Recording,
 ) -> anyhow::Result<()> {
-    use futures_util::SinkExt;
-
     let mut paused = false;
     let mut pause_offset = std::time::Duration::ZERO;
 
@@ -207,19 +202,35 @@ async fn handle_recording_stream(
                                 base_real_ts = Some(std::time::Instant::now());
                             }
                             (Some(b_ts), Some(b_real)) => {
-                                // Handle pause: wait while paused, sending keepalives
-                                {
-                                    let mut pause_start: Option<std::time::Instant> = None;
-                                    while paused.load(Ordering::Relaxed) {
-                                        if pause_start.is_none() {
-                                            pause_start = Some(std::time::Instant::now());
+                                // Drain pending messages (incl. pause/resume)
+                                paused = drain_incoming(&mut socket, paused).await;
+
+                                // While paused, wait and send keepalives
+                                if paused {
+                                    let pause_start = std::time::Instant::now();
+                                    while paused {
+                                        tokio::select! {
+                                            biased;
+                                            msg = socket.next() => {
+                                                match msg {
+                                                    Some(Ok(axum::extract::ws::Message::Text(ref t))) => {
+                                                        let s: &str = t;
+                                                        if s == "9.nvrresume;" {
+                                                            paused = false;
+                                                        }
+                                                    }
+                                                    Some(Err(_)) | None => {
+                                                        return Ok(());
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                                                socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                            }
                                         }
-                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                        sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
                                     }
-                                    if let Some(ps) = pause_start {
-                                        pause_offset += std::time::Instant::now().duration_since(ps);
-                                    }
+                                    pause_offset += std::time::Instant::now().duration_since(pause_start);
                                 }
 
                                 let guac_elapsed = ts.saturating_sub(b_ts);
@@ -233,18 +244,54 @@ async fn handle_recording_stream(
                                 if guac_elapsed > real_elapsed {
                                     let mut remaining_ms = guac_elapsed - real_elapsed;
                                     while remaining_ms > 0 {
-                                        // Check pause during long sleeps
-                                        while paused.load(Ordering::Relaxed) {
-                                            let ps = std::time::Instant::now();
-                                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                            sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
-                                            pause_offset += std::time::Instant::now().duration_since(ps);
-                                        }
                                         let chunk = remaining_ms.min(5000);
-                                        tokio::time::sleep(std::time::Duration::from_millis(chunk)).await;
-                                        remaining_ms -= chunk;
-                                        if remaining_ms > 0 {
-                                            sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                        tokio::select! {
+                                            biased;
+                                            msg = socket.next() => {
+                                                match msg {
+                                                    Some(Ok(axum::extract::ws::Message::Text(ref t))) => {
+                                                        let s: &str = t;
+                                                        if s == "8.nvrpause;" {
+                                                            paused = true;
+                                                            // Enter pause loop
+                                                            let pause_start = std::time::Instant::now();
+                                                            while paused {
+                                                                tokio::select! {
+                                                                    biased;
+                                                                    msg2 = socket.next() => {
+                                                                        match msg2 {
+                                                                            Some(Ok(axum::extract::ws::Message::Text(ref t2))) => {
+                                                                                let s2: &str = t2;
+                                                                                if s2 == "9.nvrresume;" {
+                                                                                    paused = false;
+                                                                                }
+                                                                            }
+                                                                            Some(Err(_)) | None => return Ok(()),
+                                                                            _ => {}
+                                                                        }
+                                                                    }
+                                                                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                                                                        socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                                                    }
+                                                                }
+                                                            }
+                                                            pause_offset += std::time::Instant::now().duration_since(pause_start);
+                                                            // Recalculate remaining after resume
+                                                            let new_wall = std::time::Instant::now().duration_since(b_real);
+                                                            let new_real = new_wall.saturating_sub(pause_offset).as_millis() as u64;
+                                                            remaining_ms = guac_elapsed.saturating_sub(new_real);
+                                                        }
+                                                    }
+                                                    Some(Err(_)) | None => return Ok(()),
+                                                    _ => {}
+                                                }
+                                            }
+                                            _ = tokio::time::sleep(std::time::Duration::from_millis(chunk)) => {
+                                                remaining_ms -= chunk;
+                                                if remaining_ms > 0 {
+                                                    socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -257,7 +304,7 @@ async fn handle_recording_stream(
                                         guac_elapsed.to_string().len(),
                                         guac_elapsed
                                     );
-                                    sender.send(axum::extract::ws::Message::Text(prog)).await?;
+                                    socket.send(axum::extract::ws::Message::Text(prog)).await?;
                                     last_progress_sent = std::time::Instant::now();
                                 }
                             }
@@ -268,7 +315,7 @@ async fn handle_recording_stream(
             }
 
             // Send standard instruction
-            sender
+            socket
                 .send(axum::extract::ws::Message::Text(instruction.raw))
                 .await?;
         }
@@ -276,10 +323,8 @@ async fn handle_recording_stream(
 
     // Signal end-of-recording so the frontend can close gracefully
     let end_msg = format!("{}.nvrend;", "nvrend".len());
-    let _ = sender.send(axum::extract::ws::Message::Text(end_msg)).await;
-    let _ = sender.send(axum::extract::ws::Message::Close(None)).await;
-
-    drain_handle.abort();
+    let _ = socket.send(axum::extract::ws::Message::Text(end_msg)).await;
+    let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
 
     Ok(())
 }

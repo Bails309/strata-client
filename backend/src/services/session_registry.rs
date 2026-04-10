@@ -591,4 +591,29 @@ mod tests {
         buf.push("4.size,1.0,4.2560,4.1440;".into());
         assert_eq!(buf.last_size(), Some("4.size,1.0,4.2560,4.1440;"));
     }
+
+    #[tokio::test]
+    async fn registry_terminate_session() {
+        let registry = SessionRegistry::new();
+        let result = registry
+            .register(
+                "kill-me".into(),
+                Uuid::new_v4(),
+                "Conn".into(),
+                "rdp".into(),
+                Uuid::new_v4(),
+                "user".into(),
+                "10.0.0.1".into(),
+                "1.1.1.1".into(),
+            )
+            .await;
+        assert!(result.is_some());
+
+        // Terminate should succeed the first time
+        assert!(registry.terminate("kill-me").await);
+        // Second call returns false (kill_tx already consumed)
+        assert!(!registry.terminate("kill-me").await);
+        // Nonexistent session returns false
+        assert!(!registry.terminate("no-such").await);
+    }
 }

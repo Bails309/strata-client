@@ -50,6 +50,7 @@ import Dashboard from '../pages/Dashboard';
 import {
   getMyConnections, getFavorites, getCredentialProfiles, getServiceHealth,
   getProfileMappings, toggleFavorite, setCredentialMapping,
+  removeCredentialMapping, getConnectionInfo, createTunnelTicket,
 } from '../api';
 
 function renderDashboard() {
@@ -595,6 +596,136 @@ describe('Dashboard', () => {
     renderDashboard();
     await waitFor(() => {
       expect(screen.getByText(/no connections available/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows tiled credential prompt when opening tiled with credless RDP connections', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    await userEvent.click(checkboxes[1]); // connection 1
+    await userEvent.click(checkboxes[2]); // connection 2
+    await userEvent.click(screen.getByText(/Open Tiled/));
+    await waitFor(() => {
+      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+    });
+  });
+
+  it('submits tiled credential form', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
+    vi.mocked(createTunnelTicket).mockResolvedValue({ ticket: 'tkt-1' });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    await userEvent.click(checkboxes[1]);
+    await userEvent.click(checkboxes[2]);
+    await userEvent.click(screen.getByText(/Open Tiled/));
+    await waitFor(() => {
+      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+    });
+    // Fill creds
+    const userInputs = screen.getAllByPlaceholderText('Username');
+    const passInputs = screen.getAllByPlaceholderText('Password');
+    await userEvent.type(userInputs[0], 'admin');
+    await userEvent.type(passInputs[0], 'secret');
+    // Submit
+    await userEvent.click(screen.getByText(/Connect All/));
+    expect(createTunnelTicket).toHaveBeenCalled();
+  });
+
+  it('cancels tiled credential prompt', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    await userEvent.click(checkboxes[1]);
+    await userEvent.click(checkboxes[2]);
+    await userEvent.click(screen.getByText(/Open Tiled/));
+    await waitFor(() => {
+      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByText('Cancel'));
+    expect(screen.queryByText('Enter Credentials')).not.toBeInTheDocument();
+  });
+
+  it('opens tiled immediately when connections have vault credentials', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: true });
+    vi.mocked(createTunnelTicket).mockResolvedValue({ ticket: 'tkt-1' });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    await userEvent.click(checkboxes[1]);
+    await userEvent.click(checkboxes[2]);
+    await userEvent.click(screen.getByText(/Open Tiled/));
+    // Should NOT show credential modal, should call createTunnelTicket directly
+    await waitFor(() => {
+      expect(createTunnelTicket).toHaveBeenCalled();
+    });
+    expect(screen.queryByText('Enter Credentials')).not.toBeInTheDocument();
+  });
+
+  it('removes a credential mapping when profile set to empty', async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue({
+      database: { connected: true, mode: 'local', host: 'localhost' },
+      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      vault: { configured: true, mode: 'local', address: '' },
+    });
+    vi.mocked(getCredentialProfiles).mockResolvedValue([
+      { id: 'prof1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
+    ]);
+    vi.mocked(getProfileMappings).mockResolvedValue([{ connection_id: '1', connection_name: 'Server Alpha', protocol: 'rdp' }]);
+    vi.mocked(removeCredentialMapping).mockResolvedValue({ status: 'ok' });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // Wait for profile to load and show "Admin" option assigned
+    await waitFor(() => {
+      expect(screen.getAllByText('Admin').length).toBeGreaterThanOrEqual(1);
+    });
+    // Click the Admin option to open dropdown for first connection, select None
+    const adminOptions = screen.getAllByText('Admin');
+    await userEvent.click(adminOptions[0]);
+    // Select None from dropdown
+    const noneOption = screen.getByRole('option', { name: 'None' });
+    await userEvent.click(noneOption);
+    await waitFor(() => {
+      expect(removeCredentialMapping).toHaveBeenCalledWith('1');
+    });
+  });
+
+  it('shows domain label on recent cards for non-IP hostname', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue([
+      { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: 'server.example.com', port: 3389, description: '', last_accessed: '2024-06-15T10:00:00Z' },
+    ]);
+    renderDashboard();
+    await waitFor(() => {
+      const cards = document.querySelectorAll('.recent-card');
+      expect(cards.length).toBeGreaterThanOrEqual(1);
+    });
+    expect(document.body.textContent).toContain('example.com');
+  });
+
+  it('shows expired label in profile selector', async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue({
+      database: { connected: true, mode: 'local', host: 'localhost' },
+      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      vault: { configured: true, mode: 'local', address: '' },
+    });
+    vi.mocked(getCredentialProfiles).mockResolvedValue([
+      { id: 'p1', label: 'Old Creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2023-01-01T00:00:00Z', ttl_hours: 12, expired: true },
+    ]);
+    vi.mocked(getProfileMappings).mockResolvedValue([]);
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // Open profile selector
+    const noneOptions = screen.getAllByText('None');
+    await userEvent.click(noneOptions[0]);
+    await waitFor(() => {
+      expect(screen.getByText('Old Creds (expired)')).toBeInTheDocument();
     });
   });
 });

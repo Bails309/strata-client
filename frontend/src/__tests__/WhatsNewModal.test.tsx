@@ -1,0 +1,67 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import WhatsNewModal, { WHATS_NEW_VERSION } from '../components/WhatsNewModal';
+
+const STORAGE_KEY = 'strata-whats-new-dismissed';
+
+describe('WhatsNewModal', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('shows modal when user has not dismissed current version', () => {
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+  });
+
+  it('does not show modal when already dismissed for current version', () => {
+    localStorage.setItem(`${STORAGE_KEY}-user1`, WHATS_NEW_VERSION);
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
+  });
+
+  it('does not show modal when userId is undefined', () => {
+    render(<WhatsNewModal userId={undefined} />);
+    expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
+  });
+
+  it('dismisses on "Got it" click and saves to localStorage', async () => {
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+    await userEvent.click(screen.getByText('Got it'));
+    expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
+    expect(localStorage.getItem(`${STORAGE_KEY}-user1`)).toBe(WHATS_NEW_VERSION);
+  });
+
+  it('dismisses on backdrop click', async () => {
+    render(<WhatsNewModal userId="user1" />);
+    const backdrop = screen.getByText(`What's New in ${WHATS_NEW_VERSION}`).closest('.fixed');
+    expect(backdrop).toBeTruthy();
+    await userEvent.click(backdrop!);
+    expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
+  });
+
+  it('does not dismiss when clicking inside the modal content', async () => {
+    render(<WhatsNewModal userId="user1" />);
+    // Click inside the modal content (e.g., a section heading)
+    await userEvent.click(screen.getByText('Active Sessions Dashboard'));
+    expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+  });
+
+  it('shows modal again when version changes from dismissed version', () => {
+    localStorage.setItem(`${STORAGE_KEY}-user1`, '0.0.0-old');
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+  });
+
+  it('scopes dismissal per user', () => {
+    localStorage.setItem(`${STORAGE_KEY}-other-user`, WHATS_NEW_VERSION);
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+  });
+});

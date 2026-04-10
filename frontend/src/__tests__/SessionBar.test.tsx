@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+
+vi.mock('../api', () => ({
+  createShareLink: vi.fn(),
+}));
 
 vi.mock('../components/SessionManager', () => ({
   useSessionManager: vi.fn(),
@@ -10,6 +14,7 @@ vi.mock('../components/SessionManager', () => ({
 
 import { useSessionManager } from '../components/SessionManager';
 import SessionBar from '../components/SessionBar';
+import { createShareLink } from '../api';
 
 const resizeObserverMock = vi.fn(function() {
   return {
@@ -216,5 +221,116 @@ describe('SessionBar', () => {
     expect(screen.getByText(/Exit Tiled \(2\)/)).toBeInTheDocument();
     await userEvent.click(screen.getByText(/Exit Tiled/));
     expect(setTiledSessionIds).toHaveBeenCalledWith([]);
+  });
+
+  it('shows keyboard shortcuts panel when keyboard button clicked', async () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await userEvent.click(screen.getByTitle('Keyboard Shortcuts'));
+    expect(screen.getByText('C+A+Del')).toBeInTheDocument();
+    expect(screen.getByText('Alt+Tab')).toBeInTheDocument();
+    expect(screen.getByText('Esc')).toBeInTheDocument();
+    expect(screen.getByText('F11')).toBeInTheDocument();
+  });
+
+  it('shows fullscreen button', () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+    expect(screen.getByTitle('Fullscreen')).toBeInTheDocument();
+  });
+
+  it('shows collapsed session count when collapsed', () => {
+    const sessions = [makeMockSession('s1', 'A'), makeMockSession('s2', 'B')];
+    renderSessionBar('/', true, sessions);
+    // When collapsed, the main content is hidden but session count appears inside toggle
+    const toggle = screen.getByTitle('Expand sessions');
+    expect(toggle).toBeInTheDocument();
+    expect(toggle.textContent).toContain('2');
+  });
+
+  it('shows share button when canShare is true', () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions, { canShare: true });
+    expect(screen.getByTitle('Share connection')).toBeInTheDocument();
+  });
+
+  it('hides share button when canShare is false', () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions, { canShare: false });
+    expect(screen.queryByTitle('Share connection')).not.toBeInTheDocument();
+  });
+
+  it('shows session ended overlay for errored session', () => {
+    const errorSession = makeMockSession('s1', 'Dead');
+    (errorSession as any).error = 'terminated by admin';
+    renderSessionBar('/', false, [errorSession]);
+    expect(screen.getByText('Session Ended')).toBeInTheDocument();
+    expect(screen.getByText('Terminated by Admin')).toBeInTheDocument();
+  });
+
+  it('shows connection lost for non-terminated error', () => {
+    const errorSession = makeMockSession('s1', 'Dead');
+    (errorSession as any).error = 'connection reset';
+    renderSessionBar('/', false, [errorSession]);
+    expect(screen.getByText('Connection Lost')).toBeInTheDocument();
+  });
+
+  it('shows file browser button when session has filesystems', () => {
+    const session = makeMockSession('s1', 'Server A');
+    (session as any).filesystems = [{}];
+    renderSessionBar('/', false, [session]);
+    expect(screen.getByTitle('Browse files')).toBeInTheDocument();
+  });
+
+  it('hides file browser button when no filesystems', () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+    expect(screen.queryByTitle('Browse files')).not.toBeInTheDocument();
+  });
+
+  it('opens share popover on share click and shows mode buttons', async () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions, { canShare: true });
+    await userEvent.click(screen.getByTitle('Share connection'));
+    expect(screen.getByText('View Only')).toBeInTheDocument();
+    expect(screen.getByText('Control')).toBeInTheDocument();
+  });
+
+  it('generates share link when mode is selected', async () => {
+    vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc123' });
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions, { canShare: true });
+    await userEvent.click(screen.getByTitle('Share connection'));
+    await userEvent.click(screen.getByText('View Only'));
+    await waitFor(() => {
+      expect(createShareLink).toHaveBeenCalledWith('conn-s1', 'view');
+    });
+  });
+
+  it('sends keyboard combo when shortcut button clicked', async () => {
+    const sendKeyEvent = vi.fn();
+    const session = makeMockSession('s1', 'Server A');
+    (session as any).client = { sendKeyEvent, getDisplay: () => ({ getElement: () => document.createElement('div') }) };
+    renderSessionBar('/', false, [session]);
+    await userEvent.click(screen.getByTitle('Keyboard Shortcuts'));
+    await userEvent.click(screen.getByText('Esc'));
+    expect(sendKeyEvent).toHaveBeenCalled();
+  });
+
+  it('shows pop-out button when session has popOut function', () => {
+    const session = makeMockSession('s1', 'Server A');
+    (session as any).popOut = vi.fn();
+    (session as any).isPoppedOut = false;
+    renderSessionBar('/', false, [session]);
+    expect(screen.getByTitle('Pop out')).toBeInTheDocument();
+  });
+
+  it('navigates home when closing last session', async () => {
+    const closeSession = vi.fn();
+    const sessions = [makeMockSession('s1', 'Only Session')];
+    renderSessionBar('/', false, sessions, { closeSession });
+    await userEvent.click(screen.getByTitle('Close Session'));
+    expect(closeSession).toHaveBeenCalledWith('s1');
   });
 });

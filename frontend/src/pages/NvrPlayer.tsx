@@ -78,12 +78,22 @@ export default function NvrPlayer() {
     // Detect replay→live transition using instruction handler on the tunnel.
     // During replay, instructions arrive in rapid bursts. Once the backend
     // switches to live broadcast, the rate drops to real-time.
+    //
+    // IMPORTANT: we must preserve the Guacamole Client's original
+    // oninstruction handler and forward every instruction to it, otherwise
+    // the Client never processes drawing/size/sync instructions and the
+    // display stays blank.
     if (rewindSecs > 0) {
       setPhase('replaying');
       let lastInstructionTime = Date.now();
       let instructionCount = 0;
 
-      tunnel.oninstruction = () => {
+      const clientHandler = tunnel.oninstruction;
+
+      tunnel.oninstruction = (opcode: string, args: string[]) => {
+        // Always forward to the Client so the display renders
+        if (clientHandler) clientHandler(opcode, args);
+
         instructionCount++;
         const now = Date.now();
         const gap = now - lastInstructionTime;
@@ -93,7 +103,8 @@ export default function NvrPlayer() {
         // between instructions exceeds 80ms, we've caught up to live.
         if (instructionCount > 50 && gap > 80) {
           setPhase('live');
-          tunnel.oninstruction = null;
+          // Restore the Client's handler so it continues processing
+          tunnel.oninstruction = clientHandler;
         }
       };
     } else {

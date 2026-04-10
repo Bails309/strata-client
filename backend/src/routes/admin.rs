@@ -1799,10 +1799,10 @@ pub async fn observe_session(
             frames.push(size_inst.to_string());
         }
 
-        // Add buffered frames from the requested offset
-        if offset > 0 {
-            frames.extend(buffer.frames_from_offset(offset));
-        }
+        // Always send at least 5 s of recent frames so the observer has a
+        // complete initial screen state, even for "Jump to Live" (offset 0).
+        let effective_offset = if offset == 0 { 5 } else { offset };
+        frames.extend(buffer.frames_from_offset(effective_offset));
 
         let rx = session.broadcast_tx.subscribe();
         (frames, rx)

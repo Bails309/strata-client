@@ -200,13 +200,15 @@ export default function SessionClient() {
       }
     };
 
-    // Detect server-initiated clean disconnect (state 5 = DISCONNECTED).
+    // Detect server-initiated clean disconnect (state 4 = DISCONNECTING).
     // When the remote server ends the session, guacd sends a "disconnect"
-    // instruction which causes the client state to transition to DISCONNECTED
-    // before the tunnel closes.
+    // instruction → Client.disconnect() fires: DISCONNECTING(4) → tunnel.disconnect()
+    // → tunnel CLOSED → DISCONNECTED(5).  We must set the flag at state 4 because
+    // tunnel.onstatechange fires synchronously inside tunnel.disconnect(), BEFORE
+    // the client reaches state 5.
     session.client.onstatechange = (state: number) => {
-      // State 5 = Guacamole.Client.State.DISCONNECTED
-      if (state === 5 && !userDisconnectRef.current) {
+      // State 4 = Guacamole.Client.State.DISCONNECTING
+      if (state === 4 && !userDisconnectRef.current) {
         serverDisconnectRef.current = true;
       }
       // State 3 = CONNECTED: re-send container size and scale display

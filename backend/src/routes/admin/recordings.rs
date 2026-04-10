@@ -6,11 +6,11 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, SinkExt};
 
 use crate::db::Recording;
 use crate::error::AppError;
-use crate::services::app_state::SharedState;
+use crate::services::app_state::{SharedState, BootPhase};
 
 
 #[derive(Deserialize)]
@@ -108,21 +108,99 @@ async fn handle_recording_stream(
         }
     };
 
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Background task: Sink (read and discard messages from client)
+    // This prevents the TCP window from filling up if the client sends data (like handshakes)
+    tokio::spawn(async move {
+        while let Some(msg) = ws_receiver.next().await {
+            if let Err(e) = msg {
+                tracing::debug!("WebSocket receiver closed: {e}");
+                break;
+            }
+        }
+    });
+
     let mut parser = GuacamoleParser::new();
+    let mut base_guac_ts: Option<u64> = None;
+    let mut base_real_ts: Option<std::time::Instant> = None;
+    let mut last_progress_sent = std::time::Instant::now();
+
     let mut buf = [0u8; 16384];
+    let mut send_buffer = String::with_capacity(32768);
+
+    // Initial wake-up (nop)
+    ws_sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
 
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
+            if !send_buffer.is_empty() {
+                ws_sender.send(axum::extract::ws::Message::Text(send_buffer)).await?;
+            }
             break;
         }
 
         parser.push(&buf[..n]);
 
         while let Some(instruction) = parser.next_instruction() {
-            let raw_str = String::from_utf8_lossy(&instruction.raw).to_string();
-            // tracing::debug!("Proxying instruction: {}", raw_str);
-            socket.send(axum::extract::ws::Message::Text(raw_str)).await?;
+            // Check for sync instruction to handle pacing
+            if instruction.opcode == b"sync" {
+                if let Some(ts_bytes) = instruction.args.get(0) {
+                    if let Ok(ts_str) = std::str::from_utf8(ts_bytes) {
+                        if let Ok(ts) = ts_str.parse::<u64>() {
+                            match (base_guac_ts, base_real_ts) {
+                                (None, None) => {
+                                    base_guac_ts = Some(ts);
+                                    base_real_ts = Some(std::time::Instant::now());
+                                }
+                                (Some(b_ts), Some(b_real)) => {
+                                    let guac_elapsed = ts.saturating_sub(b_ts);
+                                    let real_elapsed = std::time::Instant::now().duration_since(b_real).as_millis() as u64;
+
+                                    if guac_elapsed > real_elapsed {
+                                        // Flush buffer before wait
+                                        if !send_buffer.is_empty() {
+                                            let payload = std::mem::take(&mut send_buffer);
+                                            ws_sender.send(axum::extract::ws::Message::Text(payload)).await?;
+                                        }
+
+                                        let wait_ms = guac_elapsed - real_elapsed;
+                                        // Keep-alive for long waits
+                                        if wait_ms > 5000 {
+                                            let mut remaining = wait_ms;
+                                            while remaining > 5000 {
+                                                tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+                                                ws_sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                                remaining -= 5000;
+                                            }
+                                            tokio::time::sleep(std::time::Duration::from_millis(remaining)).await;
+                                        } else {
+                                            tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+                                        }
+                                    }
+
+                                    // Periodic progress update
+                                    if last_progress_sent.elapsed().as_millis() > 500 {
+                                        let prog = format!("{}.nvrprogress,{}.{};", "nvrprogress".len(), guac_elapsed.to_string().len(), guac_elapsed);
+                                        send_buffer.push_str(&prog);
+                                        last_progress_sent = std::time::Instant::now();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Aggregate with lossy UTF-8
+            send_buffer.push_str(&String::from_utf8_lossy(&instruction.raw));
+
+            // Flush threshold
+            if send_buffer.len() >= 16384 {
+                ws_sender.send(axum::extract::ws::Message::Text(std::mem::take(&mut send_buffer))).await?;
+            }
         }
     }
 

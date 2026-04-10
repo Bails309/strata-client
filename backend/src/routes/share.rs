@@ -381,6 +381,7 @@ pub async fn ws_shared_tunnel(
         security,
         ignore_cert,
         recording_path: None,
+        recording_name: None,
         create_recording_path: false,
         width: query.width.unwrap_or(1920).clamp(64, 7680),
         height: query.height.unwrap_or(1080).clamp(64, 4320),
@@ -420,6 +421,8 @@ pub async fn ws_shared_tunnel(
                 user_id: owner_user_id,
                 username: nvr_username,
                 client_ip,
+                started_at: chrono::Utc::now(),
+                db_pool: db.pool.clone(),
             };
             if let Err(e) =
                 tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await

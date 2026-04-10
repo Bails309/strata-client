@@ -55,6 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Streaming
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
+bytes = "1"
 
 # LDAP (Active Directory sync)
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }

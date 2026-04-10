@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use bytes::Bytes;
 
 // ── Recording config ───────────────────────────────────────────────────
 
@@ -240,6 +241,35 @@ pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::R
     }
 
     Ok(resp.bytes().await?.to_vec())
+}
+
+pub async fn download_stream_from_azure(
+    cfg: &AzureBlobConfig,
+    blob: &str,
+) -> anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>> {
+    let url = cfg.blob_url(blob);
+    let date = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let x_headers = format!("x-ms-date:{date}\nx-ms-version:2023-11-03");
+    let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
+    let auth = cfg.sign("GET", 0, "", &x_headers, &resource)?;
+
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", auth)
+        .header("x-ms-date", &date)
+        .header("x-ms-version", "2023-11-03")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Azure Blob download failed ({status}): {body}");
+    }
+
+    Ok(resp.bytes_stream())
 }
 
 // ── Background sync task ───────────────────────────────────────────────

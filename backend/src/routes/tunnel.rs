@@ -470,7 +470,7 @@ pub async fn ws_tunnel(
                 username: nvr_username,
                 client_ip,
                 started_at,
-                db_pool: audit_pool,
+                db_pool: audit_pool.clone(),
             };
             if let Err(e) =
                 tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await

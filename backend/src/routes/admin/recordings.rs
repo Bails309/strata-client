@@ -5,14 +5,15 @@ use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
-use std::time::{Duration, Instant};
+// use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
-use futures::StreamExt;
+use futures_util::StreamExt;
 
 use crate::db::Recording;
 use crate::error::AppError;
 use crate::services::app_state::{SharedState, BootPhase};
 use crate::services::recordings;
+use bytes::Bytes;
 
 #[derive(Deserialize)]
 pub struct ListRecordingsQuery {
@@ -92,14 +93,16 @@ async fn handle_recording_stream(
         // Azure storage stream
         let azure = {
             let s = state.read().await;
-            s.instance_context.azure_storage.clone()
+            let pool = s.db.as_ref().ok_or_else(|| anyhow::anyhow!("DB not connected"))?.pool.clone();
+            let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
+            crate::services::recordings::get_azure_config(&pool, vault.as_ref()).await?
         };
         if let Some(azure) = azure {
-            let container = "recordings";
-            let blob = azure.container_client(container).blob_client(&recording.storage_path);
-            let stream = blob.download().await?.into_stream();
+            let stream = crate::services::recordings::download_stream_from_azure(&azure, &recording.storage_path).await?;
             let reader = tokio_util::io::StreamReader::new(
-                stream.map(|res| res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                stream.map(|res: reqwest::Result<bytes::Bytes>| {
+                    res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                })
             );
             Box::new(tokio::io::BufReader::new(reader)) as Box<dyn tokio::io::AsyncRead + Unpin + Send>
         } else {

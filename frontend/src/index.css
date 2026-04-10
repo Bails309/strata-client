@@ -814,12 +814,6 @@ html.light .recent-card-btn:hover {
     @apply inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-accent text-white text-[0.65rem] font-bold shadow-lg mt-1.5;
   }
 
-  /* Premium Checkbox */
-  .checkbox {
-    @apply relative shrink-0 cursor-pointer;
-    appearance: none;
-  }
-}
 
 /* ── Historical Player ────────────────────────────────────────── */
 .player-overlay {
@@ -872,9 +866,12 @@ html.light .recent-card-btn:hover {
   @apply absolute inset-0 flex items-center justify-center bg-black/40 z-10;
 }
 
-.spinner {
-  @apply w-10 h-10 border-4 border-accent/20 border-t-accent rounded-full animate-spin;
-}
+  .spinner {
+    @apply w-10 h-10 border-4 border-accent/20 border-t-accent rounded-full animate-spin;
+  }
+
+  .checkbox {
+    @apply relative shrink-0 cursor-pointer;
     -webkit-appearance: none;
     width: 18px;
     height: 18px;

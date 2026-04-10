@@ -14,7 +14,6 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
-  const [isPlaying, setIsPlaying] = useState(true);
   
   // Progress tracking
   const [progressMs, setProgressMs] = useState(0);

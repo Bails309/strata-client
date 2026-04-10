@@ -127,8 +127,8 @@ export default function NvrPlayer() {
       }
     };
 
-    // Auto-scale display
-    const resizeObserver = new ResizeObserver(() => {
+    // Auto-scale display to fit the container
+    const scaleToFit = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
       if (w > 0 && h > 0) {
@@ -139,8 +139,14 @@ export default function NvrPlayer() {
           display.scale(scale);
         }
       }
-    });
+    };
+
+    // Re-scale when the container resizes (window resize, sidebar toggle)
+    const resizeObserver = new ResizeObserver(scaleToFit);
     resizeObserver.observe(container);
+
+    // Re-scale when the remote display dimensions change (size instruction)
+    display.onresize = scaleToFit;
 
     // Elapsed timer
     timerRef.current = window.setInterval(() => {

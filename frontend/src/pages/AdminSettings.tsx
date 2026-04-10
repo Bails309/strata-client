@@ -2772,7 +2772,9 @@ function SessionsTab() {
                         onClick={() => navigate(`/observe/${encodeURIComponent(s.session_id)}?offset=0&name=${encodeURIComponent(s.connection_name)}&user=${encodeURIComponent(s.username)}`)}
                         title="Watch live"
                       >
-                        ● Live
+                        <span className="inline-flex items-center gap-1 animate-pulse text-red-500">
+                          ● Live
+                        </span>
                       </button>
                       <button
                         className="btn btn-secondary text-xs py-1 px-2"

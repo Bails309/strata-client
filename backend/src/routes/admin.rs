@@ -2594,7 +2594,7 @@ mod tests {
         let json = r#"{"label":"New Label","enabled":false}"#;
         let r: UpdateAdSyncConfigRequest = serde_json::from_str(json).unwrap();
         assert_eq!(r.label.unwrap(), "New Label");
-        assert_eq!(r.enabled.unwrap(), false);
+        assert!(!r.enabled.unwrap());
         assert!(r.ldap_url.is_none());
     }
 

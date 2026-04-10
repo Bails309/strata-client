@@ -141,7 +141,7 @@ describe('Credentials', () => {
     await screen.findByText('New Profile');
     await user.click(screen.getByText('New Profile'));
     await user.type(screen.getByPlaceholderText('e.g. Domain Admin, SSH Dev Server'), 'Test');
-    await user.type(screen.getByPlaceholderText('jsmith'), 'admin');
+    await user.type(screen.getByPlaceholderText('sAMAccountName (e.g. jsmith)'), 'admin');
     await user.type(screen.getByPlaceholderText('Enter password'), 'secret');
     await user.click(screen.getByText('Create Profile'));
     expect(createCredentialProfile).toHaveBeenCalled();
@@ -335,7 +335,7 @@ describe('Credentials', () => {
     await screen.findByText('New Profile');
     await user.click(screen.getByText('New Profile'));
     await user.type(screen.getByPlaceholderText('e.g. Domain Admin, SSH Dev Server'), 'Test');
-    await user.type(screen.getByPlaceholderText('jsmith'), 'admin');
+    await user.type(screen.getByPlaceholderText('sAMAccountName (e.g. jsmith)'), 'admin');
     await user.type(screen.getByPlaceholderText('Enter password'), 'secret');
     await user.click(screen.getByText('Create Profile'));
     expect(await screen.findByText('Network error')).toBeInTheDocument();
@@ -515,7 +515,7 @@ describe('Credentials', () => {
     await screen.findByText('New Profile');
     await user.click(screen.getByText('New Profile'));
     await user.type(screen.getByPlaceholderText('e.g. Domain Admin, SSH Dev Server'), 'Test');
-    await user.type(screen.getByPlaceholderText('jsmith'), 'admin');
+    await user.type(screen.getByPlaceholderText('sAMAccountName (e.g. jsmith)'), 'admin');
     await user.type(screen.getByPlaceholderText('Enter password'), 'secret');
     await user.click(screen.getByText('Create Profile'));
     expect(await screen.findByText('Save failed')).toBeInTheDocument();

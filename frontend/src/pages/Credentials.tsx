@@ -260,9 +260,12 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               <input
                 value={editing.username}
                 onChange={(e) => setEditing({ ...editing, username: e.target.value })}
-                placeholder={editing.id ? '(unchanged)' : 'jsmith'}
+                placeholder={editing.id ? '(unchanged)' : 'sAMAccountName (e.g. jsmith)'}
                 autoComplete="off"
               />
+              <p className="text-txt-tertiary text-[0.6875rem] mt-1">
+                Note: Use sAMAccountName format (e.g. jsmith), not UPN or full email address.
+              </p>
             </div>
             <div className="form-group">
               <label>Password</label>

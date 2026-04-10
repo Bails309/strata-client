@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
-use futures_util::{StreamExt, SinkExt};
+use futures_util::StreamExt;
 
 use crate::db::Recording;
 use crate::error::AppError;
@@ -54,11 +54,14 @@ pub async fn stream_recording(
     State(state): State<SharedState>,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("Received stream_recording request for ID: {}", id);
-
-    let db = {
+    let (db, _config) = {
         let s = state.read().await;
-        s.db.clone().ok_or(AppError::SetupRequired)?
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        let db = s.db.clone().ok_or(AppError::SetupRequired)?;
+        let cfg = s.config.clone().ok_or(AppError::SetupRequired)?;
+        (db, cfg)
     };
 
     // Fetch recording metadata
@@ -68,11 +71,7 @@ pub async fn stream_recording(
         .await?
         .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
 
-    // Configure WebSocket with much higher limits for large recording blobs
-    Ok(ws
-        .max_frame_size(16 * 1024 * 1024)
-        .max_message_size(32 * 1024 * 1024)
-        .on_upgrade(move |socket| async move {
+    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| async move {
         if let Err(e) = handle_recording_stream(socket, state, recording).await {
             tracing::error!("Recording stream error: {e}");
         }
@@ -89,6 +88,7 @@ async fn handle_recording_stream(
         let file = tokio::fs::File::open(path).await?;
         Box::new(tokio::io::BufReader::new(file)) as Box<dyn tokio::io::AsyncRead + Unpin + Send>
     } else {
+        // Azure storage stream
         let azure = {
             let s = state.read().await;
             let pool = s.db.as_ref().ok_or_else(|| anyhow::anyhow!("DB not connected"))?.pool.clone();
@@ -108,18 +108,10 @@ async fn handle_recording_stream(
         }
     };
 
-    let (mut ws_sender, mut ws_receiver) = socket.split();
-
-    // Background task: Sink (read and discard messages from client)
-    // This prevents the TCP window from filling up if the client sends data (like handshakes)
-    tokio::spawn(async move {
-        while let Some(msg) = ws_receiver.next().await {
-            if let Err(e) = msg {
-                tracing::debug!("WebSocket receiver closed: {e}");
-                break;
-            }
-        }
-    });
+    // Send NVR header with total duration
+    let duration_ms = recording.duration_secs.unwrap_or(0) * 1000;
+    let header = format!("{}.nvrheader,{}.{};", "nvrheader".len(), duration_ms.to_string().len(), duration_ms);
+    socket.send(axum::extract::ws::Message::Text(header)).await?;
 
     let mut parser = GuacamoleParser::new();
     let mut base_guac_ts: Option<u64> = None;
@@ -127,17 +119,10 @@ async fn handle_recording_stream(
     let mut last_progress_sent = std::time::Instant::now();
 
     let mut buf = [0u8; 16384];
-    let mut send_buffer = String::with_capacity(32768);
-
-    // Initial wake-up (nop)
-    ws_sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
 
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
-            if !send_buffer.is_empty() {
-                ws_sender.send(axum::extract::ws::Message::Text(send_buffer)).await?;
-            }
             break;
         }
 
@@ -145,62 +130,37 @@ async fn handle_recording_stream(
 
         while let Some(instruction) = parser.next_instruction() {
             // Check for sync instruction to handle pacing
-            if instruction.opcode == b"sync" {
-                if let Some(ts_bytes) = instruction.args.get(0) {
-                    if let Ok(ts_str) = std::str::from_utf8(ts_bytes) {
-                        if let Ok(ts) = ts_str.parse::<u64>() {
-                            match (base_guac_ts, base_real_ts) {
-                                (None, None) => {
-                                    base_guac_ts = Some(ts);
-                                    base_real_ts = Some(std::time::Instant::now());
-                                }
-                                (Some(b_ts), Some(b_real)) => {
-                                    let guac_elapsed = ts.saturating_sub(b_ts);
-                                    let real_elapsed = std::time::Instant::now().duration_since(b_real).as_millis() as u64;
-
-                                    if guac_elapsed > real_elapsed {
-                                        // Flush buffer before wait
-                                        if !send_buffer.is_empty() {
-                                            let payload = std::mem::take(&mut send_buffer);
-                                            ws_sender.send(axum::extract::ws::Message::Text(payload)).await?;
-                                        }
-
-                                        let wait_ms = guac_elapsed - real_elapsed;
-                                        // Keep-alive for long waits
-                                        if wait_ms > 5000 {
-                                            let mut remaining = wait_ms;
-                                            while remaining > 5000 {
-                                                tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-                                                ws_sender.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
-                                                remaining -= 5000;
-                                            }
-                                            tokio::time::sleep(std::time::Duration::from_millis(remaining)).await;
-                                        } else {
-                                            tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
-                                        }
-                                    }
-
-                                    // Periodic progress update
-                                    if last_progress_sent.elapsed().as_millis() > 500 {
-                                        let prog = format!("{}.nvrprogress,{}.{};", "nvrprogress".len(), guac_elapsed.to_string().len(), guac_elapsed);
-                                        send_buffer.push_str(&prog);
-                                        last_progress_sent = std::time::Instant::now();
-                                    }
-                                }
-                                _ => {}
+            if instruction.opcode == "sync" {
+                if let Some(ts_str) = instruction.args.get(0) {
+                    if let Ok(ts) = ts_str.parse::<u64>() {
+                        match (base_guac_ts, base_real_ts) {
+                            (None, None) => {
+                                base_guac_ts = Some(ts);
+                                base_real_ts = Some(std::time::Instant::now());
                             }
+                            (Some(b_ts), Some(b_real)) => {
+                                let guac_elapsed = ts.saturating_sub(b_ts);
+                                let real_elapsed = std::time::Instant::now().duration_since(b_real).as_millis() as u64;
+
+                                if guac_elapsed > real_elapsed {
+                                    tokio::time::sleep(std::time::Duration::from_millis(guac_elapsed - real_elapsed)).await;
+                                }
+
+                                // Send progress update periodically (every 500ms at most)
+                                if last_progress_sent.elapsed().as_millis() > 500 {
+                                    let prog = format!("{}.nvrprogress,{}.{};", "nvrprogress".len(), guac_elapsed.to_string().len(), guac_elapsed);
+                                    socket.send(axum::extract::ws::Message::Text(prog)).await?;
+                                    last_progress_sent = std::time::Instant::now();
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
             }
 
-            // Aggregate with lossy UTF-8
-            send_buffer.push_str(&String::from_utf8_lossy(&instruction.raw));
-
-            // Flush threshold
-            if send_buffer.len() >= 16384 {
-                ws_sender.send(axum::extract::ws::Message::Text(std::mem::take(&mut send_buffer))).await?;
-            }
+            // Send standard instruction
+            socket.send(axum::extract::ws::Message::Text(instruction.raw)).await?;
         }
     }
 
@@ -208,91 +168,76 @@ async fn handle_recording_stream(
 }
 
 struct GuacamoleInstruction {
-    opcode: Vec<u8>,
-    args: Vec<Vec<u8>>,
-    raw: Vec<u8>,
+    opcode: String,
+    args: Vec<String>,
+    raw: String,
 }
 
 struct GuacamoleParser {
-    buffer: Vec<u8>,
+    buffer: String,
 }
 
 impl GuacamoleParser {
     fn new() -> Self {
-        Self { buffer: Vec::new() }
+        Self { buffer: String::new() }
     }
 
     fn push(&mut self, data: &[u8]) {
-        self.buffer.extend_from_slice(data);
+        self.buffer.push_str(&String::from_utf8_lossy(data));
     }
 
     fn next_instruction(&mut self) -> Option<GuacamoleInstruction> {
         let mut elements = Vec::new();
-        let mut cursor = 0;
+        let mut cursor_bytes = 0;
 
         loop {
-            let remaining = &self.buffer[cursor..];
-            let dot_pos = match remaining.iter().position(|&b| b == b'.') {
-                Some(p) => p,
+            // Find length prefix
+            let remaining = &self.buffer[cursor_bytes..];
+            let dot_pos = match remaining.find('.') {
+                Some(pos) => pos,
                 None => return None,
             };
 
-            let len_str = match std::str::from_utf8(&remaining[..dot_pos]) {
-                Ok(s) => s,
-                Err(_) => {
-                    tracing::error!("Invalid UTF-8 in length prefix: {:?}", &remaining[..dot_pos]);
-                    self.buffer.clear();
-                    return None;
-                }
-            };
-            
+            let len_str = &remaining[..dot_pos];
             let len: usize = match len_str.parse() {
                 Ok(l) => l,
                 Err(_) => {
-                    tracing::error!("Failed to parse length prefix: '{}'", len_str);
+                    // Malformed prefix, clear and stop
                     self.buffer.clear();
                     return None;
                 }
             };
+
+            let content_start_bytes = cursor_bytes + dot_pos + 1;
+            let after_prefix = &self.buffer[content_start_bytes..];
             
-            let content_start = cursor + dot_pos + 1;
-            
-            // Strictly follow Guacamole's character counting
-            // Guacamole protocol counts Unicode characters, NOT bytes.
+            // We need 'len' characters. Find the byte offset for 'len' characters.
             let mut char_count = 0;
-            let mut check_pos = content_start;
-            
-            while char_count < len {
-                if check_pos >= self.buffer.len() {
-                    return None; // Need more data
+            let mut content_end_offset = 0;
+            for (i, _) in after_prefix.char_indices() {
+                if char_count == len {
+                    content_end_offset = i;
+                    break;
                 }
-                
-                let b = self.buffer[check_pos];
-                // In UTF-8, characters start with 0xxxxxxx or 11xxxxxx.
-                // Continuation bytes (10xxxxxx) do NOT start a character.
-                if (b & 0xC0) != 0x80 {
-                    char_count += 1;
-                }
-                check_pos += 1;
+                char_count += 1;
             }
 
-            // Consume all continuation bytes of the final character
-            while check_pos < self.buffer.len() && (self.buffer[check_pos] & 0xC0) == 0x80 {
-                check_pos += 1;
+            if char_count < len {
+                return None; // Need more data
             }
 
-            if check_pos >= self.buffer.len() {
+            let content = &after_prefix[..content_end_offset];
+            elements.push(content.to_string());
+
+            let terminator_pos = content_start_bytes + content_end_offset;
+            if terminator_pos >= self.buffer.len() {
                 return None; // Need more data (terminator)
             }
 
-            let content_bytes = self.buffer[content_start..check_pos].to_vec();
-            elements.push(content_bytes);
-
-            let terminator = self.buffer[check_pos];
-            if terminator == b';' {
-                let total_len = check_pos + 1;
-                let raw = self.buffer[..total_len].to_vec();
-                self.buffer.drain(..total_len);
+            let terminator = self.buffer.as_bytes()[terminator_pos] as char;
+            if terminator == ';' {
+                let raw = self.buffer[..=terminator_pos].to_string();
+                self.buffer.drain(..=terminator_pos);
                 
                 let opcode = elements.remove(0);
                 return Some(GuacamoleInstruction {
@@ -300,15 +245,12 @@ impl GuacamoleParser {
                     args: elements,
                     raw,
                 });
-            } else if terminator == b',' {
-                cursor = check_pos + 1;
+            } else if terminator == ',' {
+                cursor_bytes = terminator_pos + 1;
                 continue;
             } else {
-                // If we reach here, we hit a byte that isn't , or ; where we expected a terminator.
-                // This means our character counting desynced OR the input is malformed.
-                // We MUST recover by skipping and trying to find the next valid length prefix.
-                tracing::warn!("Protocol desync: expected terminator, found {}. Attempting recovery.", terminator);
-                self.buffer.clear(); // Simple recovery for now
+                // Malformed
+                self.buffer.clear();
                 return None;
             }
         }

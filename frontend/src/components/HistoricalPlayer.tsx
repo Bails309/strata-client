@@ -92,6 +92,15 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
       setLoading(false);
     };
 
+    tunnel.onstatechange = (state: number) => {
+      // Suppress errors from normal end-of-recording close (CLOSED = 2)
+      if (state === 2 && recordingEndedRef.current) {
+        // Clean disconnect after nvrend — clear any error that may have
+        // been set by a race between the close frame and our handler.
+        setErrorMsg('');
+      }
+    };
+
     // Auto-scale
     const scaleToFit = () => {
       const w = container.clientWidth;

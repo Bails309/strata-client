@@ -2263,22 +2263,8 @@ function RdpSections({
       </Section>
 
       <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">Recording path and filename are managed automatically by the system. Use the Recordings tab to enable/disable recording globally.</p>
         <FieldGrid>
-          <div className="form-group !mb-0">
-            <label title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording.">Recording Path</label>
-            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} placeholder="/var/lib/guacamole/recordings" title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording." />
-          </div>
-          <div className="form-group !mb-0">
-            <label title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}.">Recording Name</label>
-            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} placeholder="recording" title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}." />
-          </div>
-          <div className="form-group !mb-0">
-            <label>&nbsp;</label>
-            <label className="flex items-center gap-2" title="Automatically create the recording directory if it does not yet exist.">
-              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
-              Auto-create recording path
-            </label>
-          </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2" title="Exclude graphical output from the recording, producing a recording that contains only user input events.">
@@ -2529,22 +2515,8 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
       </Section>
 
       <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">Recording path and filename are managed automatically by the system. Use the Recordings tab to enable/disable recording globally.</p>
         <FieldGrid>
-          <div className="form-group !mb-0">
-            <label title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording.">Recording Path</label>
-            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording." />
-          </div>
-          <div className="form-group !mb-0">
-            <label title="The filename to use for any created recordings. If omitted, the value 'recording' will be used.">Recording Name</label>
-            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} title="The filename to use for any created recordings. If omitted, the value 'recording' will be used." />
-          </div>
-          <div className="form-group !mb-0">
-            <label>&nbsp;</label>
-            <label className="flex items-center gap-2" title="Automatically create the recording directory if it does not yet exist.">
-              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
-              Auto-create recording path
-            </label>
-          </div>
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2" title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed.">

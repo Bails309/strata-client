@@ -25,7 +25,7 @@ export default function Select({ value, onChange, options, placeholder }: Select
     if (!ref.current) return;
     const rect = ref.current.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
-    const menuHeight = (options.length * 36) + 8;
+    const menuHeight = Math.min((options.length * 36) + 8, 320);
     const placeAbove = spaceBelow < menuHeight && rect.top > menuHeight;
 
     setMenuStyle({

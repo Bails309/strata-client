@@ -748,7 +748,8 @@ html.light .recent-card-btn:hover {
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg);
     animation: var(--animate-select-in);
-    overflow: hidden;
+    max-height: 320px;
+    overflow-y: auto;
   }
 
   .cs-option {

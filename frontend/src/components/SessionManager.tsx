@@ -1,5 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
 import Guacamole from 'guacamole-common-js';
+import { getMe } from '../api';
 
 export interface GuacSession {
   id: string;                      // connection UUID
@@ -18,6 +19,10 @@ export interface GuacSession {
   filesystems: { object: Guacamole.GuacObject; name: string }[];
   /** Remote clipboard text (last received from the session) */
   remoteClipboard: string;
+  /** Pop-out state and actions */
+  isPoppedOut?: boolean;
+  popOut?: () => void;
+  popIn?: () => void;
 }
 
 interface SessionManagerValue {
@@ -33,6 +38,11 @@ interface SessionManagerValue {
   /** IDs of sessions that currently receive keyboard input */
   focusedSessionIds: string[];
   setFocusedSessionIds: (ids: string[]) => void;
+  /** Session bar (right sidebar) layout state */
+  sessionBarCollapsed: boolean;
+  setSessionBarCollapsed: (collapsed: boolean) => void;
+  barWidth: number;
+  canShare: boolean;
 }
 
 interface CreateSessionOpts {
@@ -56,7 +66,18 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [tiledSessionIds, setTiledSessionIds] = useState<string[]>([]);
   const [focusedSessionIds, setFocusedSessionIds] = useState<string[]>([]);
+  const [sessionBarCollapsed, setSessionBarCollapsed] = useState(false);
+  const [canShare, setCanShare] = useState(false);
   const sessionsRef = useRef<GuacSession[]>([]);
+ 
+  const barWidth = 0; // Floating overlay doesn't reserve space
+
+  // Fetch sharing permission from the user's own profile
+  useEffect(() => {
+    getMe().then((me: any) => {
+      setCanShare(me.can_manage_system || me.can_create_sharing_profiles);
+    }).catch(() => {});
+  }, []);
 
   // Keep ref in sync
   sessionsRef.current = sessions;
@@ -124,15 +145,30 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
     };
 
     // ── Clipboard sync: local → remote (on focus) ──
-    const pushClipboard = () => {
-      navigator.clipboard?.readText().then((text) => {
+    const pushClipboard = async () => {
+      try {
+        const text = await navigator.clipboard?.readText();
         if (text && text !== session.remoteClipboard) {
           const stream = client.createClipboardStream('text/plain');
           const writer = new Guacamole.StringWriter(stream);
-          writer.sendText(text);
+          
+          // Split text into chunks to avoid hitting Guacamole protocol 
+          // instruction size limits (typically 8KB). 4096 is a safe chunk size.
+          // Add a small delay between chunks to avoid overwhelming the tunnel.
+          const CHUNK_SIZE = 4096;
+          for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+            writer.sendText(text.substring(i, i + CHUNK_SIZE));
+            // Tiny delay to let the event loop process and allow guacd to 
+            // handle the reassembly buffer without bursting.
+            await new Promise(resolve => setTimeout(resolve, 5));
+          }
+          
           writer.sendEnd();
+          session.remoteClipboard = text; // Update local state to avoid echo
         }
-      }).catch(() => {});
+      } catch (err) {
+        // Silently fail if clipboard access is denied
+      }
     };
     // Push local clipboard whenever the display gets focus
     displayEl.addEventListener('mouseenter', pushClipboard);
@@ -257,6 +293,10 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
       setTiledSessionIds,
       focusedSessionIds,
       setFocusedSessionIds,
+      sessionBarCollapsed,
+      setSessionBarCollapsed,
+      barWidth,
+      canShare,
     }}>
       {children}
     </SessionManagerContext.Provider>

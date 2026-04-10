@@ -16,6 +16,7 @@ pub struct NvrContext {
     pub protocol: String,
     pub user_id: uuid::Uuid,
     pub username: String,
+    pub client_ip: String,
 }
 
 /// Parameters injected into the guacd Guacamole protocol handshake.
@@ -97,6 +98,10 @@ impl HandshakeParams {
                 .or_insert_with(|| "true".into());
             m.entry("enable-gfx-h264".into())
                 .or_insert_with(|| "true".into());
+
+            // Increase clipboard buffer size to 8 MiB (default is often 64KB - 256KB)
+            m.entry("clipboard-buffer-size".into())
+                .or_insert_with(|| "8388608".into());
         }
 
         // SFTP for SSH connections
@@ -137,6 +142,7 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "enable-printing"
             | "enable-gfx"
             | "enable-gfx-h264"
+            | "clipboard-buffer-size"
             | "resize-method"
             | "server-layout"
             | "console"
@@ -367,7 +373,7 @@ pub async fn proxy(
     // opens, not when it receives "ready".
 
     // ── NVR: register session in the in-memory registry ──
-    let nvr_handles = if let Some(ref ctx) = nvr {
+    let mut nvr_handles = if let Some(ref ctx) = nvr {
         match ctx
             .registry
             .register(
@@ -377,10 +383,12 @@ pub async fn proxy(
                 ctx.protocol.clone(),
                 ctx.user_id,
                 ctx.username.clone(),
+                handshake.hostname.clone(),
+                ctx.client_ip.clone(),
             )
             .await
         {
-            Some((tx, buffer)) => Some((tx, buffer, ctx.registry.clone())),
+            Some((tx, buffer, kill_rx)) => Some((tx, buffer, ctx.registry.clone(), Some(kill_rx))),
             None => {
                 tracing::error!("Session limit reached — rejecting tunnel");
                 return Err(AppError::Internal(
@@ -399,28 +407,43 @@ pub async fn proxy(
     // up to the last ';' in each read, keeping the remainder for next time.
     let mut tcp_buf = vec![0u8; 65536];
     let mut pending = Vec::<u8>::new();
-    /// Maximum pending buffer size (1 MB). If a client sends data without
+    /// Maximum pending buffer size (16 MiB). If a client sends data without
     /// instruction terminators the buffer is capped to prevent OOM.
-    const MAX_PENDING_BYTES: usize = 1024 * 1024;
+    const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
 
     // WebSocket keepalive – send a Ping every 15 s, timeout if no Pong in 30 s.
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
     ping_interval.tick().await; // consume the first immediate tick
     let mut last_pong = tokio::time::Instant::now();
 
-    // Resolve bandwidth counters (if NVR is active, track via session handle)
-    let bandwidth = if let Some((_, _, ref registry)) = nvr_handles {
+    let (bandwidth, mut kill_rx) = if let Some((_, _, ref registry, ref mut rx_opt)) = nvr_handles {
         if let Some(ref ctx) = nvr {
-            registry.get(&ctx.session_id).await
+            (registry.get(&ctx.session_id).await, rx_opt.take())
         } else {
-            None
+            (None, None)
         }
     } else {
-        None
+        (None, None)
     };
 
     loop {
         tokio::select! {
+             // Administrative kill signal
+            _ = async {
+                match kill_rx {
+                    Some(ref mut rx) => rx.await.ok(),
+                    None => Some(std::future::pending::<()>().await),
+                }
+            } => {
+                tracing::info!("Session terminated by administrator");
+                // Notify the client before closing
+                let msg = "Session terminated by administrator";
+                let inst = guac_instruction("error", &[msg, "521"]);
+                let text = String::from_utf8_lossy(&inst).into_owned();
+                let _ = ws.send(axum::extract::ws::Message::Text(text)).await;
+                break;
+            }
+
             // TCP (guacd) → WebSocket (frontend)
             result = tcp_read.read(&mut tcp_buf) => {
                 match result {
@@ -454,7 +477,7 @@ pub async fn proxy(
                             pending = remainder;
 
                             // NVR: capture frame into ring buffer + broadcast
-                            if let Some((ref tx, ref buffer, _)) = nvr_handles {
+                            if let Some((ref tx, ref buffer, _, _)) = nvr_handles {
                                 {
                                     let mut buf = buffer.write().await;
                                     buf.push(text.clone());

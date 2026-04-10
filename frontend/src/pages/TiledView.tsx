@@ -27,8 +27,8 @@ export default function TiledView() {
     setFocusedSessionIds,
     setActiveSessionId,
     closeSession,
+    barWidth,
   } = useSessionManager();
-  const [barHeight, setBarHeight] = useState(0);
   // Map of sessionId → list of required parameter names (for onrequired prompts)
   const [requiredCreds, setRequiredCreds] = useState<Record<string, string[]>>({});
 
@@ -42,17 +42,6 @@ export default function TiledView() {
 
   const { cols, rows } = useMemo(() => computeGrid(tiledSessions.length), [tiledSessions.length]);
 
-  // Observe session bar height
-  useEffect(() => {
-    const barEl = document.querySelector('.session-bar') as HTMLElement | null;
-    if (!barEl) { setBarHeight(0); return; }
-    setBarHeight(barEl.offsetHeight);
-    const ro = new ResizeObserver(([entry]) => {
-      setBarHeight(entry.target instanceof HTMLElement ? entry.target.offsetHeight : 0);
-    });
-    ro.observe(barEl);
-    return () => ro.disconnect();
-  }, [sessions.length]);
 
   // If no tiled sessions, go home
   useEffect(() => {
@@ -164,15 +153,15 @@ export default function TiledView() {
         position: 'fixed',
         top: 0,
         left: sidebarWidth,
-        right: 0,
-        bottom: barHeight,
+        right: barWidth,
+        bottom: 0,
         zIndex: 5,
         display: 'grid',
         gridTemplateColumns: `repeat(${cols}, 1fr)`,
         gridTemplateRows: `repeat(${rows}, 1fr)`,
         gap: 2,
         background: '#000',
-        transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+        transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1), right 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
       }}
     >
       {tiledSessions.map((session) => (

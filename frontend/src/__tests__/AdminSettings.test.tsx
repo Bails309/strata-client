@@ -38,6 +38,7 @@ vi.mock('../api', () => ({
   deleteConnectionFolder: vi.fn(),
   getUsers: vi.fn(),
   getActiveSessions: vi.fn(),
+  killSessions: vi.fn(),
   getAdSyncConfigs: vi.fn(),
   createAdSyncConfig: vi.fn(),
   updateAdSyncConfig: vi.fn(),
@@ -55,7 +56,7 @@ import {
   getKerberosRealms, createKerberosRealm, updateKerberosRealm, deleteKerberosRealm,
   createRole, createConnection, updateConnection, deleteConnection,
   createConnectionFolder, deleteConnectionFolder,
-  getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
+  getActiveSessions, killSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
   updateAuthMethods, updateSettings, updateRoleMappings,
 } from '../api';
@@ -1129,7 +1130,7 @@ describe('SessionsTab', () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 0 },
+      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 0, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
     ]);
   });
   afterEach(() => vi.restoreAllMocks());
@@ -1162,7 +1163,7 @@ describe('SessionsTab', () => {
 
   it('shows buffer depth', async () => {
     vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 120 },
+      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 120, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1172,7 +1173,7 @@ describe('SessionsTab', () => {
 
   it('shows buffer with seconds', async () => {
     vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 45 },
+      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 45, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1182,7 +1183,7 @@ describe('SessionsTab', () => {
 
   it('shows buffer with minutes and seconds', async () => {
     vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 90 },
+      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 90, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
     ]);
     const user = userEvent.setup();
     renderAdmin();
@@ -1210,12 +1211,27 @@ describe('SessionsTab', () => {
     });
   });
 
-  it('handles fetch error gracefully', async () => {
-    vi.mocked(getActiveSessions).mockRejectedValue(new Error('fetch fail'));
+  it('calls killSessions on confirm', async () => {
+    vi.mocked(killSessions).mockResolvedValue({ status: 'ok', killed_count: 1 });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Audit Logs'));
-    expect(await screen.findByText(/no active sessions/i)).toBeInTheDocument();
+    
+    // Select the session
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[1]); // Row checkbox
+    
+    // Click Kill
+    const killBtn = screen.getByText('Kill 1 Session(s)');
+    await user.click(killBtn);
+    
+    // Themed modal should appear
+    expect(await screen.findByText('Terminate Sessions')).toBeInTheDocument();
+    
+    // Click Terminate
+    await user.click(screen.getByText('Terminate'));
+    
+    expect(killSessions).toHaveBeenCalledWith(['s1']);
   });
 });
 

@@ -2,13 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { getConnectionInfo, getConnections, createTunnelTicket, getMe } from '../api';
+import { getConnectionInfo, getConnections, createTunnelTicket } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
-import SessionToolbar from '../components/SessionToolbar';
 import SessionWatermark from '../components/SessionWatermark';
-import TouchToolbar from '../components/TouchToolbar';
 
 /*
  * Phases:
@@ -32,7 +30,7 @@ export default function SessionClient() {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sessions, activeSessionId, setActiveSessionId, createSession, closeSession, getSession } = useSessionManager();
+  const { sessions, activeSessionId, setActiveSessionId, createSession, closeSession, getSession, barWidth } = useSessionManager();
   const sidebarWidth = useSidebarWidth();
 
   const [phase, setPhase] = useState<Phase>('loading');
@@ -45,20 +43,11 @@ export default function SessionClient() {
   const [ignoreCert, setIgnoreCert] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string }>({ username: '', password: '' });
 
-  // Fetch sharing permission from the user's own profile
-  const [canShare, setCanShare] = useState(false);
-  useEffect(() => {
-    getMe().then((me) => {
-      setCanShare(me.can_manage_system || me.can_create_sharing_profiles);
-    }).catch(() => {});
-  }, []);
   const containerFocusedRef = useRef(false);
   const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
   const userDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const [barHeight, setBarHeight] = useState(0);
-
+  const wireHandlersRef = useRef<(session: GuacSession, attempt: number) => void>();
   // Find the session for this connection
   const currentSession = sessions.find(
     (s) => s.connectionId === connectionId && s.id === activeSessionId
@@ -66,20 +55,6 @@ export default function SessionClient() {
 
   const { isPoppedOut, popOut, returnDisplay } = usePopOut(currentSession, containerRef);
 
-  // ── Observe session bar height to offset the session container ──
-  useEffect(() => {
-    const barEl = document.querySelector('.session-bar') as HTMLElement | null;
-    if (!barEl) {
-      setBarHeight(0);
-      return;
-    }
-    setBarHeight(barEl.offsetHeight);
-    const ro = new ResizeObserver(([entry]) => {
-      setBarHeight(entry.target instanceof HTMLElement ? entry.target.offsetHeight : 0);
-    });
-    ro.observe(barEl);
-    return () => ro.disconnect();
-  }, [sessions.length]); // re-run when sessions appear/disappear
 
   // ── Phase 1: Check for existing session or fetch connection info ──
   useEffect(() => {
@@ -127,7 +102,7 @@ export default function SessionClient() {
   }, [credForm]);
 
   // ── Auto-reconnect: attempt to re-establish a dropped session ──
-  const attemptReconnect = useCallback((attempt: number) => {
+  const attemptReconnect = useCallback((attempt: number): void => {
     if (!connectionId || !containerRef.current || userDisconnectRef.current) return;
 
     setReconnecting({ attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS });
@@ -169,7 +144,7 @@ export default function SessionClient() {
           connectParams,
         });
 
-        wireSessionErrorHandlers(session, attempt);
+        wireHandlersRef.current?.(session, attempt);
         attachSession(session, container);
         setReconnecting(null);
       } catch {
@@ -184,12 +159,23 @@ export default function SessionClient() {
   }, [connectionId, connectionName, protocol, ignoreCert, createSession]);
 
   // ── Wire error/close handlers onto a session for reconnection ──
-  const wireSessionErrorHandlers = useCallback((session: GuacSession, _prevAttempt?: number) => {
+  const wireSessionErrorHandlers = useCallback((session: GuacSession, attempt = 0): void => {
     const handleUnexpectedClose = () => {
       if (userDisconnectRef.current) return;
       // Clean up the dead session from the manager
       closeSession(session.id);
-      attemptReconnect(1);
+
+      // Stability check: if the session lasted more than 10s, reset reconnect counter.
+      // Otherwise, increment the current attempt.
+      const elapsed = Date.now() - session.createdAt;
+      const nextAttempt = elapsed > 10000 ? 1 : attempt + 1;
+
+      if (nextAttempt > RECONNECT_MAX_ATTEMPTS) {
+        setReconnecting(null);
+        setError('Connection lost. Automatic reconnection failed after multiple attempts.');
+      } else {
+        attemptReconnect(nextAttempt);
+      }
     };
 
     session.tunnel.onstatechange = (state: number) => {
@@ -221,6 +207,8 @@ export default function SessionClient() {
       setSshRequired(parameters);
     };
   }, [closeSession, attemptReconnect, phase]);
+
+  wireHandlersRef.current = wireSessionErrorHandlers;
 
   // ── Phase 3: Create or attach session ──
   useEffect(() => {
@@ -285,7 +273,7 @@ export default function SessionClient() {
     });
 
     return () => { cancelled = true; cancelAnimationFrame(raf); };
-  }, [phase, connectionId, protocol, connectionName, createSession, getSession, wireSessionErrorHandlers]);
+  }, [phase, connectionId, protocol, connectionName, createSession, getSession, wireSessionErrorHandlers, ignoreCert]);
 
   // Re-attach when switching back to an existing session
   useEffect(() => {
@@ -296,13 +284,14 @@ export default function SessionClient() {
   // Handle resize
   useEffect(() => {
     if (!currentSession || !containerRef.current) return;
-    const container = containerRef.current;
+    const container = containerRef.current!;
     const client = currentSession.client;
     const display = client.getDisplay();
 
+
     function handleResize() {
-      const cw = container.clientWidth;
-      const ch = container.clientHeight;
+      const cw = container!.clientWidth;
+      const ch = container!.clientHeight;
       if (cw <= 0 || ch <= 0) return;
 
       const dw = display.getWidth();
@@ -313,12 +302,20 @@ export default function SessionClient() {
       client.sendSize(cw, ch);
     }
 
-    // Run once immediately to sync after attach
-    handleResize();
+    const observer = new ResizeObserver(() => {
+      handleResize();
+    });
 
+    observer.observe(container);
+    
+    // Fallback for window resize too
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [currentSession, barHeight, sidebarWidth]);
+    
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [currentSession]);
 
   // Keyboard management — focus-scoped with capture-phase key trap
   useEffect(() => {
@@ -433,10 +430,10 @@ export default function SessionClient() {
       position: 'fixed',
       top: 0,
       left: sidebarWidth,
-      right: 0,
-      bottom: barHeight,
+      right: barWidth,
+      bottom: 0,
       zIndex: 5,
-      transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+      transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1), right 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
     }}>
       <div
         ref={containerRef}
@@ -458,21 +455,17 @@ export default function SessionClient() {
         }}
       />
 
-      {/* Session toolbar — share, file browser, pop-out */}
-      {currentSession && connectionId && (
-        <>
-          <SessionToolbar
-            session={currentSession}
-            connectionId={connectionId}
-            canShare={canShare}
-            isPoppedOut={isPoppedOut}
-            onPopOut={popOut}
-            onPopIn={returnDisplay}
-          />
-          <TouchToolbar client={currentSession.client} />
-          <SessionWatermark />
-        </>
-      )}
+      {/* Registration of pop-out actions with SessionManager */}
+      {useEffect(() => {
+        if (currentSession) {
+          currentSession.isPoppedOut = isPoppedOut;
+          currentSession.popOut = popOut;
+          currentSession.popIn = returnDisplay;
+        }
+      }, [currentSession, isPoppedOut, popOut, returnDisplay]) as any}
+
+      {/* Touch controls and watermark */}
+      {currentSession && <SessionWatermark />}
 
       {/* Pop-out placeholder */}
       {isPoppedOut && (
@@ -522,11 +515,28 @@ export default function SessionClient() {
       )}
 
       {error && !reconnecting && !sshRequired && phase !== 'prompt' && (
-        <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(0,0,0,0.85)' }}>
-          <div className="card max-w-[400px] text-center !p-8">
-            <div className="text-3xl mb-2">⚠</div>
-            <div className="text-red-500 text-base mb-6 break-words">{error}</div>
-            <button className="btn-primary" onClick={() => navigate('/')}>Go Back</button>
+        <div className="absolute inset-0 flex items-center justify-center z-10 animate-in fade-in duration-300" style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)' }}>
+          <div className="card max-w-[400px] text-center !p-8 shadow-2xl scale-in-center">
+            <div className="flex items-center justify-center w-16 h-16 rounded-full bg-danger/10 text-danger mx-auto mb-6">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                <line x1="12" y1="2" x2="12" y2="12" />
+              </svg>
+            </div>
+            <h3 className="text-xl font-bold mb-2">
+              {error.toLowerCase().includes('terminated') ? 'Session Terminated' : 'Connection Error'}
+            </h3>
+            <p className="text-txt-secondary text-sm mb-8 leading-relaxed">
+              {error.toLowerCase().includes('terminated') 
+                ? 'Your session has been terminated by an administrator. Any unsaved work may be lost.'
+                : error}
+            </p>
+            <div className="flex gap-3">
+              <button className="btn flex-1" onClick={() => navigate('/')}>Exit to Dashboard</button>
+              {!error.toLowerCase().includes('terminated') && (
+                <button className="btn-primary flex-1" onClick={() => window.location.reload()}>Retry</button>
+              )}
+            </div>
           </div>
         </div>
       )}

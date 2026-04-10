@@ -767,29 +767,51 @@ html.light .recent-card-btn:hover {
     font-weight: 600;
   }
 
-  /* Session bar */
+  /* Session bar (Floating Overlay) */
   .session-bar {
-    @apply fixed bottom-0 left-0 right-0 z-[100] flex items-end;
-    background: var(--color-nav-bg);
-    border-top: 1px solid var(--color-nav-border);
-    transition: height 0.25s var(--ease-out);
+    @apply fixed top-0 right-0 bottom-0 z-[100] flex flex-col items-center;
+    background: rgba(15, 15, 20, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4);
+  }
+ 
+  .session-thumbs-container {
+    @apply flex flex-col gap-3 px-2.5 py-4 overflow-y-auto flex-1 w-full;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-scrollbar-thumb) transparent;
   }
 
   .session-thumb {
-    @apply relative shrink-0 w-40 overflow-hidden cursor-pointer transition-all duration-200;
+    @apply relative shrink-0 w-full overflow-hidden cursor-pointer transition-all duration-200;
     border-radius: var(--radius-sm);
-    border: 1.5px solid var(--color-border);
+    border: 1px solid var(--color-border);
+    aspect-ratio: 16/9;
   }
+ 
   .session-thumb:hover {
     border-color: var(--color-accent-light);
-    box-shadow: 0 0 0 2px var(--color-accent-dim);
+    box-shadow: 0 0 12px var(--color-accent-dim);
   }
+ 
   .session-thumb-active {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 2px var(--color-accent-dim);
+    box-shadow: 0 0 16px var(--color-accent-dim);
   }
+ 
   .session-thumb-error {
     border-color: var(--color-danger);
+  }
+ 
+  .session-bar-toggle {
+    @apply w-full flex flex-col items-center justify-center p-3 border-0 bg-transparent text-txt-secondary hover:text-txt-primary cursor-pointer transition-colors duration-150;
+    border-bottom: 1px solid var(--color-border);
+  }
+ 
+  .session-count-badge {
+    @apply inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-accent text-white text-[0.65rem] font-bold shadow-lg mt-1.5;
   }
 
   /* Premium Checkbox */

@@ -172,6 +172,9 @@ pub struct ActiveSession {
     pub bytes_from_guacd: AtomicU64,
     /// Bytes sent to guacd (client → server direction)
     pub bytes_to_guacd: AtomicU64,
+    pub remote_host: String,
+    pub client_ip: String,
+    pub kill_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 // ── Session info (serialisable summary for the admin API) ──────────
@@ -188,6 +191,8 @@ pub struct SessionInfo {
     pub buffer_depth_secs: u64,
     pub bytes_from_guacd: u64,
     pub bytes_to_guacd: u64,
+    pub remote_host: String,
+    pub client_ip: String,
 }
 
 // ── Registry ───────────────────────────────────────────────────────
@@ -215,7 +220,13 @@ impl SessionRegistry {
         protocol: String,
         user_id: Uuid,
         username: String,
-    ) -> Option<(broadcast::Sender<Arc<String>>, Arc<RwLock<SessionBuffer>>)> {
+        remote_host: String,
+        client_ip: String,
+    ) -> Option<(
+        broadcast::Sender<Arc<String>>,
+        Arc<RwLock<SessionBuffer>>,
+        tokio::sync::oneshot::Receiver<()>,
+    )> {
         // Use a single write lock for atomic check-and-insert (no TOCTOU)
         let mut sessions = self.sessions.write().await;
         if sessions.len() >= MAX_SESSIONS {
@@ -226,6 +237,7 @@ impl SessionRegistry {
         }
 
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let buffer = Arc::new(RwLock::new(SessionBuffer::new()));
 
         let session = Arc::new(ActiveSession {
@@ -240,10 +252,13 @@ impl SessionRegistry {
             broadcast_tx: tx.clone(),
             bytes_from_guacd: AtomicU64::new(0),
             bytes_to_guacd: AtomicU64::new(0),
+            remote_host,
+            client_ip,
+            kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
         });
 
         sessions.insert(session_id, session);
-        Some((tx, buffer))
+        Some((tx, buffer, kill_rx))
     }
 
     /// Remove a session from the registry (called when the tunnel closes).
@@ -269,6 +284,8 @@ impl SessionRegistry {
                 buffer_depth_secs: depth,
                 bytes_from_guacd: s.bytes_from_guacd.load(Ordering::Relaxed),
                 bytes_to_guacd: s.bytes_to_guacd.load(Ordering::Relaxed),
+                remote_host: s.remote_host.clone(),
+                client_ip: s.client_ip.clone(),
             });
         }
         infos
@@ -277,6 +294,23 @@ impl SessionRegistry {
     /// Look up a single session by ID.
     pub async fn get(&self, session_id: &str) -> Option<Arc<ActiveSession>> {
         self.sessions.read().await.get(session_id).cloned()
+    }
+
+    /// Forcefully terminate a session by triggering its kill signal.
+    pub async fn terminate(&self, session_id: &str) -> bool {
+        let session = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_id).cloned()
+        };
+
+        if let Some(s) = session {
+            let mut guard = s.kill_tx.lock().await;
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(());
+                return true;
+            }
+        }
+        false
     }
 
     /// Aggregate metrics across all active sessions.
@@ -389,6 +423,8 @@ mod tests {
                 "rdp".into(),
                 user_id,
                 "admin".into(),
+                "10.0.0.1".into(),
+                "192.168.1.10".into(),
             )
             .await;
         assert!(result.is_some());
@@ -416,6 +452,8 @@ mod tests {
                 "vnc".into(),
                 Uuid::new_v4(),
                 "user".into(),
+                "127.0.0.1".into(),
+                "1.2.3.4".into(),
             )
             .await;
 
@@ -465,6 +503,8 @@ mod tests {
             buffer_depth_secs: 120,
             bytes_from_guacd: 5000,
             bytes_to_guacd: 2000,
+            remote_host: "target".into(),
+            client_ip: "source".into(),
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["protocol"], "rdp");
@@ -520,6 +560,8 @@ mod tests {
                 "rdp".into(),
                 Uuid::new_v4(),
                 "u1".into(),
+                "10.0.0.1".into(),
+                "1.1.1.1".into(),
             )
             .await;
         registry
@@ -530,6 +572,8 @@ mod tests {
                 "vnc".into(),
                 Uuid::new_v4(),
                 "u2".into(),
+                "10.0.0.2".into(),
+                "2.2.2.2".into(),
             )
             .await;
         let m = registry.metrics().await;

@@ -1,10 +1,12 @@
-use axum::extract::{Extension, Path, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Extension, Path, Query, State, WebSocketUpgrade};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -95,6 +97,8 @@ pub async fn ws_tunnel(
     Extension(user): Extension<AuthUser>,
     Path(connection_id): Path<Uuid>,
     Query(query): Query<TunnelQuery>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     // ── Per-user tunnel rate limiting ──
     {
@@ -356,6 +360,14 @@ pub async fn ws_tunnel(
         .bind(connection_id)
         .execute(&db.pool)
         .await?;
+ 
+    // Extract client IP (X-Forwarded-For > ConnectInfo)
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
 
     // Build NVR context for session recording into the in-memory ring buffer
     let session_registry = {
@@ -375,6 +387,7 @@ pub async fn ws_tunnel(
     let audit_pool = db.pool.clone();
     Ok(ws
         .protocols(["guacamole"])
+        .max_message_size(64 * 1024 * 1024)
         .on_upgrade(move |socket| async move {
             let nvr = NvrContext {
                 registry: session_registry,
@@ -384,6 +397,7 @@ pub async fn ws_tunnel(
                 protocol: nvr_protocol,
                 user_id: nvr_user_id,
                 username: nvr_username,
+                client_ip,
             };
             if let Err(e) =
                 tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await

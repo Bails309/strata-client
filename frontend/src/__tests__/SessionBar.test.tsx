@@ -46,6 +46,10 @@ function defaultManagerMock(overrides = {}) {
     setTiledSessionIds: vi.fn(),
     focusedSessionIds: [],
     setFocusedSessionIds: vi.fn(),
+    sessionBarCollapsed: false,
+    setSessionBarCollapsed: vi.fn(),
+    barWidth: 200,
+    canShare: false,
     ...overrides,
   };
 }
@@ -107,12 +111,12 @@ describe('SessionBar', () => {
       activeSessionId: 's1',
     }));
     renderSessionBar();
-    const toggle = screen.getByTitle('Collapse session bar');
+    const toggle = screen.getByTitle('Collapse sessions');
     expect(toggle).toBeInTheDocument();
     await userEvent.click(toggle);
     expect(screen.queryByText('A')).not.toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
-    expect(screen.getByTitle('Expand session bar')).toBeInTheDocument();
+    expect(screen.getByTitle('Expand sessions')).toBeInTheDocument();
   });
 
   it('renders disconnect button per session', () => {
@@ -150,7 +154,7 @@ describe('SessionBar', () => {
       tiledSessionIds: ['s1', 's2'],
     }));
     renderSessionBar('/tiled');
-    expect(screen.getByText(/Tiled/)).toBeInTheDocument();
+    expect(screen.getByText(/Exit Tiled/)).toBeInTheDocument();
   });
 
   it('does not show tiled button on non-tiled route', () => {
@@ -216,8 +220,8 @@ describe('SessionBar', () => {
       setTiledSessionIds,
     }));
     renderSessionBar('/tiled');
-    expect(screen.getByText(/Tiled \(2\)/)).toBeInTheDocument();
-    await userEvent.click(screen.getByText(/Tiled/));
+    expect(screen.getByText(/Exit Tiled \(2\)/)).toBeInTheDocument();
+    await userEvent.click(screen.getByText(/Exit Tiled/));
     expect(setTiledSessionIds).toHaveBeenCalledWith([]);
   });
 });

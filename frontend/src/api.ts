@@ -563,9 +563,17 @@ export interface ActiveSession {
   buffer_depth_secs: number;
   bytes_from_guacd: number;
   bytes_to_guacd: number;
+  remote_host: string;
+  client_ip: string;
 }
 
 export const getActiveSessions = () => request<ActiveSession[]>('/admin/sessions');
+
+export const killSessions = (session_ids: string[]) =>
+  request<{ status: string; killed_count: number }>('/admin/sessions/kill', {
+    method: 'POST',
+    body: JSON.stringify({ session_ids }),
+  });
 
 /**
  * Build a WebSocket URL for the NVR observe endpoint.

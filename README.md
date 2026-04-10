@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.8.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.10.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -51,15 +51,10 @@
 - **Immutable audit log** — SHA-256 hash-chained, append-only audit trail
 - **Tiled multi-session view** — Open multiple connections side-by-side in a responsive grid with per-tile focus control and keyboard broadcast
 - **Live session NVR** — TiVo-style admin session observation with a 5-minute rewind buffer; jump into any active session and scrub backwards to see what a user did
-- **Clipboard sync** — Automatic bidirectional clipboard sharing between local and remote sessions
-- **File transfer** — Drag-and-drop upload, in-browser file browser, and RDP virtual drive for seamless file access
-- **Connection sharing** — Generate temporary share links in **view** (read-only) or **control** (full keyboard & mouse) mode; guests can provide remote assistance without credentials
-- **Connection groups & folders** — Organise connections into nested groups with collapsible group headers and an optional description field
-- **Favorites** — Star connections for quick access with a dedicated favorites filter on the Dashboard
-- **Light / dark theme toggle** — Cycle between System, Light, and Dark themes from the sidebar; refined layered-charcoal dark palette
-- **Nginx Gateway** — Built-in Nginx gateway handling SSL termination, automatic HTTP/1.1 to HTTPS redirection, and persistent security headers (CSP, HSTS) with no external dependencies required
-- **Health & load metrics** — Real-time bandwidth tracking and `GET /api/admin/metrics` endpoint with session counts by protocol
-- **PWA & tablet support** — Installable Progressive Web App with offline shell, touch toolbar for special key combos (Ctrl+Alt+Del, Win key, Alt+Tab, etc.)
+- **Unified Session Bar** — Consolidated session controls (Sharing, File Browser, Fullscreen, Pop-out, OSK) into a single, sleek, zero-footprint collapsible right-side dock
+- **Integrated OSK** — Touch toolbar and on-screen keyboard shortcuts integrated directly into the Session Bar dock; no more floating buttons obscuring the remote screen
+- **Smooth Session Resizing** — `ResizeObserver`-driven scaling handles sidebar and dock transitions smoothly without layout artifacts or resolution flashes
+- **Large Clipboard Support** — Protocol-level text chunking supports transferring tens of thousands of lines (64MB+ buffer) between local and remote sessions
 - **Sidecar guacd scaling** — Round-robin connection pool across multiple guacd instances for horizontal scaling
 - **H.264 GFX encoding** — FreeRDP 3 GFX pipeline with H.264 enabled by default for RDP connections, dramatically reducing bandwidth
 - **Modern SPA** — React + TypeScript + Vite frontend with Tailwind CSS v4, setup wizard, admin dashboard, credential vault, and HTML5 Canvas session client

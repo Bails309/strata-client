@@ -6,7 +6,7 @@ const STORAGE_KEY = 'strata-whats-new-dismissed';
  * Bump this version string each release to re-show the modal.
  * The content below should be updated to match.
  */
-export const WHATS_NEW_VERSION = '0.7.0';
+export const WHATS_NEW_VERSION = '0.9.0';
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
@@ -65,36 +65,37 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
 
           <div className="space-y-4 text-[0.8125rem] leading-relaxed text-txt-secondary">
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Granular Permissions</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Active Sessions Dashboard</h3>
               <p>
-                Roles now support 9 fine-grained permissions — control who can create users,
-                connections, folders, sharing profiles, and more. Assign exactly the access each
-                team needs.
+                A new real-time administrative view that monitors all active tunnel connections.
+                Track bandwidth, duration, and remote hosts across your entire infrastructure from a
+                single pane of glass.
               </p>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Connection Folders</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Administrative Kill Switch</h3>
               <p>
-                Connection groups have been renamed to <strong>Connection Folders</strong> with
-                full CRUD support, collapsible views, and role-based folder access control.
+                Administrators can now terminate any active session directly from the Sessions
+                dashboard. Instantly revoke access to live tunnels when security or troubleshooting
+                needs arise.
               </p>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Security Hardening</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Reconnection Stability</h3>
               <p>
-                Docker containers now run as non-root users, sensitive settings are
-                automatically redacted in API responses, and new input validation prevents
-                path-traversal and injection attacks.
+                We've overhauled the session client's reconnection logic. New stability thresholds
+                and backoff strategies prevent infinite reconnection loops on permanent failures,
+                ensuring a smoother user experience.
               </p>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Dependency Upgrades</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Project Synchronization</h3>
               <p>
-                sqlx upgraded to 0.8 and jsonwebtoken to v10, bringing improved performance
-                and security.
+                Backend and Frontend versions have been unified to 0.9.0, bringing improved
+                architectural consistency and build reliability across the full stack.
               </p>
             </section>
           </div>

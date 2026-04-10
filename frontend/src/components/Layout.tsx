@@ -31,6 +31,11 @@ const NAV_ITEMS = [
       <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 7h8M8 12h8M8 17h5"/>
     </svg>
   )},
+  { to: '/admin/sessions', label: 'Live Sessions', icon: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  )},
 ];
 
 export default function Layout({ user, onLogout }: { user: MeResponse | null, onLogout: () => void }) {
@@ -75,6 +80,9 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
                 }
                 if (item.to === '/audit') {
                   return user?.can_manage_system || user?.can_view_audit_logs;
+                }
+                if (item.to === '/admin/sessions') {
+                  return user?.can_manage_system;
                 }
                 if (item.to === '/credentials') {
                   return user?.vault_configured;

@@ -1730,6 +1730,39 @@ pub async fn list_active_sessions(
 }
 
 #[derive(Deserialize)]
+pub struct KillSessionsRequest {
+    pub session_ids: Vec<String>,
+}
+
+pub async fn kill_sessions(
+    State(state): State<SharedState>,
+    Json(body): Json<KillSessionsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+
+    let mut killed_count = 0;
+    for id in &body.session_ids {
+        if registry.terminate(id).await {
+            killed_count += 1;
+        }
+    }
+
+    audit::log(
+        &db.pool,
+        None,
+        "sessions.killed",
+        &json!({ "count": killed_count, "ids": body.session_ids }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "success", "killed_count": killed_count })))
+}
+
+#[derive(Deserialize)]
 pub struct ObserveQuery {
     /// How many seconds back to replay (0 = live only, 300 = full 5-min buffer)
     pub offset: Option<u64>,

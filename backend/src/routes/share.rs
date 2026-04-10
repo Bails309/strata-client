@@ -1,8 +1,10 @@
-use axum::extract::{Path, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
 use uuid::Uuid;
@@ -188,6 +190,8 @@ pub async fn ws_shared_tunnel(
     State(state): State<SharedState>,
     Path(share_token): Path<String>,
     Query(query): Query<SharedTunnelQuery>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     // Rate limit shared tunnel connections
     {
@@ -230,8 +234,22 @@ pub async fn ws_shared_tunnel(
     .fetch_optional(&db.pool)
     .await?;
 
-    let (_share_id, connection_id, owner_user_id, mode) =
+    let (share_id, connection_id, owner_user_id, mode) =
         share.ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+
+    // Increment access count
+    sqlx::query("UPDATE connection_shares SET access_count = access_count + 1, last_accessed = now() WHERE id = $1")
+        .bind(share_id)
+        .execute(&db.pool)
+        .await?;
+
+    // Extract client IP (X-Forwarded-For > ConnectInfo)
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
 
     let read_only = mode == "view";
 
@@ -401,6 +419,7 @@ pub async fn ws_shared_tunnel(
                 protocol,
                 user_id: owner_user_id,
                 username: nvr_username,
+                client_ip,
             };
             if let Err(e) =
                 tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await

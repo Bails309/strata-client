@@ -220,6 +220,32 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
       setSessions((prev) => [...prev]);
     };
 
+    // ── Auto-remove dead sessions when the tunnel closes ──
+    // This fires regardless of whether SessionClient is mounted, so zombie
+    // sessions are always cleaned up from the sessions list and session bar.
+    tunnel.onstatechange = (state: number) => {
+      if (state === 2 /* Guacamole.Tunnel.State.CLOSED */) {
+        setSessions((prev) => {
+          const s = prev.find((x) => x.id === sessionId);
+          if (s) {
+            s.keyboard.onkeydown = null;
+            s.keyboard.onkeyup = null;
+            s.keyboard.reset();
+          }
+          return prev.filter((x) => x.id !== sessionId);
+        });
+        setTiledSessionIds((prev) => prev.filter((tid) => tid !== sessionId));
+        setFocusedSessionIds((prev) => prev.filter((fid) => fid !== sessionId));
+        setActiveSessionId((current) => {
+          if (current === sessionId) {
+            const remaining = sessionsRef.current.filter((x) => x.id !== sessionId);
+            return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+          }
+          return current;
+        });
+      }
+    };
+
     // On connected, re-send the container size to ensure guacd matches the viewport
     client.onstatechange = (state: number) => {
       if (state === 3) {

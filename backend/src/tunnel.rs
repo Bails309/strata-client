@@ -467,6 +467,12 @@ pub async fn proxy(
                 match result {
                     Ok(0) => {
                         tracing::info!("guacd closed TCP connection");
+                        // Forward an explicit "disconnect" instruction so the
+                        // browser client knows the session ended server-side
+                        // (as opposed to a network drop).
+                        let disc = guac_instruction("disconnect", &[]);
+                        let text = String::from_utf8_lossy(&disc).into_owned();
+                        let _ = ws.send(Message::Text(text)).await;
                         break;
                     }
                     Ok(n) => {
@@ -512,6 +518,10 @@ pub async fn proxy(
                     }
                     Err(e) => {
                         tracing::error!("guacd TCP read error: {e}");
+                        // Tell the browser so it doesn't auto-reconnect
+                        let disc = guac_instruction("disconnect", &[]);
+                        let text = String::from_utf8_lossy(&disc).into_owned();
+                        let _ = ws.send(Message::Text(text)).await;
                         break;
                     }
                 }

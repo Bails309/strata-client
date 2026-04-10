@@ -31,7 +31,7 @@ export default function SessionClient() {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sessions, activeSessionId, setActiveSessionId, createSession, closeSession, getSession, barWidth } = useSessionManager();
+  const { sessions, activeSessionId, setActiveSessionId, createSession, getSession, barWidth } = useSessionManager();
   const sidebarWidth = useSidebarWidth();
 
   const [phase, setPhase] = useState<Phase>('loading');
@@ -52,12 +52,17 @@ export default function SessionClient() {
   const serverDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wireHandlersRef = useRef<(session: GuacSession, attempt: number) => void>();
+  /** Ref mirror of `error` so effects always read the latest value. */
+  const errorRef = useRef('');
   // Find the session for this connection
   const currentSession = sessions.find(
     (s) => s.connectionId === connectionId && s.id === activeSessionId
   ) || sessions.find((s) => s.connectionId === connectionId);
 
   const { isPoppedOut, popOut, returnDisplay } = usePopOut(currentSession, containerRef);
+
+  // Keep errorRef in sync with the error state.
+  errorRef.current = error;
 
 
   // ── Phase 1: Check for existing session or fetch connection info ──
@@ -72,6 +77,12 @@ export default function SessionClient() {
       setConnectionName(existing.name);
       return;
     }
+
+    // Don't re-fetch connection info if the session just ended with an error
+    // (e.g. server disconnected).  Without this guard, removing the dead session
+    // from SessionManager causes getSession to change → this effect re-runs →
+    // fetches info → sets phase to 'connected' → Phase 3 creates a new session.
+    if (errorRef.current) return;
 
     let cancelled = false;
     Promise.all([
@@ -170,25 +181,27 @@ export default function SessionClient() {
     }, delay);
   }, [connectionId, connectionName, protocol, ignoreCert, createSession]);
 
-  // ── Wire error/close handlers onto a session for reconnection ──
+  // ── Wire error/close handlers onto a session for UI feedback ──
+  // Session cleanup (removing from SessionManager) is handled by the
+  // tunnel.onstatechange in SessionManager.createSession.  This handler
+  // only manages UI: showing the "Session Ended" overlay or triggering
+  // reconnection.
   const wireSessionErrorHandlers = useCallback((session: GuacSession, attempt = 0): void => {
-    const handleUnexpectedClose = () => {
+    // Tracks whether tunnel.onerror fired BEFORE the tunnel reached CLOSED.
+    let tunnelHadError = false;
+
+    const handleTunnelClosed = () => {
+      // If the user navigated away or manually disconnected, skip UI updates.
       if (userDisconnectRef.current) return;
 
-      // If the server sent a clean disconnect (user logged out of the remote
-      // session), show a "Session Ended" message instead of reconnecting.
-      if (serverDisconnectRef.current) {
-        closeSession(session.id);
+      // Clean close (no error) or explicit server disconnect → show overlay.
+      if (serverDisconnectRef.current || !tunnelHadError) {
         setReconnecting(null);
         setError('The remote session has ended. You may have logged out of the server.');
         return;
       }
 
-      // Clean up the dead session from the manager
-      closeSession(session.id);
-
-      // Stability check: if the session lasted more than 10s, reset reconnect counter.
-      // Otherwise, increment the current attempt.
+      // Error-based closure (network drop, timeout) → attempt reconnection.
       const elapsed = Date.now() - session.createdAt;
       const nextAttempt = elapsed > 10000 ? 1 : attempt + 1;
 
@@ -201,11 +214,9 @@ export default function SessionClient() {
     };
 
     // ── Intercept guacd instructions to detect server-initiated disconnects ──
-    // This fires BEFORE the Client processes the instruction, so
-    // serverDisconnectRef is set before any onstatechange / onerror handlers.
     const clientInstructionHandler = session.tunnel.oninstruction;
     session.tunnel.oninstruction = function (opcode: string, args: string[]) {
-      if ((opcode === 'disconnect' || opcode === 'error') && !userDisconnectRef.current) {
+      if (opcode === 'disconnect' || opcode === 'error') {
         serverDisconnectRef.current = true;
       }
       if (clientInstructionHandler) {
@@ -213,64 +224,53 @@ export default function SessionClient() {
       }
     };
 
-    // Re-send container size when connected.
-    session.client.onstatechange = (state: number) => {
-      // State 3 = CONNECTED: re-send container size and scale display
-      if (state === 3) {
-        requestAnimationFrame(() => {
-          const parent = session.displayEl.parentElement;
-          if (parent) {
-            const cw = parent.clientWidth;
-            const ch = parent.clientHeight;
-            if (cw > 0 && ch > 0) {
-              session.client.sendSize(cw, ch);
-            }
-            const display = session.client.getDisplay();
-            const dw = display.getWidth();
-            const dh = display.getHeight();
-            if (dw > 0 && dh > 0 && cw > 0 && ch > 0) {
-              display.scale(Math.min(cw / dw, ch / dh));
-            }
-          }
-        });
-      }
-    };
-
-    // ── Single entry point for handling unexpected closures ──
-    // Tunnel CLOSED is the terminal state and always fires, whether the
-    // closure came from a "disconnect" instruction, an "error" instruction,
-    // or a raw WebSocket close. By routing everything through here we
-    // avoid double-fire issues.
+    // ── Wrap tunnel.onstatechange (preserve the SessionManager handler) ──
+    const managerTunnelStateHandler = session.tunnel.onstatechange;
     session.tunnel.onstatechange = (state: number) => {
-      if (state === Guacamole.Tunnel.CLOSED && !userDisconnectRef.current) {
-        handleUnexpectedClose();
+      // Let SessionManager clean up the session from its list first.
+      if (managerTunnelStateHandler) {
+        managerTunnelStateHandler(state);
+      }
+      // Then handle UI (overlay / reconnection).
+      if (state === 2 /* CLOSED */) {
+        handleTunnelClosed();
       }
     };
 
-    // Save error details but don't trigger reconnection here.
-    // close_tunnel() always fires tunnel.setState(CLOSED) after onerror,
-    // so handleUnexpectedClose will run via tunnel.onstatechange above.
+    // ── Wrap tunnel.onerror (preserve SessionManager handler) ──
+    const managerTunnelErrorHandler = session.tunnel.onerror;
     session.tunnel.onerror = (status: Guacamole.Status) => {
+      tunnelHadError = true;
       session.error = status.message || 'Connection failed';
+      if (managerTunnelErrorHandler) {
+        managerTunnelErrorHandler(status);
+      }
     };
 
-    // Save error details but don't trigger reconnection here.
-    // The "error" instruction handler always calls client.disconnect()
-    // afterward, which closes the tunnel → triggers handleUnexpectedClose.
+    // ── Wrap client.onerror ──
+    const managerClientErrorHandler = session.client.onerror;
     session.client.onerror = (status: Guacamole.Status) => {
       session.error = status.message || 'Connection failed';
+      if (managerClientErrorHandler) {
+        managerClientErrorHandler(status);
+      }
     };
 
     session.client.onrequired = (parameters: string[]) => {
       setSshRequired(parameters);
     };
-  }, [closeSession, attemptReconnect]);
+  }, [attemptReconnect]);
 
   wireHandlersRef.current = wireSessionErrorHandlers;
 
   // ── Phase 3: Create or attach session ──
   useEffect(() => {
     if (phase !== 'connected' || !connectionId || !containerRef.current) return;
+
+    // Don't create a new session if the previous one ended in an error.
+    // Without this guard, cleaning up the dead session triggers a re-render
+    // that re-runs this effect and auto-connects to the same (dead) server.
+    if (errorRef.current) return;
 
     const existing = getSession(connectionId);
     if (existing) {

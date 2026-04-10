@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use bytes::Bytes;
 
 // ── Recording config ───────────────────────────────────────────────────
 

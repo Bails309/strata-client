@@ -2829,6 +2829,16 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
     load();
   };
 
+  const handleClone = (c: AdSyncConfig) => {
+    setEditing({
+      ...c,
+      id: undefined,
+      label: `${c.label} (Copy)`,
+      clone_from: c.id,
+      bind_password: '••••••••',
+    });
+  };
+
   const handleSync = async (id: string) => {
     setSyncing(id);
     try {
@@ -3192,6 +3202,7 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
                     {syncing === c.id ? 'Syncing...' : '⟳ Sync Now'}
                   </button>
                   <button className="btn btn-secondary btn-sm" onClick={() => handleViewRuns(c.id)}>History</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => handleClone(c)}>Clone</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => setEditing(c)}>Edit</button>
                   <button className="btn btn-secondary btn-sm text-red-500" onClick={() => handleDelete(c.id)}>Delete</button>
                 </div>

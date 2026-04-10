@@ -124,10 +124,9 @@ To enable automatic Let's Encrypt HTTPS, set `STRATA_DOMAIN` to your public doma
 
 **Step 1 — DNS:** Point your domain's A record to your server's public IP.
 
-**Step 2 — `.env`:**
-
 ```bash
 STRATA_DOMAIN=strata.example.com
+STRATA_ALLOWED_ORIGINS=https://strata.example.com
 ```
 
 **Step 3 — Start:**
@@ -164,7 +163,7 @@ HTTPS_PORT=8443
 |---|---|
 | `Caddyfile` | Routing rules, timeouts, compression, security headers |
 | `docker-compose.yml` | Caddy service definition, port mappings, volumes |
-| `.env` | `STRATA_DOMAIN`, `HTTP_PORT`, `HTTPS_PORT` |
+| `.env` | `STRATA_DOMAIN`, `STRATA_ALLOWED_ORIGINS`, `HTTP_PORT`, `HTTPS_PORT` |
 
 The [Caddyfile](../Caddyfile) uses `{$STRATA_DOMAIN:http://localhost}` as the site address:
 - When `STRATA_DOMAIN` is **unset or empty** → defaults to `http://localhost` (plain HTTP)

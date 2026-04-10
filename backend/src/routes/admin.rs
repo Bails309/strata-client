@@ -1860,6 +1860,7 @@ pub struct CreateAdSyncConfigRequest {
     pub keytab_path: Option<String>,
     pub krb5_principal: Option<String>,
     pub ca_cert_pem: Option<String>,
+    pub clone_from: Option<Uuid>,
 }
 
 pub async fn create_ad_sync_config(
@@ -1887,14 +1888,28 @@ pub async fn create_ad_sync_config(
     }
 
     // Encrypt bind_password via Vault if configured
-    let bind_password = body.bind_password.as_deref().unwrap_or("");
+    let mut bind_password = body.bind_password.as_deref().unwrap_or("").to_string();
+
+    // Resolve password if it's a mask and we are cloning
+    if (bind_password == DOT_MASK || bind_password == STAR_MASK) {
+        if let Some(id) = body.clone_from {
+            let existing: Option<String> = sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&db.pool)
+                .await?;
+            if let Some(pw) = existing {
+                bind_password = pw;
+            }
+        }
+    }
+
     let stored_password = if !bind_password.is_empty() {
         let vault_cfg = {
             let s = state.read().await;
             s.config.as_ref().and_then(|c| c.vault.clone())
         };
         if let Some(ref vc) = vault_cfg {
-            crate::services::vault::seal_setting(vc, bind_password).await?
+            crate::services::vault::seal_setting(vc, &bind_password).await?
         } else {
             bind_password.to_string()
         }
@@ -2254,14 +2269,25 @@ pub async fn test_ad_sync_connection(
 
     // Resolve password: if it's a mask, fetch from DB. Then unseal.
     let mut bind_password = body.bind_password.clone().unwrap_or_default();
-    if (bind_password == DOT_MASK || bind_password == STAR_MASK) && body.id.is_some() {
-        let existing: Option<String> =
-            sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-                .bind(body.id.unwrap())
-                .fetch_optional(&db.pool)
-                .await?;
-        if let Some(pw) = existing {
-            bind_password = pw;
+    if bind_password == DOT_MASK || bind_password == STAR_MASK {
+        if let Some(id) = body.id {
+            let existing: Option<String> =
+                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&db.pool)
+                    .await?;
+            if let Some(pw) = existing {
+                bind_password = pw;
+            }
+        } else if let Some(clone_id) = body.clone_from {
+            let existing: Option<String> =
+                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
+                    .bind(clone_id)
+                    .fetch_optional(&db.pool)
+                    .await?;
+            if let Some(pw) = existing {
+                bind_password = pw;
+            }
         }
     }
 

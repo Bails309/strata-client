@@ -209,7 +209,7 @@ The bundled Vault container runs on the internal Docker bridge network and is **
 - **SQL:** All database queries use parameterized statements via `sqlx` (no string interpolation)
 - **Path traversal:** Recording file downloads reject filenames containing `..`, `/`, or `\`
 - **JSON parsing:** All request bodies are deserialized with `serde` into strongly-typed structs
-- **CORS:** Configured via `tower-http` (currently permissive — tighten for production)
+- **CORS:** Configured via `tower-http`. Controlled by the `STRATA_ALLOWED_ORIGINS` environment variable in production.
 
 ---
 
@@ -313,7 +313,7 @@ Per-connection overrides can disable GFX via the `extra` JSONB field: `{"enable-
 1. **TLS everywhere** — use the built-in Caddy profile (`--profile https`) or terminate TLS at an external reverse proxy
 2. **External Vault** — for production, use an external Vault cluster with Shamir's Secret Sharing (multiple key shares) and AppRole authentication instead of a single unseal key and root token
 3. **Vault AppRole** — use AppRole authentication instead of static tokens; rotate credentials regularly
-4. **Restrict CORS** — change `allow_origin(Any)` to your specific domain
+4. **Restrict CORS** — set `STRATA_ALLOWED_ORIGINS` to your specific frontend domain (e.g., `https://strata.example.com`).
 5. **Database roles** — grant `INSERT, SELECT` only on `audit_logs` to enforce append-only at the DB level
 6. **Network policies** — in Kubernetes, use NetworkPolicies to restrict inter-pod communication
 7. **Secret rotation** — rotate Vault tokens and database credentials periodically

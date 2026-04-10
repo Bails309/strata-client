@@ -84,7 +84,8 @@ nano .env
 ```
 
 **Essential variables to set:**
-- `STRATA_DOMAIN`: Set this to your domain (e.g., `strata.example.com`). This is used for CORS and SSO callback identification.
+- `STRATA_DOMAIN`: Set this to your domain (e.g., `strata.example.com`). This is used for SSO/OIDC callback identification and automatic TLS.
+- `STRATA_ALLOWED_ORIGINS`: Set this to your production frontend URL (e.g., `https://strata.example.com`). Required for secure cross-origin communication.
 - `DEFAULT_ADMIN_PASSWORD`: Set a strong initial password.
 
 ### 4.3 Launch the Stack

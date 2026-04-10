@@ -152,6 +152,7 @@ export interface KerberosRealm {
   is_default: boolean;
   created_at: string;
   updated_at: string;
+  clone_from?: string;
 }
 
 export const getKerberosRealms = () =>
@@ -210,6 +211,7 @@ export interface AdSyncConfig {
   ca_cert_pem?: string;
   created_at: string;
   updated_at: string;
+  clone_from?: string;
 }
 
 export interface AdSyncRun {
@@ -435,6 +437,7 @@ export interface CredentialProfile {
   label: string;
   created_at: string;
   updated_at: string;
+  clone_from?: string;
   expires_at: string;
   expired: boolean;
   ttl_hours: number;

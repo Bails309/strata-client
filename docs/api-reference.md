@@ -639,6 +639,36 @@ Upgrades to a WebSocket connection that proxies bidirectional binary frames betw
    - Username from the JWT
 4. Binary frames are proxied bidirectionally until either side closes
 
+### `POST /api/tunnel/ticket`
+
+Obtain a one-time tunnel ticket for a specific connection. This ticket is then used to authenticate the WebSocket upgrade.
+
+**Request Body**
+```json
+{
+  "connection_id": "uuid",
+  "width": 1920,
+  "height": 1080,
+  "dpi": 96
+}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `connection_id` | UUID | Yes | — | Target connection ID |
+| `width` | integer | No | 1920 | Display width |
+| `height` | integer | No | 1080 | Display height |
+| `dpi` | integer | No | 96 | Display DPI |
+
+**Response** `200 OK`
+```json
+{
+  "ticket": "uuid-ticket-string"
+}
+```
+
+**Security**: This endpoint validates that the user has access to the connection (directly or via folder) before issuing the ticket.
+
 ### `GET /api/shared/tunnel/:share_token`
 
 Public WebSocket tunnel for shared sessions. No authentication required.

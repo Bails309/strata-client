@@ -48,6 +48,8 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/admin/*` | `require_auth` + `require_admin` |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
 
+**Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user's role grants them access to the target connection, including mappings via connection folders (`role_folders`).
+
 **Admin connection visibility:** Admin users (`role == "admin"`) see all connections via `GET /api/user/connections` regardless of `role_connections` mapping. Non-admin users see only connections explicitly assigned to their role.
 
 ---
@@ -233,6 +235,7 @@ The backend applies in-memory rate limiting at multiple layers to prevent abuse:
 | `/api/auth/login` | Client IP | 20 attempts | 300 s |
 | `/api/shared/tunnel/:token` | Share token | 10 attempts | 60 s |
 | `/api/tunnel/:id` (WebSocket) | User ID | 30 connections | 60 s |
+| `/api/tunnel/ticket` | User ID | 30 tickets | 60 s |
 
 All rate limiters use a sliding window with automatic OOM protection — entries are pruned when the map exceeds 50,000 (10,000 for share tokens), and cleared entirely if pruning is insufficient.
 

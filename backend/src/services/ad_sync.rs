@@ -794,6 +794,7 @@ mod tests {
             keytab_path: None,
             krb5_principal: None,
             ca_cert_pem: None,
+            connection_defaults: serde_json::json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

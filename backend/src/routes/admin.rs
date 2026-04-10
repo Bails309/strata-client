@@ -1905,14 +1905,18 @@ pub async fn create_ad_sync_config(
     }
 
     let stored_password = if !bind_password.is_empty() {
-        let vault_cfg = {
-            let s = state.read().await;
-            s.config.as_ref().and_then(|c| c.vault.clone())
-        };
-        if let Some(ref vc) = vault_cfg {
-            crate::services::vault::seal_setting(vc, &bind_password).await?
+        if bind_password.starts_with("vault:") {
+            bind_password
         } else {
-            bind_password.to_string()
+            let vault_cfg = {
+                let s = state.read().await;
+                s.config.as_ref().and_then(|c| c.vault.clone())
+            };
+            if let Some(ref vc) = vault_cfg {
+                crate::services::vault::seal_setting(vc, &bind_password).await?
+            } else {
+                bind_password
+            }
         }
     } else {
         String::new()
@@ -2042,14 +2046,18 @@ pub async fn update_ad_sync_config(
         if v != DOT_MASK && v != STAR_MASK {
             // Encrypt bind_password via Vault if configured
             let stored = if !v.is_empty() {
-                let vault_cfg = {
-                    let s = state.read().await;
-                    s.config.as_ref().and_then(|c| c.vault.clone())
-                };
-                if let Some(ref vc) = vault_cfg {
-                    crate::services::vault::seal_setting(vc, v).await?
-                } else {
+                if v.starts_with("vault:") {
                     v.clone()
+                } else {
+                    let vault_cfg = {
+                        let s = state.read().await;
+                        s.config.as_ref().and_then(|c| c.vault.clone())
+                    };
+                    if let Some(ref vc) = vault_cfg {
+                        crate::services::vault::seal_setting(vc, v).await?
+                    } else {
+                        v.clone()
+                    }
                 }
             } else {
                 String::new()

@@ -2574,6 +2574,28 @@ mod tests {
         assert!(r.bind_dn.is_none());
         assert!(r.protocol.is_none());
         assert!(r.tls_skip_verify.is_none());
+        assert!(r.clone_from.is_none());
+    }
+
+    #[test]
+    fn create_ad_sync_config_request_clone() {
+        let clone_id = Uuid::new_v4();
+        let json = format!(
+            r#"{{"label":"Clone","ldap_url":"ldap://dc.corp.local","search_bases":[],"clone_from":"{}"}}"#,
+            clone_id
+        );
+        let r: CreateAdSyncConfigRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(r.label, "Clone");
+        assert_eq!(r.clone_from, Some(clone_id));
+    }
+
+    #[test]
+    fn update_ad_sync_config_request_deser() {
+        let json = r#"{"label":"New Label","enabled":false}"#;
+        let r: UpdateAdSyncConfigRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.label.unwrap(), "New Label");
+        assert_eq!(r.enabled.unwrap(), false);
+        assert!(r.ldap_url.is_none());
     }
 
     #[test]

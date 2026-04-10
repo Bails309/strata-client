@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { getConnectionInfo, getConnections, createTunnelTicket } from '../api';
+import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialProfiles, CredentialProfile } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
@@ -41,11 +41,14 @@ export default function SessionClient() {
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
   const [hasDomain, setHasDomain] = useState(false);
   const [ignoreCert, setIgnoreCert] = useState(false);
-  const pendingCredsRef = useRef<{ username: string; password: string }>({ username: '', password: '' });
+  const [vaultProfiles, setVaultProfiles] = useState<CredentialProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
+  const pendingCredsRef = useRef<{ username: string; password: string; credential_profile_id?: string }>({ username: '', password: '' });
 
   const containerFocusedRef = useRef(false);
   const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
   const userDisconnectRef = useRef(false);
+  const serverDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wireHandlersRef = useRef<(session: GuacSession, attempt: number) => void>();
   // Find the session for this connection
@@ -92,14 +95,21 @@ export default function SessionClient() {
     return () => { cancelled = true; };
   }, [connectionId, getSession, setActiveSessionId]);
 
+  // Fetch vault credential profiles when the prompt is shown
+  useEffect(() => {
+    if (phase !== 'prompt') return;
+    getCredentialProfiles()
+      .then((profiles) => setVaultProfiles(profiles.filter((p) => !p.expired)))
+      .catch(() => {}); // Vault may not be configured
+  }, [phase]);
+
   // ── Phase 2 → 3: user submits credentials ──
   const handlePreConnectSubmit = useCallback(() => {
-    pendingCredsRef.current = {
-      username: credForm.username || '',
-      password: credForm.password || '',
-    };
+    pendingCredsRef.current = selectedProfileId
+      ? { username: '', password: '', credential_profile_id: selectedProfileId }
+      : { username: credForm.username || '', password: credForm.password || '' };
     setPhase('connected');
-  }, [credForm]);
+  }, [credForm, selectedProfileId]);
 
   // ── Auto-reconnect: attempt to re-establish a dropped session ──
   const attemptReconnect = useCallback((attempt: number): void => {
@@ -107,6 +117,7 @@ export default function SessionClient() {
 
     setReconnecting({ attempt, maxAttempts: RECONNECT_MAX_ATTEMPTS });
     setError('');
+    serverDisconnectRef.current = false;
 
     const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(2, attempt - 1), RECONNECT_MAX_DELAY);
 
@@ -162,6 +173,16 @@ export default function SessionClient() {
   const wireSessionErrorHandlers = useCallback((session: GuacSession, attempt = 0): void => {
     const handleUnexpectedClose = () => {
       if (userDisconnectRef.current) return;
+
+      // If the server sent a clean disconnect (user logged out of the remote
+      // session), show a "Session Ended" message instead of reconnecting.
+      if (serverDisconnectRef.current) {
+        closeSession(session.id);
+        setReconnecting(null);
+        setError('The remote session has ended. You may have logged out of the server.');
+        return;
+      }
+
       // Clean up the dead session from the manager
       closeSession(session.id);
 
@@ -175,6 +196,36 @@ export default function SessionClient() {
         setError('Connection lost. Automatic reconnection failed after multiple attempts.');
       } else {
         attemptReconnect(nextAttempt);
+      }
+    };
+
+    // Detect server-initiated clean disconnect (state 5 = DISCONNECTED).
+    // When the remote server ends the session, guacd sends a "disconnect"
+    // instruction which causes the client state to transition to DISCONNECTED
+    // before the tunnel closes.
+    session.client.onstatechange = (state: number) => {
+      // State 5 = Guacamole.Client.State.DISCONNECTED
+      if (state === 5 && !userDisconnectRef.current) {
+        serverDisconnectRef.current = true;
+      }
+      // State 3 = CONNECTED: re-send container size and scale display
+      if (state === 3) {
+        requestAnimationFrame(() => {
+          const parent = session.displayEl.parentElement;
+          if (parent) {
+            const cw = parent.clientWidth;
+            const ch = parent.clientHeight;
+            if (cw > 0 && ch > 0) {
+              session.client.sendSize(cw, ch);
+            }
+            const display = session.client.getDisplay();
+            const dw = display.getWidth();
+            const dh = display.getHeight();
+            if (dw > 0 && dh > 0 && cw > 0 && ch > 0) {
+              display.scale(Math.min(cw / dw, ch / dh));
+            }
+          }
+        });
       }
     };
 
@@ -236,6 +287,7 @@ export default function SessionClient() {
           connection_id: connectionId,
           username: creds.username || undefined,
           password: creds.password || undefined,
+          credential_profile_id: creds.credential_profile_id || undefined,
           width: container.clientWidth,
           height: container.clientHeight,
           dpi: Math.round(96 * dpr),
@@ -524,7 +576,9 @@ export default function SessionClient() {
               </svg>
             </div>
             <h3 className="text-xl font-bold mb-2">
-              {error.toLowerCase().includes('terminated') ? 'Session Terminated' : 'Connection Error'}
+              {error.toLowerCase().includes('terminated') ? 'Session Terminated'
+                : error.toLowerCase().includes('session has ended') ? 'Session Ended'
+                : 'Connection Error'}
             </h3>
             <p className="text-txt-secondary text-sm mb-8 leading-relaxed">
               {error.toLowerCase().includes('terminated') 
@@ -533,7 +587,7 @@ export default function SessionClient() {
             </p>
             <div className="flex gap-3">
               <button className="btn flex-1" onClick={() => navigate('/')}>Exit to Dashboard</button>
-              {!error.toLowerCase().includes('terminated') && (
+              {!error.toLowerCase().includes('terminated') && !error.toLowerCase().includes('session has ended') && (
                 <button className="btn-primary flex-1" onClick={() => window.location.reload()}>Retry</button>
               )}
             </div>
@@ -547,7 +601,24 @@ export default function SessionClient() {
             <h2 className="!mb-1">Connect to {protocol.toUpperCase()}</h2>
             <p className="text-txt-secondary text-sm mb-4">Enter credentials for the remote server.</p>
             <form onSubmit={(e) => { e.preventDefault(); handlePreConnectSubmit(); }}>
-              {preConnectFields.map((field) => (
+              {vaultProfiles.length > 0 && (
+                <div className="form-group">
+                  <label>Saved Credential Profile</label>
+                  <select
+                    value={selectedProfileId}
+                    onChange={(e) => {
+                      setSelectedProfileId(e.target.value);
+                      if (e.target.value) setCredForm({ username: '', password: '', domain: '' });
+                    }}
+                  >
+                    <option value="">— Enter manually —</option>
+                    {vaultProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {!selectedProfileId && preConnectFields.map((field) => (
                 <div className="form-group" key={field}>
                   <label>{paramLabels[field] || field}</label>
                   <input type={field === 'password' ? 'password' : 'text'} value={credForm[field] || ''} onChange={(e) => setCredForm({ ...credForm, [field]: e.target.value })} autoFocus={field === preConnectFields[0]} />

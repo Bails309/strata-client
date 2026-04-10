@@ -97,7 +97,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
     resizeObserver.observe(container);
     display.onresize = scaleToFit;
 
-    client.connect();
+    client.connect('');
 
     return () => {
       resizeObserver.disconnect();

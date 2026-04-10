@@ -56,6 +56,7 @@ pub struct CreateTicketRequest {
     pub connection_id: Uuid,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub credential_profile_id: Option<Uuid>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub dpi: Option<u32>,
@@ -104,6 +105,7 @@ pub async fn create_tunnel_ticket(
         connection_id: body.connection_id,
         username: body.username,
         password: body.password,
+        credential_profile_id: body.credential_profile_id,
         width: body.width.unwrap_or(1920),
         height: body.height.unwrap_or(1080),
         dpi: body.dpi.unwrap_or(96),
@@ -275,6 +277,41 @@ pub async fn ws_tunnel(
     // Priority: Vault profile > ticket > query-string fallback
     // Consume the one-time ticket (if provided) to extract credentials
     let ticket_creds = query.ticket.as_deref().and_then(tunnel_tickets::consume);
+
+    // If the ticket carries a one-off credential_profile_id, decrypt those
+    // vault credentials directly (no permanent mapping required).
+    let oneoff_profile_id = ticket_creds.as_ref().and_then(|t| t.credential_profile_id);
+    let (oneoff_username, oneoff_password) = if let (Some(profile_id), Some(vault_cfg)) =
+        (oneoff_profile_id, &config.vault)
+    {
+        let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+            "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
+             FROM credential_profiles cp
+             WHERE cp.id = $1 AND cp.user_id = $2
+               AND cp.expires_at > now()",
+        )
+        .bind(profile_id)
+        .bind(user.id)
+        .fetch_optional(&db.pool)
+        .await?;
+
+        if let Some((enc_payload, enc_dek, nonce)) = cred {
+            let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+            let u = parsed["u"].as_str().unwrap_or("").to_string();
+            let p = parsed["p"].as_str().unwrap_or("").to_string();
+            (
+                if u.is_empty() { None } else { Some(u) },
+                if p.is_empty() { None } else { Some(p) },
+            )
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
     // If ticket provided dimensions, use them
     let effective_width = clamp_dimension(
         ticket_creds
@@ -307,8 +344,14 @@ pub async fn ws_tunnel(
         96,
     );
 
-    let (final_username, final_password) = if vault_password.is_some() {
-        // Vault-stored credential profile – use stored username (or Strata login as fallback)
+    let (final_username, final_password) = if oneoff_password.is_some() {
+        // One-off vault credential profile from ticket
+        (
+            oneoff_username.or_else(|| Some(user.username.clone())),
+            oneoff_password,
+        )
+    } else if vault_password.is_some() {
+        // Permanently mapped vault credential profile
         (
             vault_username.or_else(|| Some(user.username.clone())),
             vault_password,

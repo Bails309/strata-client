@@ -513,6 +513,7 @@ export interface CreateTunnelTicketRequest {
   connection_id: string;
   username?: string;
   password?: string;
+  credential_profile_id?: string;
   width?: number;
   height?: number;
   dpi?: number;

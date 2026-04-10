@@ -87,6 +87,7 @@ vi.mock('../api', () => ({
   createTunnelTicket: vi.fn(),
   getMe: vi.fn().mockResolvedValue({ username: 'admin', client_ip: '10.0.0.1', watermark_enabled: false }),
   createShareLink: vi.fn(),
+  getCredentialProfiles: vi.fn().mockResolvedValue([]),
 }));
 
 const mockCreateSession = vi.fn(({ connectionId, name, protocol }: any) => ({

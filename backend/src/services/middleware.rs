@@ -71,6 +71,10 @@ pub async fn require_auth(
         .map(|v| v.eq_ignore_ascii_case("websocket"))
         .unwrap_or(false);
 
+    if is_ws_upgrade {
+        tracing::debug!("Detected WebSocket upgrade request");
+    }
+
     let token = req
         .headers()
         .get(http::header::AUTHORIZATION)
@@ -80,15 +84,30 @@ pub async fn require_auth(
         .or_else(|| {
             // Only allow ?token= for WebSocket upgrade requests
             if !is_ws_upgrade {
+                tracing::debug!("Not a WS upgrade, skipping query token check");
                 return None;
             }
-            req.uri().query().and_then(|q| {
-                q.split('&')
-                    .find_map(|pair| pair.strip_prefix("token="))
-                    .map(|t| t.to_string())
-            })
+            let query = req.uri().query().unwrap_or_default();
+            tracing::debug!("Searching for token in query: {}", query);
+            query.split('&')
+                .find_map(|pair| {
+                    if pair.starts_with("token=") {
+                        let t = pair[6..].to_string();
+                        // Guacamole sometimes appends ?undefined to the URL
+                        if let Some(pos) = t.find('?') {
+                            Some(t[..pos].to_string())
+                        } else {
+                            Some(t)
+                        }
+                    } else {
+                        None
+                    }
+                })
         })
-        .ok_or_else(|| AppError::Auth("Missing or invalid Authorization header".into()))?;
+        .ok_or_else(|| {
+            tracing::warn!("Auth failed: Missing token. Path: {}, WS: {}", req.uri().path(), is_ws_upgrade);
+            AppError::Auth("Missing or invalid Authorization header".into())
+        })?;
 
     // Check if the token has been revoked (logout) — do this before
     // expensive DB lookups to short-circuit revoked tokens early.

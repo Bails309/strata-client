@@ -51,7 +51,7 @@ export default function Dashboard() {
   const [page, setPage] = useState(1);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [tiledCredPrompt, setTiledCredPrompt] = useState<TiledCredPrompt | null>(null);
-  const [tiledCreds, setTiledCreds] = useState<Record<string, { username: string; password: string }>>({});
+  const [tiledCreds, setTiledCreds] = useState<Record<string, { username: string; password: string; credential_profile_id?: string }>>({});
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [showFavorites, setShowFavorites] = useState(false);
@@ -235,7 +235,7 @@ export default function Dashboard() {
   /** Create all tiled sessions and navigate */
   const launchTiled = useCallback(async (
     conns: Connection[],
-    creds: Record<string, { username: string; password: string }>,
+    creds: Record<string, { username: string; password: string; credential_profile_id?: string }>,
   ) => {
     const ids: string[] = [];
     const containerEl = document.createElement('div');
@@ -252,8 +252,9 @@ export default function Dashboard() {
       try {
         const resp = await createTunnelTicket({
           connection_id: conn.id,
-          username: connCreds?.username || undefined,
-          password: connCreds?.password || undefined,
+          username: connCreds?.credential_profile_id ? undefined : (connCreds?.username || undefined),
+          password: connCreds?.credential_profile_id ? undefined : (connCreds?.password || undefined),
+          credential_profile_id: connCreds?.credential_profile_id || undefined,
           width: 800,
           height: 600,
           dpi: Math.round(96 * dpr),
@@ -622,6 +623,27 @@ export default function Dashboard() {
                     <span className="badge badge-accent" style={{ marginRight: 8 }}>{conn.protocol.toUpperCase()}</span>
                     {conn.name}
                   </div>
+                  {credProfiles.filter((p) => !p.expired).length > 0 && (
+                    <div className="form-group" style={{ marginBottom: 6 }}>
+                      <select
+                        value={tiledCreds[conn.id]?.credential_profile_id || ''}
+                        onChange={(e) =>
+                          setTiledCreds((prev) => ({
+                            ...prev,
+                            [conn.id]: e.target.value
+                              ? { username: '', password: '', credential_profile_id: e.target.value }
+                              : { username: prev[conn.id]?.username || '', password: prev[conn.id]?.password || '' },
+                          }))
+                        }
+                      >
+                        <option value="">— Enter manually —</option>
+                        {credProfiles.filter((p) => !p.expired).map((p) => (
+                          <option key={p.id} value={p.id}>{p.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {!tiledCreds[conn.id]?.credential_profile_id && (
                   <div className="flex gap-2">
                     <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
                       <input
@@ -650,6 +672,7 @@ export default function Dashboard() {
                       />
                     </div>
                   </div>
+                  )}
                 </div>
               ))}
               <div className="flex gap-2 justify-end" style={{ marginTop: 8 }}>

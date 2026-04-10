@@ -23,8 +23,13 @@ export function usePopOut(
   const mouseRef = useRef<Guacamole.Mouse | null>(null);
   const touchRef = useRef<Guacamole.Mouse.Touchscreen | null>(null);
 
+  // Track the session that was actually popped out, so returnDisplay works
+  // correctly even when the parent component's current session changes.
+  const poppedSessionRef = useRef<GuacSession | null>(null);
+
   const returnDisplay = useCallback(() => {
-    if (!session) return;
+    const poppedSession = poppedSessionRef.current;
+    if (!poppedSession) return;
 
     // Tear down popup keyboard
     if (keyboardRef.current) {
@@ -50,22 +55,22 @@ export function usePopOut(
 
     // Return the display element to the main window container
     const container = containerRef.current;
-    if (container && session.displayEl) {
+    if (container && poppedSession.displayEl) {
       container.innerHTML = '';
-      container.appendChild(session.displayEl);
+      container.appendChild(poppedSession.displayEl);
 
       // Re-attach mouse/touch handlers since the element moved between documents
-      const mouse = new Guacamole.Mouse(session.displayEl);
+      const mouse = new Guacamole.Mouse(poppedSession.displayEl);
       mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
-        session.client.sendMouseState(e.state, true);
+        poppedSession.client.sendMouseState(e.state, true);
       });
-      const touch = new Guacamole.Mouse.Touchscreen(session.displayEl);
+      const touch = new Guacamole.Mouse.Touchscreen(poppedSession.displayEl);
       touch.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
-        session.client.sendMouseState(e.state, true);
+        poppedSession.client.sendMouseState(e.state, true);
       });
 
       // Force Guacamole to re-render display and cursor layers
-      const display = session.client.getDisplay();
+      const display = poppedSession.client.getDisplay();
       const dw = display.getWidth();
       const dh = display.getHeight();
       const cw = container.clientWidth;
@@ -73,7 +78,7 @@ export function usePopOut(
       if (dw > 0 && dh > 0 && cw > 0 && ch > 0) {
         display.scale(Math.min(cw / dw, ch / dh));
       }
-      session.client.sendSize(cw, ch);
+      poppedSession.client.sendSize(cw, ch);
     }
 
     // Close the popup window
@@ -82,9 +87,10 @@ export function usePopOut(
       try { popup.close(); } catch { /* ignore */ }
     }
     popupRef.current = null;
+    poppedSessionRef.current = null;
     cleanupRef.current = null;
     setIsPoppedOut(false);
-  }, [session, containerRef]);
+  }, [containerRef]);
 
   const popOut = useCallback(async () => {
     if (!session || isPoppedOut) return;
@@ -127,6 +133,7 @@ export function usePopOut(
     if (!popup) return; // popup blocked
 
     popupRef.current = popup;
+    poppedSessionRef.current = session;
 
     // ── Set up the popup document ──
     popup.document.title = `${session.name} — Strata`;
@@ -220,17 +227,43 @@ export function usePopOut(
     setIsPoppedOut(true);
   }, [session, isPoppedOut, returnDisplay]);
 
-  // Clean up on unmount or session change
+  // Clean up on unmount only — NOT on session change.
+  // When the user navigates to a different connection, the session changes but
+  // the pop-out should stay open until explicitly returned or unmounted.
   useEffect(() => {
     return () => {
       cleanupRef.current?.();
+      cleanupRef.current = null;
+
+      // Tear down popup keyboard
+      if (keyboardRef.current) {
+        keyboardRef.current.onkeydown = null;
+        keyboardRef.current.onkeyup = null;
+        keyboardRef.current.reset();
+        keyboardRef.current = null;
+      }
+
+      // Tear down popup mouse/touch handlers
+      if (mouseRef.current) {
+        mouseRef.current.onmousedown = null;
+        mouseRef.current.onmouseup = null;
+        mouseRef.current.onmousemove = null;
+        mouseRef.current = null;
+      }
+      if (touchRef.current) {
+        touchRef.current.onmousedown = null;
+        touchRef.current.onmouseup = null;
+        touchRef.current.onmousemove = null;
+        touchRef.current = null;
+      }
+
       if (popupRef.current && !popupRef.current.closed) {
         try { popupRef.current.close(); } catch { /* ignore */ }
       }
       popupRef.current = null;
-      keyboardRef.current = null;
+      setIsPoppedOut(false);
     };
-  }, [session?.id]);
+  }, []);
 
   return { isPoppedOut, popOut, returnDisplay };
 }

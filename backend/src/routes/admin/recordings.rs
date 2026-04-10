@@ -121,7 +121,7 @@ async fn handle_recording_stream(
             .await?;
             let reader = tokio_util::io::StreamReader::new(stream.map(
                 |res: reqwest::Result<bytes::Bytes>| {
-                    res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                    res.map_err(|e| std::io::Error::other(e))
                 },
             ));
             Box::new(tokio::io::BufReader::new(reader))
@@ -161,7 +161,7 @@ async fn handle_recording_stream(
         while let Some(instruction) = parser.next_instruction() {
             // Check for sync instruction to handle pacing
             if instruction.opcode == "sync" {
-                if let Some(ts_str) = instruction.args.get(0) {
+                if let Some(ts_str) = instruction.args.first() {
                     if let Ok(ts) = ts_str.parse::<u64>() {
                         match (base_guac_ts, base_real_ts) {
                             (None, None) => {
@@ -242,10 +242,7 @@ impl GuacamoleParser {
         loop {
             // Find length prefix
             let remaining = &self.buffer[cursor_bytes..];
-            let dot_pos = match remaining.find('.') {
-                Some(pos) => pos,
-                None => return None,
-            };
+            let dot_pos = remaining.find('.')?;
 
             let len_str = &remaining[..dot_pos];
             let len: usize = match len_str.parse() {

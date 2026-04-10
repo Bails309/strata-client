@@ -90,8 +90,8 @@ pub async fn require_auth(
             let query = req.uri().query().unwrap_or_default();
             tracing::debug!("Searching for token in query: {}", query);
             query.split('&').find_map(|pair| {
-                if pair.starts_with("token=") {
-                    let t = pair[6..].to_string();
+                if let Some(t) = pair.strip_prefix("token=") {
+                    let t = t.to_string();
                     // Guacamole sometimes appends ?undefined to the URL
                     if let Some(pos) = t.find('?') {
                         Some(t[..pos].to_string())

@@ -15,6 +15,7 @@ import { SessionManagerProvider } from './components/SessionManager';
 import SessionBar from './components/SessionBar';
 import WhatsNewModal from './components/WhatsNewModal';
 import { getMe, MeResponse } from './api';
+import { SettingsProvider } from './contexts/SettingsContext';
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -67,35 +68,37 @@ export default function App() {
     );
   }
 
-  if (!authenticated) {
-    return (
-      <Routes>
-        <Route path="/login" element={<Login onLogin={handleLogin} />} />
-        <Route path="/shared/:shareToken" element={<SharedViewer />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    );
-  }
-
   return (
-    <SessionManagerProvider>
-      <Routes>
-        <Route element={<Layout user={user} onLogout={handleLogout} />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/credentials" element={user?.vault_configured ? <Credentials vaultConfigured={true} /> : <Navigate to="/" replace />} />
-          <Route path="/admin" element={(user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections || user?.can_create_users || user?.can_create_user_groups || user?.can_create_connections || user?.can_create_connection_folders || user?.can_create_sharing_profiles) ? <AdminSettings user={user} /> : <Navigate to="/" replace />} />
-          <Route path="/session/:connectionId" element={<SessionClient />} />
-          <Route path="/tiled" element={<TiledView />} />
-          <Route path="/observe/:sessionId" element={<NvrPlayer />} />
-          <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
-          <Route path="/admin/sessions" element={user?.can_manage_system ? <ActiveSessions /> : <Navigate to="/" replace />} />
-        </Route>
-        <Route path="/shared/:shareToken" element={<SharedViewer />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-      <SessionBar />
-      <WhatsNewModal userId={user?.id} />
-    </SessionManagerProvider>
+    <SettingsProvider>
+      <SessionManagerProvider>
+        {!authenticated ? (
+          <Routes>
+            <Route path="/login" element={<Login onLogin={handleLogin} />} />
+            <Route path="/shared/:shareToken" element={<SharedViewer />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        ) : (
+          <>
+            <Routes>
+              <Route element={<Layout user={user} onLogout={handleLogout} />}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/credentials" element={user?.vault_configured ? <Credentials vaultConfigured={true} /> : <Navigate to="/" replace />} />
+                <Route path="/admin" element={(user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections || user?.can_create_users || user?.can_create_user_groups || user?.can_create_connections || user?.can_create_connection_folders || user?.can_create_sharing_profiles) ? <AdminSettings user={user} /> : <Navigate to="/" replace />} />
+                <Route path="/session/:connectionId" element={<SessionClient />} />
+                <Route path="/tiled" element={<TiledView />} />
+                <Route path="/observe/:sessionId" element={<NvrPlayer />} />
+                <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
+                <Route path="/admin/sessions" element={user?.can_manage_system ? <ActiveSessions /> : <Navigate to="/" replace />} />
+              </Route>
+              <Route path="/shared/:shareToken" element={<SharedViewer />} />
+              <Route path="/login" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+            <SessionBar />
+            <WhatsNewModal userId={user?.id} />
+          </>
+        )}
+      </SessionManagerProvider>
+    </SettingsProvider>
   );
 }

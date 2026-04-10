@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useSettings } from '../contexts/SettingsContext';
 import { createPortal } from 'react-dom';
 import {
   getCredentialProfiles,
@@ -24,6 +25,7 @@ interface EditingProfile {
 
 export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
   const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
+  const { formatDateTime } = useSettings();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mappings, setMappings] = useState<Record<string, CredentialMapping[]>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -353,9 +355,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                         </span>
                       ) : (
                         <span className="ml-3 text-xs text-txt-tertiary">
-                          Expires {new Date(profile.expires_at).toLocaleString('en-GB', {
-                            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-                          })}
+                          Expires {formatDateTime(profile.expires_at)}
                         </span>
                       )}
                     </div>

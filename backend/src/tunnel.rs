@@ -183,9 +183,6 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "disable-offscreen-caching"
             | "disable-gfx"
             | "ignore-cert"
-            | "recording-path"
-            | "recording-name"
-            | "create-recording-path"
             | "recording-include-keys"
             | "recording-exclude-output"
             | "recording-exclude-mouse"
@@ -291,6 +288,7 @@ pub async fn proxy(
     guacd_port: u16,
     handshake: HandshakeParams,
     nvr: Option<NvrContext>,
+    display_timezone: String,
 ) -> Result<(), AppError> {
     // Connect to guacd
     let addr = format!("{guacd_host}:{guacd_port}");
@@ -298,6 +296,16 @@ pub async fn proxy(
         .await
         .map_err(|e| AppError::Internal(format!("guacd connect ({addr}): {e}")))?;
 
+    handle_guac_handshake(stream, ws, handshake, nvr, display_timezone).await
+}
+
+async fn handle_guac_handshake(
+    stream: TcpStream,
+    mut ws: WebSocket,
+    handshake: HandshakeParams,
+    nvr: Option<NvrContext>,
+    display_timezone: String,
+) -> Result<(), AppError> {
     let (mut tcp_read, mut tcp_write) = tokio::io::split(stream);
 
     // Step 1: Send "select" instruction
@@ -327,7 +335,7 @@ pub async fn proxy(
         guac_instruction("audio", &["audio/L16", "audio/L8"]),
         guac_instruction("video", &[]),
         guac_instruction("image", &["image/png", "image/jpeg", "image/webp"]),
-        guac_instruction("timezone", &["UTC"]),
+        guac_instruction("timezone", &[&display_timezone]),
     ];
     for inst in &client_handshake {
         tcp_write
@@ -884,6 +892,37 @@ mod tests {
         assert_eq!(m["hostname"], "legit.com");
         // Empty value not inserted
         assert!(!m.contains_key("font-size"));
+    }
+
+    #[test]
+    fn full_param_map_recording_not_overridable() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("recording-path".into(), "/tmp/evil".into());
+        extra.insert("recording-name".into(), "evil.guac".into());
+        extra.insert("create-recording-path".into(), "false".into());
+
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: Some("/var/lib/guacamole/recordings".into()),
+            recording_name: Some("backend-generated.guac".into()),
+            create_recording_path: true,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra,
+        };
+        let m = hp.full_param_map();
+        // Recording params must not be overridden by extra
+        assert_eq!(m["recording-path"], "/var/lib/guacamole/recordings");
+        assert_eq!(m["recording-name"], "backend-generated.guac");
+        assert_eq!(m["create-recording-path"], "true");
     }
 
     #[test]

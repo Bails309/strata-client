@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
+use crate::services::settings;
 use crate::tunnel::{self, HandshakeParams, NvrContext};
 use axum::extract::Extension;
 
@@ -409,6 +410,11 @@ pub async fn ws_shared_tunnel(
         owner_username.unwrap_or_else(|| "unknown".into())
     );
 
+    // Fetch timezone for the Guacamole handshake
+    let display_timezone = settings::get(&db.pool, "display_timezone")
+        .await?
+        .unwrap_or_else(|| "UTC".to_string());
+
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |socket| async move {
@@ -425,7 +431,7 @@ pub async fn ws_shared_tunnel(
                 db_pool: db.pool.clone(),
             };
             if let Err(e) =
-                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr), display_timezone).await
             {
                 tracing::error!("Shared tunnel error: {e}");
             }

@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getActiveSessions, killSessions, ActiveSession } from '../api';
 import ConfirmModal from '../components/ConfirmModal';
+import { useSettings } from '../contexts/SettingsContext';
 
 export default function ActiveSessions() {
+  const { formatDateTime } = useSettings();
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -180,7 +182,7 @@ export default function ActiveSessions() {
                   <td className="p-4">
                     <div className="flex flex-col">
                       <span className="text-sm text-txt-primary">{getDuration(session.started_at)}</span>
-                      <span className="text-[0.65rem] text-txt-tertiary uppercase font-medium">Started {new Date(session.started_at).toLocaleTimeString()}</span>
+                      <span className="text-[0.65rem] text-txt-tertiary uppercase font-medium">Started {formatDateTime(session.started_at)}</span>
                     </div>
                   </td>
                   <td className="p-4 text-right">

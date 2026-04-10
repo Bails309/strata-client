@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getMyConnections, getConnectionInfo, Connection, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile, createTunnelTicket, getServiceHealth } from '../api';
 import { useSessionManager } from '../components/SessionManager';
 import Select from '../components/Select';
+import { useSettings } from '../contexts/SettingsContext';
 
 const PAGE_SIZE = 50;
 
@@ -60,6 +61,7 @@ export default function Dashboard() {
   const [credProfiles, setCredProfiles] = useState<CredentialProfile[]>([]);
   /** Map of connection_id → profile_id currently assigned */
   const [connProfileMap, setConnProfileMap] = useState<Record<string, string>>({});
+  const { formatDateTime } = useSettings();
   const navigate = useNavigate();
   const { createSession, setTiledSessionIds, setFocusedSessionIds, setActiveSessionId } = useSessionManager();
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -367,11 +369,7 @@ export default function Dashboard() {
                       </span>
                     </p>
                     <p>
-                      Last Accessed:{' '}
-                      {new Date(conn.last_accessed!).toLocaleDateString('en-GB', {
-                        day: 'numeric', month: 'short', year: 'numeric',
-                        hour: '2-digit', minute: '2-digit', second: '2-digit',
-                      })}
+                      Last Accessed: {formatDateTime(conn.last_accessed!)}
                     </p>
                   </div>
 
@@ -704,6 +702,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
   onProfileChange: (connectionId: string, profileId: string) => void;
   onConnect: () => void;
 }) {
+    const { formatDateTime } = useSettings();
     const status: 'active' | 'expired' | 'none' = useMemo(() => {
       const profile = credProfiles.find(p => p.id === assignedProfileId);
       if (!profile) return 'none';
@@ -736,10 +735,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
         </td>
         <td className="text-[0.8125rem] text-txt-secondary">
           {conn.last_accessed
-            ? new Date(conn.last_accessed).toLocaleDateString('en-GB', {
-                day: 'numeric', month: 'short', year: 'numeric',
-                hour: '2-digit', minute: '2-digit',
-              })
+            ? formatDateTime(conn.last_accessed)
             : '—'}
         </td>
         <td>

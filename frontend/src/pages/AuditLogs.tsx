@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { getAuditLogs, AuditLog } from '../api';
+import { useSettings } from '../contexts/SettingsContext';
 
 export default function AuditLogs() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [page, setPage] = useState(1);
+  const { formatDateTime } = useSettings();
 
   useEffect(() => {
     getAuditLogs(page).then(setLogs).catch(() => {});
@@ -14,38 +16,42 @@ export default function AuditLogs() {
       <h1>Audit Logs</h1>
 
       <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Timestamp</th>
-              <th>Action</th>
-              <th>User</th>
-              <th>Details</th>
-              <th>Hash</th>
-            </tr>
-          </thead>
-          <tbody>
-            {logs.map((log) => (
-              <tr key={log.id}>
-                <td>{log.id}</td>
-                <td className="text-[0.8rem]">{new Date(log.created_at).toLocaleString('en-GB')}</td>
-                <td>
-                  <span className="badge badge-success">{log.action_type}</span>
-                </td>
-                <td className="text-sm">
-                  {log.username || (log.user_id ? log.user_id.slice(0, 8) : '—')}
-                </td>
-                <td className="text-[0.8rem] max-w-[300px] overflow-hidden text-ellipsis">
-                  {JSON.stringify(log.details)}
-                </td>
-                <td className="font-mono text-[0.7rem] text-txt-secondary">
-                  {log.current_hash.slice(0, 12)}…
-                </td>
+        <div className="table-responsive">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Timestamp</th>
+                <th>Action</th>
+                <th>User</th>
+                <th>Details</th>
+                <th>Hash</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {logs.map((log) => (
+                <tr key={log.id}>
+                  <td>{log.id}</td>
+                  <td className="text-[0.8rem] whitespace-nowrap font-mono">
+                    {formatDateTime(log.created_at)}
+                  </td>
+                  <td>
+                    <span className="badge badge-success">{log.action_type}</span>
+                  </td>
+                  <td className="text-sm">
+                    {log.username || (log.user_id ? log.user_id.slice(0, 8) : '—')}
+                  </td>
+                  <td className="text-[0.8rem] max-w-[300px] overflow-hidden text-ellipsis">
+                    {JSON.stringify(log.details)}
+                  </td>
+                  <td className="font-mono text-[0.7rem] text-txt-secondary">
+                    {log.current_hash.slice(0, 12)}…
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         <div className="flex justify-center gap-2 mt-4">
           <button className="btn" disabled={page <= 1} onClick={() => setPage(page - 1)}>

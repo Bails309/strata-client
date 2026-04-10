@@ -85,7 +85,11 @@ async fn handle_recording_stream(
 ) -> anyhow::Result<()> {
     let mut reader = if recording.storage_type == "local" {
         let path = format!("/var/lib/guacamole/recordings/{}", recording.storage_path);
-        let file = tokio::fs::File::open(path).await?;
+        tracing::info!("Opening local recording: id={}, path={}", recording.id, path);
+        let file = tokio::fs::File::open(&path).await.map_err(|e| {
+            tracing::error!("Failed to open recording file: id={}, path={}, err={}", recording.id, path, e);
+            e
+        })?;
         Box::new(tokio::io::BufReader::new(file)) as Box<dyn tokio::io::AsyncRead + Unpin + Send>
     } else {
         // Azure storage stream

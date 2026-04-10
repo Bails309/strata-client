@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
-use crate::services::{recordings, tunnel_tickets, vault};
+use crate::services::{recordings, settings, tunnel_tickets, vault};
 use crate::tunnel::{self, HandshakeParams, NvrContext};
 
 /// Per-user rate limiter for WebSocket tunnel connections.
@@ -498,6 +498,11 @@ pub async fn ws_tunnel(
         });
     }
 
+    // Fetch timezone for the Guacamole handshake
+    let display_timezone = settings::get(&db.pool, "display_timezone")
+        .await?
+        .unwrap_or_else(|| "UTC".to_string());
+
     let audit_pool = db.pool.clone();
     Ok(ws
         .protocols(["guacamole"])
@@ -516,7 +521,7 @@ pub async fn ws_tunnel(
                 db_pool: audit_pool.clone(),
             };
             if let Err(e) =
-                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr)).await
+                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr), display_timezone).await
             {
                 tracing::error!("Tunnel error: {e}");
                 // Audit log the tunnel failure

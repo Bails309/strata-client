@@ -1893,10 +1893,11 @@ pub async fn create_ad_sync_config(
     // Resolve password if it's a mask and we are cloning
     if (bind_password == DOT_MASK || bind_password == STAR_MASK) {
         if let Some(id) = body.clone_from {
-            let existing: Option<String> = sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&db.pool)
-                .await?;
+            let existing: Option<String> =
+                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&db.pool)
+                    .await?;
             if let Some(pw) = existing {
                 bind_password = pw;
             }

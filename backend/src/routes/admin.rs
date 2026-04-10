@@ -1759,7 +1759,9 @@ pub async fn kill_sessions(
     )
     .await?;
 
-    Ok(Json(json!({ "status": "success", "killed_count": killed_count })))
+    Ok(Json(
+        json!({ "status": "success", "killed_count": killed_count }),
+    ))
 }
 
 #[derive(Deserialize)]

@@ -118,7 +118,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
             <button key={t} className={`tab ${tab === t ? 'tab-active' : ''}`} onClick={() => setTab(t)}>
               {t === 'sso' ? 'SSO / OIDC' : 
                t === 'ad-sync' ? 'AD Sync' : 
-               t === 'sessions' ? 'Audit Logs' : 
+               t === 'sessions' ? 'Sessions' : 
                t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}

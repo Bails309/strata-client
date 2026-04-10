@@ -730,7 +730,8 @@ pub async fn connection_info(
     };
 
     let ignore_cert = if protocol == "rdp" {
-        extra.as_ref()
+        extra
+            .as_ref()
             .and_then(|e| e.get("ignore-cert"))
             .map(|v| match v {
                 serde_json::Value::String(s) => s == "true",
@@ -741,7 +742,6 @@ pub async fn connection_info(
     } else {
         false
     };
-
 
     Ok(Json(json!({
         "protocol": protocol,

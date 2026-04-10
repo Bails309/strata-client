@@ -152,7 +152,7 @@ export default function SessionBar() {
       </button>
  
       {/* Main Content (only visible when expanded or we can just hide it with overflow) */}
-      <div className={`w-full h-full flex flex-col items-center transition-opacity duration-200 ${sessionBarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+      <div className={`w-full h-full flex flex-col items-center transition-opacity duration-200 ${sessionBarCollapsed ? 'opacity-0 pointer-events-none hidden' : 'opacity-100'}`}>
         <div className="w-full flex items-center justify-between p-3 border-b border-white/5">
           <span className="text-[0.65rem] font-bold text-txt-secondary uppercase tracking-widest">Active Sessions</span>
           <div className="session-count-badge !mt-0">{sessions.length}</div>
@@ -349,6 +349,7 @@ export default function SessionBar() {
                 session={session}
                 isActive={session.id === activeSessionId}
                 onSwitch={() => handleSwitch(session)}
+                sessionBarCollapsed={sessionBarCollapsed}
                 onClose={(e) => handleClose(e, session)}
               />
             ))}
@@ -387,12 +388,13 @@ export default function SessionBar() {
 }
 
 function SessionThumbnail({
-  session, isActive, onSwitch, onClose,
+  session, isActive, onSwitch, onClose, sessionBarCollapsed,
 }: {
   session: GuacSession;
   isActive: boolean;
   onSwitch: () => void;
   onClose: (e: React.MouseEvent) => void;
+  sessionBarCollapsed: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
@@ -433,7 +435,7 @@ function SessionThumbnail({
     <div
       className={`session-thumb ${isActive ? 'session-thumb-active' : ''} ${session.error ? 'session-thumb-error' : ''}`}
       onClick={onSwitch}
-      title={session.name}
+      title={sessionBarCollapsed ? undefined : session.name}
     >
       <canvas
         ref={canvasRef}
@@ -441,41 +443,49 @@ function SessionThumbnail({
         height={108}
         className="block w-full object-cover bg-black"
       />
-      <div className="flex items-center gap-1.5 px-2 py-1 min-w-0">
-        <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent-dim text-accent-light shrink-0">
-          {session.protocol.toUpperCase()}
-        </span>
-        <span className="text-[0.7rem] font-medium text-txt-primary whitespace-nowrap overflow-hidden text-ellipsis min-w-0">
-          {session.name}
-        </span>
-      </div>
-      <button
-        className="absolute top-1 right-1 w-[22px] h-[22px] flex items-center justify-center rounded border-0 bg-danger text-white cursor-pointer opacity-85 p-0 transition-all duration-150 hover:opacity-100 hover:scale-110"
-        style={{ background: 'var(--color-danger)', zIndex: 10 }}
-        onClick={onClose}
-        title="Close Session"
-      >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-          <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      </button>
- 
-      {/* Error Overlay */}
-      {session.error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-[1px] p-2 text-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-danger)" strokeWidth="2" className="mb-1">
-            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <span className="text-[0.6rem] font-bold text-danger leading-tight uppercase">Session Ended</span>
-          <span className="text-[0.55rem] text-txt-secondary leading-tight mt-0.5 max-w-full truncate px-1">
-            {session.error.includes('terminated') ? 'Terminated by Admin' : 'Connection Lost'}
-          </span>
-        </div>
+      {!sessionBarCollapsed && (
+        <>
+          <div className="flex items-center gap-1.5 px-2 py-1 min-w-0">
+            <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent-dim text-accent-light shrink-0">
+              {session.protocol.toUpperCase()}
+            </span>
+            <span className="text-[0.7rem] font-medium text-txt-primary whitespace-nowrap overflow-hidden text-ellipsis min-w-0">
+              {session.name}
+            </span>
+          </div>
+          <button
+            className="absolute top-1 right-1 w-[22px] h-[22px] flex items-center justify-center rounded border-0 bg-danger text-white cursor-pointer opacity-85 p-0 transition-all duration-150 hover:opacity-100 hover:scale-110"
+            style={{ background: 'var(--color-danger)', zIndex: 10 }}
+            onClick={onClose}
+            title="Close Session"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </>
       )}
- 
-      {isActive && !session.error && (
-        <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t bg-accent" />
+       {!sessionBarCollapsed && (
+        <>
+          {/* Error Overlay */}
+          {session.error && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-[1px] p-2 text-center">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-danger)" strokeWidth="2" className="mb-1">
+                <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span className="text-[0.6rem] font-bold text-danger leading-tight uppercase">Session Ended</span>
+              <span className="text-[0.55rem] text-txt-secondary leading-tight mt-0.5 max-w-full truncate px-1">
+                {session.error.includes('terminated') ? 'Terminated by Admin' : 'Connection Lost'}
+              </span>
+            </div>
+          )}
+
+          {isActive && !session.error && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t bg-accent" />
+          )}
+        </>
       )}
+
     </div>
   );
 }

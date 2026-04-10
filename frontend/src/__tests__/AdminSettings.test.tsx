@@ -129,7 +129,7 @@ describe('AdminSettings', () => {
 
   it('renders all tab buttons', () => {
     renderAdmin();
-    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Vault', 'Recordings', 'Access', 'AD Sync', 'Audit Logs', 'Security']) {
+    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Vault', 'Recordings', 'Access', 'AD Sync', 'Sessions', 'Security']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
@@ -797,7 +797,7 @@ describe('AccessTab', () => {
   it('switches to sessions tab', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByRole('button', { name: 'Audit Logs' }));
+    await user.click(screen.getByRole('button', { name: 'Sessions' }));
     expect(await screen.findByText('Active Sessions')).toBeInTheDocument();
   });
 
@@ -1138,7 +1138,7 @@ describe('SessionsTab', () => {
   it('renders active sessions', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     expect(await screen.findByText('Server A')).toBeInTheDocument();
     expect(screen.getByText('admin')).toBeInTheDocument();
   });
@@ -1147,14 +1147,14 @@ describe('SessionsTab', () => {
     vi.mocked(getActiveSessions).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     expect(await screen.findByText(/no active sessions/i)).toBeInTheDocument();
   });
 
   it('shows session duration', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     await screen.findByText('Server A');
     // Duration should be rendered (format varies by time)
     const durationEls = screen.getAllByText(/\d+[hms]/);
@@ -1167,7 +1167,7 @@ describe('SessionsTab', () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     expect(await screen.findByText('2m')).toBeInTheDocument();
   });
 
@@ -1177,7 +1177,7 @@ describe('SessionsTab', () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     expect(await screen.findByText('45s')).toBeInTheDocument();
   });
 
@@ -1187,14 +1187,14 @@ describe('SessionsTab', () => {
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     expect(await screen.findByText('1m 30s')).toBeInTheDocument();
   });
 
   it('renders Live and Rewind buttons', async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     await screen.findByText('Server A');
     expect(screen.getByText('● Live')).toBeInTheDocument();
     expect(screen.getByText('⏪ Rewind')).toBeInTheDocument();
@@ -1204,7 +1204,7 @@ describe('SessionsTab', () => {
     vi.mocked(getActiveSessions).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     await waitFor(() => {
       const btns = screen.getAllByText('Refreshing...');
       expect(btns.length).toBeGreaterThanOrEqual(1);
@@ -1215,7 +1215,7 @@ describe('SessionsTab', () => {
     vi.mocked(killSessions).mockResolvedValue({ status: 'ok', killed_count: 1 });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Audit Logs'));
+    await user.click(screen.getByText('Sessions'));
     
     // Select the session
     const checkboxes = screen.getAllByRole('checkbox');

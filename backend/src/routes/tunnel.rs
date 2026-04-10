@@ -4,9 +4,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
-use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::error::AppError;

@@ -144,15 +144,7 @@ vi.mock('../components/usePopOut', () => ({
   usePopOut: () => ({ isPoppedOut: false, popOut: vi.fn(), returnDisplay: vi.fn() }),
 }));
 
-vi.mock('../components/SessionToolbar', () => ({
-  default: () => null,
-}));
-
 vi.mock('../components/SessionWatermark', () => ({
-  default: () => null,
-}));
-
-vi.mock('../components/TouchToolbar', () => ({
   default: () => null,
 }));
 
@@ -303,7 +295,7 @@ describe('SessionClient', () => {
     vi.mocked(getConnectionInfo).mockRejectedValue(new Error('fail'));
     renderSessionClient();
     await waitFor(() => {
-      expect(document.body.textContent).toContain('Go Back');
+      expect(document.body.textContent).toContain('Exit to Dashboard');
     });
   });
 
@@ -422,8 +414,8 @@ describe('SessionClient', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('Failed to load connection info');
     });
-    // Shows warning icon
-    expect(document.body.textContent).toContain('⚠');
+    // Shows error header
+    expect(document.body.textContent).toContain('Connection Error');
   });
 
   it('falls back to protocol name when connection detail is missing', async () => {

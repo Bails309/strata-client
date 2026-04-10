@@ -649,16 +649,23 @@ Obtain a one-time tunnel ticket for a specific connection. This ticket is then u
   "connection_id": "uuid",
   "width": 1920,
   "height": 1080,
-  "dpi": 96
+  "dpi": 96,
+  "credential_profile_id": "uuid (optional)"
 }
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `connection_id` | UUID | Yes | — | Target connection ID |
+| `username` | string | No | — | One-time username for this session |
+| `password` | string | No | — | One-time password for this session |
+| `credential_profile_id` | UUID | No | — | Vault credential profile to use for this session (one-off, no permanent mapping required) |
 | `width` | integer | No | 1920 | Display width |
 | `height` | integer | No | 1080 | Display height |
 | `dpi` | integer | No | 96 | Display DPI |
+| `ignore_cert` | boolean | No | false | Override the connection's ignore-cert setting |
+
+When `credential_profile_id` is provided, the backend decrypts the vault profile directly for this session. The credential resolution priority is: **one-off vault profile > permanently mapped vault profile > ticket credentials > query string fallback**.
 
 **Response** `200 OK`
 ```json

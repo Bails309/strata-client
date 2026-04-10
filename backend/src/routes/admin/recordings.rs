@@ -108,26 +108,25 @@ async fn handle_recording_stream(
         }
     };
 
-    // Send NVR header with total duration (byte-safe)
+    // Send NVR header with total duration (Text-based)
     let duration_ms = recording.duration_secs.unwrap_or(0) * 1000;
     let header = format!("{}.nvrheader,{}.{};", "nvrheader".len(), duration_ms.to_string().len(), duration_ms);
-    socket.send(axum::extract::ws::Message::Binary(header.into_bytes().into())).await?;
+    socket.send(axum::extract::ws::Message::Text(header)).await?;
 
     let mut parser = GuacamoleParser::new();
     let mut base_guac_ts: Option<u64> = None;
     let mut base_real_ts: Option<std::time::Instant> = None;
     let mut last_progress_sent = std::time::Instant::now();
-    let mut last_nop_sent = std::time::Instant::now();
 
     let mut buf = [0u8; 16384];
-    let mut send_buffer = Vec::with_capacity(32768);
+    let mut send_buffer = String::with_capacity(32768);
 
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
             // Send remaining buffer before exit
             if !send_buffer.is_empty() {
-                socket.send(axum::extract::ws::Message::Binary(send_buffer.into())).await?;
+                socket.send(axum::extract::ws::Message::Text(send_buffer)).await?;
             }
             break;
         }
@@ -152,7 +151,7 @@ async fn handle_recording_stream(
                                     if guac_elapsed > real_elapsed {
                                         // Flush current aggregation buffer before sleeping
                                         if !send_buffer.is_empty() {
-                                            socket.send(axum::extract::ws::Message::Binary(std::mem::take(&mut send_buffer).into())).await?;
+                                            socket.send(axum::extract::ws::Message::Text(std::mem::take(&mut send_buffer))).await?;
                                         }
 
                                         let wait_ms = guac_elapsed - real_elapsed;
@@ -161,7 +160,7 @@ async fn handle_recording_stream(
                                             let mut remaining = wait_ms;
                                             while remaining > 5000 {
                                                 tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-                                                socket.send(axum::extract::ws::Message::Binary("3.nop;".into())).await?;
+                                                socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
                                                 remaining -= 5000;
                                             }
                                             tokio::time::sleep(std::time::Duration::from_millis(remaining)).await;
@@ -173,8 +172,7 @@ async fn handle_recording_stream(
                                     // Send progress update
                                     if last_progress_sent.elapsed().as_millis() > 500 {
                                         let prog = format!("{}.nvrprogress,{}.{};", "nvrprogress".len(), guac_elapsed.to_string().len(), guac_elapsed);
-                                        // Progress is sent immediately or appended? Let's append it to stream.
-                                        send_buffer.extend_from_slice(prog.as_bytes());
+                                        send_buffer.push_str(&prog);
                                         last_progress_sent = std::time::Instant::now();
                                     }
                                 }
@@ -185,12 +183,14 @@ async fn handle_recording_stream(
                 }
             }
 
-            // Aggregate instruction into send buffer
-            send_buffer.extend_from_slice(&instruction.raw);
+            // Aggregate instruction into send buffer using lossy UTF-8 conversion.
+            // Guacamole protocol counts Unicode characters, so lossy conversion to FFFD (1 char)
+            // is safe as long as we maintain character count integrity.
+            send_buffer.push_str(&String::from_utf8_lossy(&instruction.raw));
 
             // If buffer exceeds threshold, flush it
             if send_buffer.len() >= 16384 {
-                socket.send(axum::extract::ws::Message::Binary(std::mem::take(&mut send_buffer).into())).await?;
+                socket.send(axum::extract::ws::Message::Text(std::mem::take(&mut send_buffer))).await?;
             }
         }
     }

@@ -6,7 +6,7 @@ const STORAGE_KEY = 'strata-whats-new-dismissed';
  * Bump this version string each release to re-show the modal.
  * The content below should be updated to match.
  */
-export const WHATS_NEW_VERSION = '0.9.0';
+export const WHATS_NEW_VERSION = '0.10.2';
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
@@ -65,37 +65,44 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
 
           <div className="space-y-4 text-[0.8125rem] leading-relaxed text-txt-secondary">
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Active Sessions Dashboard</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">One-Off Vault Credentials</h3>
               <p>
-                A new real-time administrative view that monitors all active tunnel connections.
-                Track bandwidth, duration, and remote hosts across your entire infrastructure from a
-                single pane of glass.
+                You can now select a saved credential profile directly from the login prompt when
+                connecting to a server — no need to permanently map credentials to each connection.
+                Works for both single and tiled (multi-session) connections.
               </p>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Administrative Kill Switch</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">NVR Playback Controls</h3>
               <p>
-                Administrators can now terminate any active session directly from the Sessions
-                dashboard. Instantly revoke access to live tunnels when security or troubleshooting
-                needs arise.
+                Session recordings now feature a progress bar, speed selector (1×, 2×, 4×, 8×), and
+                server-paced replay that preserves original inter-frame timing for accurate playback.
               </p>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Reconnection Stability</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Per-User Recent Connections</h3>
               <p>
-                We've overhauled the session client's reconnection logic. New stability thresholds
-                and backoff strategies prevent infinite reconnection loops on permanent failures,
-                ensuring a smoother user experience.
+                Your "Recent Connections" on the dashboard now track only your activity — no more
+                seeing other users' recently accessed servers in your list.
               </p>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Project Synchronization</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Session Disconnect Handling</h3>
               <p>
-                Backend and Frontend versions have been unified to 0.9.0, bringing improved
-                architectural consistency and build reliability across the full stack.
+                Logging out of a remote server now cleanly ends the session with a clear
+                "Session Ended" message, instead of leaving you on a black screen with
+                endless reconnection attempts.
+              </p>
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Pop-Out Session Stability</h3>
+              <p>
+                Connecting to additional servers while a session is popped out no longer disrupts
+                the popup window. Pop-out sessions now persist independently until you return them.
               </p>
             </section>
           </div>

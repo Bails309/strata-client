@@ -99,6 +99,17 @@ User credentials (RDP/SSH passwords) are never stored in plaintext. The system u
 - DEKs are only held in memory for the duration of the encrypt/decrypt operation
 - Vault access is restricted by token/AppRole with minimal Transit-only permissions
 
+### Credential Resolution Priority
+
+When establishing a tunnel, the backend resolves credentials in the following priority order:
+
+1. **One-off vault profile** — A `credential_profile_id` supplied on the tunnel ticket. The profile is decrypted directly from the user's `credential_profiles` table (no permanent `credential_mappings` entry required). The profile must belong to the requesting user and must not be expired.
+2. **Permanently mapped vault profile** — A credential profile linked to the connection via the `credential_mappings` table.
+3. **Ticket credentials** — Username/password supplied in the one-time tunnel ticket (from the credential prompt form).
+4. **Query string fallback** — Legacy credential parameters on the WebSocket URL (kept for backward compatibility).
+
+This design allows users to use vault-stored credentials for ad-hoc connections without creating permanent mappings, while maintaining the security guarantee that only the profile owner can decrypt their credentials.
+
 ### Memory Zeroization
 
 All sensitive material (DEKs, plaintext passwords) uses the `zeroize` crate to overwrite memory before deallocation, preventing data leaks through memory reuse.

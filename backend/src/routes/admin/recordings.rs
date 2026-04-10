@@ -89,26 +89,40 @@ async fn handle_recording_stream(
 ) -> anyhow::Result<()> {
     use futures_util::SinkExt;
 
-    // Split the socket so we can drain incoming messages (keepalive pings,
-    // client handshake responses) while sending recording data.
-    let (mut sender, mut receiver) = socket.split();
+    let mut paused = false;
+    let mut pause_offset = std::time::Duration::ZERO;
 
-    // Shared pause flag between drain task and sending loop
-    let paused = Arc::new(AtomicBool::new(false));
-    let paused_for_drain = paused.clone();
-
-    let drain_handle = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            if let axum::extract::ws::Message::Text(ref text) = msg {
-                let t: &str = text;
-                if t == "8.nvrpause;" {
-                    paused_for_drain.store(true, Ordering::Relaxed);
-                } else if t == "9.nvrresume;" {
-                    paused_for_drain.store(false, Ordering::Relaxed);
+    /// Drain any pending client messages (keepalive pings, nvrpause/nvrresume)
+    /// without blocking. Returns the updated pause state.
+    async fn drain_incoming(
+        socket: &mut axum::extract::ws::WebSocket,
+        mut paused: bool,
+    ) -> bool {
+        loop {
+            tokio::select! {
+                biased;
+                msg = socket.next() => {
+                    match msg {
+                        Some(Ok(axum::extract::ws::Message::Text(ref text))) => {
+                            let t: &str = text;
+                            if t == "8.nvrpause;" {
+                                paused = true;
+                            } else if t == "9.nvrresume;" {
+                                paused = false;
+                            }
+                        }
+                        Some(Ok(_)) => {} // ignore binary/ping/pong
+                        _ => break,       // closed or error
+                    }
+                }
+                _ = std::future::ready(()) => {
+                    // No message ready right now — stop draining
+                    break;
                 }
             }
         }
-    });
+        paused
+    }
 
     let mut reader = if recording.storage_type == "local" {
         let path = format!("/var/lib/guacamole/recordings/{}", recording.storage_path);
@@ -163,7 +177,7 @@ async fn handle_recording_stream(
         duration_ms.to_string().len(),
         duration_ms
     );
-    sender
+    socket
         .send(axum::extract::ws::Message::Text(header))
         .await?;
 
@@ -171,7 +185,6 @@ async fn handle_recording_stream(
     let mut base_guac_ts: Option<u64> = None;
     let mut base_real_ts: Option<std::time::Instant> = None;
     let mut last_progress_sent = std::time::Instant::now();
-    let mut pause_offset = std::time::Duration::ZERO;
 
     let mut buf = [0u8; 16384];
 
@@ -364,5 +377,94 @@ impl GuacamoleParser {
                 return None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parser_simple() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.test,5.hello;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "test");
+        assert_eq!(inst.args, vec!["hello"]);
+        assert_eq!(inst.raw, "4.test,5.hello;");
+    }
+
+    #[test]
+    fn test_parser_multi_part() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.test,5.hello,5.world;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "test");
+        assert_eq!(inst.args, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_parser_unicode() {
+        let mut parser = GuacamoleParser::new();
+        // Guacamole protocol counts characters, not bytes. 
+        // 🚀 is 1 character but 4 bytes in UTF-8.
+        parser.push("1.🚀,5.world;".as_bytes());
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "🚀");
+        assert_eq!(inst.args, vec!["world"]);
+    }
+
+    #[test]
+    fn test_parser_partial() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.te");
+        assert!(parser.next_instruction().is_none());
+        parser.push(b"st,5.hel");
+        assert!(parser.next_instruction().is_none());
+        parser.push(b"lo;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "test");
+        assert_eq!(inst.args, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_parser_malformed_prefix() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"abc.test,5.hello;");
+        assert!(parser.next_instruction().is_none());
+        assert!(parser.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_parser_malformed_terminator() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.test?5.hello;");
+        assert!(parser.next_instruction().is_none());
+        assert!(parser.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_parser_empty_arg() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.test,0.,5.world;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "test");
+        assert_eq!(inst.args, vec!["", "world"]);
+    }
+
+    #[test]
+    fn test_parser_multiple_instructions() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.inst,1.1;4.inst,1.2;");
+        
+        let inst1 = parser.next_instruction().unwrap();
+        assert_eq!(inst1.opcode, "inst");
+        assert_eq!(inst1.args, vec!["1"]);
+        
+        let inst2 = parser.next_instruction().unwrap();
+        assert_eq!(inst2.opcode, "inst");
+        assert_eq!(inst2.args, vec!["2"]);
+        
+        assert!(parser.next_instruction().is_none());
     }
 }

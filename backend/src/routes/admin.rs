@@ -1891,7 +1891,7 @@ pub async fn create_ad_sync_config(
     let mut bind_password = body.bind_password.as_deref().unwrap_or("").to_string();
 
     // Resolve password if it's a mask and we are cloning
-    if (bind_password == DOT_MASK || bind_password == STAR_MASK) {
+    if bind_password == DOT_MASK || bind_password == STAR_MASK {
         if let Some(id) = body.clone_from {
             let existing: Option<String> =
                 sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")

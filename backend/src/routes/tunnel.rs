@@ -281,37 +281,36 @@ pub async fn ws_tunnel(
     // If the ticket carries a one-off credential_profile_id, decrypt those
     // vault credentials directly (no permanent mapping required).
     let oneoff_profile_id = ticket_creds.as_ref().and_then(|t| t.credential_profile_id);
-    let (oneoff_username, oneoff_password) = if let (Some(profile_id), Some(vault_cfg)) =
-        (oneoff_profile_id, &config.vault)
-    {
-        let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-            "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
+    let (oneoff_username, oneoff_password) =
+        if let (Some(profile_id), Some(vault_cfg)) = (oneoff_profile_id, &config.vault) {
+            let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+                "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
              FROM credential_profiles cp
              WHERE cp.id = $1 AND cp.user_id = $2
                AND cp.expires_at > now()",
-        )
-        .bind(profile_id)
-        .bind(user.id)
-        .fetch_optional(&db.pool)
-        .await?;
-
-        if let Some((enc_payload, enc_dek, nonce)) = cred {
-            let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
-            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
-                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
-            let u = parsed["u"].as_str().unwrap_or("").to_string();
-            let p = parsed["p"].as_str().unwrap_or("").to_string();
-            (
-                if u.is_empty() { None } else { Some(u) },
-                if p.is_empty() { None } else { Some(p) },
             )
+            .bind(profile_id)
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            if let Some((enc_payload, enc_dek, nonce)) = cred {
+                let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+                let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+                let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                    .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+                let u = parsed["u"].as_str().unwrap_or("").to_string();
+                let p = parsed["p"].as_str().unwrap_or("").to_string();
+                (
+                    if u.is_empty() { None } else { Some(u) },
+                    if p.is_empty() { None } else { Some(p) },
+                )
+            } else {
+                (None, None)
+            }
         } else {
             (None, None)
-        }
-    } else {
-        (None, None)
-    };
+        };
     // If ticket provided dimensions, use them
     let effective_width = clamp_dimension(
         ticket_creds
@@ -401,7 +400,11 @@ pub async fn ws_tunnel(
         .map_err(|_| AppError::Validation("Invalid port number".into()))?;
 
     let recording_name = recording_path.as_ref().map(|_| {
-        format!("{}-{}.guac", connection_id, chrono::Utc::now().timestamp_millis())
+        format!(
+            "{}-{}.guac",
+            connection_id,
+            chrono::Utc::now().timestamp_millis()
+        )
     });
 
     let handshake = HandshakeParams {
@@ -520,8 +523,15 @@ pub async fn ws_tunnel(
                 started_at,
                 db_pool: audit_pool.clone(),
             };
-            if let Err(e) =
-                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr), display_timezone).await
+            if let Err(e) = tunnel::proxy(
+                socket,
+                &guacd_host,
+                guacd_port,
+                handshake,
+                Some(nvr),
+                display_timezone,
+            )
+            .await
             {
                 tracing::error!("Tunnel error: {e}");
                 // Audit log the tunnel failure

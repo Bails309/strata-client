@@ -132,7 +132,6 @@ impl SessionBuffer {
         }
     }
 
-
     /// Return buffered frames with relative timing (milliseconds since first
     /// frame in the selection).  Used by the observe endpoint to pace replay.
     pub fn frames_with_timing(&self, offset_secs: u64) -> Vec<(u64, String)> {
@@ -485,7 +484,6 @@ mod tests {
         assert!(!result.contains("connect"));
         assert!(!result.contains("args"));
     }
-
 
     #[test]
     fn session_buffer_push_filtered_out_entirely() {

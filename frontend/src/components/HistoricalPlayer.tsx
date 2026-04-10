@@ -18,6 +18,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
   // Progress tracking
   const [progressMs, setProgressMs] = useState(0);
   const [durationMs, setDurationMs] = useState(recording.duration_secs ? recording.duration_secs * 1000 : 0);
+  const recordingEndedRef = useRef(false);
 
   const cleanup = useCallback(() => {
     if (tunnelRef.current) {
@@ -39,6 +40,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
 
     setLoading(true);
     setErrorMsg('');
+    recordingEndedRef.current = false;
 
     const url = buildRecordingStreamUrl(recording.id);
     const qIdx = url.indexOf('?');
@@ -69,15 +71,23 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
         setProgressMs(current);
         return;
       }
+      if (opcode === 'nvrend') {
+        recordingEndedRef.current = true;
+        setProgressMs(prev => durationMs || prev);
+        setLoading(false);
+        return;
+      }
       if (clientHandler) clientHandler(opcode, args);
     };
 
     client.onerror = (status: Guacamole.Status) => {
+      if (recordingEndedRef.current) return;
       setErrorMsg(status?.message || 'Playback error');
       setLoading(false);
     };
 
     tunnel.onerror = (status: Guacamole.Status) => {
+      if (recordingEndedRef.current) return;
       setErrorMsg(status?.message || 'Tunnel error');
       setLoading(false);
     };

@@ -49,6 +49,25 @@ vi.mock('../api', () => ({
   getAdSyncRuns: vi.fn(),
 }));
 
+vi.mock('../contexts/SettingsContext', () => ({
+  useSettings: () => ({
+    settings: {},
+    timeSettings: {
+      display_timezone: 'UTC',
+      display_time_format: 'HH:mm:ss',
+      display_date_format: 'YYYY-MM-DD',
+    },
+    loading: false,
+    refreshSettings: vi.fn(),
+    updateSettings: vi.fn(),
+    formatDateTime: (date: any) => {
+      if (!date) return '—';
+      return new Date(date).toISOString();
+    },
+  }),
+  SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 import AdminSettings from '../pages/AdminSettings';
 import {
   getSettings, getRoles, getConnections, getConnectionFolders, getUsers,
@@ -798,7 +817,7 @@ describe('AccessTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByRole('button', { name: 'Sessions' }));
-    expect(await screen.findByText('Active Sessions')).toBeInTheDocument();
+    expect(await screen.findByText('Sessions & Recordings')).toBeInTheDocument();
   });
 
   it('renders connections table', async () => {
@@ -1787,7 +1806,7 @@ describe('ConnectionForm protocol sections', () => {
     await user.click(within(row).getByText('Edit'));
     // SSH sections should render — section titles have ▸/▾ prefix
     expect(screen.getByText(/Authentication/)).toBeInTheDocument();
-    expect(screen.getByText(/Display/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /[▸▾]\s*Display/ })).toBeInTheDocument();
     expect(screen.getByText(/Terminal Behavior/)).toBeInTheDocument();
     expect(screen.getByText(/SFTP/)).toBeInTheDocument();
     expect(screen.getByText(/Screen Recording/)).toBeInTheDocument();
@@ -1804,10 +1823,11 @@ describe('ConnectionForm protocol sections', () => {
     // Authentication is defaultOpen, so it should show fields
     expect(screen.getByText('Private Key')).toBeInTheDocument();
     // Display is collapsed by default — click to expand
-    await user.click(screen.getByText(/Display/));
+    // Use getByRole to distinguish from the "Display" tab
+    await user.click(screen.getByRole('button', { name: /▸ Display/ }));
     expect(screen.getByText('Font Name')).toBeInTheDocument();
     // Click again to collapse
-    await user.click(screen.getByText(/Display/));
+    await user.click(screen.getByRole('button', { name: /▾ Display/ }));
     expect(screen.queryByText('Font Name')).not.toBeInTheDocument();
   });
 

@@ -4,13 +4,13 @@
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
-use futures_util::StreamExt;
 
 use crate::db::Recording;
 use crate::error::AppError;
-use crate::services::app_state::{SharedState, BootPhase};
+use crate::services::app_state::{BootPhase, SharedState};
 
 
 #[derive(Deserialize)]
@@ -36,7 +36,7 @@ pub async fn list_recordings(
          WHERE ($1::uuid IS NULL OR user_id = $1)
            AND ($2::uuid IS NULL OR connection_id = $2)
          ORDER BY started_at DESC
-         LIMIT $3 OFFSET $4"
+         LIMIT $3 OFFSET $4",
     )
     .bind(query.user_id)
     .bind(query.connection_id)
@@ -71,11 +71,13 @@ pub async fn stream_recording(
         .await?
         .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
 
-    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| async move {
-        if let Err(e) = handle_recording_stream(socket, state, recording).await {
-            tracing::error!("Recording stream error: {e}");
-        }
-    }))
+    Ok(ws
+        .protocols(["guacamole"])
+        .on_upgrade(move |socket| async move {
+            if let Err(e) = handle_recording_stream(socket, state, recording).await {
+                tracing::error!("Recording stream error: {e}");
+            }
+        }))
 }
 
 async fn handle_recording_stream(
@@ -85,9 +87,18 @@ async fn handle_recording_stream(
 ) -> anyhow::Result<()> {
     let mut reader = if recording.storage_type == "local" {
         let path = format!("/var/lib/guacamole/recordings/{}", recording.storage_path);
-        tracing::info!("Opening local recording: id={}, path={}", recording.id, path);
+        tracing::info!(
+            "Opening local recording: id={}, path={}",
+            recording.id,
+            path
+        );
         let file = tokio::fs::File::open(&path).await.map_err(|e| {
-            tracing::error!("Failed to open recording file: id={}, path={}, err={}", recording.id, path, e);
+            tracing::error!(
+                "Failed to open recording file: id={}, path={}, err={}",
+                recording.id,
+                path,
+                e
+            );
             e
         })?;
         Box::new(tokio::io::BufReader::new(file)) as Box<dyn tokio::io::AsyncRead + Unpin + Send>
@@ -95,18 +106,28 @@ async fn handle_recording_stream(
         // Azure storage stream
         let azure = {
             let s = state.read().await;
-            let pool = s.db.as_ref().ok_or_else(|| anyhow::anyhow!("DB not connected"))?.pool.clone();
+            let pool = s
+                .db
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("DB not connected"))?
+                .pool
+                .clone();
             let vault = s.config.as_ref().and_then(|c| c.vault.as_ref()).cloned();
             crate::services::recordings::get_azure_config(&pool, vault.as_ref()).await?
         };
         if let Some(azure) = azure {
-            let stream = crate::services::recordings::download_stream_from_azure(&azure, &recording.storage_path).await?;
-            let reader = tokio_util::io::StreamReader::new(
-                stream.map(|res: reqwest::Result<bytes::Bytes>| {
+            let stream = crate::services::recordings::download_stream_from_azure(
+                &azure,
+                &recording.storage_path,
+            )
+            .await?;
+            let reader = tokio_util::io::StreamReader::new(stream.map(
+                |res: reqwest::Result<bytes::Bytes>| {
                     res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-                })
-            );
-            Box::new(tokio::io::BufReader::new(reader)) as Box<dyn tokio::io::AsyncRead + Unpin + Send>
+                },
+            ));
+            Box::new(tokio::io::BufReader::new(reader))
+                as Box<dyn tokio::io::AsyncRead + Unpin + Send>
         } else {
             anyhow::bail!("Azure storage not configured");
         }
@@ -114,8 +135,15 @@ async fn handle_recording_stream(
 
     // Send NVR header with total duration
     let duration_ms = recording.duration_secs.unwrap_or(0) * 1000;
-    let header = format!("{}.nvrheader,{}.{};", "nvrheader".len(), duration_ms.to_string().len(), duration_ms);
-    socket.send(axum::extract::ws::Message::Text(header)).await?;
+    let header = format!(
+        "{}.nvrheader,{}.{};",
+        "nvrheader".len(),
+        duration_ms.to_string().len(),
+        duration_ms
+    );
+    socket
+        .send(axum::extract::ws::Message::Text(header))
+        .await?;
 
     let mut parser = GuacamoleParser::new();
     let mut base_guac_ts: Option<u64> = None;
@@ -144,15 +172,25 @@ async fn handle_recording_stream(
                             }
                             (Some(b_ts), Some(b_real)) => {
                                 let guac_elapsed = ts.saturating_sub(b_ts);
-                                let real_elapsed = std::time::Instant::now().duration_since(b_real).as_millis() as u64;
+                                let real_elapsed =
+                                    std::time::Instant::now().duration_since(b_real).as_millis()
+                                        as u64;
 
                                 if guac_elapsed > real_elapsed {
-                                    tokio::time::sleep(std::time::Duration::from_millis(guac_elapsed - real_elapsed)).await;
+                                    tokio::time::sleep(std::time::Duration::from_millis(
+                                        guac_elapsed - real_elapsed,
+                                    ))
+                                    .await;
                                 }
 
                                 // Send progress update periodically (every 500ms at most)
                                 if last_progress_sent.elapsed().as_millis() > 500 {
-                                    let prog = format!("{}.nvrprogress,{}.{};", "nvrprogress".len(), guac_elapsed.to_string().len(), guac_elapsed);
+                                    let prog = format!(
+                                        "{}.nvrprogress,{}.{};",
+                                        "nvrprogress".len(),
+                                        guac_elapsed.to_string().len(),
+                                        guac_elapsed
+                                    );
                                     socket.send(axum::extract::ws::Message::Text(prog)).await?;
                                     last_progress_sent = std::time::Instant::now();
                                 }
@@ -164,9 +202,16 @@ async fn handle_recording_stream(
             }
 
             // Send standard instruction
-            socket.send(axum::extract::ws::Message::Text(instruction.raw)).await?;
+            socket
+                .send(axum::extract::ws::Message::Text(instruction.raw))
+                .await?;
         }
     }
+
+    // Signal end-of-recording so the frontend can close gracefully
+    let end_msg = format!("{}.nvrend;", "nvrend".len());
+    let _ = socket.send(axum::extract::ws::Message::Text(end_msg)).await;
+    let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
 
     Ok(())
 }
@@ -183,7 +228,9 @@ struct GuacamoleParser {
 
 impl GuacamoleParser {
     fn new() -> Self {
-        Self { buffer: String::new() }
+        Self {
+            buffer: String::new(),
+        }
     }
 
     fn push(&mut self, data: &[u8]) {
@@ -242,7 +289,7 @@ impl GuacamoleParser {
             if terminator == ';' {
                 let raw = self.buffer[..=terminator_pos].to_string();
                 self.buffer.drain(..=terminator_pos);
-                
+
                 let opcode = elements.remove(0);
                 return Some(GuacamoleInstruction {
                     opcode,

@@ -430,8 +430,15 @@ pub async fn ws_shared_tunnel(
                 started_at: chrono::Utc::now(),
                 db_pool: db.pool.clone(),
             };
-            if let Err(e) =
-                tunnel::proxy(socket, &guacd_host, guacd_port, handshake, Some(nvr), display_timezone).await
+            if let Err(e) = tunnel::proxy(
+                socket,
+                &guacd_host,
+                guacd_port,
+                handshake,
+                Some(nvr),
+                display_timezone,
+            )
+            .await
             {
                 tracing::error!("Shared tunnel error: {e}");
             }

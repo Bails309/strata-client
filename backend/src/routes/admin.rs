@@ -1862,7 +1862,8 @@ pub async fn observe_session(
                             // Cap individual sleeps to 500ms to stay responsive
                             let sleep_ms = adjusted.min(500);
                             if sleep_ms > 5 {
-                                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms))
+                                    .await;
                             }
                         }
                     }

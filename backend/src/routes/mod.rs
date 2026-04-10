@@ -120,7 +120,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/sessions/:id/observe",
             get(admin::observe_session),
         )
-        .route("/api/admin/recordings", get(admin::recordings::list_recordings))
+        .route(
+            "/api/admin/recordings",
+            get(admin::recordings::list_recordings),
+        )
         .route(
             "/api/admin/recordings/:id/stream",
             get(admin::recordings::stream_recording),

@@ -20,6 +20,25 @@ vi.mock('../api', () => ({
   getServiceHealth: vi.fn(),
 }));
 
+vi.mock('../contexts/SettingsContext', () => ({
+  useSettings: () => ({
+    settings: {},
+    timeSettings: {
+      display_timezone: 'UTC',
+      display_time_format: 'HH:mm:ss',
+      display_date_format: 'YYYY-MM-DD',
+    },
+    loading: false,
+    refreshSettings: vi.fn(),
+    updateSettings: vi.fn(),
+    formatDateTime: (date: any) => {
+      if (!date) return '—';
+      return new Date(date).toISOString();
+    },
+  }),
+  SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 import Credentials from '../pages/Credentials';
 import {
   getCredentialProfiles,

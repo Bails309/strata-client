@@ -41,7 +41,10 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
     setErrorMsg('');
 
     const url = buildRecordingStreamUrl(recording.id);
-    const tunnel = new Guacamole.WebSocketTunnel(url);
+    const qIdx = url.indexOf('?');
+    const tunnelBase = qIdx >= 0 ? url.substring(0, qIdx) : url;
+    const tunnelQuery = qIdx >= 0 ? url.substring(qIdx + 1) : '';
+    const tunnel = new Guacamole.WebSocketTunnel(tunnelBase);
     const client = new Guacamole.Client(tunnel);
 
     tunnelRef.current = tunnel;
@@ -97,7 +100,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
     resizeObserver.observe(container);
     display.onresize = scaleToFit;
 
-    client.connect('');
+    client.connect(tunnelQuery);
 
     return () => {
       resizeObserver.disconnect();

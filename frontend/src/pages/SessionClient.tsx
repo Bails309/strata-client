@@ -200,17 +200,21 @@ export default function SessionClient() {
       }
     };
 
-    // Detect server-initiated clean disconnect (state 4 = DISCONNECTING).
-    // When the remote server ends the session, guacd sends a "disconnect"
-    // instruction → Client.disconnect() fires: DISCONNECTING(4) → tunnel.disconnect()
-    // → tunnel CLOSED → DISCONNECTED(5).  We must set the flag at state 4 because
-    // tunnel.onstatechange fires synchronously inside tunnel.disconnect(), BEFORE
-    // the client reaches state 5.
-    session.client.onstatechange = (state: number) => {
-      // State 4 = Guacamole.Client.State.DISCONNECTING
-      if (state === 4 && !userDisconnectRef.current) {
+    // ── Intercept guacd instructions to detect server-initiated disconnects ──
+    // This fires BEFORE the Client processes the instruction, so
+    // serverDisconnectRef is set before any onstatechange / onerror handlers.
+    const clientInstructionHandler = session.tunnel.oninstruction;
+    session.tunnel.oninstruction = function (opcode: string, args: string[]) {
+      if ((opcode === 'disconnect' || opcode === 'error') && !userDisconnectRef.current) {
         serverDisconnectRef.current = true;
       }
+      if (clientInstructionHandler) {
+        clientInstructionHandler.call(this, opcode, args);
+      }
+    };
+
+    // Re-send container size when connected.
+    session.client.onstatechange = (state: number) => {
       // State 3 = CONNECTED: re-send container size and scale display
       if (state === 3) {
         requestAnimationFrame(() => {
@@ -232,35 +236,35 @@ export default function SessionClient() {
       }
     };
 
+    // ── Single entry point for handling unexpected closures ──
+    // Tunnel CLOSED is the terminal state and always fires, whether the
+    // closure came from a "disconnect" instruction, an "error" instruction,
+    // or a raw WebSocket close. By routing everything through here we
+    // avoid double-fire issues.
     session.tunnel.onstatechange = (state: number) => {
       if (state === Guacamole.Tunnel.CLOSED && !userDisconnectRef.current) {
         handleUnexpectedClose();
       }
     };
 
+    // Save error details but don't trigger reconnection here.
+    // close_tunnel() always fires tunnel.setState(CLOSED) after onerror,
+    // so handleUnexpectedClose will run via tunnel.onstatechange above.
     session.tunnel.onerror = (status: Guacamole.Status) => {
       session.error = status.message || 'Connection failed';
-      if (!userDisconnectRef.current) {
-        handleUnexpectedClose();
-      } else {
-        setError(`Tunnel error: ${session.error}`);
-      }
     };
 
+    // Save error details but don't trigger reconnection here.
+    // The "error" instruction handler always calls client.disconnect()
+    // afterward, which closes the tunnel → triggers handleUnexpectedClose.
     session.client.onerror = (status: Guacamole.Status) => {
       session.error = status.message || 'Connection failed';
-      // Client errors during an active session trigger reconnection
-      if (!userDisconnectRef.current && phase === 'connected') {
-        handleUnexpectedClose();
-      } else {
-        setError(`Error: ${session.error}`);
-      }
     };
 
     session.client.onrequired = (parameters: string[]) => {
       setSshRequired(parameters);
     };
-  }, [closeSession, attemptReconnect, phase]);
+  }, [closeSession, attemptReconnect]);
 
   wireHandlersRef.current = wireSessionErrorHandlers;
 

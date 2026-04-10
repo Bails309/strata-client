@@ -1820,18 +1820,42 @@ pub async fn observe_session(
                 }
             }
 
-            // Phase 2: Forward live frames from the broadcast channel
+            // Phase 2: Forward live frames from the broadcast channel while
+            // draining client-sent messages (e.g. Guacamole tunnel pings)
+            // and sending periodic keep-alive nops to prevent client-side
+            // tunnel timeouts during idle periods.
+            let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
             loop {
-                match rx.recv().await {
-                    Ok(frame) => {
-                        if socket.send(Message::Text((*frame).clone())).await.is_err() {
+                tokio::select! {
+                    result = rx.recv() => {
+                        match result {
+                            Ok(frame) => {
+                                if socket.send(Message::Text((*frame).clone())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("NVR observer lagged {n} frames, skipping");
+                            }
+                            Err(_) => break, // channel closed (session ended)
+                        }
+                    }
+                    // Drain any incoming messages (pings, etc.) to prevent
+                    // the receive buffer from growing unbounded.
+                    msg = socket.recv() => {
+                        if msg.is_none() {
+                            break; // client disconnected
+                        }
+                        // Discard message content — observe is one-way
+                    }
+                    _ = keepalive.tick() => {
+                        // Guacamole nop instruction keeps the tunnel alive
+                        if socket.send(Message::Text("3.nop;".into())).await.is_err() {
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("NVR observer lagged {n} frames, skipping");
-                    }
-                    Err(_) => break, // channel closed (session ended)
                 }
             }
         }))

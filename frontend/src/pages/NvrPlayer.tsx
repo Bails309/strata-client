@@ -56,8 +56,15 @@ export default function NvrPlayer() {
     elapsedRef.current = 0;
     setElapsed(0);
 
-    const wsUrl = buildNvrObserveUrl(sessionId, rewindSecs);
-    const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+    // Guacamole.WebSocketTunnel.connect(data) always appends "?" + data to
+    // the URL.  We must therefore pass only the base path to the constructor
+    // and supply token / offset as the connect-data so that the query string
+    // is not doubled (which would corrupt the `offset` value).
+    const fullUrl = buildNvrObserveUrl(sessionId, rewindSecs);
+    const qIdx = fullUrl.indexOf('?');
+    const tunnelBase = qIdx >= 0 ? fullUrl.substring(0, qIdx) : fullUrl;
+    const tunnelQuery = qIdx >= 0 ? fullUrl.substring(qIdx + 1) : '';
+    const tunnel = new Guacamole.WebSocketTunnel(tunnelBase);
     const client = new Guacamole.Client(tunnel);
 
     tunnelRef.current = tunnel;
@@ -130,7 +137,7 @@ export default function NvrPlayer() {
       setElapsed(elapsedRef.current);
     }, 1000);
 
-    client.connect('');
+    client.connect(tunnelQuery);
 
     return () => {
       resizeObserver.disconnect();

@@ -431,7 +431,10 @@ pub async fn proxy(
             _ = async {
                 match kill_rx {
                     Some(ref mut rx) => rx.await.ok(),
-                    None => Some(std::future::pending::<()>().await),
+                    None => {
+                        std::future::pending::<()>().await;
+                        Some(())
+                    },
                 }
             } => {
                 tracing::info!("Session terminated by administrator");

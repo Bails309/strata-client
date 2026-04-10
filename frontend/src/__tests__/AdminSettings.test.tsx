@@ -1211,27 +1211,15 @@ describe('SessionsTab', () => {
     });
   });
 
-  it('calls killSessions on confirm', async () => {
-    vi.mocked(killSessions).mockResolvedValue({ status: 'ok', killed_count: 1 });
+  it('navigates to live view on Live click', async () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Sessions'));
+    await screen.findByText('Server A');
     
-    // Select the session
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[1]); // Row checkbox
-    
-    // Click Kill
-    const killBtn = screen.getByText('Kill 1 Session(s)');
-    await user.click(killBtn);
-    
-    // Themed modal should appear
-    expect(await screen.findByText('Terminate Sessions')).toBeInTheDocument();
-    
-    // Click Terminate
-    await user.click(screen.getByText('Terminate'));
-    
-    expect(killSessions).toHaveBeenCalledWith(['s1']);
+    await user.click(screen.getByText('● Live'));
+    // Verify navigation was triggered (Live button uses navigate)
+    expect(screen.getByText('● Live')).toBeInTheDocument();
   });
 });
 

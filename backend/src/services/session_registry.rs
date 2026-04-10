@@ -212,6 +212,7 @@ impl SessionRegistry {
     /// Register a new session and return the broadcast sender + buffer
     /// handle for the tunnel proxy to use.
     /// Returns `None` if the maximum session limit has been reached.
+    #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &self,
         session_id: String,

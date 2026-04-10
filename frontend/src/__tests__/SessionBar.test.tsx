@@ -125,20 +125,16 @@ describe('SessionBar', () => {
   });
 
   it('shows collapse/expand toggle', async () => {
+    const setSessionBarCollapsed = vi.fn();
     const sessions = [makeMockSession('s1', 'A')];
-    renderSessionBar('/', false, sessions);
+    renderSessionBar('/', false, sessions, { setSessionBarCollapsed });
     
     const toggle = screen.getByTitle('Collapse sessions');
     expect(toggle).toBeInTheDocument();
     
     await userEvent.click(toggle);
     
-    await waitFor(() => {
-      expect(screen.queryByText('A')).not.toBeInTheDocument();
-    });
-    
-    expect(screen.getByText('1')).toBeInTheDocument();
-    expect(screen.getByTitle('Expand sessions')).toBeInTheDocument();
+    expect(setSessionBarCollapsed).toHaveBeenCalledWith(true);
   });
 
   it('renders disconnect button per session', () => {

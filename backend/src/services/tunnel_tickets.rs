@@ -14,6 +14,7 @@ pub struct TunnelTicket {
     pub width: u32,
     pub height: u32,
     pub dpi: u32,
+    pub ignore_cert: bool,
     pub created_at: Instant,
 }
 
@@ -55,6 +56,7 @@ mod tests {
             width: 1920,
             height: 1080,
             dpi: 96,
+            ignore_cert: false,
             created_at: Instant::now(),
         }
     }
@@ -110,6 +112,7 @@ mod tests {
             width: 2560,
             height: 1440,
             dpi: 144,
+            ignore_cert: true,
             created_at: Instant::now(),
         };
         let id = create(ticket);
@@ -121,6 +124,7 @@ mod tests {
         assert_eq!(consumed.width, 2560);
         assert_eq!(consumed.height, 1440);
         assert_eq!(consumed.dpi, 144);
+        assert!(consumed.ignore_cert);
     }
 
     #[test]
@@ -133,6 +137,7 @@ mod tests {
             width: 1920,
             height: 1080,
             dpi: 96,
+            ignore_cert: false,
             created_at: Instant::now(),
         };
         let id = create(ticket);

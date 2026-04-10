@@ -79,18 +79,32 @@ async fn main() -> anyhow::Result<()> {
     ensure_default_admin(&db).await?;
 
     // ── Resolve JWT signing secret ──
-    // Priority: JWT_SECRET env → persisted config → generate new random secret.
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .ok()
-        .or_else(|| persisted.as_ref().and_then(|c| c.jwt_secret.clone()))
-        .unwrap_or_else(|| {
-            use base64::Engine;
-            let mut key = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
-            let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
-            tracing::info!("Generated new JWT signing secret (persisted to config)");
-            secret
-        });
+    // Priority: JWT_SECRET env → persisted config → system secrets file → generate new random secret.
+    let jwt_secret = if let Ok(s) = std::env::var("JWT_SECRET") {
+        s
+    } else if let Some(s) = persisted.as_ref().and_then(|c| c.jwt_secret.clone()) {
+        s
+    } else if let Some(s) = config::SystemSecrets::load().map(|s| s.jwt_secret) {
+        s
+    } else {
+        use base64::Engine;
+        let mut key = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+        let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
+        tracing::info!("Generated new JWT signing secret");
+
+        // Persist to system-secrets.json immediately so it survives restarts
+        let secrets = config::SystemSecrets {
+            jwt_secret: secret.clone(),
+        };
+        if let Err(e) = secrets.save() {
+            tracing::warn!("Failed to persist JWT secret: {e}");
+        } else {
+            tracing::info!("JWT secret persisted to system-secrets.json");
+        }
+        secret
+    };
+
     // Publish to process-wide OnceLock so auth/middleware can read it
     config::JWT_SECRET
         .set(jwt_secret.clone())

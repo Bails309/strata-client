@@ -1,9 +1,11 @@
 // Strata Client Service Worker – offline shell cache
-const CACHE_NAME = 'strata-shell-v1';
+const CACHE_NAME = 'strata-shell-v2';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/favicon.png',
+  '/logo-dark.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -29,14 +31,19 @@ self.addEventListener('fetch', (event) => {
   // Never cache API or WebSocket requests
   if (url.pathname.startsWith('/api')) return;
 
-  // Network-first for navigation, cache-first for static assets
+  // Network-first for navigation, cache-then-network for static assets
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request).catch(() => caches.match('/index.html'))
     );
   } else {
     event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request))
+      caches.match(request).then((cached) => {
+        return cached || fetch(request).catch((err) => {
+          console.debug('[SW] Fetch failed for:', request.url, err);
+          return null; // Gracefully handle missing assets
+        });
+      })
     );
   }
 });

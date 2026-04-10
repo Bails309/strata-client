@@ -484,6 +484,7 @@ export const removeCredentialMapping = (connectionId: string) =>
 export interface ConnectionInfo {
   protocol: string;
   has_credentials: boolean;
+  ignore_cert?: boolean;
 }
 
 export const getConnectionInfo = (connectionId: string) =>
@@ -513,6 +514,7 @@ export interface CreateTunnelTicketRequest {
   width?: number;
   height?: number;
   dpi?: number;
+  ignore_cert?: boolean;
 }
 
 export const createTunnelTicket = (body: CreateTunnelTicketRequest) =>

@@ -42,6 +42,7 @@ export default function SessionClient() {
   const [error, setError] = useState('');
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
   const [hasDomain, setHasDomain] = useState(false);
+  const [ignoreCert, setIgnoreCert] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string }>({ username: '', password: '' });
 
   // Fetch sharing permission from the user's own profile
@@ -103,6 +104,7 @@ export default function SessionClient() {
         setProtocol(info.protocol);
         setConnectionName(connDetail?.name || info.protocol.toUpperCase());
         setHasDomain(!!connDetail?.domain);
+        setIgnoreCert(!!info.ignore_cert);
         if (info.has_credentials) {
           setPhase('connected');
         } else if (info.protocol === 'rdp') {
@@ -147,6 +149,7 @@ export default function SessionClient() {
           width: container.clientWidth,
           height: container.clientHeight,
           dpi: Math.round(96 * dpr),
+          ignore_cert: ignoreCert,
         });
 
         if (userDisconnectRef.current) return;
@@ -178,7 +181,7 @@ export default function SessionClient() {
         }
       }
     }, delay);
-  }, [connectionId, connectionName, protocol, createSession]);
+  }, [connectionId, connectionName, protocol, ignoreCert, createSession]);
 
   // ── Wire error/close handlers onto a session for reconnection ──
   const wireSessionErrorHandlers = useCallback((session: GuacSession, _prevAttempt?: number) => {
@@ -248,6 +251,7 @@ export default function SessionClient() {
           width: container.clientWidth,
           height: container.clientHeight,
           dpi: Math.round(96 * dpr),
+          ignore_cert: ignoreCert,
         });
         ticketId = resp.ticket;
       } catch {

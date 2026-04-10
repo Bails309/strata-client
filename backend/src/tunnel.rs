@@ -167,6 +167,7 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "wol-wait-time"
             | "force-lossless"
             | "disable-glyph-caching"
+            | "ignore-cert"
     )
 }
 
@@ -328,8 +329,9 @@ pub async fn proxy(
             val.clone()
         };
         let msg = format!("  arg '{}' = '{}'", name, display);
-        tracing::debug!(msg);
+        tracing::info!(msg);
     }
+
 
     let connect_values: Vec<String> = arg_names
         .iter()

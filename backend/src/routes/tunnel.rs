@@ -57,6 +57,7 @@ pub struct CreateTicketRequest {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub dpi: Option<u32>,
+    pub ignore_cert: Option<bool>,
 }
 
 pub async fn create_tunnel_ticket(
@@ -80,6 +81,7 @@ pub async fn create_tunnel_ticket(
         width: body.width.unwrap_or(1920),
         height: body.height.unwrap_or(1080),
         dpi: body.dpi.unwrap_or(96),
+        ignore_cert: body.ignore_cert.unwrap_or(false),
         created_at: std::time::Instant::now(),
     };
 
@@ -305,12 +307,18 @@ pub async fn ws_tunnel(
     );
     tracing::debug!(msg = debug_msg);
 
-    // Use per-connection security/ignore-cert from extra, with fallback defaults
+    // Use per-connection security/ignore-cert from extra, with fallback defaults.
+    // The one-time ticket can override the 'ignore-cert' database setting.
     let security = extra.get("security").cloned().or(Some("any".into()));
-    let ignore_cert = extra
-        .get("ignore-cert")
-        .map(|v| v == "true")
-        .unwrap_or(false);
+    let ignore_cert = ticket_creds
+        .as_ref()
+        .map(|t| t.ignore_cert)
+        .unwrap_or_else(|| {
+            extra
+                .get("ignore-cert")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+        });
 
     let safe_port: u16 = port
         .try_into()

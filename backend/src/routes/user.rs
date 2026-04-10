@@ -399,8 +399,12 @@ pub async fn update_credential_profile(
                 .fetch_one(&db.pool)
                 .await?;
 
-                let plaintext =
-                    vault::unseal(&vault_cfg, &existing.1, &existing.0, &existing.2).await?;
+                let plaintext = vault::unseal(&vault_cfg, &existing.1, &existing.0, &existing.2)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to decrypt existing credential profile: {e}");
+                        AppError::Validation("Existing profile data uses outdated encryption. To update this profile, please re-type both your Username and Password to securely overwrite it.".into())
+                    })?;
                 let plain_str = String::from_utf8(plaintext).unwrap_or_default();
                 let parsed: serde_json::Value = serde_json::from_str(&plain_str)
                     .unwrap_or_else(|_| json!({ "u": "", "p": plain_str }));
@@ -697,9 +701,9 @@ pub async fn connection_info(
         (db, vault)
     };
 
-    // Fetch protocol for this connection
-    let protocol: String = sqlx::query_scalar(
-        "SELECT protocol FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+    // Fetch protocol and extra params for this connection
+    let (protocol, extra): (String, Option<serde_json::Value>) = sqlx::query_as(
+        "SELECT protocol, extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
     )
     .bind(connection_id)
     .fetch_optional(&db.pool)
@@ -725,9 +729,24 @@ pub async fn connection_info(
         .unwrap_or(false)
     };
 
+    let ignore_cert = if protocol == "rdp" {
+        extra.as_ref()
+            .and_then(|e| e.get("ignore-cert"))
+            .map(|v| match v {
+                serde_json::Value::String(s) => s == "true",
+                serde_json::Value::Bool(b) => *b,
+                _ => false,
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+
     Ok(Json(json!({
         "protocol": protocol,
         "has_credentials": has_vault_creds,
+        "ignore_cert": ignore_cert,
     })))
 }
 

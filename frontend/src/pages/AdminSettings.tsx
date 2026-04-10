@@ -1899,7 +1899,8 @@ function RdpSections({
           <div className="form-group !mb-0">
             <label>&nbsp;</label>
             <label className="flex items-center gap-2 mt-1">
-              <input type="checkbox" checked={ex('ignore-cert') !== 'false'} onChange={(e) => setEx('ignore-cert', e.target.checked ? 'true' : 'false')} className="checkbox" />
+              <input type="checkbox" checked={ex('ignore-cert') === 'true'} onChange={(e) => setEx('ignore-cert', e.target.checked ? 'true' : 'false')} className="checkbox" />
+
               Ignore server certificate
             </label>
           </div>

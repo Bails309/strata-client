@@ -152,6 +152,50 @@ impl LocalVaultSecrets {
     }
 }
 
+/// System-wide secrets (e.g. JWT signing key).
+/// Kept separate from config.toml to avoid leaking via serialization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemSecrets {
+    pub jwt_secret: String,
+}
+
+impl SystemSecrets {
+    /// Derive the secrets file path from the config directory.
+    pub fn path() -> String {
+        let config = AppConfig::config_path();
+        let dir = Path::new(&config)
+            .parent()
+            .unwrap_or_else(|| Path::new("/app/config"));
+        dir.join("system-secrets.json")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Persist system secrets to disk.
+    pub fn save(&self) -> anyhow::Result<()> {
+        let path = Self::path();
+        if let Some(parent) = Path::new(&path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string(self)?;
+        std::fs::write(&path, &json)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
+    /// Load system secrets from disk, if they exist.
+    pub fn load() -> Option<Self> {
+        let path = Self::path();
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 
 use crate::db::Recording;
 use crate::error::AppError;
-use crate::services::app_state::{SharedState, BootPhase};
+use crate::services::app_state::SharedState;
 
 
 #[derive(Deserialize)]
@@ -108,90 +108,21 @@ async fn handle_recording_stream(
         }
     };
 
-    // Send NVR header with total duration (Text-based)
-    let duration_ms = recording.duration_secs.unwrap_or(0) * 1000;
-    let header = format!("{}.nvrheader,{}.{};", "nvrheader".len(), duration_ms.to_string().len(), duration_ms);
-    socket.send(axum::extract::ws::Message::Text(header)).await?;
-
     let mut parser = GuacamoleParser::new();
-    let mut base_guac_ts: Option<u64> = None;
-    let mut base_real_ts: Option<std::time::Instant> = None;
-    let mut last_progress_sent = std::time::Instant::now();
-
     let mut buf = [0u8; 16384];
-    let mut send_buffer = String::with_capacity(32768);
 
     loop {
         let n = reader.read(&mut buf).await?;
         if n == 0 {
-            // Send remaining buffer before exit
-            if !send_buffer.is_empty() {
-                socket.send(axum::extract::ws::Message::Text(send_buffer)).await?;
-            }
             break;
         }
 
         parser.push(&buf[..n]);
 
         while let Some(instruction) = parser.next_instruction() {
-            // Check for sync instruction to handle pacing
-            if instruction.opcode == b"sync" {
-                if let Some(ts_bytes) = instruction.args.get(0) {
-                    if let Ok(ts_str) = std::str::from_utf8(ts_bytes) {
-                        if let Ok(ts) = ts_str.parse::<u64>() {
-                            match (base_guac_ts, base_real_ts) {
-                                (None, None) => {
-                                    base_guac_ts = Some(ts);
-                                    base_real_ts = Some(std::time::Instant::now());
-                                }
-                                (Some(b_ts), Some(b_real)) => {
-                                    let guac_elapsed = ts.saturating_sub(b_ts);
-                                    let real_elapsed = std::time::Instant::now().duration_since(b_real).as_millis() as u64;
-
-                                    if guac_elapsed > real_elapsed {
-                                        // Flush current aggregation buffer before sleeping
-                                        if !send_buffer.is_empty() {
-                                            socket.send(axum::extract::ws::Message::Text(std::mem::take(&mut send_buffer))).await?;
-                                        }
-
-                                        let wait_ms = guac_elapsed - real_elapsed;
-                                        // If wait is long, periodically send nop to keep-alive
-                                        if wait_ms > 5000 {
-                                            let mut remaining = wait_ms;
-                                            while remaining > 5000 {
-                                                tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-                                                socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
-                                                remaining -= 5000;
-                                            }
-                                            tokio::time::sleep(std::time::Duration::from_millis(remaining)).await;
-                                        } else {
-                                            tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
-                                        }
-                                    }
-
-                                    // Send progress update
-                                    if last_progress_sent.elapsed().as_millis() > 500 {
-                                        let prog = format!("{}.nvrprogress,{}.{};", "nvrprogress".len(), guac_elapsed.to_string().len(), guac_elapsed);
-                                        send_buffer.push_str(&prog);
-                                        last_progress_sent = std::time::Instant::now();
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Aggregate instruction into send buffer using lossy UTF-8 conversion.
-            // Guacamole protocol counts Unicode characters, so lossy conversion to FFFD (1 char)
-            // is safe as long as we maintain character count integrity.
-            send_buffer.push_str(&String::from_utf8_lossy(&instruction.raw));
-
-            // If buffer exceeds threshold, flush it
-            if send_buffer.len() >= 16384 {
-                socket.send(axum::extract::ws::Message::Text(std::mem::take(&mut send_buffer))).await?;
-            }
+            let raw_str = String::from_utf8_lossy(&instruction.raw).to_string();
+            // tracing::debug!("Proxying instruction: {}", raw_str);
+            socket.send(axum::extract::ws::Message::Text(raw_str)).await?;
         }
     }
 

@@ -7,6 +7,7 @@ import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
 import SessionWatermark from '../components/SessionWatermark';
+import Select from '../components/Select';
 
 /*
  * Phases:
@@ -604,18 +605,17 @@ export default function SessionClient() {
               {vaultProfiles.length > 0 && (
                 <div className="form-group">
                   <label>Saved Credential Profile</label>
-                  <select
+                  <Select
                     value={selectedProfileId}
-                    onChange={(e) => {
-                      setSelectedProfileId(e.target.value);
-                      if (e.target.value) setCredForm({ username: '', password: '', domain: '' });
+                    onChange={(val) => {
+                      setSelectedProfileId(val);
+                      if (val) setCredForm({ username: '', password: '', domain: '' });
                     }}
-                  >
-                    <option value="">— Enter manually —</option>
-                    {vaultProfiles.map((p) => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: '', label: '— Enter manually —' },
+                      ...vaultProfiles.map((p) => ({ value: p.id, label: p.label })),
+                    ]}
+                  />
                 </div>
               )}
               {!selectedProfileId && preConnectFields.map((field) => (

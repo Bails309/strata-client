@@ -625,22 +625,21 @@ export default function Dashboard() {
                   </div>
                   {credProfiles.filter((p) => !p.expired).length > 0 && (
                     <div className="form-group" style={{ marginBottom: 6 }}>
-                      <select
+                      <Select
                         value={tiledCreds[conn.id]?.credential_profile_id || ''}
-                        onChange={(e) =>
+                        onChange={(val) =>
                           setTiledCreds((prev) => ({
                             ...prev,
-                            [conn.id]: e.target.value
-                              ? { username: '', password: '', credential_profile_id: e.target.value }
+                            [conn.id]: val
+                              ? { username: '', password: '', credential_profile_id: val }
                               : { username: prev[conn.id]?.username || '', password: prev[conn.id]?.password || '' },
                           }))
                         }
-                      >
-                        <option value="">— Enter manually —</option>
-                        {credProfiles.filter((p) => !p.expired).map((p) => (
-                          <option key={p.id} value={p.id}>{p.label}</option>
-                        ))}
-                      </select>
+                        options={[
+                          { value: '', label: '— Enter manually —' },
+                          ...credProfiles.filter((p) => !p.expired).map((p) => ({ value: p.id, label: p.label })),
+                        ]}
+                      />
                     </div>
                   )}
                   {!tiledCreds[conn.id]?.credential_profile_id && (

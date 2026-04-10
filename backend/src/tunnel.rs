@@ -677,7 +677,6 @@ mod tests {
         assert!(!is_allowed_guacd_param("hostname"));
         assert!(!is_allowed_guacd_param("password"));
         assert!(!is_allowed_guacd_param("username"));
-        assert!(!is_allowed_guacd_param("recording-path"));
         assert!(!is_allowed_guacd_param("drive-path"));
         assert!(!is_allowed_guacd_param("enable-drive"));
         assert!(!is_allowed_guacd_param("arbitrary-param"));

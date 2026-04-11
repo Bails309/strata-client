@@ -704,8 +704,7 @@ mod tests {
 
     #[test]
     fn tunnel_query_with_ticket_only() {
-        let q: TunnelQuery =
-            serde_json::from_str(r#"{"ticket":"abc-ticket-123"}"#).unwrap();
+        let q: TunnelQuery = serde_json::from_str(r#"{"ticket":"abc-ticket-123"}"#).unwrap();
         assert_eq!(q.ticket.as_deref(), Some("abc-ticket-123"));
         assert!(q.username.is_none());
     }

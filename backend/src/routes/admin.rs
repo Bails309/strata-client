@@ -3062,8 +3062,7 @@ mod tests {
     // ── UpdateFolderRequest ────────────────────────────────────────
     #[test]
     fn update_folder_request_deser() {
-        let r: UpdateFolderRequest =
-            serde_json::from_str(r#"{"name":"production"}"#).unwrap();
+        let r: UpdateFolderRequest = serde_json::from_str(r#"{"name":"production"}"#).unwrap();
         assert_eq!(r.name, "production");
         assert!(r.parent_id.is_none());
     }
@@ -3117,8 +3116,7 @@ mod tests {
 
     #[test]
     fn observe_query_with_values() {
-        let q: ObserveQuery =
-            serde_json::from_str(r#"{"offset":60,"speed":2.0}"#).unwrap();
+        let q: ObserveQuery = serde_json::from_str(r#"{"offset":60,"speed":2.0}"#).unwrap();
         assert_eq!(q.offset.unwrap(), 60);
         assert!((q.speed.unwrap() - 2.0).abs() < f64::EPSILON);
     }
@@ -3134,8 +3132,7 @@ mod tests {
 
     #[test]
     fn kill_sessions_request_empty() {
-        let r: KillSessionsRequest =
-            serde_json::from_str(r#"{"session_ids":[]}"#).unwrap();
+        let r: KillSessionsRequest = serde_json::from_str(r#"{"session_ids":[]}"#).unwrap();
         assert!(r.session_ids.is_empty());
     }
 
@@ -3438,8 +3435,7 @@ mod tests {
     // ── ListRecordingsQuery ────────────────────────────────────────
     #[test]
     fn list_recordings_query_deser() {
-        let q: super::recordings::ListRecordingsQuery =
-            serde_json::from_str("{}").unwrap();
+        let q: super::recordings::ListRecordingsQuery = serde_json::from_str("{}").unwrap();
         assert!(q.user_id.is_none());
         assert!(q.connection_id.is_none());
         assert!(q.limit.is_none());

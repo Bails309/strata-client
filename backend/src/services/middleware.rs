@@ -48,6 +48,21 @@ struct UserPermissionsRow {
     pub can_create_sharing_profiles: bool,
 }
 
+impl AuthUser {
+    /// Returns `true` if the user holds at least one admin-level permission.
+    pub fn has_any_admin_permission(&self) -> bool {
+        self.can_manage_system
+            || self.can_manage_users
+            || self.can_manage_connections
+            || self.can_view_audit_logs
+            || self.can_create_users
+            || self.can_create_user_groups
+            || self.can_create_connections
+            || self.can_create_connection_folders
+            || self.can_create_sharing_profiles
+    }
+}
+
 /// Axum middleware that validates the Bearer token (local JWT or OIDC),
 /// looks up the user in the database, and injects `AuthUser` as a request extension.
 pub async fn require_auth(
@@ -275,17 +290,7 @@ pub async fn require_admin(req: Request, next: Next) -> Result<Response, AppErro
         .cloned()
         .ok_or(AppError::Auth("Not authenticated".into()))?;
 
-    let has_any_admin_perm = user.can_manage_system
-        || user.can_manage_users
-        || user.can_manage_connections
-        || user.can_view_audit_logs
-        || user.can_create_users
-        || user.can_create_user_groups
-        || user.can_create_connections
-        || user.can_create_connection_folders
-        || user.can_create_sharing_profiles;
-
-    if !has_any_admin_perm {
+    if !user.has_any_admin_permission() {
         return Err(AppError::Forbidden);
     }
 
@@ -444,16 +449,11 @@ mod tests {
         ];
         for field in perms {
             let user = make_user_with_perm(field);
-            let has_any = user.can_manage_system
-                || user.can_manage_users
-                || user.can_manage_connections
-                || user.can_view_audit_logs
-                || user.can_create_users
-                || user.can_create_user_groups
-                || user.can_create_connections
-                || user.can_create_connection_folders
-                || user.can_create_sharing_profiles;
-            assert!(has_any, "Expected '{}' to grant admin perm", field);
+            assert!(
+                user.has_any_admin_permission(),
+                "Expected '{}' to grant admin perm",
+                field
+            );
         }
     }
 
@@ -461,16 +461,7 @@ mod tests {
     #[test]
     fn no_permissions_means_no_admin() {
         let user = make_user_with_perm("none");
-        let has_any = user.can_manage_system
-            || user.can_manage_users
-            || user.can_manage_connections
-            || user.can_view_audit_logs
-            || user.can_create_users
-            || user.can_create_user_groups
-            || user.can_create_connections
-            || user.can_create_connection_folders
-            || user.can_create_sharing_profiles;
-        assert!(!has_any);
+        assert!(!user.has_any_admin_permission());
     }
 
     #[test]
@@ -512,8 +503,7 @@ mod tests {
             can_create_connection_folders: true,
             can_create_sharing_profiles: true,
         };
-        assert!(user.can_manage_system);
-        assert!(user.can_create_sharing_profiles);
+        assert!(user.has_any_admin_permission());
         assert_eq!(user.role, "admin");
     }
 }

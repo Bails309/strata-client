@@ -731,24 +731,24 @@ mod tests {
     fn tunnel_rate_limit_constants() {
         assert_eq!(MAX_TUNNEL_PER_USER, 30);
         assert_eq!(TUNNEL_WINDOW_SECS, 60);
-        assert!(MAX_TUNNEL_RATE_ENTRIES >= 10_000);
+        const { assert!(MAX_TUNNEL_RATE_ENTRIES >= 10_000) };
     }
 
     // ── Dimension constants for completeness ───────────────────────
 
     #[test]
     fn max_width_at_least_8k() {
-        assert!(MAX_WIDTH >= 7680);
+        const { assert!(MAX_WIDTH >= 7680) };
     }
 
     #[test]
     fn max_height_at_least_8k() {
-        assert!(MAX_HEIGHT >= 4320);
+        const { assert!(MAX_HEIGHT >= 4320) };
     }
 
     #[test]
     fn max_dpi_is_reasonable() {
-        assert!(MAX_DPI >= 300);
-        assert!(MAX_DPI <= 1200);
+        const { assert!(MAX_DPI >= 300) };
+        const { assert!(MAX_DPI <= 1200) };
     }
 }

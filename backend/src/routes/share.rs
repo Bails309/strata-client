@@ -560,14 +560,14 @@ mod tests {
 
     #[test]
     fn share_rate_limit_constants_consistent() {
-        assert!(MAX_SHARE_ATTEMPTS > 0);
-        assert!(SHARE_WINDOW_SECS > 0);
-        assert!(MAX_SHARE_RATE_ENTRIES > MAX_SHARE_ATTEMPTS);
+        const { assert!(MAX_SHARE_ATTEMPTS > 0) };
+        const { assert!(SHARE_WINDOW_SECS > 0) };
+        const { assert!(MAX_SHARE_RATE_ENTRIES > MAX_SHARE_ATTEMPTS) };
     }
 
     #[test]
     fn default_share_expiry_is_positive() {
-        assert!(DEFAULT_SHARE_EXPIRY_HOURS > 0);
+        const { assert!(DEFAULT_SHARE_EXPIRY_HOURS > 0) };
     }
 
     // ── SharedTunnelQuery edge cases ───────────────────────────────

@@ -915,18 +915,18 @@ mod tests {
     #[test]
     fn rate_limit_per_ip_is_stricter_window() {
         // IP rate limiting has a larger window to catch distributed attacks
-        assert!(IP_WINDOW_SECS > WINDOW_SECS);
-        assert!(MAX_IP_ATTEMPTS > MAX_ATTEMPTS);
+        const { assert!(IP_WINDOW_SECS > WINDOW_SECS) };
+        const { assert!(MAX_IP_ATTEMPTS > MAX_ATTEMPTS) };
     }
 
     #[test]
     fn sso_state_ttl_is_reasonable() {
-        assert!(SSO_STATE_TTL_SECS >= 60);
-        assert!(SSO_STATE_TTL_SECS <= 600);
+        const { assert!(SSO_STATE_TTL_SECS >= 60) };
+        const { assert!(SSO_STATE_TTL_SECS <= 600) };
     }
 
     #[test]
     fn max_rate_limit_entries_prevents_oom() {
-        assert!(MAX_RATE_LIMIT_ENTRIES >= 10_000);
+        const { assert!(MAX_RATE_LIMIT_ENTRIES >= 10_000) };
     }
 }

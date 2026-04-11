@@ -35,43 +35,56 @@ pub enum AppError {
     Internal(String),
 }
 
+/// Extract the HTTP status code and user-facing message for an error variant.
+/// Internal details are never exposed to the client.
+pub fn error_status_and_message(err: &AppError) -> (StatusCode, String) {
+    match err {
+        AppError::Database(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".into(),
+        ),
+        AppError::Config(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".into(),
+        ),
+        AppError::Vault(_) => (StatusCode::BAD_GATEWAY, "Service dependency error".into()),
+        AppError::Reqwest(_) => (StatusCode::BAD_GATEWAY, "Service connectivity error".into()),
+        AppError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+        AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+        AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+        AppError::Forbidden => (StatusCode::FORBIDDEN, "Forbidden".into()),
+        AppError::SetupRequired => (StatusCode::SERVICE_UNAVAILABLE, "Setup required".into()),
+        AppError::Internal(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".into(),
+        ),
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             AppError::Database(e) => {
                 tracing::error!("Database error: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".into(),
-                )
+                error_status_and_message(&self)
             }
             AppError::Config(msg) => {
                 tracing::error!("Config error: {msg}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".into(),
-                )
+                error_status_and_message(&self)
             }
             AppError::Vault(msg) => {
                 tracing::error!("Vault error: {msg}");
-                (StatusCode::BAD_GATEWAY, "Service dependency error".into())
+                error_status_and_message(&self)
             }
             AppError::Reqwest(e) => {
                 tracing::error!("Network error: {e}");
-                (StatusCode::BAD_GATEWAY, "Service connectivity error".into())
+                error_status_and_message(&self)
             }
-            AppError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
-            AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
-            AppError::Forbidden => (StatusCode::FORBIDDEN, "Forbidden".into()),
-            AppError::SetupRequired => (StatusCode::SERVICE_UNAVAILABLE, "Setup required".into()),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {msg}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error".into(),
-                )
+                error_status_and_message(&self)
             }
+            _ => error_status_and_message(&self),
         };
 
         let body = json!({ "error": message });
@@ -213,5 +226,90 @@ mod tests {
             let (status, _) = error_response(app_err);
             assert_eq!(status, StatusCode::BAD_GATEWAY);
         }
+    }
+
+    // ── error_status_and_message (pure, verifies body text) ────────────
+
+    #[test]
+    fn database_error_hides_internal_details() {
+        let err = AppError::Database(sqlx::Error::RowNotFound);
+        let (status, msg) = error_status_and_message(&err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(msg, "Internal server error");
+        assert!(!msg.contains("RowNotFound"));
+    }
+
+    #[test]
+    fn config_error_hides_internal_details() {
+        let err = AppError::Config("secret db url".into());
+        let (_, msg) = error_status_and_message(&err);
+        assert_eq!(msg, "Internal server error");
+        assert!(!msg.contains("secret"));
+    }
+
+    #[test]
+    fn vault_error_body_is_generic() {
+        let err = AppError::Vault("vault token xyz".into());
+        let (status, msg) = error_status_and_message(&err);
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(msg, "Service dependency error");
+        assert!(!msg.contains("xyz"));
+    }
+
+    #[test]
+    fn reqwest_error_body_is_generic() {
+        let err = reqwest::Client::new().get("not-a-url").build();
+        if let Err(e) = err {
+            let app_err: AppError = e.into();
+            let (_, msg) = error_status_and_message(&app_err);
+            assert_eq!(msg, "Service connectivity error");
+        }
+    }
+
+    #[test]
+    fn auth_error_passes_through_message() {
+        let err = AppError::Auth("Invalid credentials".into());
+        let (status, msg) = error_status_and_message(&err);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(msg, "Invalid credentials");
+    }
+
+    #[test]
+    fn validation_error_passes_through_message() {
+        let err = AppError::Validation("name is required".into());
+        let (status, msg) = error_status_and_message(&err);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(msg, "name is required");
+    }
+
+    #[test]
+    fn not_found_error_passes_through_message() {
+        let err = AppError::NotFound("connection 123".into());
+        let (status, msg) = error_status_and_message(&err);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(msg, "connection 123");
+    }
+
+    #[test]
+    fn forbidden_body_text() {
+        let (status, msg) = error_status_and_message(&AppError::Forbidden);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(msg, "Forbidden");
+    }
+
+    #[test]
+    fn setup_required_body_text() {
+        let (status, msg) = error_status_and_message(&AppError::SetupRequired);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(msg, "Setup required");
+    }
+
+    #[test]
+    fn internal_error_hides_details() {
+        let err = AppError::Internal("sensitive stack trace".into());
+        let (status, msg) = error_status_and_message(&err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(msg, "Internal server error");
+        assert!(!msg.contains("sensitive"));
     }
 }

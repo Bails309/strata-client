@@ -63,6 +63,23 @@ impl AuthUser {
     }
 }
 
+/// Extract a `token=` value from a query string, handling the `?undefined`
+/// suffix that Guacamole sometimes appends.
+pub fn extract_token_from_query(query: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        if let Some(t) = pair.strip_prefix("token=") {
+            let t = t.to_string();
+            if let Some(pos) = t.find('?') {
+                Some(t[..pos].to_string())
+            } else {
+                Some(t)
+            }
+        } else {
+            None
+        }
+    })
+}
+
 /// Axum middleware that validates the Bearer token (local JWT or OIDC),
 /// looks up the user in the database, and injects `AuthUser` as a request extension.
 pub async fn require_auth(
@@ -104,19 +121,7 @@ pub async fn require_auth(
             }
             let query = req.uri().query().unwrap_or_default();
             tracing::debug!("Searching for token in query: {}", query);
-            query.split('&').find_map(|pair| {
-                if let Some(t) = pair.strip_prefix("token=") {
-                    let t = t.to_string();
-                    // Guacamole sometimes appends ?undefined to the URL
-                    if let Some(pos) = t.find('?') {
-                        Some(t[..pos].to_string())
-                    } else {
-                        Some(t)
-                    }
-                } else {
-                    None
-                }
-            })
+            extract_token_from_query(query)
         })
         .ok_or_else(|| {
             tracing::warn!(
@@ -505,5 +510,76 @@ mod tests {
         };
         assert!(user.has_any_admin_permission());
         assert_eq!(user.role, "admin");
+    }
+
+    // ── extract_token_from_query tests ───────────────────────────
+
+    #[test]
+    fn extract_token_simple() {
+        assert_eq!(
+            extract_token_from_query("token=abc123"),
+            Some("abc123".into())
+        );
+    }
+
+    #[test]
+    fn extract_token_with_undefined_suffix() {
+        assert_eq!(
+            extract_token_from_query("token=abc123?undefined"),
+            Some("abc123".into())
+        );
+    }
+
+    #[test]
+    fn extract_token_with_other_suffix() {
+        assert_eq!(
+            extract_token_from_query("token=abc123?extra"),
+            Some("abc123".into())
+        );
+    }
+
+    #[test]
+    fn extract_token_among_other_params() {
+        assert_eq!(
+            extract_token_from_query("foo=bar&token=mytoken&baz=qux"),
+            Some("mytoken".into())
+        );
+    }
+
+    #[test]
+    fn extract_token_first_param() {
+        assert_eq!(
+            extract_token_from_query("token=first&other=second"),
+            Some("first".into())
+        );
+    }
+
+    #[test]
+    fn extract_token_last_param() {
+        assert_eq!(
+            extract_token_from_query("other=second&token=last"),
+            Some("last".into())
+        );
+    }
+
+    #[test]
+    fn extract_token_missing() {
+        assert_eq!(extract_token_from_query("foo=bar&baz=qux"), None);
+    }
+
+    #[test]
+    fn extract_token_empty_query() {
+        assert_eq!(extract_token_from_query(""), None);
+    }
+
+    #[test]
+    fn extract_token_empty_value() {
+        assert_eq!(extract_token_from_query("token="), Some("".into()));
+    }
+
+    #[test]
+    fn extract_token_no_prefix_match() {
+        // "tokenx=abc" should not match
+        assert_eq!(extract_token_from_query("tokenx=abc"), None);
     }
 }

@@ -8,6 +8,24 @@ pub enum StorageType {
     AzureBlob,
 }
 
+/// Parse a storage type string from settings into a `StorageType` enum.
+pub fn parse_storage_type(s: &str) -> StorageType {
+    match s {
+        "azure_blob" => StorageType::AzureBlob,
+        _ => StorageType::Local,
+    }
+}
+
+/// Parse a retention days string, defaulting to 30 on invalid input.
+pub fn parse_retention_days(s: &str) -> u32 {
+    s.parse().unwrap_or(30)
+}
+
+/// Check whether recordings are enabled from a settings string value.
+pub fn parse_recording_enabled(s: &str) -> bool {
+    s == "true"
+}
+
 pub struct RecordingConfig {
     pub enabled: bool,
     pub retention_days: u32,
@@ -15,25 +33,23 @@ pub struct RecordingConfig {
 }
 
 pub async fn get_config(pool: &sqlx::Pool<sqlx::Postgres>) -> anyhow::Result<RecordingConfig> {
-    let enabled = crate::services::settings::get(pool, "recordings_enabled")
-        .await?
-        .unwrap_or_else(|| "false".into())
-        == "true";
+    let enabled = parse_recording_enabled(
+        &crate::services::settings::get(pool, "recordings_enabled")
+            .await?
+            .unwrap_or_else(|| "false".into()),
+    );
 
-    let retention_days: u32 = crate::services::settings::get(pool, "recordings_retention_days")
-        .await?
-        .unwrap_or_else(|| "30".into())
-        .parse()
-        .unwrap_or(30);
+    let retention_days = parse_retention_days(
+        &crate::services::settings::get(pool, "recordings_retention_days")
+            .await?
+            .unwrap_or_else(|| "30".into()),
+    );
 
-    let storage_type = match crate::services::settings::get(pool, "recordings_storage_type")
-        .await?
-        .unwrap_or_else(|| "local".into())
-        .as_str()
-    {
-        "azure_blob" => StorageType::AzureBlob,
-        _ => StorageType::Local,
-    };
+    let storage_type = parse_storage_type(
+        &crate::services::settings::get(pool, "recordings_storage_type")
+            .await?
+            .unwrap_or_else(|| "local".into()),
+    );
 
     Ok(RecordingConfig {
         enabled,
@@ -556,5 +572,71 @@ mod tests {
         };
         assert!(!cfg.enabled);
         assert_eq!(cfg.storage_type, StorageType::Local);
+    }
+
+    // ── parse_storage_type ─────────────────────────────────────────
+
+    #[test]
+    fn parse_storage_type_local() {
+        assert_eq!(parse_storage_type("local"), StorageType::Local);
+    }
+
+    #[test]
+    fn parse_storage_type_azure_blob() {
+        assert_eq!(parse_storage_type("azure_blob"), StorageType::AzureBlob);
+    }
+
+    #[test]
+    fn parse_storage_type_unknown_defaults_local() {
+        assert_eq!(parse_storage_type("s3"), StorageType::Local);
+        assert_eq!(parse_storage_type(""), StorageType::Local);
+        assert_eq!(parse_storage_type("AZURE_BLOB"), StorageType::Local);
+    }
+
+    // ── parse_retention_days ───────────────────────────────────────
+
+    #[test]
+    fn parse_retention_days_valid() {
+        assert_eq!(parse_retention_days("90"), 90);
+    }
+
+    #[test]
+    fn parse_retention_days_default() {
+        assert_eq!(parse_retention_days("invalid"), 30);
+        assert_eq!(parse_retention_days(""), 30);
+    }
+
+    #[test]
+    fn parse_retention_days_zero() {
+        assert_eq!(parse_retention_days("0"), 0);
+    }
+
+    #[test]
+    fn parse_retention_days_large() {
+        assert_eq!(parse_retention_days("3650"), 3650);
+    }
+
+    // ── parse_recording_enabled ────────────────────────────────────
+
+    #[test]
+    fn parse_recording_enabled_true() {
+        assert!(parse_recording_enabled("true"));
+    }
+
+    #[test]
+    fn parse_recording_enabled_false() {
+        assert!(!parse_recording_enabled("false"));
+    }
+
+    #[test]
+    fn parse_recording_enabled_empty() {
+        assert!(!parse_recording_enabled(""));
+    }
+
+    #[test]
+    fn parse_recording_enabled_other() {
+        assert!(!parse_recording_enabled("yes"));
+        assert!(!parse_recording_enabled("1"));
+        assert!(!parse_recording_enabled("TRUE"));
     }
 }

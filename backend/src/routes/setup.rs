@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::config::{AppConfig, DatabaseMode, LocalVaultSecrets, VaultConfig, VaultMode};
+use crate::config::{AppConfig, LocalVaultSecrets, VaultConfig, VaultMode};
 use crate::db::Database;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
@@ -54,11 +54,7 @@ pub async fn initialize(
     // Determine database URL from environment variable
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://strata:strata_default@postgres-local:5432/strata".into());
-    let db_mode = if db_url.contains("postgres-local") {
-        DatabaseMode::Local
-    } else {
-        DatabaseMode::External
-    };
+    let db_mode = crate::config::detect_database_mode(&db_url);
 
     let db_ssl_mode = std::env::var("DATABASE_SSL_MODE").ok();
     let db_ca_cert = std::env::var("DATABASE_CA_CERT").ok();
@@ -135,17 +131,11 @@ pub async fn initialize(
 
     // Build and persist config
     let guacd_host = std::env::var("GUACD_HOST").unwrap_or_else(|_| "guacd".into());
-    let guacd_port: u16 = std::env::var("GUACD_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(4822);
+    let guacd_port: u16 =
+        crate::config::parse_port_with_default(std::env::var("GUACD_PORT").ok().as_deref(), 4822);
 
-    let guacd_instances: Vec<String> = std::env::var("GUACD_INSTANCES")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let guacd_instances: Vec<String> =
+        crate::config::parse_guacd_instances(&std::env::var("GUACD_INSTANCES").unwrap_or_default());
 
     let cfg = AppConfig {
         database_url: db_url,

@@ -10,6 +10,26 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{settings, vault};
 
+/// Resolve effective TTL: user preference capped by admin max.
+/// Both inputs and output are clamped to [1, admin_max].
+pub fn resolve_ttl(user_pref: Option<i32>, admin_max: i64) -> i32 {
+    (user_pref.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32
+}
+
+/// Parse the `ignore-cert` field from a connection's `extra` JSON.
+/// Returns `true` when the field is a boolean `true` or the string `"true"`.
+pub fn parse_ignore_cert(extra: &Option<serde_json::Value>) -> bool {
+    extra
+        .as_ref()
+        .and_then(|e| e.get("ignore-cert"))
+        .map(|v| match v {
+            serde_json::Value::String(s) => s == "true",
+            serde_json::Value::Bool(b) => *b,
+            _ => false,
+        })
+        .unwrap_or(false)
+}
+
 async fn require_running(state: &SharedState) -> Result<crate::db::Database, AppError> {
     let s = state.read().await;
     if s.phase != BootPhase::Running {
@@ -323,7 +343,7 @@ pub async fn create_credential_profile(
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(12)
         .clamp(1, 12);
-    let ttl_hours = (body.ttl_hours.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32;
+    let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, expires_at)
@@ -436,8 +456,7 @@ pub async fn update_credential_profile(
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(12)
             .clamp(1, 12);
-        let ttl_hours =
-            (body.ttl_hours.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32;
+        let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
 
         sqlx::query(
             "UPDATE credential_profiles
@@ -473,8 +492,7 @@ pub async fn update_credential_profile(
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(12)
             .clamp(1, 12);
-        let ttl_hours =
-            (body.ttl_hours.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32;
+        let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
         sqlx::query(
             "UPDATE credential_profiles SET ttl_hours = $1, expires_at = now() + make_interval(hours => $1), updated_at = now() WHERE id = $2",
         )
@@ -740,15 +758,7 @@ pub async fn connection_info(
     };
 
     let ignore_cert = if protocol == "rdp" {
-        extra
-            .as_ref()
-            .and_then(|e| e.get("ignore-cert"))
-            .map(|v| match v {
-                serde_json::Value::String(s) => s == "true",
-                serde_json::Value::Bool(b) => *b,
-                _ => false,
-            })
-            .unwrap_or(false)
+        parse_ignore_cert(&extra)
     } else {
         false
     };
@@ -1306,5 +1316,88 @@ mod tests {
     #[test]
     fn filename_rejects_windows_path() {
         assert!(!is_safe_recording_filename("C:\\Windows\\System32"));
+    }
+
+    // ── resolve_ttl ────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_ttl_uses_user_pref_within_range() {
+        assert_eq!(resolve_ttl(Some(6), 12), 6);
+    }
+
+    #[test]
+    fn resolve_ttl_clamps_above_max() {
+        assert_eq!(resolve_ttl(Some(24), 12), 12);
+    }
+
+    #[test]
+    fn resolve_ttl_clamps_below_one() {
+        assert_eq!(resolve_ttl(Some(0), 12), 1);
+        assert_eq!(resolve_ttl(Some(-5), 12), 1);
+    }
+
+    #[test]
+    fn resolve_ttl_defaults_to_admin_max() {
+        assert_eq!(resolve_ttl(None, 8), 8);
+    }
+
+    #[test]
+    fn resolve_ttl_none_with_small_admin_max() {
+        assert_eq!(resolve_ttl(None, 1), 1);
+    }
+
+    #[test]
+    fn resolve_ttl_exact_boundary() {
+        assert_eq!(resolve_ttl(Some(12), 12), 12);
+        assert_eq!(resolve_ttl(Some(1), 12), 1);
+    }
+
+    // ── parse_ignore_cert ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_ignore_cert_bool_true() {
+        let extra = Some(json!({ "ignore-cert": true }));
+        assert!(parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn parse_ignore_cert_bool_false() {
+        let extra = Some(json!({ "ignore-cert": false }));
+        assert!(!parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn parse_ignore_cert_string_true() {
+        let extra = Some(json!({ "ignore-cert": "true" }));
+        assert!(parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn parse_ignore_cert_string_false() {
+        let extra = Some(json!({ "ignore-cert": "false" }));
+        assert!(!parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn parse_ignore_cert_missing_key() {
+        let extra = Some(json!({ "other": "value" }));
+        assert!(!parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn parse_ignore_cert_none_extra() {
+        assert!(!parse_ignore_cert(&None));
+    }
+
+    #[test]
+    fn parse_ignore_cert_number_ignored() {
+        let extra = Some(json!({ "ignore-cert": 1 }));
+        assert!(!parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn parse_ignore_cert_null_value() {
+        let extra = Some(json!({ "ignore-cert": null }));
+        assert!(!parse_ignore_cert(&extra));
     }
 }

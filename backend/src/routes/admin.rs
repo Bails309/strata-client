@@ -30,6 +30,152 @@ fn is_safe_hostname(s: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == ':' || c == '_')
 }
 
+/// Validate that an LDAP URL uses a safe scheme (ldap:// or ldaps://).
+fn validate_ldap_url(url: &str) -> Result<(), AppError> {
+    if !url.starts_with("ldap://") && !url.starts_with("ldaps://") {
+        return Err(AppError::Validation(
+            "LDAP URL must use ldap:// or ldaps://".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate that an LDAP search filter has balanced parentheses.
+fn validate_ldap_filter(filter: &str) -> Result<(), AppError> {
+    let opens = filter.chars().filter(|c| *c == '(').count();
+    let closes = filter.chars().filter(|c| *c == ')').count();
+    if opens != closes || opens == 0 {
+        return Err(AppError::Validation(
+            "Invalid LDAP search filter — unbalanced parentheses".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Build the OIDC discovery URL from an issuer URL, handling trailing slashes.
+fn build_oidc_discovery_url(issuer_url: &str) -> String {
+    if issuer_url.ends_with('/') {
+        format!("{}.well-known/openid-configuration", issuer_url)
+    } else {
+        format!("{}/.well-known/openid-configuration", issuer_url)
+    }
+}
+
+/// Validate that an OIDC configuration JSON contains the required endpoints.
+fn validate_oidc_config(config: &serde_json::Value) -> Result<(), AppError> {
+    let has_auth = config
+        .get("authorization_endpoint")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_token = config
+        .get("token_endpoint")
+        .and_then(|v| v.as_str())
+        .is_some();
+    let has_jwks = config.get("jwks_uri").and_then(|v| v.as_str()).is_some();
+
+    if !has_auth || !has_token || !has_jwks {
+        return Err(AppError::Validation(
+            "OIDC configuration is missing required endpoints (authorization, token, or jwks)."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Determine whether a setting update should be skipped because it's a
+/// sensitive key whose value matches a redaction mask (the UI re-sent
+/// the placeholder, meaning the user didn't actually change it).
+fn should_skip_masked_setting(key: &str, value: &str) -> bool {
+    SENSITIVE_SETTINGS.iter().any(|s| key.contains(s)) && (value == DOT_MASK || value == STAR_MASK)
+}
+
+/// Convert Kerberos realm DB rows into `RealmConfig` values suitable for
+/// writing a krb5.conf file.
+fn realm_rows_to_configs(rows: &[KerberosRealmRow]) -> Vec<kerberos::RealmConfig> {
+    rows.iter()
+        .map(|r| kerberos::RealmConfig {
+            realm: r.realm.clone(),
+            kdcs: r
+                .kdc_servers
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            admin_server: r.admin_server.clone(),
+            ticket_lifetime: r.ticket_lifetime.clone(),
+            renew_lifetime: r.renew_lifetime.clone(),
+            is_default: r.is_default,
+        })
+        .collect()
+}
+
+/// Validate a batch of Kerberos hostname-like values against `is_safe_hostname`.
+/// Returns an error naming the field if any value fails.
+fn validate_kerberos_hostnames(
+    realm: Option<&str>,
+    kdcs: Option<&[String]>,
+    admin_server: Option<&str>,
+) -> Result<(), AppError> {
+    if let Some(r) = realm {
+        if !is_safe_hostname(r) {
+            return Err(AppError::Validation(
+                "Kerberos realm must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+            ));
+        }
+    }
+    if let Some(kdc_list) = kdcs {
+        if kdc_list.iter().any(|k| !is_safe_hostname(k)) {
+            return Err(AppError::Validation(
+                "Kerberos KDC hostnames must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+            ));
+        }
+    }
+    if let Some(admin) = admin_server {
+        if !is_safe_hostname(admin) {
+            return Err(AppError::Validation(
+                "Kerberos admin server must contain only alphanumeric characters, dots, hyphens, and colons".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Compute per_page and offset from optional page/per_page query params.
+/// `per_page` is clamped to [1, max_per_page], page to >= 1.
+fn paginate(page: Option<i64>, per_page: Option<i64>, max_per_page: i64) -> (i64, i64) {
+    let per_page = per_page.unwrap_or(50).clamp(1, max_per_page);
+    let offset = (page.unwrap_or(1).max(1) - 1) * per_page;
+    (per_page, offset)
+}
+
+/// Normalise the `extra` JSON field: turn `null` into an empty object `{}`.
+fn normalize_extra(extra: &serde_json::Value) -> serde_json::Value {
+    if extra.is_null() {
+        serde_json::json!({})
+    } else {
+        extra.clone()
+    }
+}
+
+/// Build a share URL string from a token and mode.
+pub fn build_share_url(token: &str, mode: &str) -> String {
+    if mode == "control" {
+        format!("/shared/{}?mode=control", token)
+    } else {
+        format!("/shared/{}", token)
+    }
+}
+
+/// Validate that a share mode value is either "view" or "control".
+pub fn validate_share_mode(mode: &str) -> Result<String, AppError> {
+    match mode {
+        "view" | "control" => Ok(mode.to_string()),
+        _ => Err(AppError::Validation(
+            "mode must be 'view' or 'control'".into(),
+        )),
+    }
+}
+
 // ── Settings ───────────────────────────────────────────────────────────
 
 /// Settings keys whose values must be redacted from API responses.
@@ -123,9 +269,7 @@ pub async fn update_settings(
 
     for kv in &body.settings {
         // If it's a sensitive key and matches a redaction mask, skip updating it
-        if SENSITIVE_SETTINGS.iter().any(|s| kv.key.contains(s))
-            && (kv.value == DOT_MASK || kv.value == STAR_MASK)
-        {
+        if should_skip_masked_setting(&kv.key, &kv.value) {
             continue;
         }
         settings::set(&db.pool, &kv.key, &kv.value).await?;
@@ -186,11 +330,7 @@ pub async fn test_sso_connection(
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let discovery_url = if body.issuer_url.ends_with('/') {
-        format!("{}.well-known/openid-configuration", body.issuer_url)
-    } else {
-        format!("{}/.well-known/openid-configuration", body.issuer_url)
-    };
+    let discovery_url = build_oidc_discovery_url(&body.issuer_url);
 
     let resp = client.get(&discovery_url).send().await?;
 
@@ -204,18 +344,9 @@ pub async fn test_sso_connection(
     let config: serde_json::Value = resp.json().await?;
 
     // Basic validation of the OIDC configuration
-    let auth_endpoint = config
-        .get("authorization_endpoint")
-        .and_then(|v| v.as_str());
-    let token_endpoint = config.get("token_endpoint").and_then(|v| v.as_str());
-    let jwks_uri = config.get("jwks_uri").and_then(|v| v.as_str());
+    validate_oidc_config(&config)?;
 
-    if auth_endpoint.is_none() || token_endpoint.is_none() || jwks_uri.is_none() {
-        return Err(AppError::Validation(
-            "OIDC configuration is missing required endpoints (authorization, token, or jwks)."
-                .into(),
-        ));
-    }
+    let token_endpoint = config.get("token_endpoint").and_then(|v| v.as_str());
 
     // Attempt to validate credentials if we have a secret
     if !client_secret.is_empty() && client_secret != "********" {
@@ -633,14 +764,11 @@ pub async fn create_kerberos_realm(
     let db = require_running(&state).await?;
 
     // Validate hostname-like values
-    if !is_safe_hostname(&body.realm)
-        || body.kdc_servers.iter().any(|k| !is_safe_hostname(k))
-        || !is_safe_hostname(&body.admin_server)
-    {
-        return Err(AppError::Validation(
-            "Kerberos hostnames must contain only alphanumeric characters, dots, hyphens, and colons".into(),
-        ));
-    }
+    validate_kerberos_hostnames(
+        Some(&body.realm),
+        Some(&body.kdc_servers),
+        Some(&body.admin_server),
+    )?;
 
     let ticket_lifetime = body.ticket_lifetime.as_deref().unwrap_or("10h");
     let renew_lifetime = body.renew_lifetime.as_deref().unwrap_or("7d");
@@ -704,27 +832,11 @@ pub async fn update_kerberos_realm(
     let db = require_running(&state).await?;
 
     // Validate hostname-like values (parity with create)
-    if let Some(ref realm) = body.realm {
-        if !is_safe_hostname(realm) {
-            return Err(AppError::Validation(
-                "Kerberos realm must contain only alphanumeric characters, dots, hyphens, and colons".into(),
-            ));
-        }
-    }
-    if let Some(ref kdcs) = body.kdc_servers {
-        if kdcs.iter().any(|k| !is_safe_hostname(k)) {
-            return Err(AppError::Validation(
-                "Kerberos KDC hostnames must contain only alphanumeric characters, dots, hyphens, and colons".into(),
-            ));
-        }
-    }
-    if let Some(ref admin) = body.admin_server {
-        if !is_safe_hostname(admin) {
-            return Err(AppError::Validation(
-                "Kerberos admin server must contain only alphanumeric characters, dots, hyphens, and colons".into(),
-            ));
-        }
-    }
+    validate_kerberos_hostnames(
+        body.realm.as_deref(),
+        body.kdc_servers.as_deref(),
+        body.admin_server.as_deref(),
+    )?;
 
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kerberos_realms WHERE id = $1)")
@@ -856,22 +968,7 @@ async fn regenerate_krb5_conf(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), A
     .fetch_all(pool)
     .await?;
 
-    let configs: Vec<kerberos::RealmConfig> = rows
-        .iter()
-        .map(|r| kerberos::RealmConfig {
-            realm: r.realm.clone(),
-            kdcs: r
-                .kdc_servers
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
-            admin_server: r.admin_server.clone(),
-            ticket_lifetime: r.ticket_lifetime.clone(),
-            renew_lifetime: r.renew_lifetime.clone(),
-            is_default: r.is_default,
-        })
-        .collect();
+    let configs = realm_rows_to_configs(&rows);
 
     kerberos::write_krb5_conf_multi(&configs, "/etc/krb5/krb5.conf")
         .map_err(|e| AppError::Internal(format!("krb5.conf write failed: {e}")))?;
@@ -1221,11 +1318,7 @@ pub async fn create_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     let db = require_running(&state).await?;
     let port = body.port.unwrap_or(3389);
-    let extra = if body.extra.is_null() {
-        serde_json::json!({})
-    } else {
-        body.extra.clone()
-    };
+    let extra = normalize_extra(&body.extra);
     let row: ConnectionRow = sqlx::query_as(
         "INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, extra)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1258,11 +1351,7 @@ pub async fn update_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     let db = require_running(&state).await?;
     let port = body.port.unwrap_or(3389);
-    let extra = if body.extra.is_null() {
-        serde_json::json!({})
-    } else {
-        body.extra.clone()
-    };
+    let extra = normalize_extra(&body.extra);
     let row: ConnectionRow = sqlx::query_as(
         "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, folder_id = $7, extra = $8, updated_at = now()
          WHERE id = $9 AND soft_deleted_at IS NULL
@@ -1609,8 +1698,7 @@ pub async fn list_audit_logs(
     axum::extract::Query(query): axum::extract::Query<AuditLogQuery>,
 ) -> Result<Json<Vec<AuditLogRow>>, AppError> {
     let db = require_running(&state).await?;
-    let per_page = query.per_page.unwrap_or(50).clamp(1, 200);
-    let offset = (query.page.unwrap_or(1).max(1) - 1) * per_page;
+    let (per_page, offset) = paginate(query.page, query.per_page, 200);
 
     let rows: Vec<AuditLogRow> = sqlx::query_as(
         "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash
@@ -1999,21 +2087,11 @@ pub async fn create_ad_sync_config(
     let db = require_running(&state).await?;
 
     // Validate LDAP URL uses a safe scheme
-    if !body.ldap_url.starts_with("ldap://") && !body.ldap_url.starts_with("ldaps://") {
-        return Err(AppError::Validation(
-            "LDAP URL must use ldap:// or ldaps://".into(),
-        ));
-    }
+    validate_ldap_url(&body.ldap_url)?;
 
     // Validate search filter has balanced parentheses (basic LDAP filter sanity)
     if let Some(ref filter) = body.search_filter {
-        let opens = filter.chars().filter(|c| *c == '(').count();
-        let closes = filter.chars().filter(|c| *c == ')').count();
-        if opens != closes || opens == 0 {
-            return Err(AppError::Validation(
-                "Invalid LDAP search filter — unbalanced parentheses".into(),
-            ));
-        }
+        validate_ldap_filter(filter)?;
     }
 
     // Encrypt bind_password via Vault if configured
@@ -2131,22 +2209,12 @@ pub async fn update_ad_sync_config(
 
     // Validate ldap_url if being updated (parity with create)
     if let Some(ref v) = body.ldap_url {
-        if !v.starts_with("ldap://") && !v.starts_with("ldaps://") {
-            return Err(AppError::Validation(
-                "LDAP URL must use ldap:// or ldaps://".into(),
-            ));
-        }
+        validate_ldap_url(v)?;
     }
 
     // Validate search_filter if being updated (parity with create)
     if let Some(ref filter) = body.search_filter {
-        let opens = filter.chars().filter(|c| *c == '(').count();
-        let closes = filter.chars().filter(|c| *c == ')').count();
-        if opens != closes || opens == 0 {
-            return Err(AppError::Validation(
-                "Invalid LDAP search filter — unbalanced parentheses".into(),
-            ));
-        }
+        validate_ldap_filter(filter)?;
     }
 
     // Apply partial updates within a transaction for atomicity
@@ -3508,5 +3576,587 @@ mod tests {
         assert_eq!(v["label"], "Work");
         assert_eq!(v["expired"], false);
         assert_eq!(v["ttl_hours"], 8);
+    }
+
+    // ── validate_ldap_url ──────────────────────────────────────────
+
+    #[test]
+    fn validate_ldap_url_ldap() {
+        assert!(validate_ldap_url("ldap://dc.corp.local").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_url_ldaps() {
+        assert!(validate_ldap_url("ldaps://dc.corp.local:636").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_http() {
+        assert!(validate_ldap_url("http://dc.corp.local").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_https() {
+        assert!(validate_ldap_url("https://dc.corp.local").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_empty() {
+        assert!(validate_ldap_url("").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_ftp() {
+        assert!(validate_ldap_url("ftp://dc.corp.local").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_plain_hostname() {
+        assert!(validate_ldap_url("dc.corp.local").is_err());
+    }
+
+    // ── validate_ldap_filter ───────────────────────────────────────
+
+    #[test]
+    fn validate_ldap_filter_balanced() {
+        assert!(validate_ldap_filter("(objectClass=computer)").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_filter_nested() {
+        assert!(validate_ldap_filter("(&(objectClass=computer)(cn=*))").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_filter_complex() {
+        assert!(validate_ldap_filter("(|(objectClass=user)(objectClass=group))").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_filter_unbalanced_open() {
+        assert!(validate_ldap_filter("((objectClass=computer)").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_unbalanced_close() {
+        assert!(validate_ldap_filter("(objectClass=computer))").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_no_parens() {
+        assert!(validate_ldap_filter("objectClass=computer").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_empty() {
+        assert!(validate_ldap_filter("").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_just_parens() {
+        assert!(validate_ldap_filter("()").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_filter_deep_nesting() {
+        assert!(validate_ldap_filter("((&(|(cn=a)(cn=b))(sn=c)))").is_ok());
+    }
+
+    // ── is_safe_hostname (additional coverage) ─────────────────────────
+
+    #[test]
+    fn is_safe_hostname_rejects_empty() {
+        assert!(!is_safe_hostname(""));
+    }
+
+    #[test]
+    fn is_safe_hostname_rejects_too_long() {
+        let long = "a".repeat(256);
+        assert!(!is_safe_hostname(&long));
+    }
+
+    #[test]
+    fn is_safe_hostname_allows_max_length() {
+        let max = "a".repeat(255);
+        assert!(is_safe_hostname(&max));
+    }
+
+    #[test]
+    fn is_safe_hostname_rejects_spaces() {
+        assert!(!is_safe_hostname("host name"));
+    }
+
+    #[test]
+    fn is_safe_hostname_rejects_slashes() {
+        assert!(!is_safe_hostname("host/name"));
+        assert!(!is_safe_hostname("host\\name"));
+    }
+
+    #[test]
+    fn is_safe_hostname_rejects_special_chars() {
+        assert!(!is_safe_hostname("host@name"));
+        assert!(!is_safe_hostname("host;name"));
+        assert!(!is_safe_hostname("host&name"));
+    }
+
+    #[test]
+    fn is_safe_hostname_allows_ipv4() {
+        assert!(is_safe_hostname("192.168.1.1"));
+    }
+
+    #[test]
+    fn is_safe_hostname_allows_host_with_port() {
+        assert!(is_safe_hostname("myhost:8080"));
+    }
+
+    // ── redact_settings (additional coverage) ──────────────────────────
+
+    #[test]
+    fn redact_settings_masks_all_sensitive() {
+        let settings = vec![
+            ("sso_client_secret".into(), "secret123".into()),
+            ("ad_bind_password".into(), "pwd".into()),
+            ("azure_storage_access_key".into(), "key".into()),
+            ("vault_token".into(), "tok".into()),
+            ("vault_unseal_key".into(), "unseal".into()),
+        ];
+        let redacted = redact_settings(settings);
+        for (_, v) in &redacted {
+            assert_eq!(v, STAR_MASK);
+        }
+    }
+
+    #[test]
+    fn redact_settings_preserves_key_order() {
+        let settings = vec![
+            ("a_setting".into(), "val_a".into()),
+            ("sso_client_secret".into(), "secret".into()),
+            ("b_setting".into(), "val_b".into()),
+        ];
+        let redacted = redact_settings(settings);
+        assert_eq!(redacted[0].0, "a_setting");
+        assert_eq!(redacted[0].1, "val_a");
+        assert_eq!(redacted[1].1, STAR_MASK);
+        assert_eq!(redacted[2].0, "b_setting");
+        assert_eq!(redacted[2].1, "val_b");
+    }
+
+    // ── build_oidc_discovery_url ───────────────────────────────────
+
+    #[test]
+    fn oidc_discovery_url_no_trailing_slash() {
+        assert_eq!(
+            build_oidc_discovery_url("https://login.example.com"),
+            "https://login.example.com/.well-known/openid-configuration"
+        );
+    }
+
+    #[test]
+    fn oidc_discovery_url_with_trailing_slash() {
+        assert_eq!(
+            build_oidc_discovery_url("https://login.example.com/"),
+            "https://login.example.com/.well-known/openid-configuration"
+        );
+    }
+
+    #[test]
+    fn oidc_discovery_url_with_path() {
+        assert_eq!(
+            build_oidc_discovery_url("https://auth.example.com/realms/main"),
+            "https://auth.example.com/realms/main/.well-known/openid-configuration"
+        );
+    }
+
+    #[test]
+    fn oidc_discovery_url_with_path_trailing_slash() {
+        assert_eq!(
+            build_oidc_discovery_url("https://auth.example.com/realms/main/"),
+            "https://auth.example.com/realms/main/.well-known/openid-configuration"
+        );
+    }
+
+    // ── validate_oidc_config ───────────────────────────────────────
+
+    #[test]
+    fn oidc_config_valid() {
+        let config = json!({
+            "authorization_endpoint": "https://auth/authorize",
+            "token_endpoint": "https://auth/token",
+            "jwks_uri": "https://auth/jwks"
+        });
+        assert!(validate_oidc_config(&config).is_ok());
+    }
+
+    #[test]
+    fn oidc_config_missing_auth_endpoint() {
+        let config = json!({
+            "token_endpoint": "https://auth/token",
+            "jwks_uri": "https://auth/jwks"
+        });
+        assert!(validate_oidc_config(&config).is_err());
+    }
+
+    #[test]
+    fn oidc_config_missing_token_endpoint() {
+        let config = json!({
+            "authorization_endpoint": "https://auth/authorize",
+            "jwks_uri": "https://auth/jwks"
+        });
+        assert!(validate_oidc_config(&config).is_err());
+    }
+
+    #[test]
+    fn oidc_config_missing_jwks() {
+        let config = json!({
+            "authorization_endpoint": "https://auth/authorize",
+            "token_endpoint": "https://auth/token"
+        });
+        assert!(validate_oidc_config(&config).is_err());
+    }
+
+    #[test]
+    fn oidc_config_empty_object() {
+        assert!(validate_oidc_config(&json!({})).is_err());
+    }
+
+    #[test]
+    fn oidc_config_null_values_rejected() {
+        let config = json!({
+            "authorization_endpoint": null,
+            "token_endpoint": "https://auth/token",
+            "jwks_uri": "https://auth/jwks"
+        });
+        assert!(validate_oidc_config(&config).is_err());
+    }
+
+    #[test]
+    fn oidc_config_numeric_values_rejected() {
+        let config = json!({
+            "authorization_endpoint": 42,
+            "token_endpoint": "https://auth/token",
+            "jwks_uri": "https://auth/jwks"
+        });
+        assert!(validate_oidc_config(&config).is_err());
+    }
+
+    #[test]
+    fn oidc_config_with_extra_fields_valid() {
+        let config = json!({
+            "authorization_endpoint": "https://auth/authorize",
+            "token_endpoint": "https://auth/token",
+            "jwks_uri": "https://auth/jwks",
+            "issuer": "https://auth",
+            "userinfo_endpoint": "https://auth/userinfo"
+        });
+        assert!(validate_oidc_config(&config).is_ok());
+    }
+
+    // ── should_skip_masked_setting ─────────────────────────────────
+
+    #[test]
+    fn skip_masked_star_mask() {
+        assert!(should_skip_masked_setting("sso_client_secret", STAR_MASK));
+    }
+
+    #[test]
+    fn skip_masked_dot_mask() {
+        assert!(should_skip_masked_setting("ad_bind_password", DOT_MASK));
+    }
+
+    #[test]
+    fn skip_masked_non_sensitive_key() {
+        assert!(!should_skip_masked_setting("theme_color", STAR_MASK));
+    }
+
+    #[test]
+    fn skip_masked_sensitive_key_real_value() {
+        assert!(!should_skip_masked_setting(
+            "sso_client_secret",
+            "real-secret-value"
+        ));
+    }
+
+    #[test]
+    fn skip_masked_vault_token_star() {
+        assert!(should_skip_masked_setting("vault_token", STAR_MASK));
+    }
+
+    #[test]
+    fn skip_masked_partial_match_key() {
+        assert!(should_skip_masked_setting(
+            "my_custom_vault_token_extra",
+            STAR_MASK
+        ));
+    }
+
+    #[test]
+    fn skip_masked_empty_value() {
+        assert!(!should_skip_masked_setting("sso_client_secret", ""));
+    }
+
+    // ── realm_rows_to_configs ──────────────────────────────────────
+
+    #[test]
+    fn realm_rows_to_configs_single() {
+        let rows = vec![KerberosRealmRow {
+            id: Uuid::nil(),
+            realm: "CORP.LOCAL".into(),
+            kdc_servers: "kdc1.corp.local,kdc2.corp.local".into(),
+            admin_server: "kadmin.corp.local".into(),
+            ticket_lifetime: "10h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }];
+        let configs = realm_rows_to_configs(&rows);
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].realm, "CORP.LOCAL");
+        assert_eq!(configs[0].kdcs, vec!["kdc1.corp.local", "kdc2.corp.local"]);
+        assert_eq!(configs[0].admin_server, "kadmin.corp.local");
+        assert_eq!(configs[0].ticket_lifetime, "10h");
+        assert_eq!(configs[0].renew_lifetime, "7d");
+        assert!(configs[0].is_default);
+    }
+
+    #[test]
+    fn realm_rows_to_configs_filters_empty_kdcs() {
+        let rows = vec![KerberosRealmRow {
+            id: Uuid::nil(),
+            realm: "TEST.COM".into(),
+            kdc_servers: "kdc1, , kdc2,".into(),
+            admin_server: "admin".into(),
+            ticket_lifetime: "8h".into(),
+            renew_lifetime: "3d".into(),
+            is_default: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }];
+        let configs = realm_rows_to_configs(&rows);
+        assert_eq!(configs[0].kdcs, vec!["kdc1", "kdc2"]);
+    }
+
+    #[test]
+    fn realm_rows_to_configs_empty() {
+        let configs = realm_rows_to_configs(&[]);
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn realm_rows_to_configs_multiple() {
+        let rows = vec![
+            KerberosRealmRow {
+                id: Uuid::nil(),
+                realm: "A.COM".into(),
+                kdc_servers: "kdc-a".into(),
+                admin_server: "admin-a".into(),
+                ticket_lifetime: "1h".into(),
+                renew_lifetime: "1d".into(),
+                is_default: true,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            KerberosRealmRow {
+                id: Uuid::nil(),
+                realm: "B.COM".into(),
+                kdc_servers: "kdc-b1,kdc-b2".into(),
+                admin_server: "admin-b".into(),
+                ticket_lifetime: "2h".into(),
+                renew_lifetime: "2d".into(),
+                is_default: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        ];
+        let configs = realm_rows_to_configs(&rows);
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].realm, "A.COM");
+        assert_eq!(configs[1].realm, "B.COM");
+        assert_eq!(configs[1].kdcs.len(), 2);
+    }
+
+    // ── validate_kerberos_hostnames ────────────────────────────────
+
+    #[test]
+    fn kerberos_hostnames_all_none() {
+        assert!(validate_kerberos_hostnames(None, None, None).is_ok());
+    }
+
+    #[test]
+    fn kerberos_hostnames_valid_realm() {
+        assert!(validate_kerberos_hostnames(Some("CORP.LOCAL"), None, None).is_ok());
+    }
+
+    #[test]
+    fn kerberos_hostnames_invalid_realm() {
+        assert!(validate_kerberos_hostnames(Some("CORP; DROP"), None, None).is_err());
+    }
+
+    #[test]
+    fn kerberos_hostnames_valid_kdcs() {
+        let kdcs = vec!["kdc1.corp".into(), "kdc2.corp".into()];
+        assert!(validate_kerberos_hostnames(None, Some(&kdcs), None).is_ok());
+    }
+
+    #[test]
+    fn kerberos_hostnames_one_bad_kdc() {
+        let kdcs = vec!["kdc1.corp".into(), "kdc2; evil".into()];
+        assert!(validate_kerberos_hostnames(None, Some(&kdcs), None).is_err());
+    }
+
+    #[test]
+    fn kerberos_hostnames_valid_admin() {
+        assert!(validate_kerberos_hostnames(None, None, Some("admin.corp")).is_ok());
+    }
+
+    #[test]
+    fn kerberos_hostnames_invalid_admin() {
+        assert!(validate_kerberos_hostnames(None, None, Some("admin\nEvil")).is_err());
+    }
+
+    #[test]
+    fn kerberos_hostnames_all_valid() {
+        let kdcs = vec!["kdc1".into(), "kdc2".into()];
+        assert!(validate_kerberos_hostnames(Some("REALM"), Some(&kdcs), Some("admin")).is_ok());
+    }
+
+    #[test]
+    fn kerberos_hostnames_realm_bad_rest_valid() {
+        let kdcs = vec!["kdc1".into()];
+        assert!(
+            validate_kerberos_hostnames(Some("BAD REALM"), Some(&kdcs), Some("admin")).is_err()
+        );
+    }
+
+    // ── paginate ───────────────────────────────────────────────────
+
+    #[test]
+    fn paginate_defaults() {
+        let (per_page, offset) = paginate(None, None, 200);
+        assert_eq!(per_page, 50);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn paginate_page_2() {
+        let (per_page, offset) = paginate(Some(2), Some(25), 200);
+        assert_eq!(per_page, 25);
+        assert_eq!(offset, 25);
+    }
+
+    #[test]
+    fn paginate_clamps_per_page_max() {
+        let (per_page, _) = paginate(None, Some(999), 200);
+        assert_eq!(per_page, 200);
+    }
+
+    #[test]
+    fn paginate_clamps_per_page_min() {
+        let (per_page, _) = paginate(None, Some(0), 200);
+        assert_eq!(per_page, 1);
+    }
+
+    #[test]
+    fn paginate_negative_page() {
+        let (_, offset) = paginate(Some(-5), Some(10), 200);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn paginate_page_zero_treated_as_one() {
+        let (_, offset) = paginate(Some(0), Some(10), 200);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn paginate_page_3_per_page_10() {
+        let (per_page, offset) = paginate(Some(3), Some(10), 100);
+        assert_eq!(per_page, 10);
+        assert_eq!(offset, 20);
+    }
+
+    // ── normalize_extra ────────────────────────────────────────────
+
+    #[test]
+    fn normalize_extra_null() {
+        let result = normalize_extra(&serde_json::Value::Null);
+        assert_eq!(result, json!({}));
+    }
+
+    #[test]
+    fn normalize_extra_empty_object() {
+        let input = json!({});
+        let result = normalize_extra(&input);
+        assert_eq!(result, json!({}));
+    }
+
+    #[test]
+    fn normalize_extra_with_fields() {
+        let input = json!({"color-depth": "32", "enable-wallpaper": "true"});
+        let result = normalize_extra(&input);
+        assert_eq!(result["color-depth"], "32");
+        assert_eq!(result["enable-wallpaper"], "true");
+    }
+
+    #[test]
+    fn normalize_extra_array_passthrough() {
+        let input = json!([1, 2, 3]);
+        let result = normalize_extra(&input);
+        assert_eq!(result, json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn normalize_extra_string_passthrough() {
+        let input = json!("hello");
+        let result = normalize_extra(&input);
+        assert_eq!(result, json!("hello"));
+    }
+
+    // ── build_share_url ────────────────────────────────────────────
+
+    #[test]
+    fn share_url_view_mode() {
+        assert_eq!(build_share_url("abc-123", "view"), "/shared/abc-123");
+    }
+
+    #[test]
+    fn share_url_control_mode() {
+        assert_eq!(
+            build_share_url("abc-123", "control"),
+            "/shared/abc-123?mode=control"
+        );
+    }
+
+    #[test]
+    fn share_url_unknown_mode_treated_as_view() {
+        assert_eq!(build_share_url("tok", "other"), "/shared/tok");
+    }
+
+    // ── validate_share_mode ────────────────────────────────────────
+
+    #[test]
+    fn share_mode_view() {
+        assert_eq!(validate_share_mode("view").unwrap(), "view");
+    }
+
+    #[test]
+    fn share_mode_control() {
+        assert_eq!(validate_share_mode("control").unwrap(), "control");
+    }
+
+    #[test]
+    fn share_mode_invalid() {
+        assert!(validate_share_mode("admin").is_err());
+    }
+
+    #[test]
+    fn share_mode_empty() {
+        assert!(validate_share_mode("").is_err());
+    }
+
+    #[test]
+    fn share_mode_uppercase() {
+        // Only exact matches accepted, not case-insensitive
+        assert!(validate_share_mode("View").is_err());
     }
 }

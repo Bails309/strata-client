@@ -26,15 +26,9 @@ fn sanitize_krb5_value(val: &str, field: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Generate a krb5.conf that contains all configured realms and write it out.
-pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyhow::Result<()> {
-    if realms.is_empty() {
-        // Remove the file if no realms are configured
-        let _ = std::fs::remove_file(output_path);
-        tracing::info!("No Kerberos realms configured — removed {output_path}");
-        return Ok(());
-    }
-
+/// Validate all realm values and generate the krb5.conf content string.
+/// Returns `Err` if any value contains forbidden characters.
+pub fn generate_krb5_conf_string(realms: &[RealmConfig]) -> anyhow::Result<String> {
     // Validate all values before generating config
     for r in realms {
         sanitize_krb5_value(&r.realm, "realm")?;
@@ -104,7 +98,7 @@ pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyho
         format!("\n[capaths]\n{capaths_section}")
     };
 
-    let conf = format!(
+    Ok(format!(
         r#"[libdefaults]
     default_realm = {default_upper}
     dns_lookup_realm = false
@@ -118,7 +112,19 @@ pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyho
 [domain_realm]
 {domain_realm_section}{capaths_block}
 "#
-    );
+    ))
+}
+
+/// Generate a krb5.conf that contains all configured realms and write it out.
+pub fn write_krb5_conf_multi(realms: &[RealmConfig], output_path: &str) -> anyhow::Result<()> {
+    if realms.is_empty() {
+        // Remove the file if no realms are configured
+        let _ = std::fs::remove_file(output_path);
+        tracing::info!("No Kerberos realms configured — removed {output_path}");
+        return Ok(());
+    }
+
+    let conf = generate_krb5_conf_string(realms)?;
 
     if let Some(parent) = Path::new(output_path).parent() {
         std::fs::create_dir_all(parent)?;
@@ -276,5 +282,204 @@ mod tests {
             path_str,
         );
         assert!(result.is_err());
+    }
+
+    // ── generate_krb5_conf_string tests ───────────────────────────
+
+    #[test]
+    fn generate_single_realm_libdefaults() {
+        let realms = vec![RealmConfig {
+            realm: "EXAMPLE.COM".into(),
+            kdcs: vec!["kdc1.example.com".into()],
+            admin_server: "admin.example.com".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+        }];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        assert!(conf.contains("default_realm = EXAMPLE.COM"));
+        assert!(conf.contains("ticket_lifetime = 24h"));
+        assert!(conf.contains("renew_lifetime = 7d"));
+        assert!(conf.contains("dns_lookup_realm = false"));
+        assert!(conf.contains("dns_lookup_kdc = false"));
+        assert!(conf.contains("forwardable = true"));
+    }
+
+    #[test]
+    fn generate_single_realm_sections() {
+        let realms = vec![RealmConfig {
+            realm: "EXAMPLE.COM".into(),
+            kdcs: vec!["kdc1.example.com".into(), "kdc2.example.com".into()],
+            admin_server: "admin.example.com".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+        }];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        assert!(conf.contains("[realms]"));
+        assert!(conf.contains("EXAMPLE.COM = {"));
+        assert!(conf.contains("kdc = kdc1.example.com"));
+        assert!(conf.contains("kdc = kdc2.example.com"));
+        assert!(conf.contains("admin_server = admin.example.com"));
+        assert!(conf.contains("[domain_realm]"));
+        assert!(conf.contains(".example.com = EXAMPLE.COM"));
+        assert!(conf.contains("    example.com = EXAMPLE.COM"));
+        // Single realm has no capaths
+        assert!(!conf.contains("[capaths]"));
+    }
+
+    #[test]
+    fn generate_multi_realm_capaths() {
+        let realms = vec![
+            RealmConfig {
+                realm: "ALPHA.COM".into(),
+                kdcs: vec!["kdc.alpha.com".into()],
+                admin_server: "admin.alpha.com".into(),
+                ticket_lifetime: "24h".into(),
+                renew_lifetime: "7d".into(),
+                is_default: true,
+            },
+            RealmConfig {
+                realm: "BETA.COM".into(),
+                kdcs: vec!["kdc.beta.com".into()],
+                admin_server: "admin.beta.com".into(),
+                ticket_lifetime: "12h".into(),
+                renew_lifetime: "3d".into(),
+                is_default: false,
+            },
+        ];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        assert!(conf.contains("[capaths]"));
+        assert!(conf.contains("ALPHA.COM = {"));
+        assert!(conf.contains("BETA.COM = ."));
+        assert!(conf.contains("ALPHA.COM = ."));
+        // default realm is ALPHA (is_default=true)
+        assert!(conf.contains("default_realm = ALPHA.COM"));
+        assert!(conf.contains("ticket_lifetime = 24h"));
+    }
+
+    #[test]
+    fn generate_default_falls_back_to_first() {
+        let realms = vec![
+            RealmConfig {
+                realm: "FIRST.COM".into(),
+                kdcs: vec!["kdc.first.com".into()],
+                admin_server: "admin.first.com".into(),
+                ticket_lifetime: "10h".into(),
+                renew_lifetime: "2d".into(),
+                is_default: false,
+            },
+            RealmConfig {
+                realm: "SECOND.COM".into(),
+                kdcs: vec!["kdc.second.com".into()],
+                admin_server: "admin.second.com".into(),
+                ticket_lifetime: "8h".into(),
+                renew_lifetime: "1d".into(),
+                is_default: false,
+            },
+        ];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        // No is_default=true, so first realm is used
+        assert!(conf.contains("default_realm = FIRST.COM"));
+        assert!(conf.contains("ticket_lifetime = 10h"));
+    }
+
+    #[test]
+    fn generate_three_realms_capaths() {
+        let realms = vec![
+            RealmConfig {
+                realm: "A.COM".into(),
+                kdcs: vec!["kdc.a.com".into()],
+                admin_server: "admin.a.com".into(),
+                ticket_lifetime: "24h".into(),
+                renew_lifetime: "7d".into(),
+                is_default: true,
+            },
+            RealmConfig {
+                realm: "B.COM".into(),
+                kdcs: vec!["kdc.b.com".into()],
+                admin_server: "admin.b.com".into(),
+                ticket_lifetime: "24h".into(),
+                renew_lifetime: "7d".into(),
+                is_default: false,
+            },
+            RealmConfig {
+                realm: "C.COM".into(),
+                kdcs: vec!["kdc.c.com".into()],
+                admin_server: "admin.c.com".into(),
+                ticket_lifetime: "24h".into(),
+                renew_lifetime: "7d".into(),
+                is_default: false,
+            },
+        ];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        assert!(conf.contains("[capaths]"));
+        // A→B, A→C cross-trusts
+        assert!(conf.contains("B.COM = ."));
+        assert!(conf.contains("C.COM = ."));
+    }
+
+    #[test]
+    fn generate_realm_case_normalization() {
+        let realms = vec![RealmConfig {
+            realm: "Mixed.Case.Realm".into(),
+            kdcs: vec!["kdc.mixed.com".into()],
+            admin_server: "admin.mixed.com".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+        }];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        // Realm names are uppercased in [realms] and [domain_realm]
+        assert!(conf.contains("MIXED.CASE.REALM = {"));
+        assert!(conf.contains("default_realm = MIXED.CASE.REALM"));
+        // domain_realm uses lowercase
+        assert!(conf.contains(".mixed.case.realm = MIXED.CASE.REALM"));
+    }
+
+    #[test]
+    fn generate_rejects_injected_kdc() {
+        let realms = vec![RealmConfig {
+            realm: "EXAMPLE.COM".into(),
+            kdcs: vec!["kdc.example.com\ninjected = true".into()],
+            admin_server: "admin.example.com".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+        }];
+        assert!(generate_krb5_conf_string(&realms).is_err());
+    }
+
+    #[test]
+    fn generate_rejects_injected_admin_server() {
+        let realms = vec![RealmConfig {
+            realm: "EXAMPLE.COM".into(),
+            kdcs: vec!["kdc.example.com".into()],
+            admin_server: "admin.example.com}".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+        }];
+        assert!(generate_krb5_conf_string(&realms).is_err());
+    }
+
+    #[test]
+    fn generate_multiple_kdcs_per_realm() {
+        let realms = vec![RealmConfig {
+            realm: "EXAMPLE.COM".into(),
+            kdcs: vec![
+                "kdc1.example.com".into(),
+                "kdc2.example.com".into(),
+                "kdc3.example.com".into(),
+            ],
+            admin_server: "admin.example.com".into(),
+            ticket_lifetime: "24h".into(),
+            renew_lifetime: "7d".into(),
+            is_default: true,
+        }];
+        let conf = generate_krb5_conf_string(&realms).unwrap();
+        assert!(conf.contains("kdc = kdc1.example.com"));
+        assert!(conf.contains("kdc = kdc2.example.com"));
+        assert!(conf.contains("kdc = kdc3.example.com"));
     }
 }

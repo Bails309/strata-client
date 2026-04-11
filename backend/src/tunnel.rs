@@ -1,10 +1,32 @@
 use axum::extract::ws::{Message, WebSocket};
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::error::AppError;
 use crate::services::session_registry::SessionRegistry;
+
+/// Convert a serde_json::Value (expected to be an Object) into a flat
+/// HashMap<String, String>.  Strings are kept as-is, booleans and numbers
+/// are converted via `to_string()`, and all other types are skipped.
+pub fn json_to_string_map(value: &serde_json::Value) -> HashMap<String, String> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .filter_map(|(k, v)| {
+                let val = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    _ => return None,
+                };
+                Some((k.clone(), val))
+            })
+            .collect(),
+        _ => HashMap::new(),
+    }
+}
 
 /// Optional NVR context — when provided the proxy captures guacd→client
 /// frames into a ring buffer and broadcasts them to admin observers.
@@ -1335,5 +1357,97 @@ mod tests {
         assert!(!is_allowed_guacd_param("recording-path"));
         assert!(!is_allowed_guacd_param("recording-name"));
         assert!(!is_allowed_guacd_param("create-recording-path"));
+    }
+
+    // ── json_to_string_map ─────────────────────────────────────────
+
+    #[test]
+    fn json_to_string_map_object_strings() {
+        let val = serde_json::json!({"color-depth": "24", "enable-wallpaper": "true"});
+        let m = json_to_string_map(&val);
+        assert_eq!(m["color-depth"], "24");
+        assert_eq!(m["enable-wallpaper"], "true");
+    }
+
+    #[test]
+    fn json_to_string_map_mixed_types() {
+        let val = serde_json::json!({"str": "hello", "bool": true, "num": 42, "arr": [1,2]});
+        let m = json_to_string_map(&val);
+        assert_eq!(m["str"], "hello");
+        assert_eq!(m["bool"], "true");
+        assert_eq!(m["num"], "42");
+        assert!(!m.contains_key("arr"), "arrays should be skipped");
+    }
+
+    #[test]
+    fn json_to_string_map_empty_object() {
+        let val = serde_json::json!({});
+        let m = json_to_string_map(&val);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn json_to_string_map_non_object() {
+        let val = serde_json::json!("just a string");
+        let m = json_to_string_map(&val);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn json_to_string_map_null() {
+        let val = serde_json::Value::Null;
+        let m = json_to_string_map(&val);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn json_to_string_map_array() {
+        let val = serde_json::json!([1, 2, 3]);
+        let m = json_to_string_map(&val);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn json_to_string_map_nested_object_skipped() {
+        let val = serde_json::json!({"key": "val", "nested": {"a": "b"}});
+        let m = json_to_string_map(&val);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m["key"], "val");
+    }
+
+    #[test]
+    fn json_to_string_map_bool_false() {
+        let val = serde_json::json!({"flag": false});
+        let m = json_to_string_map(&val);
+        assert_eq!(m["flag"], "false");
+    }
+
+    #[test]
+    fn json_to_string_map_number_float() {
+        let val = serde_json::json!({"dpi": 96.5});
+        let m = json_to_string_map(&val);
+        assert_eq!(m["dpi"], "96.5");
+    }
+
+    #[test]
+    fn json_to_string_map_number_negative() {
+        let val = serde_json::json!({"offset": -10});
+        let m = json_to_string_map(&val);
+        assert_eq!(m["offset"], "-10");
+    }
+
+    #[test]
+    fn json_to_string_map_empty_string_value() {
+        let val = serde_json::json!({"empty": ""});
+        let m = json_to_string_map(&val);
+        assert_eq!(m["empty"], "");
+    }
+
+    #[test]
+    fn json_to_string_map_null_value_skipped() {
+        let val = serde_json::json!({"present": "yes", "absent": null});
+        let m = json_to_string_map(&val);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m["present"], "yes");
     }
 }

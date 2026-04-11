@@ -163,12 +163,8 @@ async fn handle_recording_stream(
 
     // Send NVR header with total duration
     let duration_ms = recording.duration_secs.unwrap_or(0) * 1000;
-    let header = format!(
-        "{}.nvrheader,{}.{};",
-        "nvrheader".len(),
-        duration_ms.to_string().len(),
-        duration_ms
-    );
+    let duration_str = duration_ms.to_string();
+    let header = format_guac_instruction("nvrheader", &[&duration_str]);
     socket
         .send(axum::extract::ws::Message::Text(header))
         .await?;
@@ -294,12 +290,9 @@ async fn handle_recording_stream(
 
                                 // Send progress update periodically (every 500ms at most)
                                 if last_progress_sent.elapsed().as_millis() > 500 {
-                                    let prog = format!(
-                                        "{}.nvrprogress,{}.{};",
-                                        "nvrprogress".len(),
-                                        guac_elapsed.to_string().len(),
-                                        guac_elapsed
-                                    );
+                                    let elapsed_str = guac_elapsed.to_string();
+                                    let prog =
+                                        format_guac_instruction("nvrprogress", &[&elapsed_str]);
                                     socket.send(axum::extract::ws::Message::Text(prog)).await?;
                                     last_progress_sent = std::time::Instant::now();
                                 }
@@ -318,11 +311,22 @@ async fn handle_recording_stream(
     }
 
     // Signal end-of-recording so the frontend can close gracefully
-    let end_msg = format!("{}.nvrend;", "nvrend".len());
+    let end_msg = format_guac_instruction("nvrend", &[]);
     let _ = socket.send(axum::extract::ws::Message::Text(end_msg)).await;
     let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
 
     Ok(())
+}
+
+/// Format a Guacamole protocol instruction from an opcode and arguments.
+/// Each element is length-prefixed (`len.value`), separated by commas, terminated by semicolon.
+pub fn format_guac_instruction(opcode: &str, args: &[&str]) -> String {
+    let mut out = format!("{}.{}", opcode.len(), opcode);
+    for arg in args {
+        out.push_str(&format!(",{}.{}", arg.len(), arg));
+    }
+    out.push(';');
+    out
 }
 
 struct GuacamoleInstruction {
@@ -639,5 +643,56 @@ mod tests {
         let mut parser = GuacamoleParser::new();
         parser.push(b"");
         assert!(parser.next_instruction().is_none());
+    }
+
+    // ── format_guac_instruction tests ───────────────────────────
+
+    #[test]
+    fn format_guac_no_args() {
+        assert_eq!(format_guac_instruction("nvrend", &[]), "6.nvrend;");
+    }
+
+    #[test]
+    fn format_guac_one_arg() {
+        assert_eq!(
+            format_guac_instruction("nvrheader", &["5000"]),
+            "9.nvrheader,4.5000;"
+        );
+    }
+
+    #[test]
+    fn format_guac_multiple_args() {
+        assert_eq!(
+            format_guac_instruction("size", &["1920", "1080", "96"]),
+            "4.size,4.1920,4.1080,2.96;"
+        );
+    }
+
+    #[test]
+    fn format_guac_nop() {
+        assert_eq!(format_guac_instruction("nop", &[]), "3.nop;");
+    }
+
+    #[test]
+    fn format_guac_empty_arg() {
+        assert_eq!(format_guac_instruction("test", &[""]), "4.test,0.;");
+    }
+
+    #[test]
+    fn format_guac_roundtrips_with_parser() {
+        let wire = format_guac_instruction("sync", &["1617091200000"]);
+        let mut parser = GuacamoleParser::new();
+        parser.push(wire.as_bytes());
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "sync");
+        assert_eq!(inst.args, vec!["1617091200000"]);
+    }
+
+    #[test]
+    fn format_guac_nvrprogress() {
+        let elapsed = 12345u64;
+        let elapsed_str = elapsed.to_string();
+        let result = format_guac_instruction("nvrprogress", &[&elapsed_str]);
+        assert_eq!(result, "11.nvrprogress,5.12345;");
     }
 }

@@ -1097,4 +1097,88 @@ mod tests {
         let clean = "Clean string".to_string();
         assert_eq!(sanitize_error(clean.clone()), clean);
     }
+
+    #[test]
+    fn sanitize_error_empty() {
+        assert_eq!(sanitize_error("".into()), "");
+    }
+
+    #[test]
+    fn sanitize_error_all_nulls() {
+        assert_eq!(sanitize_error("\0\0\0".into()), "");
+    }
+
+    #[test]
+    fn parse_ldif_two_entries_with_dns() {
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\n\ndn: CN=PC2,DC=corp\ncn: PC2\ndNSHostName: pc2.corp.local\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "PC1");
+        assert_eq!(result[1].name, "PC2");
+        assert!(result[0].dns_host_name.is_none());
+        assert_eq!(result[1].dns_host_name.as_deref(), Some("pc2.corp.local"));
+    }
+
+    #[test]
+    fn parse_ldif_with_description() {
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\ndescription: Web server\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result[0].description.as_deref(), Some("Web server"));
+    }
+
+    #[test]
+    fn parse_ldif_ignores_extra_attributes() {
+        let ldif = "dn: CN=PC1,DC=corp\ncn: PC1\noperatingSystem: Windows Server 2022\nobjectGUID: abc123\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "PC1");
+    }
+
+    #[test]
+    fn parse_ldif_mixed_comments_and_entries() {
+        let ldif =
+            "# Comment\ndn: CN=A,DC=corp\ncn: A\n\n# Another comment\ndn: CN=B,DC=corp\ncn: B\n\n";
+        let result = parse_ldif(ldif).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn ad_sync_config_serialization() {
+        let cfg = sample_config();
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(v["label"], "test-sync");
+        assert_eq!(v["protocol"], "rdp");
+        assert_eq!(v["enabled"], true);
+        assert_eq!(v["auth_method"], "simple");
+        assert_eq!(v["default_port"], 3389);
+    }
+
+    #[test]
+    fn ad_sync_config_deserialization() {
+        let cfg = sample_config();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let deserialized: AdSyncConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.label, cfg.label);
+        assert_eq!(deserialized.ldap_url, cfg.ldap_url);
+    }
+
+    #[test]
+    fn ad_sync_run_serialization_error() {
+        let run = AdSyncRun {
+            id: Uuid::nil(),
+            config_id: Uuid::nil(),
+            started_at: Utc::now(),
+            finished_at: None,
+            status: "error".into(),
+            created: 0,
+            updated: 0,
+            soft_deleted: 0,
+            hard_deleted: 0,
+            error_message: Some("LDAP bind failed".into()),
+        };
+        let v = serde_json::to_value(&run).unwrap();
+        assert_eq!(v["status"], "error");
+        assert_eq!(v["error_message"], "LDAP bind failed");
+        assert!(v["finished_at"].is_null());
+    }
 }

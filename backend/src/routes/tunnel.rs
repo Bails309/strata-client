@@ -39,6 +39,64 @@ const MAX_WIDTH: u32 = 7680; // 8K
 const MAX_HEIGHT: u32 = 4320; // 8K
 const MAX_DPI: u32 = 600;
 
+/// Credential source for the tunnel.  Each variant carries the username
+/// and password available from that source.
+pub struct CredentialSource {
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+/// Resolve final tunnel credentials using a priority cascade:
+///   1. One-off vault credential profile (from ticket)
+///   2. Permanently-mapped vault credential profile
+///   3. One-time ticket credentials
+///   4. Legacy query-string fallback
+///   5. None
+///
+/// `fallback_username` is used when the chosen source has a password but no username.
+pub fn resolve_credentials(
+    oneoff: &CredentialSource,
+    vault: &CredentialSource,
+    ticket: Option<&CredentialSource>,
+    query: &CredentialSource,
+    fallback_username: &str,
+) -> (Option<String>, Option<String>) {
+    if oneoff.password.is_some() {
+        (
+            oneoff
+                .username
+                .clone()
+                .or_else(|| Some(fallback_username.to_string())),
+            oneoff.password.clone(),
+        )
+    } else if vault.password.is_some() {
+        (
+            vault
+                .username
+                .clone()
+                .or_else(|| Some(fallback_username.to_string())),
+            vault.password.clone(),
+        )
+    } else if let Some(tc) = ticket {
+        (
+            tc.username
+                .clone()
+                .or_else(|| Some(fallback_username.to_string())),
+            tc.password.clone(),
+        )
+    } else if query.password.is_some() {
+        (
+            query
+                .username
+                .clone()
+                .or_else(|| Some(fallback_username.to_string())),
+            query.password.clone(),
+        )
+    } else {
+        (None, None)
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct TunnelQuery {
     pub username: Option<String>,
@@ -204,21 +262,7 @@ pub async fn ws_tunnel(
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Parse extra JSONB into a HashMap for guacd params
-    let extra: std::collections::HashMap<String, String> = match &extra_json {
-        serde_json::Value::Object(map) => map
-            .iter()
-            .filter_map(|(k, v)| {
-                let val = match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    _ => return None,
-                };
-                Some((k.clone(), val))
-            })
-            .collect(),
-        _ => std::collections::HashMap::new(),
-    };
+    let extra = crate::tunnel::json_to_string_map(&extra_json);
 
     // Attempt to load and decrypt user credentials from credential profiles
     let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {
@@ -343,36 +387,28 @@ pub async fn ws_tunnel(
         96,
     );
 
-    let (final_username, final_password) = if oneoff_password.is_some() {
-        // One-off vault credential profile from ticket
-        (
-            oneoff_username.or_else(|| Some(user.username.clone())),
-            oneoff_password,
-        )
-    } else if vault_password.is_some() {
-        // Permanently mapped vault credential profile
-        (
-            vault_username.or_else(|| Some(user.username.clone())),
-            vault_password,
-        )
-    } else if let Some(ref tc) = ticket_creds {
-        // Credentials from one-time ticket
-        (
-            tc.username.clone().or_else(|| Some(user.username.clone())),
-            tc.password.clone(),
-        )
-    } else if query.password.is_some() {
-        // Legacy: credentials supplied as query params (kept for backward compat)
-        (
-            query
-                .username
-                .clone()
-                .or_else(|| Some(user.username.clone())),
-            query.password.clone(),
-        )
-    } else {
-        (None, None)
-    };
+    let (final_username, final_password) = resolve_credentials(
+        &CredentialSource {
+            username: oneoff_username,
+            password: oneoff_password,
+        },
+        &CredentialSource {
+            username: vault_username,
+            password: vault_password,
+        },
+        ticket_creds
+            .as_ref()
+            .map(|tc| CredentialSource {
+                username: tc.username.clone(),
+                password: tc.password.clone(),
+            })
+            .as_ref(),
+        &CredentialSource {
+            username: query.username.clone(),
+            password: query.password.clone(),
+        },
+        &user.username,
+    );
 
     let has_creds = final_password.is_some();
 
@@ -750,5 +786,145 @@ mod tests {
     fn max_dpi_is_reasonable() {
         const { assert!(MAX_DPI >= 300) };
         const { assert!(MAX_DPI <= 1200) };
+    }
+
+    // ── resolve_credentials ────────────────────────────────────────
+
+    fn cred(u: Option<&str>, p: Option<&str>) -> CredentialSource {
+        CredentialSource {
+            username: u.map(|s| s.to_string()),
+            password: p.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn resolve_creds_oneoff_wins() {
+        let (u, p) = resolve_credentials(
+            &cred(Some("oneoff_u"), Some("oneoff_p")),
+            &cred(Some("vault_u"), Some("vault_p")),
+            Some(&cred(Some("ticket_u"), Some("ticket_p"))),
+            &cred(Some("query_u"), Some("query_p")),
+            "fallback",
+        );
+        assert_eq!(u.as_deref(), Some("oneoff_u"));
+        assert_eq!(p.as_deref(), Some("oneoff_p"));
+    }
+
+    #[test]
+    fn resolve_creds_vault_wins_over_ticket() {
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(Some("vault_u"), Some("vault_p")),
+            Some(&cred(Some("ticket_u"), Some("ticket_p"))),
+            &cred(None, None),
+            "fallback",
+        );
+        assert_eq!(u.as_deref(), Some("vault_u"));
+        assert_eq!(p.as_deref(), Some("vault_p"));
+    }
+
+    #[test]
+    fn resolve_creds_ticket_wins_over_query() {
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, None),
+            Some(&cred(Some("ticket_u"), Some("ticket_p"))),
+            &cred(Some("query_u"), Some("query_p")),
+            "fallback",
+        );
+        assert_eq!(u.as_deref(), Some("ticket_u"));
+        assert_eq!(p.as_deref(), Some("ticket_p"));
+    }
+
+    #[test]
+    fn resolve_creds_query_fallback() {
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, None),
+            None,
+            &cred(Some("query_u"), Some("query_p")),
+            "fallback",
+        );
+        assert_eq!(u.as_deref(), Some("query_u"));
+        assert_eq!(p.as_deref(), Some("query_p"));
+    }
+
+    #[test]
+    fn resolve_creds_none_when_empty() {
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, None),
+            None,
+            &cred(None, None),
+            "fallback",
+        );
+        assert!(u.is_none());
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn resolve_creds_fallback_username_when_missing() {
+        let (u, p) = resolve_credentials(
+            &cred(None, Some("oneoff_p")),
+            &cred(None, None),
+            None,
+            &cred(None, None),
+            "fallback",
+        );
+        assert_eq!(u.as_deref(), Some("fallback"));
+        assert_eq!(p.as_deref(), Some("oneoff_p"));
+    }
+
+    #[test]
+    fn resolve_creds_vault_fallback_username() {
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, Some("vault_p")),
+            None,
+            &cred(None, None),
+            "user1",
+        );
+        assert_eq!(u.as_deref(), Some("user1"));
+        assert_eq!(p.as_deref(), Some("vault_p"));
+    }
+
+    #[test]
+    fn resolve_creds_ticket_with_password_only() {
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, None),
+            Some(&cred(None, Some("tp"))),
+            &cred(None, None),
+            "fb_user",
+        );
+        assert_eq!(u.as_deref(), Some("fb_user"));
+        assert_eq!(p.as_deref(), Some("tp"));
+    }
+
+    #[test]
+    fn resolve_creds_ticket_no_password_skipped() {
+        // ticket with username but no password: still uses ticket source
+        let (u, p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, None),
+            Some(&cred(Some("tu"), None)),
+            &cred(Some("qu"), Some("qp")),
+            "fb",
+        );
+        // ticket has no password — username from ticket, password None
+        assert_eq!(u.as_deref(), Some("tu"));
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn resolve_creds_query_fallback_username() {
+        let (u, _p) = resolve_credentials(
+            &cred(None, None),
+            &cred(None, None),
+            None,
+            &cred(None, Some("qp")),
+            "me",
+        );
+        assert_eq!(u.as_deref(), Some("me"));
     }
 }

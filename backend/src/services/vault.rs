@@ -229,25 +229,32 @@ pub async fn unseal(
     Ok(plaintext)
 }
 
-/// Encrypt a string value for storage using the `vault:{json}` envelope format.
-/// Used for settings, AD sync bind passwords, and other secrets stored as TEXT.
-pub async fn seal_setting(vault: &VaultConfig, plaintext: &str) -> Result<String, AppError> {
-    let sealed = seal(vault, plaintext.as_bytes()).await?;
+/// Encode sealed bytes into a `vault:{json}` envelope string.
+pub fn format_seal_envelope(sealed: &SealedCredential) -> String {
+    use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD;
     let encoded = serde_json::json!({
-        "ct": b64.encode(sealed.ciphertext),
-        "dek": b64.encode(sealed.encrypted_dek),
-        "n": b64.encode(sealed.nonce),
+        "ct": b64.encode(&sealed.ciphertext),
+        "dek": b64.encode(&sealed.encrypted_dek),
+        "n": b64.encode(&sealed.nonce),
     });
-    Ok(format!("vault:{encoded}"))
+    format!("vault:{encoded}")
 }
 
-/// Decrypt a `vault:{json}` envelope string. If the value does not start with
-/// `vault:`, it is returned as-is (legacy plaintext).
-pub async fn unseal_setting(vault: &VaultConfig, value: &str) -> Result<String, AppError> {
+/// Decoded fields from a vault envelope: (ciphertext, encrypted_dek, nonce).
+pub struct VaultEnvelope {
+    pub ciphertext: Vec<u8>,
+    pub encrypted_dek: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+/// Parse a `vault:{json}` envelope, decoding the base64 ct/dek/nonce fields.
+/// If the string does not start with `vault:`, returns `None` (treat as legacy plaintext).
+pub fn parse_vault_envelope(value: &str) -> Result<Option<VaultEnvelope>, AppError> {
+    use base64::Engine;
     let json_str = match value.strip_prefix("vault:") {
         Some(j) => j,
-        None => return Ok(value.to_string()),
+        None => return Ok(None),
     };
     let parsed: serde_json::Value = serde_json::from_str(json_str)
         .map_err(|e| AppError::Vault(format!("Invalid vault envelope: {e}")))?;
@@ -261,7 +268,28 @@ pub async fn unseal_setting(vault: &VaultConfig, value: &str) -> Result<String, 
     let n = b64
         .decode(parsed["n"].as_str().unwrap_or(""))
         .map_err(|e| AppError::Vault(format!("nonce decode: {e}")))?;
-    let plaintext = unseal(vault, &dek, &ct, &n).await?;
+    Ok(Some(VaultEnvelope {
+        ciphertext: ct,
+        encrypted_dek: dek,
+        nonce: n,
+    }))
+}
+
+/// Encrypt a string value for storage using the `vault:{json}` envelope format.
+/// Used for settings, AD sync bind passwords, and other secrets stored as TEXT.
+pub async fn seal_setting(vault: &VaultConfig, plaintext: &str) -> Result<String, AppError> {
+    let sealed = seal(vault, plaintext.as_bytes()).await?;
+    Ok(format_seal_envelope(&sealed))
+}
+
+/// Decrypt a `vault:{json}` envelope string. If the value does not start with
+/// `vault:`, it is returned as-is (legacy plaintext).
+pub async fn unseal_setting(vault: &VaultConfig, value: &str) -> Result<String, AppError> {
+    let env = match parse_vault_envelope(value)? {
+        Some(e) => e,
+        None => return Ok(value.to_string()),
+    };
+    let plaintext = unseal(vault, &env.encrypted_dek, &env.ciphertext, &env.nonce).await?;
     String::from_utf8(plaintext).map_err(|e| AppError::Vault(format!("UTF-8 decode: {e}")))
 }
 
@@ -457,5 +485,130 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert!(format!("{}", result.unwrap_err()).contains("nonce decode"));
+    }
+
+    // ── format_seal_envelope ───────────────────────────────────────
+
+    #[test]
+    fn format_seal_envelope_produces_vault_prefix() {
+        let sealed = SealedCredential {
+            ciphertext: vec![1, 2, 3],
+            encrypted_dek: vec![4, 5, 6],
+            nonce: vec![7, 8, 9],
+        };
+        let result = format_seal_envelope(&sealed);
+        assert!(result.starts_with("vault:"));
+    }
+
+    #[test]
+    fn format_seal_envelope_contains_valid_json() {
+        let sealed = SealedCredential {
+            ciphertext: vec![10, 20],
+            encrypted_dek: vec![30, 40],
+            nonce: vec![50, 60],
+        };
+        let result = format_seal_envelope(&sealed);
+        let json_str = result.strip_prefix("vault:").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        assert!(parsed["ct"].is_string());
+        assert!(parsed["dek"].is_string());
+        assert!(parsed["n"].is_string());
+    }
+
+    #[test]
+    fn format_seal_envelope_roundtrips_with_parse() {
+        let sealed = SealedCredential {
+            ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            encrypted_dek: vec![0xCA, 0xFE],
+            nonce: vec![0xBA, 0xBE],
+        };
+        let envelope = format_seal_envelope(&sealed);
+        let env = parse_vault_envelope(&envelope).unwrap().unwrap();
+        assert_eq!(env.ciphertext, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(env.encrypted_dek, vec![0xCA, 0xFE]);
+        assert_eq!(env.nonce, vec![0xBA, 0xBE]);
+    }
+
+    #[test]
+    fn format_seal_envelope_empty_fields() {
+        let sealed = SealedCredential {
+            ciphertext: vec![],
+            encrypted_dek: vec![],
+            nonce: vec![],
+        };
+        let result = format_seal_envelope(&sealed);
+        assert!(result.starts_with("vault:"));
+        // Should still parse back
+        let env = parse_vault_envelope(&result).unwrap().unwrap();
+        assert!(env.ciphertext.is_empty());
+        assert!(env.encrypted_dek.is_empty());
+        assert!(env.nonce.is_empty());
+    }
+
+    // ── parse_vault_envelope ───────────────────────────────────────
+
+    #[test]
+    fn parse_vault_envelope_no_prefix() {
+        let result = parse_vault_envelope("plain-text").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_vault_envelope_empty_string() {
+        let result = parse_vault_envelope("").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_vault_envelope_invalid_json() {
+        let result = parse_vault_envelope("vault:not-json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_vault_envelope_bad_base64_ct() {
+        let result =
+            parse_vault_envelope(r#"vault:{"ct":"!!!invalid!!!","dek":"dGVzdA==","n":"dGVzdA=="}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_vault_envelope_bad_base64_dek() {
+        let result =
+            parse_vault_envelope(r#"vault:{"ct":"dGVzdA==","dek":"!!!bad!!!","n":"dGVzdA=="}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_vault_envelope_bad_base64_nonce() {
+        let result =
+            parse_vault_envelope(r#"vault:{"ct":"dGVzdA==","dek":"dGVzdA==","n":"!!!bad!!!"}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_vault_envelope_valid() {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let envelope = format!(
+            r#"vault:{{"ct":"{}","dek":"{}","n":"{}"}}"#,
+            b64.encode([1, 2, 3]),
+            b64.encode([4, 5]),
+            b64.encode([6, 7, 8]),
+        );
+        let env = parse_vault_envelope(&envelope).unwrap().unwrap();
+        assert_eq!(env.ciphertext, vec![1, 2, 3]);
+        assert_eq!(env.encrypted_dek, vec![4, 5]);
+        assert_eq!(env.nonce, vec![6, 7, 8]);
+    }
+
+    #[test]
+    fn parse_vault_envelope_missing_fields_empty_decode() {
+        // Missing ct/dek/n fields — parsed["ct"].as_str() returns None → unwrap_or("")
+        // Empty string base64 decodes to empty vec, which is valid
+        let env = parse_vault_envelope("vault:{}").unwrap().unwrap();
+        assert!(env.ciphertext.is_empty());
+        assert!(env.encrypted_dek.is_empty());
+        assert!(env.nonce.is_empty());
     }
 }

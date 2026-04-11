@@ -619,4 +619,157 @@ mod tests {
         // Nonexistent session returns false
         assert!(!registry.terminate("no-such").await);
     }
+
+    // ── filter_sensitive_instructions extended ──────────────────────
+
+    #[test]
+    fn filter_preserves_size_instruction() {
+        let input = "4.size,1.0,4.1920,4.1080;";
+        let result = filter_sensitive_instructions(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn filter_preserves_img_instruction() {
+        let input = "3.img,1.0,2.12,1.0,1.0,3.100,3.100;";
+        let result = filter_sensitive_instructions(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn filter_preserves_sync_instruction() {
+        let input = "4.sync,1.0;";
+        let result = filter_sensitive_instructions(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn filter_removes_connect_but_keeps_rest() {
+        let input = "4.size,1.0,4.1920,4.1080;7.connect,3.rdp;3.nop;";
+        let result = filter_sensitive_instructions(input);
+        assert!(result.contains("size"));
+        assert!(result.contains("nop"));
+        assert!(!result.contains("connect"));
+    }
+
+    #[test]
+    fn filter_only_sensitive_removed() {
+        let input = "4.args,8.hostname;4.sync,1.0;7.connect,3.rdp;3.img,1.0;";
+        let result = filter_sensitive_instructions(input);
+        assert!(!result.contains("args"));
+        assert!(!result.contains("connect"));
+        assert!(result.contains("sync"));
+        assert!(result.contains("img"));
+    }
+
+    // ── SessionBuffer extended ─────────────────────────────────────
+
+    #[test]
+    fn session_buffer_new_empty() {
+        let buf = SessionBuffer::new();
+        assert_eq!(buf.total_bytes, 0);
+        assert_eq!(buf.frames.len(), 0);
+        assert!(buf.last_size().is_none());
+        assert_eq!(buf.buffer_depth_secs(), 0);
+    }
+
+    #[test]
+    fn session_buffer_push_increments_bytes() {
+        let mut buf = SessionBuffer::new();
+        buf.push("4.size,1.0,4.1920,4.1080;".into());
+        assert!(buf.total_bytes > 0);
+        assert_eq!(buf.frames.len(), 1);
+    }
+
+    #[test]
+    fn session_buffer_filtered_out_does_not_add_frames() {
+        let mut buf = SessionBuffer::new();
+        buf.push("7.connect,3.rdp;".into());
+        assert_eq!(buf.frames.len(), 0);
+        assert_eq!(buf.total_bytes, 0);
+    }
+
+    #[test]
+    fn session_buffer_multiple_pushes() {
+        let mut buf = SessionBuffer::new();
+        buf.push("4.size,1.0,4.1920,4.1080;".into());
+        buf.push("3.img,1.0,2.12;".into());
+        buf.push("4.sync,1.0;".into());
+        assert_eq!(buf.frames.len(), 3);
+    }
+
+    #[test]
+    fn session_buffer_frames_with_timing_empty() {
+        let buf = SessionBuffer::new();
+        let frames = buf.frames_with_timing(300);
+        assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn session_buffer_frames_with_timing_has_data() {
+        let mut buf = SessionBuffer::new();
+        buf.push("4.size,1.0,4.1920,4.1080;".into());
+        buf.push("3.nop;".into());
+        let frames = buf.frames_with_timing(300);
+        assert_eq!(frames.len(), 2);
+        // First frame should have 0 delay
+        assert_eq!(frames[0].0, 0);
+    }
+
+    #[test]
+    fn session_buffer_size_instruction_caching() {
+        let mut buf = SessionBuffer::new();
+        assert!(buf.last_size().is_none());
+
+        buf.push("3.nop;".into());
+        assert!(buf.last_size().is_none());
+
+        buf.push("4.size,1.0,3.800,3.600;".into());
+        assert_eq!(buf.last_size(), Some("4.size,1.0,3.800,3.600;"));
+
+        // Update with new size
+        buf.push("4.size,1.0,4.1024,3.768;".into());
+        assert_eq!(buf.last_size(), Some("4.size,1.0,4.1024,3.768;"));
+
+        // Non-size push doesn't change it
+        buf.push("3.img,1.0;".into());
+        assert_eq!(buf.last_size(), Some("4.size,1.0,4.1024,3.768;"));
+    }
+
+    #[tokio::test]
+    async fn registry_max_sessions_enforcement() {
+        let registry = SessionRegistry::new();
+        // Register MAX_SESSIONS sessions
+        for i in 0..MAX_SESSIONS {
+            registry
+                .register(
+                    format!("session-{i}"),
+                    Uuid::new_v4(),
+                    "Conn".into(),
+                    "rdp".into(),
+                    Uuid::new_v4(),
+                    "user".into(),
+                    "10.0.0.1".into(),
+                    "1.1.1.1".into(),
+                )
+                .await;
+        }
+        let sessions = registry.list().await;
+        assert_eq!(sessions.len(), MAX_SESSIONS);
+
+        // Next registration should be rejected
+        let result = registry
+            .register(
+                "session-overflow".into(),
+                Uuid::new_v4(),
+                "Conn".into(),
+                "rdp".into(),
+                Uuid::new_v4(),
+                "user".into(),
+                "10.0.0.1".into(),
+                "1.1.1.1".into(),
+            )
+            .await;
+        assert!(result.is_none());
+    }
 }

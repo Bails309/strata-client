@@ -97,14 +97,7 @@ pub async fn create_share(
     }
 
     // Validate mode
-    let mode = match body.mode.as_str() {
-        "view" | "control" => body.mode.clone(),
-        _ => {
-            return Err(AppError::Validation(
-                "mode must be 'view' or 'control'".into(),
-            ))
-        }
-    };
+    let mode = crate::routes::admin::validate_share_mode(&body.mode)?;
 
     // Generate a unique share token
     let share_token = format!("{}", Uuid::new_v4());
@@ -138,11 +131,7 @@ pub async fn create_share(
     .await?;
 
     Ok(Json(ShareLinkResponse {
-        share_url: if mode == "control" {
-            format!("/shared/{}?mode=control", share_token)
-        } else {
-            format!("/shared/{}", share_token)
-        },
+        share_url: crate::routes::admin::build_share_url(&share_token, &mode),
         share_token,
         mode,
     }))
@@ -266,21 +255,7 @@ pub async fn ws_shared_tunnel(
 
     let (protocol, hostname, port, domain, _name, extra_json) = conn;
 
-    let extra: std::collections::HashMap<String, String> = match &extra_json {
-        serde_json::Value::Object(map) => map
-            .iter()
-            .filter_map(|(k, v)| {
-                let val = match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    _ => return None,
-                };
-                Some((k.clone(), val))
-            })
-            .collect(),
-        _ => std::collections::HashMap::new(),
-    };
+    let extra = crate::tunnel::json_to_string_map(&extra_json);
 
     // Load the OWNER's credentials (the person who shared).
     // First try the newer credential_profiles system, then fall back to

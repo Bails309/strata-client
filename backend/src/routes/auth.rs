@@ -108,6 +108,45 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+/// Validate login input lengths. Returns `Err` for empty or over-limit fields.
+pub fn validate_login_input(username: &str, password: &str) -> Result<(), AppError> {
+    if username.is_empty() || password.is_empty() {
+        return Err(AppError::Auth("Invalid credentials".into()));
+    }
+    if username.len() > 256 || password.len() > 1024 {
+        return Err(AppError::Auth("Invalid credentials".into()));
+    }
+    Ok(())
+}
+
+/// Check a sliding-window rate limit. Prunes expired entries and rejects if
+/// the number of recent attempts for `key` meets or exceeds `max_attempts`.
+/// Returns `true` if the request should be **rejected** (over limit).
+pub fn check_rate_limit(
+    map: &mut HashMap<String, Vec<Instant>>,
+    key: &str,
+    max_attempts: usize,
+    window_secs: u64,
+    max_entries: usize,
+) -> bool {
+    let now = Instant::now();
+    // OOM protection: prune entire map if it exceeds max entries
+    if map.len() > max_entries {
+        map.retain(|_, attempts| {
+            let cutoff = now - std::time::Duration::from_secs(window_secs);
+            attempts.retain(|t| *t > cutoff);
+            !attempts.is_empty()
+        });
+        if map.len() > max_entries {
+            map.clear();
+        }
+    }
+    let cutoff = now - std::time::Duration::from_secs(window_secs);
+    let attempts = map.entry(key.to_string()).or_default();
+    attempts.retain(|t| *t > cutoff);
+    attempts.len() >= max_attempts
+}
+
 /// Extract the client IP from X-Forwarded-For (rightmost non-private entry)
 /// or fall back to "unknown".
 fn extract_client_ip(headers: &HeaderMap) -> String {
@@ -185,34 +224,20 @@ pub async fn login(
     }
 
     // Input length validation
-    if body.username.is_empty() || body.password.is_empty() {
-        return Err(AppError::Auth("Invalid credentials".into()));
-    }
-    if body.username.len() > 256 || body.password.len() > 1024 {
-        return Err(AppError::Auth("Invalid credentials".into()));
-    }
+    validate_login_input(&body.username, &body.password)?;
 
     let client_ip = extract_client_ip(&headers);
 
     // ── Per-IP rate limiting ──
     {
         let mut map = IP_RATE_LIMIT.lock().unwrap();
-        // Prune entire map if it exceeds the max entries threshold (OOM protection)
-        if map.len() > MAX_RATE_LIMIT_ENTRIES {
-            map.retain(|_, attempts| {
-                let cutoff = Instant::now() - std::time::Duration::from_secs(IP_WINDOW_SECS);
-                attempts.retain(|t| *t > cutoff);
-                !attempts.is_empty()
-            });
-            // If still too large after pruning, clear entirely
-            if map.len() > MAX_RATE_LIMIT_ENTRIES {
-                map.clear();
-            }
-        }
-        let cutoff = Instant::now() - std::time::Duration::from_secs(IP_WINDOW_SECS);
-        let attempts = map.entry(client_ip.clone()).or_default();
-        attempts.retain(|t| *t > cutoff);
-        if attempts.len() >= MAX_IP_ATTEMPTS {
+        if check_rate_limit(
+            &mut map,
+            &client_ip,
+            MAX_IP_ATTEMPTS,
+            IP_WINDOW_SECS,
+            MAX_RATE_LIMIT_ENTRIES,
+        ) {
             return Err(AppError::Auth(
                 "Too many login attempts from this address. Please try again later.".into(),
             ));
@@ -222,21 +247,13 @@ pub async fn login(
     // ── Per-username rate limiting ──
     {
         let mut map = RATE_LIMIT.lock().unwrap();
-        // Prune entire map if it exceeds the max entries threshold (OOM protection)
-        if map.len() > MAX_RATE_LIMIT_ENTRIES {
-            map.retain(|_, attempts| {
-                let cutoff = Instant::now() - std::time::Duration::from_secs(WINDOW_SECS);
-                attempts.retain(|t| *t > cutoff);
-                !attempts.is_empty()
-            });
-            if map.len() > MAX_RATE_LIMIT_ENTRIES {
-                map.clear();
-            }
-        }
-        let cutoff = Instant::now() - std::time::Duration::from_secs(WINDOW_SECS);
-        let attempts = map.entry(body.username.clone()).or_default();
-        attempts.retain(|t| *t > cutoff);
-        if attempts.len() >= MAX_ATTEMPTS {
+        if check_rate_limit(
+            &mut map,
+            &body.username,
+            MAX_ATTEMPTS,
+            WINDOW_SECS,
+            MAX_RATE_LIMIT_ENTRIES,
+        ) {
             return Err(AppError::Auth(
                 "Too many login attempts. Please try again later.".into(),
             ));
@@ -928,5 +945,107 @@ mod tests {
     #[test]
     fn max_rate_limit_entries_prevents_oom() {
         const { assert!(MAX_RATE_LIMIT_ENTRIES >= 10_000) };
+    }
+
+    // ── validate_login_input ───────────────────────────────────────────
+
+    #[test]
+    fn validate_login_accepts_normal_input() {
+        assert!(validate_login_input("alice", "s3cret").is_ok());
+    }
+
+    #[test]
+    fn validate_login_rejects_empty_username() {
+        assert!(validate_login_input("", "password").is_err());
+    }
+
+    #[test]
+    fn validate_login_rejects_empty_password() {
+        assert!(validate_login_input("alice", "").is_err());
+    }
+
+    #[test]
+    fn validate_login_rejects_both_empty() {
+        assert!(validate_login_input("", "").is_err());
+    }
+
+    #[test]
+    fn validate_login_rejects_long_username() {
+        let long = "a".repeat(257);
+        assert!(validate_login_input(&long, "password").is_err());
+    }
+
+    #[test]
+    fn validate_login_rejects_long_password() {
+        let long = "a".repeat(1025);
+        assert!(validate_login_input("alice", &long).is_err());
+    }
+
+    #[test]
+    fn validate_login_accepts_boundary_lengths() {
+        let u = "a".repeat(256);
+        let p = "a".repeat(1024);
+        assert!(validate_login_input(&u, &p).is_ok());
+    }
+
+    // ── check_rate_limit ───────────────────────────────────────────────
+
+    #[test]
+    fn rate_limit_allows_under_threshold() {
+        let mut map = HashMap::new();
+        assert!(!check_rate_limit(&mut map, "user1", 3, 60, 1000));
+    }
+
+    #[test]
+    fn rate_limit_rejects_at_threshold() {
+        let mut map = HashMap::new();
+        let now = Instant::now();
+        map.insert("user1".to_string(), vec![now, now, now]);
+        assert!(check_rate_limit(&mut map, "user1", 3, 60, 1000));
+    }
+
+    #[test]
+    fn rate_limit_allows_after_window_expires() {
+        let mut map = HashMap::new();
+        let old = Instant::now() - std::time::Duration::from_secs(120);
+        map.insert("user1".to_string(), vec![old, old, old]);
+        // Window is 60s, so all 3 attempts are expired
+        assert!(!check_rate_limit(&mut map, "user1", 3, 60, 1000));
+    }
+
+    #[test]
+    fn rate_limit_different_keys_independent() {
+        let mut map = HashMap::new();
+        let now = Instant::now();
+        map.insert("user1".to_string(), vec![now, now, now]);
+        // user2 has no attempts
+        assert!(!check_rate_limit(&mut map, "user2", 3, 60, 1000));
+    }
+
+    #[test]
+    fn rate_limit_oom_protection_clears_map() {
+        let mut map = HashMap::new();
+        // Fill beyond max_entries with expired timestamps
+        let old = Instant::now() - std::time::Duration::from_secs(120);
+        for i in 0..15 {
+            map.insert(format!("user{i}"), vec![old]);
+        }
+        // max_entries = 10: the map has 15 entries, all expired → prune to 0
+        assert!(!check_rate_limit(&mut map, "new_user", 3, 60, 10));
+        // All old entries should be pruned
+        assert!(map.len() <= 1); // only "new_user" entry
+    }
+
+    #[test]
+    fn rate_limit_oom_hard_clear_when_all_active() {
+        let mut map = HashMap::new();
+        let now = Instant::now();
+        for i in 0..15 {
+            map.insert(format!("user{i}"), vec![now]);
+        }
+        // max_entries = 10, but all entries are active → hard clear
+        assert!(!check_rate_limit(&mut map, "new_user", 3, 60, 10));
+        // Hard clear leaves only the new entry
+        assert!(map.len() <= 1);
     }
 }

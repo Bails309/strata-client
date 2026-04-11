@@ -196,6 +196,30 @@ impl SystemSecrets {
     }
 }
 
+/// Parse a comma-separated list of guacd instances, trimming whitespace and
+/// filtering out empty entries.
+pub fn parse_guacd_instances(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Parse a port number from an optional string, returning a default if the
+/// string is `None` or not a valid `u16`.
+pub fn parse_port_with_default(raw: Option<&str>, default: u16) -> u16 {
+    raw.and_then(|p| p.parse().ok()).unwrap_or(default)
+}
+
+/// Determine `DatabaseMode` from a database URL string.
+pub fn detect_database_mode(db_url: &str) -> DatabaseMode {
+    if db_url.contains("postgres-local") {
+        DatabaseMode::Local
+    } else {
+        DatabaseMode::External
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +535,108 @@ mod tests {
         assert!(path.ends_with("vault-secrets.json"));
 
         std::env::remove_var("CONFIG_PATH");
+    }
+
+    // ── parse_guacd_instances tests ───────────────────────────
+
+    #[test]
+    fn parse_guacd_instances_single() {
+        assert_eq!(parse_guacd_instances("guacd2:4823"), vec!["guacd2:4823"]);
+    }
+
+    #[test]
+    fn parse_guacd_instances_multiple() {
+        assert_eq!(
+            parse_guacd_instances("host1:4822,host2:4823,host3:4824"),
+            vec!["host1:4822", "host2:4823", "host3:4824"]
+        );
+    }
+
+    #[test]
+    fn parse_guacd_instances_with_whitespace() {
+        assert_eq!(
+            parse_guacd_instances(" host1:4822 , host2:4823 "),
+            vec!["host1:4822", "host2:4823"]
+        );
+    }
+
+    #[test]
+    fn parse_guacd_instances_empty() {
+        let result: Vec<String> = parse_guacd_instances("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_guacd_instances_trailing_comma() {
+        assert_eq!(parse_guacd_instances("host1:4822,"), vec!["host1:4822"]);
+    }
+
+    #[test]
+    fn parse_guacd_instances_only_commas() {
+        let result: Vec<String> = parse_guacd_instances(",,,");
+        assert!(result.is_empty());
+    }
+
+    // ── parse_port_with_default tests ───────────────────────────
+
+    #[test]
+    fn parse_port_valid() {
+        assert_eq!(parse_port_with_default(Some("8080"), 4822), 8080);
+    }
+
+    #[test]
+    fn parse_port_none() {
+        assert_eq!(parse_port_with_default(None, 4822), 4822);
+    }
+
+    #[test]
+    fn parse_port_invalid() {
+        assert_eq!(parse_port_with_default(Some("abc"), 4822), 4822);
+    }
+
+    #[test]
+    fn parse_port_empty() {
+        assert_eq!(parse_port_with_default(Some(""), 4822), 4822);
+    }
+
+    #[test]
+    fn parse_port_overflow() {
+        assert_eq!(parse_port_with_default(Some("99999"), 4822), 4822);
+    }
+
+    #[test]
+    fn parse_port_zero() {
+        assert_eq!(parse_port_with_default(Some("0"), 4822), 0);
+    }
+
+    // ── detect_database_mode tests ───────────────────────────
+
+    #[test]
+    fn detect_local_mode() {
+        assert_eq!(
+            detect_database_mode("postgresql://strata:pass@postgres-local:5432/strata"),
+            DatabaseMode::Local
+        );
+    }
+
+    #[test]
+    fn detect_external_mode() {
+        assert_eq!(
+            detect_database_mode("postgresql://strata:pass@db.example.com:5432/strata"),
+            DatabaseMode::External
+        );
+    }
+
+    #[test]
+    fn detect_external_mode_empty() {
+        assert_eq!(detect_database_mode(""), DatabaseMode::External);
+    }
+
+    #[test]
+    fn detect_local_in_path() {
+        assert_eq!(
+            detect_database_mode("postgresql://user@host/postgres-local-db"),
+            DatabaseMode::Local
+        );
     }
 }

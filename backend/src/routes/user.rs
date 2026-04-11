@@ -1173,4 +1173,138 @@ mod tests {
         let result = require_running(&state).await;
         assert!(result.is_err());
     }
+
+    // ── UpdateCredentialProfileRequest (edge cases) ─────────────────
+
+    #[test]
+    fn update_profile_partial_fields() {
+        let j = json!({
+            "label": "Partial"
+        });
+        let req: UpdateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.label.as_deref(), Some("Partial"));
+        assert!(req.username.is_none());
+        assert!(req.password.is_none());
+        assert!(req.ttl_hours.is_none());
+    }
+
+    #[test]
+    fn create_profile_request_minimal() {
+        let j = json!({
+            "label": "Minimal",
+            "username": "u",
+            "password": "p"
+        });
+        let req: CreateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.label, "Minimal");
+        assert!(req.ttl_hours.is_none());
+    }
+
+    // ── CredentialProfileRow serialization (expired=true) ──────────
+
+    #[test]
+    fn credential_profile_row_expired_true() {
+        let now = chrono::Utc::now();
+        let r = CredentialProfileRow {
+            id: Uuid::nil(),
+            label: "Expired Profile".into(),
+            created_at: now,
+            updated_at: now,
+            expires_at: now,
+            expired: true,
+            ttl_hours: 4,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["label"], "Expired Profile");
+        assert_eq!(v["expired"], true);
+        assert_eq!(v["ttl_hours"], 4);
+    }
+
+    // ── UserConnectionRow serialization ────────────────────────────
+
+    #[test]
+    fn user_connection_row_with_folder() {
+        let r = UserConnectionRow {
+            id: Uuid::nil(),
+            name: "server-2".into(),
+            protocol: "ssh".into(),
+            hostname: "10.0.0.5".into(),
+            port: 22,
+            description: "SSH box".into(),
+            folder_id: Some(Uuid::nil()),
+            folder_name: Some("Production".into()),
+            last_accessed: Some(chrono::Utc::now()),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["folder_name"], "Production");
+        assert_eq!(v["protocol"], "ssh");
+        assert!(v["last_accessed"].is_string());
+    }
+
+    #[test]
+    fn user_connection_row_without_folder() {
+        let r = UserConnectionRow {
+            id: Uuid::nil(),
+            name: "server-3".into(),
+            protocol: "vnc".into(),
+            hostname: "10.0.0.6".into(),
+            port: 5900,
+            description: "".into(),
+            folder_id: None,
+            folder_name: None,
+            last_accessed: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v["folder_id"].is_null());
+        assert!(v["folder_name"].is_null());
+        assert!(v["last_accessed"].is_null());
+    }
+
+    // ── SetMappingRequest edge cases ───────────────────────────────
+
+    #[test]
+    fn set_mapping_request_different_ids() {
+        let j = json!({
+            "profile_id": "550e8400-e29b-41d4-a716-446655440000",
+            "connection_id": "660e8400-e29b-41d4-a716-446655440000"
+        });
+        let req: SetMappingRequest = serde_json::from_value(j).unwrap();
+        assert_ne!(req.profile_id, req.connection_id);
+    }
+
+    // ── UpdateCredentialRequest edge cases ──────────────────────────
+
+    #[test]
+    fn update_credential_request_special_chars() {
+        let j = json!({
+            "connection_id": "550e8400-e29b-41d4-a716-446655440000",
+            "password": "complex-p@$$w0rd!"
+        });
+        let req: UpdateCredentialRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.password, "complex-p@$$w0rd!");
+    }
+
+    // ── Filename sanitization ──────────────────────────────────────
+
+    #[test]
+    fn filename_allows_hyphen_and_underscore() {
+        assert!(is_safe_recording_filename("session_abc-123.guac"));
+    }
+
+    #[test]
+    fn filename_allows_uuid_format() {
+        assert!(is_safe_recording_filename(
+            "550e8400-e29b-41d4-a716-446655440000.guac"
+        ));
+    }
+
+    #[test]
+    fn filename_rejects_absolute_path() {
+        assert!(!is_safe_recording_filename("/etc/passwd"));
+    }
+
+    #[test]
+    fn filename_rejects_windows_path() {
+        assert!(!is_safe_recording_filename("C:\\Windows\\System32"));
+    }
 }

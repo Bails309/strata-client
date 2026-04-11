@@ -393,4 +393,127 @@ mod tests {
         assert_eq!(user.username, "dave");
         assert_eq!(cloned.username, "eve");
     }
+
+    // ── AuthUser permission combinations ───────────────────────────
+
+    fn make_user_with_perm(field: &str) -> AuthUser {
+        let mut user = AuthUser {
+            id: Uuid::new_v4(),
+            sub: "sub".into(),
+            username: "test".into(),
+            full_name: None,
+            role: "custom".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
+        };
+        match field {
+            "can_manage_system" => user.can_manage_system = true,
+            "can_manage_users" => user.can_manage_users = true,
+            "can_manage_connections" => user.can_manage_connections = true,
+            "can_view_audit_logs" => user.can_view_audit_logs = true,
+            "can_create_users" => user.can_create_users = true,
+            "can_create_user_groups" => user.can_create_user_groups = true,
+            "can_create_connections" => user.can_create_connections = true,
+            "can_create_connection_folders" => user.can_create_connection_folders = true,
+            "can_create_sharing_profiles" => user.can_create_sharing_profiles = true,
+            _ => {}
+        }
+        user
+    }
+
+    /// Checks that any single permission satisfies the admin check logic.
+    #[test]
+    fn has_any_admin_perm_per_field() {
+        let perms = [
+            "can_manage_system",
+            "can_manage_users",
+            "can_manage_connections",
+            "can_view_audit_logs",
+            "can_create_users",
+            "can_create_user_groups",
+            "can_create_connections",
+            "can_create_connection_folders",
+            "can_create_sharing_profiles",
+        ];
+        for field in perms {
+            let user = make_user_with_perm(field);
+            let has_any = user.can_manage_system
+                || user.can_manage_users
+                || user.can_manage_connections
+                || user.can_view_audit_logs
+                || user.can_create_users
+                || user.can_create_user_groups
+                || user.can_create_connections
+                || user.can_create_connection_folders
+                || user.can_create_sharing_profiles;
+            assert!(has_any, "Expected '{}' to grant admin perm", field);
+        }
+    }
+
+    /// User with zero permissions has no admin access.
+    #[test]
+    fn no_permissions_means_no_admin() {
+        let user = make_user_with_perm("none");
+        let has_any = user.can_manage_system
+            || user.can_manage_users
+            || user.can_manage_connections
+            || user.can_view_audit_logs
+            || user.can_create_users
+            || user.can_create_user_groups
+            || user.can_create_connections
+            || user.can_create_connection_folders
+            || user.can_create_sharing_profiles;
+        assert!(!has_any);
+    }
+
+    #[test]
+    fn auth_user_full_name_none() {
+        let user = AuthUser {
+            id: Uuid::nil(),
+            sub: "sub".into(),
+            username: "anon".into(),
+            full_name: None,
+            role: "user".into(),
+            can_manage_system: false,
+            can_manage_users: false,
+            can_manage_connections: false,
+            can_view_audit_logs: false,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
+        };
+        assert!(user.full_name.is_none());
+    }
+
+    #[test]
+    fn auth_user_all_permissions_true() {
+        let user = AuthUser {
+            id: Uuid::new_v4(),
+            sub: "admin-sub".into(),
+            username: "superadmin".into(),
+            full_name: Some("Super Admin".into()),
+            role: "admin".into(),
+            can_manage_system: true,
+            can_manage_users: true,
+            can_manage_connections: true,
+            can_view_audit_logs: true,
+            can_create_users: true,
+            can_create_user_groups: true,
+            can_create_connections: true,
+            can_create_connection_folders: true,
+            can_create_sharing_profiles: true,
+        };
+        assert!(user.can_manage_system);
+        assert!(user.can_create_sharing_profiles);
+        assert_eq!(user.role, "admin");
+    }
 }

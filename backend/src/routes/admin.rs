@@ -3021,4 +3021,496 @@ mod tests {
         let result = redact_settings(input);
         assert_eq!(result[0].1, STAR_MASK);
     }
+
+    // ── UpdateRoleRequest ──────────────────────────────────────────
+    #[test]
+    fn update_role_request_all_optional() {
+        let r: UpdateRoleRequest = serde_json::from_str("{}").unwrap();
+        assert!(r.name.is_none());
+        assert!(r.can_manage_system.is_none());
+        assert!(r.can_manage_users.is_none());
+        assert!(r.can_manage_connections.is_none());
+        assert!(r.can_view_audit_logs.is_none());
+        assert!(r.can_create_users.is_none());
+        assert!(r.can_create_user_groups.is_none());
+        assert!(r.can_create_connections.is_none());
+        assert!(r.can_create_connection_folders.is_none());
+        assert!(r.can_create_sharing_profiles.is_none());
+    }
+
+    #[test]
+    fn update_role_request_partial_fields() {
+        let r: UpdateRoleRequest =
+            serde_json::from_str(r#"{"name":"editor","can_manage_connections":true}"#).unwrap();
+        assert_eq!(r.name.as_deref(), Some("editor"));
+        assert_eq!(r.can_manage_connections, Some(true));
+        assert!(r.can_manage_system.is_none());
+    }
+
+    #[test]
+    fn create_role_request_with_permissions() {
+        let r: CreateRoleRequest = serde_json::from_str(
+            r#"{"name":"manager","can_manage_users":true,"can_view_audit_logs":true}"#,
+        )
+        .unwrap();
+        assert_eq!(r.name, "manager");
+        assert_eq!(r.can_manage_users, Some(true));
+        assert_eq!(r.can_view_audit_logs, Some(true));
+        assert!(r.can_manage_system.is_none());
+    }
+
+    // ── UpdateFolderRequest ────────────────────────────────────────
+    #[test]
+    fn update_folder_request_deser() {
+        let r: UpdateFolderRequest =
+            serde_json::from_str(r#"{"name":"production"}"#).unwrap();
+        assert_eq!(r.name, "production");
+        assert!(r.parent_id.is_none());
+    }
+
+    #[test]
+    fn update_folder_request_with_parent() {
+        let r: UpdateFolderRequest = serde_json::from_str(
+            r#"{"name":"sub","parent_id":"550e8400-e29b-41d4-a716-446655440000"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.name, "sub");
+        assert!(r.parent_id.is_some());
+    }
+
+    #[test]
+    fn create_folder_request_with_parent() {
+        let r: CreateFolderRequest = serde_json::from_str(
+            r#"{"name":"sub","parent_id":"550e8400-e29b-41d4-a716-446655440000"}"#,
+        )
+        .unwrap();
+        assert!(r.parent_id.is_some());
+    }
+
+    // ── RoleMappings serialization ─────────────────────────────────
+    #[test]
+    fn role_mappings_serializes() {
+        let m = RoleMappings {
+            connection_ids: vec![Uuid::nil()],
+            folder_ids: vec![],
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["connection_ids"].as_array().unwrap().len(), 1);
+        assert!(v["folder_ids"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn role_mapping_update_with_folders() {
+        let json = r#"{"connection_ids":["550e8400-e29b-41d4-a716-446655440000"],"folder_ids":["660e8400-e29b-41d4-a716-446655440000"]}"#;
+        let r: RoleMappingUpdate = serde_json::from_str(json).unwrap();
+        assert_eq!(r.connection_ids.len(), 1);
+        assert_eq!(r.folder_ids.len(), 1);
+    }
+
+    // ── ObserveQuery ───────────────────────────────────────────────
+    #[test]
+    fn observe_query_defaults() {
+        let q: ObserveQuery = serde_json::from_str("{}").unwrap();
+        assert!(q.offset.is_none());
+        assert!(q.speed.is_none());
+    }
+
+    #[test]
+    fn observe_query_with_values() {
+        let q: ObserveQuery =
+            serde_json::from_str(r#"{"offset":60,"speed":2.0}"#).unwrap();
+        assert_eq!(q.offset.unwrap(), 60);
+        assert!((q.speed.unwrap() - 2.0).abs() < f64::EPSILON);
+    }
+
+    // ── KillSessionsRequest ────────────────────────────────────────
+    #[test]
+    fn kill_sessions_request_deser() {
+        let r: KillSessionsRequest =
+            serde_json::from_str(r#"{"session_ids":["abc","def"]}"#).unwrap();
+        assert_eq!(r.session_ids.len(), 2);
+        assert_eq!(r.session_ids[0], "abc");
+    }
+
+    #[test]
+    fn kill_sessions_request_empty() {
+        let r: KillSessionsRequest =
+            serde_json::from_str(r#"{"session_ids":[]}"#).unwrap();
+        assert!(r.session_ids.is_empty());
+    }
+
+    // ── AuditLogRow serialization ──────────────────────────────────
+    #[test]
+    fn audit_log_row_serializes() {
+        let r = AuditLogRow {
+            id: 1,
+            created_at: chrono::Utc::now(),
+            user_id: Some(Uuid::nil()),
+            username: Some("admin".into()),
+            action_type: "login".into(),
+            details: serde_json::json!({"ip": "127.0.0.1"}),
+            current_hash: "abc123".into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["action_type"], "login");
+        assert_eq!(v["current_hash"], "abc123");
+    }
+
+    #[test]
+    fn audit_log_row_serializes_without_user() {
+        let r = AuditLogRow {
+            id: 2,
+            created_at: chrono::Utc::now(),
+            user_id: None,
+            username: None,
+            action_type: "system.startup".into(),
+            details: serde_json::json!({}),
+            current_hash: "def456".into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v["user_id"].is_null());
+        assert!(v["username"].is_null());
+    }
+
+    // ── RecordingsUpdateRequest ────────────────────────────────────
+    #[test]
+    fn recordings_update_request_azure_fields() {
+        let json = r#"{"enabled":true,"storage_type":"azure","azure_account_name":"acct","azure_container_name":"recordings","azure_access_key":"key123","retention_days":90}"#;
+        let r: RecordingsUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.azure_account_name.as_deref(), Some("acct"));
+        assert_eq!(r.azure_container_name.as_deref(), Some("recordings"));
+        assert_eq!(r.azure_access_key.as_deref(), Some("key123"));
+        assert_eq!(r.retention_days, Some(90));
+    }
+
+    // ── ConnectionRow with extra ───────────────────────────────────
+    #[test]
+    fn connection_row_serializes_with_extra() {
+        let r = ConnectionRow {
+            id: Uuid::nil(),
+            name: "rdp-host".into(),
+            protocol: "rdp".into(),
+            hostname: "10.0.0.2".into(),
+            port: 3389,
+            domain: None,
+            description: "".into(),
+            folder_id: Some(Uuid::nil()),
+            extra: serde_json::json!({"color-depth": "32", "enable-wallpaper": "true"}),
+            last_accessed: Some(chrono::Utc::now()),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["extra"]["color-depth"], "32");
+        assert!(v["folder_id"].is_string());
+        assert!(v["last_accessed"].is_string());
+    }
+
+    // ── CreateConnectionRequest extra cases ────────────────────────
+    #[test]
+    fn create_connection_request_with_folder() {
+        let json = r#"{"name":"test","protocol":"ssh","hostname":"box","folder_id":"550e8400-e29b-41d4-a716-446655440000","port":22}"#;
+        let r: CreateConnectionRequest = serde_json::from_str(json).unwrap();
+        assert!(r.folder_id.is_some());
+        assert_eq!(r.port, Some(22));
+    }
+
+    // ── ConnectionFolderRow with parent ────────────────────────────
+    #[test]
+    fn connection_folder_row_with_parent() {
+        let parent = Uuid::new_v4();
+        let r = ConnectionFolderRow {
+            id: Uuid::nil(),
+            name: "Sub-folder".into(),
+            parent_id: Some(parent),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["name"], "Sub-folder");
+        assert!(v["parent_id"].is_string());
+    }
+
+    // ── CreateAdSyncConfigRequest full ─────────────────────────────
+    #[test]
+    fn create_ad_sync_config_request_full() {
+        let json = r#"{
+            "label":"Full AD",
+            "ldap_url":"ldaps://dc.corp.local:636",
+            "bind_dn":"cn=admin,dc=corp,dc=local",
+            "bind_password":"secret",
+            "search_bases":["dc=corp,dc=local","dc=sub,dc=corp,dc=local"],
+            "search_filter":"(objectClass=computer)",
+            "search_scope":"subtree",
+            "protocol":"rdp",
+            "default_port":3389,
+            "domain_override":"CORP",
+            "tls_skip_verify":true,
+            "sync_interval_minutes":30,
+            "enabled":true,
+            "auth_method":"simple",
+            "connection_defaults":{"color-depth":"24"}
+        }"#;
+        let r: CreateAdSyncConfigRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.label, "Full AD");
+        assert_eq!(r.search_bases.len(), 2);
+        assert_eq!(r.domain_override.as_deref(), Some("CORP"));
+        assert_eq!(r.tls_skip_verify, Some(true));
+        assert_eq!(r.sync_interval_minutes, Some(30));
+        assert_eq!(r.auth_method.as_deref(), Some("simple"));
+        assert!(r.connection_defaults.is_some());
+    }
+
+    // ── UpdateAdSyncConfigRequest full ─────────────────────────────
+    #[test]
+    fn update_ad_sync_config_request_full() {
+        let json = r#"{
+            "label":"Updated",
+            "ldap_url":"ldaps://new-dc.corp.local",
+            "bind_dn":"cn=svc,dc=corp,dc=local",
+            "bind_password":"newsecret",
+            "search_bases":["dc=new,dc=corp"],
+            "search_filter":"(objectClass=user)",
+            "search_scope":"one",
+            "protocol":"ssh",
+            "default_port":22,
+            "domain_override":"NEWCORP",
+            "tls_skip_verify":false,
+            "sync_interval_minutes":120,
+            "enabled":false,
+            "auth_method":"gssapi",
+            "keytab_path":"/etc/krb5.keytab",
+            "krb5_principal":"svc@CORP.LOCAL",
+            "ca_cert_pem":"-----BEGIN CERTIFICATE-----\nMIID...",
+            "connection_defaults":{"enable-wallpaper":"true"}
+        }"#;
+        let r: UpdateAdSyncConfigRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.label.as_deref(), Some("Updated"));
+        assert_eq!(r.protocol.as_deref(), Some("ssh"));
+        assert_eq!(r.default_port, Some(22));
+        assert_eq!(r.auth_method.as_deref(), Some("gssapi"));
+        assert!(r.keytab_path.is_some());
+        assert!(r.krb5_principal.is_some());
+        assert!(r.ca_cert_pem.is_some());
+        assert!(r.connection_defaults.is_some());
+    }
+
+    // ── CreateUserRequest extra cases ──────────────────────────────
+    #[test]
+    fn create_user_request_with_full_name() {
+        let json = r#"{"username":"jdoe","email":"jdoe@example.com","full_name":"John Doe","role_id":"550e8400-e29b-41d4-a716-446655440000","auth_type":"sso"}"#;
+        let r: CreateUserRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.full_name.as_deref(), Some("John Doe"));
+        assert_eq!(r.auth_type, "sso");
+    }
+
+    // ── KerberosRealmRow edges ─────────────────────────────────────
+    #[test]
+    fn kerberos_realm_row_with_custom_lifetime() {
+        let r = KerberosRealmRow {
+            id: Uuid::nil(),
+            realm: "EXAMPLE.COM".into(),
+            kdc_servers: "kdc1.example.com".into(),
+            admin_server: "admin.example.com".into(),
+            ticket_lifetime: "8h".into(),
+            renew_lifetime: "2d".into(),
+            is_default: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["ticket_lifetime"], "8h");
+        assert_eq!(v["renew_lifetime"], "2d");
+        assert_eq!(v["is_default"], false);
+    }
+
+    // ── redact_settings edge cases ─────────────────────────────────
+    #[test]
+    fn redact_settings_empty_input() {
+        let result = redact_settings(vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn redact_settings_partial_key_match() {
+        // "azure_storage_access_key" contains "azure_storage_access_key"
+        let input = vec![
+            ("azure_storage_access_key".into(), "mykey".into()),
+            ("my_custom_vault_token_note".into(), "note".into()),
+        ];
+        let result = redact_settings(input);
+        assert_eq!(result[0].1, "********"); // Matches SENSITIVE_SETTINGS
+        assert_eq!(result[1].1, "********"); // Contains "vault_token"
+    }
+
+    // ── validate_no_restricted_keys edge cases ─────────────────────
+    #[test]
+    fn validate_no_restricted_keys_empty_ok() {
+        assert!(validate_no_restricted_keys(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_all_restricted() {
+        for key in RESTRICTED_SETTINGS {
+            let settings = vec![SettingKV {
+                key: key.to_string(),
+                value: "val".into(),
+            }];
+            assert!(
+                validate_no_restricted_keys(&settings).is_err(),
+                "Expected '{}' to be restricted",
+                key
+            );
+        }
+    }
+
+    // ── VaultUpdateRequest extra ───────────────────────────────────
+    #[test]
+    fn vault_update_request_with_transit_key() {
+        let json = r#"{"mode":"external","address":"https://vault:8200","token":"tok","transit_key":"custom-key"}"#;
+        let r: VaultUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.transit_key.as_deref(), Some("custom-key"));
+    }
+
+    // ── UserRow with sub ───────────────────────────────────────────
+    #[test]
+    fn user_row_serializes_with_sub() {
+        let r = UserRow {
+            id: Uuid::nil(),
+            username: "sso-user".into(),
+            email: "sso@corp.local".into(),
+            full_name: Some("SSO User".into()),
+            auth_type: "sso".into(),
+            sub: Some("auth0|12345".into()),
+            role_name: "user".into(),
+            deleted_at: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["sub"], "auth0|12345");
+        assert_eq!(v["auth_type"], "sso");
+    }
+
+    // ── SettingsUpdateRequest with masked values ───────────────────
+    #[test]
+    fn settings_update_request_with_sensitive() {
+        let json = r#"{"settings":[{"key":"sso_client_secret","value":"********"}]}"#;
+        let r: SettingsUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.settings[0].value, "********");
+    }
+
+    // ── is_safe_hostname edge cases ────────────────────────────────
+    #[test]
+    fn safe_hostname_single_char() {
+        assert!(is_safe_hostname("a"));
+        assert!(is_safe_hostname("1"));
+    }
+
+    #[test]
+    fn safe_hostname_rejects_null_bytes() {
+        assert!(!is_safe_hostname("host\0name"));
+    }
+
+    #[test]
+    fn safe_hostname_rejects_space() {
+        assert!(!is_safe_hostname("host name.com"));
+    }
+
+    #[test]
+    fn safe_hostname_allows_all_digits() {
+        assert!(is_safe_hostname("192.168.1.1:389"));
+    }
+
+    // ── CreateKerberosRealmRequest with all fields ──────────────────
+    #[test]
+    fn create_kerberos_realm_request_full() {
+        let json = r#"{
+            "realm":"EXAMPLE.COM",
+            "kdc_servers":["kdc1","kdc2","kdc3"],
+            "admin_server":"kadmin.example.com",
+            "ticket_lifetime":"12h",
+            "renew_lifetime":"5d",
+            "is_default":true
+        }"#;
+        let r: CreateKerberosRealmRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.kdc_servers.len(), 3);
+        assert_eq!(r.ticket_lifetime.as_deref(), Some("12h"));
+        assert_eq!(r.renew_lifetime.as_deref(), Some("5d"));
+        assert_eq!(r.is_default, Some(true));
+    }
+
+    // ── ListRecordingsQuery ────────────────────────────────────────
+    #[test]
+    fn list_recordings_query_deser() {
+        let q: super::recordings::ListRecordingsQuery =
+            serde_json::from_str("{}").unwrap();
+        assert!(q.user_id.is_none());
+        assert!(q.connection_id.is_none());
+        assert!(q.limit.is_none());
+        assert!(q.offset.is_none());
+    }
+
+    #[test]
+    fn list_recordings_query_with_values() {
+        let q: super::recordings::ListRecordingsQuery = serde_json::from_str(
+            r#"{"user_id":"550e8400-e29b-41d4-a716-446655440000","limit":10,"offset":20}"#,
+        )
+        .unwrap();
+        assert!(q.user_id.is_some());
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, Some(20));
+    }
+
+    // ── KerberosUpdateRequest full ─────────────────────────────────
+    #[test]
+    fn kerberos_update_request_full() {
+        let json = r#"{"realm":"CORP.LOCAL","kdc":["kdc1","kdc2"],"admin_server":"admin","ticket_lifetime":"24h","renew_lifetime":"7d"}"#;
+        let r: KerberosUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.kdc.len(), 2);
+        assert_eq!(r.ticket_lifetime.as_deref(), Some("24h"));
+        assert_eq!(r.renew_lifetime.as_deref(), Some("7d"));
+    }
+
+    // ── role_row with all permissions true ──────────────────────────
+    #[test]
+    fn role_row_all_permissions() {
+        let r = RoleRow {
+            id: Uuid::nil(),
+            name: "superadmin".into(),
+            can_manage_system: true,
+            can_manage_users: true,
+            can_manage_connections: true,
+            can_view_audit_logs: true,
+            can_create_users: true,
+            can_create_user_groups: true,
+            can_create_connections: true,
+            can_create_connection_folders: true,
+            can_create_sharing_profiles: true,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["can_manage_system"], true);
+        assert_eq!(v["can_manage_users"], true);
+        assert_eq!(v["can_manage_connections"], true);
+        assert_eq!(v["can_view_audit_logs"], true);
+        assert_eq!(v["can_create_users"], true);
+        assert_eq!(v["can_create_user_groups"], true);
+        assert_eq!(v["can_create_connections"], true);
+        assert_eq!(v["can_create_connection_folders"], true);
+        assert_eq!(v["can_create_sharing_profiles"], true);
+    }
+
+    // ── CredentialProfileRow serialization ──────────────────────────
+    #[test]
+    fn credential_profile_row_deser() {
+        let now = chrono::Utc::now();
+        let r = super::super::user::CredentialProfileRow {
+            id: Uuid::nil(),
+            label: "Work".into(),
+            created_at: now,
+            updated_at: now,
+            expires_at: now,
+            expired: false,
+            ttl_hours: 8,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["label"], "Work");
+        assert_eq!(v["expired"], false);
+        assert_eq!(v["ttl_hours"], 8);
+    }
 }

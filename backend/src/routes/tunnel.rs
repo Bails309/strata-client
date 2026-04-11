@@ -676,4 +676,80 @@ mod tests {
         assert_eq!(r.height, Some(2160));
         assert_eq!(r.dpi, Some(192));
     }
+
+    // ── Additional clamp_dimension tests ───────────────────────────
+
+    #[test]
+    fn clamp_dimension_default_is_returned_for_zero() {
+        // Different defaults for different use cases
+        assert_eq!(clamp_dimension(0, MIN_DIM, MAX_WIDTH, 1920), 1920);
+        assert_eq!(clamp_dimension(0, MIN_DIM, MAX_HEIGHT, 1080), 1080);
+        assert_eq!(clamp_dimension(0, MIN_DIM, MAX_DPI, 96), 96);
+    }
+
+    #[test]
+    fn clamp_dimension_u32_max() {
+        assert_eq!(
+            clamp_dimension(u32::MAX, MIN_DIM, MAX_WIDTH, 1920),
+            MAX_WIDTH
+        );
+    }
+
+    #[test]
+    fn clamp_dimension_value_equals_default() {
+        assert_eq!(clamp_dimension(1920, MIN_DIM, MAX_WIDTH, 1920), 1920);
+    }
+
+    // ── TunnelQuery edge cases ─────────────────────────────────────
+
+    #[test]
+    fn tunnel_query_with_ticket_only() {
+        let q: TunnelQuery =
+            serde_json::from_str(r#"{"ticket":"abc-ticket-123"}"#).unwrap();
+        assert_eq!(q.ticket.as_deref(), Some("abc-ticket-123"));
+        assert!(q.username.is_none());
+    }
+
+    // ── CreateTicketRequest edge cases ─────────────────────────────
+
+    #[test]
+    fn create_ticket_request_with_credential_profile() {
+        let json = r#"{"connection_id":"550e8400-e29b-41d4-a716-446655440000","credential_profile_id":"660e8400-e29b-41d4-a716-446655440000"}"#;
+        let r: CreateTicketRequest = serde_json::from_str(json).unwrap();
+        assert!(r.credential_profile_id.is_some());
+    }
+
+    #[test]
+    fn create_ticket_request_with_ignore_cert() {
+        let json = r#"{"connection_id":"550e8400-e29b-41d4-a716-446655440000","ignore_cert":true}"#;
+        let r: CreateTicketRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.ignore_cert, Some(true));
+    }
+
+    // ── Rate limit constants ───────────────────────────────────────
+
+    #[test]
+    fn tunnel_rate_limit_constants() {
+        assert_eq!(MAX_TUNNEL_PER_USER, 30);
+        assert_eq!(TUNNEL_WINDOW_SECS, 60);
+        assert!(MAX_TUNNEL_RATE_ENTRIES >= 10_000);
+    }
+
+    // ── Dimension constants for completeness ───────────────────────
+
+    #[test]
+    fn max_width_at_least_8k() {
+        assert!(MAX_WIDTH >= 7680);
+    }
+
+    #[test]
+    fn max_height_at_least_8k() {
+        assert!(MAX_HEIGHT >= 4320);
+    }
+
+    #[test]
+    fn max_dpi_is_reasonable() {
+        assert!(MAX_DPI >= 300);
+        assert!(MAX_DPI <= 1200);
+    }
 }

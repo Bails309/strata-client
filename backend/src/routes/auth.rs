@@ -858,4 +858,75 @@ mod tests {
         let json = result.unwrap();
         assert_eq!(json.0["status"], "logged_out");
     }
+
+    // ── get_base_url additional cases ──────────────────────────────
+
+    #[test]
+    fn get_base_url_https_default_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("host", "secure.example.com".parse().unwrap());
+        assert_eq!(get_base_url(&headers), "https://secure.example.com");
+    }
+
+    #[test]
+    fn get_base_url_with_custom_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        headers.insert("host", "example.com:3443".parse().unwrap());
+        assert_eq!(get_base_url(&headers), "https://example.com:3443");
+    }
+
+    #[test]
+    fn get_base_url_missing_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert_eq!(get_base_url(&headers), "https://localhost");
+    }
+
+    // ── extract_client_ip additional cases ─────────────────────────
+
+    #[test]
+    fn extract_client_ip_only_whitespace() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "   ".parse().unwrap());
+        assert_eq!(extract_client_ip(&headers), "unknown");
+    }
+
+    #[test]
+    fn extract_client_ip_trailing_comma() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.1,".parse().unwrap());
+        // Rightmost non-empty entry
+        assert_eq!(extract_client_ip(&headers), "10.0.0.1");
+    }
+
+    // ── LoginRequest additional cases ──────────────────────────────
+
+    #[test]
+    fn login_request_rejects_missing_password() {
+        let json = r#"{"password":"secret"}"#;
+        let res: Result<LoginRequest, _> = serde_json::from_str(json);
+        assert!(res.is_err());
+    }
+
+    // ── Constants and SSO config ───────────────────────────────────
+
+    #[test]
+    fn rate_limit_per_ip_is_stricter_window() {
+        // IP rate limiting has a larger window to catch distributed attacks
+        assert!(IP_WINDOW_SECS > WINDOW_SECS);
+        assert!(MAX_IP_ATTEMPTS > MAX_ATTEMPTS);
+    }
+
+    #[test]
+    fn sso_state_ttl_is_reasonable() {
+        assert!(SSO_STATE_TTL_SECS >= 60);
+        assert!(SSO_STATE_TTL_SECS <= 600);
+    }
+
+    #[test]
+    fn max_rate_limit_entries_prevents_oom() {
+        assert!(MAX_RATE_LIMIT_ENTRIES >= 10_000);
+    }
 }

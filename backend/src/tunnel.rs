@@ -1195,4 +1195,145 @@ mod tests {
         assert_eq!(op, "ready");
         assert_eq!(args.len(), 1);
     }
+
+    // ── read_instruction edge cases ────────────────────────────────
+
+    #[tokio::test]
+    async fn read_instruction_error_instruction() {
+        let data = b"5.error,20.Server not available,3.519;";
+        let mut cursor = std::io::Cursor::new(data);
+        let (op, args) = read_instruction(&mut cursor).await.unwrap();
+        assert_eq!(op, "error");
+        assert_eq!(args[0], "Server not available");
+        assert_eq!(args[1], "519");
+    }
+
+    #[tokio::test]
+    async fn read_instruction_nop() {
+        let data = b"3.nop;";
+        let mut cursor = std::io::Cursor::new(data);
+        let (op, args) = read_instruction(&mut cursor).await.unwrap();
+        assert_eq!(op, "nop");
+        assert!(args.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_instruction_select() {
+        let data = b"6.select,3.rdp;";
+        let mut cursor = std::io::Cursor::new(data);
+        let (op, args) = read_instruction(&mut cursor).await.unwrap();
+        assert_eq!(op, "select");
+        assert_eq!(args, vec!["rdp"]);
+    }
+
+    // ── HandshakeParams edge cases ─────────────────────────────────
+
+    #[test]
+    fn param_map_with_recording_name() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: Some("/recordings".into()),
+            recording_name: Some("session.guac".into()),
+            create_recording_path: true,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.param_map();
+        assert_eq!(m["recording-path"], "/recordings");
+        assert_eq!(m["recording-name"], "session.guac");
+        assert_eq!(m["create-recording-path"], "true");
+    }
+
+    #[test]
+    fn full_param_map_clipboard_for_all_protocols() {
+        for proto in &["rdp", "ssh", "vnc", "telnet"] {
+            let hp = HandshakeParams {
+                protocol: proto.to_string(),
+                hostname: "h".into(),
+                port: 22,
+                username: None,
+                password: None,
+                domain: None,
+                security: None,
+                ignore_cert: false,
+                recording_path: None,
+                recording_name: None,
+                create_recording_path: false,
+                width: 800,
+                height: 600,
+                dpi: 96,
+                extra: std::collections::HashMap::new(),
+            };
+            let m = hp.full_param_map();
+            assert_eq!(
+                m["disable-copy"], "false",
+                "disable-copy missing for {proto}"
+            );
+            assert_eq!(
+                m["disable-paste"], "false",
+                "disable-paste missing for {proto}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_param_map_rdp_clipboard_buffer() {
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: std::collections::HashMap::new(),
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["clipboard-buffer-size"], "8388608"); // 8 MiB
+    }
+
+    // ── guac_instruction edge cases ────────────────────────────────
+
+    #[test]
+    fn guac_instruction_with_empty_string_arg() {
+        let bytes = guac_instruction("test", &[""]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "4.test,0.;");
+    }
+
+    #[test]
+    fn guac_instruction_error_format() {
+        let bytes = guac_instruction("error", &["Not found", "404"]);
+        let s = String::from_utf8(bytes).unwrap();
+        assert_eq!(s, "5.error,9.Not found,3.404;");
+    }
+
+    // ── is_allowed_guacd_param: additional blocked names ───────────
+
+    #[test]
+    fn blocked_sensitive_params() {
+        // These should never be allowed via extra
+        assert!(!is_allowed_guacd_param("domain"));
+        assert!(!is_allowed_guacd_param("security"));
+        assert!(!is_allowed_guacd_param("port"));
+        assert!(!is_allowed_guacd_param("recording-path"));
+        assert!(!is_allowed_guacd_param("recording-name"));
+        assert!(!is_allowed_guacd_param("create-recording-path"));
+    }
 }

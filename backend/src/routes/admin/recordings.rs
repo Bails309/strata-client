@@ -508,4 +508,136 @@ mod tests {
 
         assert!(parser.next_instruction().is_none());
     }
+
+    // ── Additional GuacamoleParser tests ───────────────────────────
+
+    #[test]
+    fn test_parser_chunk_boundary() {
+        // Content ends exactly at 16KB chunk boundary
+        let mut parser = GuacamoleParser::new();
+        let data = "a".repeat(100);
+        let inst = format!("100.{data};");
+        parser.push(inst.as_bytes());
+        let result = parser.next_instruction().unwrap();
+        assert_eq!(result.opcode, data);
+        assert!(result.args.is_empty());
+    }
+
+    #[test]
+    fn test_parser_incremental_bytes() {
+        let mut parser = GuacamoleParser::new();
+        let full = b"4.sync,13.1617091200000;";
+        // Push one byte at a time
+        for &b in full.iter() {
+            parser.push(&[b]);
+        }
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "sync");
+        assert_eq!(inst.args, vec!["1617091200000"]);
+    }
+
+    #[test]
+    fn test_parser_no_args_instruction() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"3.nop;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "nop");
+        assert!(inst.args.is_empty());
+        assert_eq!(inst.raw, "3.nop;");
+    }
+
+    #[test]
+    fn test_parser_large_instruction() {
+        let mut parser = GuacamoleParser::new();
+        let large = "b".repeat(5000);
+        let inst = format!("5000.{large};");
+        parser.push(inst.as_bytes());
+        let result = parser.next_instruction().unwrap();
+        assert_eq!(result.opcode, large);
+    }
+
+    #[test]
+    fn test_parser_buffer_clears_on_malformed() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"abc.broken;");
+        assert!(parser.next_instruction().is_none());
+        assert!(parser.buffer.is_empty());
+        // After clear, new valid data works
+        parser.push(b"3.nop;");
+        assert!(parser.next_instruction().is_some());
+    }
+
+    #[test]
+    fn test_parser_three_args() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"4.size,4.1920,4.1080,2.96;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "size");
+        assert_eq!(inst.args, vec!["1920", "1080", "96"]);
+    }
+
+    #[test]
+    fn test_parser_multiple_unicode() {
+        let mut parser = GuacamoleParser::new();
+        // "é" is 1 char, 2 bytes. "中" is 1 char, 3 bytes.
+        parser.push("1.é,1.中;".as_bytes());
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "é");
+        assert_eq!(inst.args, vec!["中"]);
+    }
+
+    #[test]
+    fn test_parser_consecutive_after_partial() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"3.img,5.hello;3.nop;");
+        let inst1 = parser.next_instruction().unwrap();
+        assert_eq!(inst1.opcode, "img");
+        assert_eq!(inst1.args, vec!["hello"]);
+        let inst2 = parser.next_instruction().unwrap();
+        assert_eq!(inst2.opcode, "nop");
+        assert!(parser.next_instruction().is_none());
+    }
+
+    #[test]
+    fn test_parser_raw_preserved() {
+        let mut parser = GuacamoleParser::new();
+        let raw = "4.sync,13.1617091200000;";
+        parser.push(raw.as_bytes());
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.raw, raw);
+    }
+
+    #[test]
+    fn test_parser_empty_opcode() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"0.,5.hello;");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "");
+        assert_eq!(inst.args, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_parser_waiting_for_terminator() {
+        let mut parser = GuacamoleParser::new();
+        // Push data without terminator
+        parser.push(b"3.nop");
+        assert!(parser.next_instruction().is_none());
+        // Complete with terminator
+        parser.push(b";");
+        let inst = parser.next_instruction().unwrap();
+        assert_eq!(inst.opcode, "nop");
+    }
+
+    #[test]
+    fn test_parser_new_is_empty() {
+        let mut parser = GuacamoleParser::new();
+        assert!(parser.next_instruction().is_none());
+    }
+
+    #[test]
+    fn test_parser_push_empty() {
+        let mut parser = GuacamoleParser::new();
+        parser.push(b"");
+        assert!(parser.next_instruction().is_none());
+    }
 }

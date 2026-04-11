@@ -538,4 +538,69 @@ mod tests {
         let r: CreateShareRequest = serde_json::from_str(r#"{"mode":"other"}"#).unwrap();
         assert_eq!(r.mode, "other");
     }
+
+    // ── Share link URL construction ────────────────────────────────
+
+    #[test]
+    fn share_link_response_view_url_format() {
+        let token = "abc-123";
+        let url = format!("/shared/{}", token);
+        assert!(!url.contains("mode="));
+        assert_eq!(url, "/shared/abc-123");
+    }
+
+    #[test]
+    fn share_link_response_control_url_format() {
+        let token = "abc-123";
+        let url = format!("/shared/{}?mode=control", token);
+        assert!(url.contains("mode=control"));
+    }
+
+    // ── Rate limit constants ───────────────────────────────────────
+
+    #[test]
+    fn share_rate_limit_constants_consistent() {
+        assert!(MAX_SHARE_ATTEMPTS > 0);
+        assert!(SHARE_WINDOW_SECS > 0);
+        assert!(MAX_SHARE_RATE_ENTRIES > MAX_SHARE_ATTEMPTS);
+    }
+
+    #[test]
+    fn default_share_expiry_is_positive() {
+        assert!(DEFAULT_SHARE_EXPIRY_HOURS > 0);
+    }
+
+    // ── SharedTunnelQuery edge cases ───────────────────────────────
+
+    #[test]
+    fn shared_tunnel_query_all_zeros() {
+        let q: SharedTunnelQuery =
+            serde_json::from_str(r#"{"width":0,"height":0,"dpi":0}"#).unwrap();
+        assert_eq!(q.width.unwrap(), 0);
+        assert_eq!(q.height.unwrap(), 0);
+        assert_eq!(q.dpi.unwrap(), 0);
+    }
+
+    #[test]
+    fn shared_tunnel_query_large_values() {
+        let q: SharedTunnelQuery =
+            serde_json::from_str(r#"{"width":7680,"height":4320,"dpi":600}"#).unwrap();
+        assert_eq!(q.width.unwrap(), 7680);
+        assert_eq!(q.height.unwrap(), 4320);
+        assert_eq!(q.dpi.unwrap(), 600);
+    }
+
+    // ── ShareLinkResponse field access ─────────────────────────────
+
+    #[test]
+    fn share_link_response_fields_accessible() {
+        let resp = ShareLinkResponse {
+            share_token: "tok".into(),
+            share_url: "/shared/tok".into(),
+            mode: "view".into(),
+        };
+        assert_eq!(resp.share_token, "tok");
+        assert_eq!(resp.share_url, "/shared/tok");
+        assert_eq!(resp.mode, "view");
+    }
 }

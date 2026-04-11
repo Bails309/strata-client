@@ -1806,6 +1806,17 @@ pub async fn delete_connection_folder(
     Ok(Json(json!({ "status": "deleted" })))
 }
 
+/// Encode a Guacamole protocol instruction as a `String` from opcode + args.
+/// Format: `<opcode_len>.<opcode>,<arg1_len>.<arg1>,…;`
+fn format_guac_inst(opcode: &str, args: &[&str]) -> String {
+    let mut out = format!("{}.{}", opcode.len(), opcode);
+    for arg in args {
+        out.push_str(&format!(",{}.{}", arg.len(), arg));
+    }
+    out.push(';');
+    out
+}
+
 // ── Active Sessions (NVR) ──────────────────────────────────────────
 
 pub async fn list_active_sessions(
@@ -1906,21 +1917,10 @@ pub async fn observe_session(
         .on_upgrade(move |mut socket| async move {
             use axum::extract::ws::Message;
 
-            // Helper: encode a Guacamole instruction from opcode + args.
-            // Format: "<opcode_len>.<opcode>,<arg1_len>.<arg1>,…;"
-            fn guac_inst(opcode: &str, args: &[&str]) -> String {
-                let mut out = format!("{}.{}", opcode.len(), opcode);
-                for arg in args {
-                    out.push_str(&format!(",{}.{}", arg.len(), arg));
-                }
-                out.push(';');
-                out
-            }
-
             // Send total replay duration so the frontend can show a progress bar.
             let total_str = total_replay_ms.to_string();
             let speed_str = format!("{speed}");
-            let header = guac_inst("nvrheader", &[&total_str, &speed_str]);
+            let header = format_guac_inst("nvrheader", &[&total_str, &speed_str]);
             if socket.send(Message::Text(header)).await.is_err() {
                 return;
             }
@@ -1959,7 +1959,7 @@ pub async fn observe_session(
                     // Send progress marker periodically
                     if i % 20 == 0 || i == timed_frames.len() - 1 {
                         let ms_str = delay_ms.to_string();
-                        let progress = guac_inst("nvrprogress", &[&ms_str]);
+                        let progress = format_guac_inst("nvrprogress", &[&ms_str]);
                         if socket.send(Message::Text(progress)).await.is_err() {
                             return;
                         }
@@ -1972,7 +1972,7 @@ pub async fn observe_session(
             }
 
             // Send replay-done marker so the frontend knows we're now live
-            let done = guac_inst("nvrreplaydone", &[]);
+            let done = format_guac_inst("nvrreplaydone", &[]);
             let _ = socket.send(Message::Text(done)).await;
 
             // Phase 2: Forward live frames from the broadcast channel while
@@ -4158,5 +4158,52 @@ mod tests {
     fn share_mode_uppercase() {
         // Only exact matches accepted, not case-insensitive
         assert!(validate_share_mode("View").is_err());
+    }
+
+    // ── format_guac_inst ───────────────────────────────────────────
+
+    #[test]
+    fn guac_inst_no_args() {
+        assert_eq!(format_guac_inst("nvrreplaydone", &[]), "13.nvrreplaydone;");
+    }
+
+    #[test]
+    fn guac_inst_single_arg() {
+        assert_eq!(
+            format_guac_inst("nvrprogress", &["5000"]),
+            "11.nvrprogress,4.5000;"
+        );
+    }
+
+    #[test]
+    fn guac_inst_multiple_args() {
+        assert_eq!(
+            format_guac_inst("nvrheader", &["30000", "4"]),
+            "9.nvrheader,5.30000,1.4;"
+        );
+    }
+
+    #[test]
+    fn guac_inst_empty_arg() {
+        assert_eq!(format_guac_inst("nop", &[""]), "3.nop,0.;");
+    }
+
+    #[test]
+    fn guac_inst_nop() {
+        assert_eq!(format_guac_inst("nop", &[]), "3.nop;");
+    }
+
+    #[test]
+    fn guac_inst_select_protocol() {
+        assert_eq!(format_guac_inst("select", &["rdp"]), "6.select,3.rdp;");
+    }
+
+    #[test]
+    fn guac_inst_error_with_code() {
+        let result = format_guac_inst("error", &["Session killed", "521"]);
+        assert!(result.starts_with("5.error,"));
+        assert!(result.ends_with(';'));
+        assert!(result.contains("14.Session killed"));
+        assert!(result.contains("3.521"));
     }
 }

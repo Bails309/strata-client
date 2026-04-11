@@ -16,6 +16,23 @@ use crate::services::settings;
 use crate::tunnel::{self, HandshakeParams, NvrContext};
 use axum::extract::Extension;
 
+/// Resolve final username/password from credential lookup + owner fallback.
+///
+/// If both credential username and password are present, use them both.
+/// If only password is found (no stored username), fall back to the
+/// owner's username from the users table.  Otherwise return (None, None).
+fn resolve_final_credentials(
+    cred_username: Option<String>,
+    cred_password: Option<String>,
+    owner_username: Option<String>,
+) -> (Option<String>, Option<String>) {
+    match (cred_username, cred_password) {
+        (Some(u), Some(p)) => (Some(u), Some(p)),
+        (None, Some(p)) => (owner_username, Some(p)),
+        _ => (None, None),
+    }
+}
+
 /// Rate limiter for shared tunnel connections (per share_token).
 static SHARE_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -318,11 +335,8 @@ pub async fn ws_shared_tunnel(
             .fetch_optional(&db.pool)
             .await?;
 
-    let (final_username, final_password) = match (cred_username, cred_password) {
-        (Some(u), Some(p)) => (Some(u), Some(p)),
-        (None, Some(p)) => (owner_username.clone(), Some(p)),
-        _ => (None, None),
-    };
+    let (final_username, final_password) =
+        resolve_final_credentials(cred_username, cred_password, owner_username.clone());
 
     let guacd_host: String;
     let guacd_port: u16;
@@ -577,5 +591,53 @@ mod tests {
         assert_eq!(resp.share_token, "tok");
         assert_eq!(resp.share_url, "/shared/tok");
         assert_eq!(resp.mode, "view");
+    }
+
+    // ── resolve_final_credentials ──────────────────────────────────
+
+    #[test]
+    fn resolve_creds_both_present() {
+        let (u, p) = resolve_final_credentials(
+            Some("admin".into()),
+            Some("pass".into()),
+            Some("owner".into()),
+        );
+        assert_eq!(u.as_deref(), Some("admin"));
+        assert_eq!(p.as_deref(), Some("pass"));
+    }
+
+    #[test]
+    fn resolve_creds_username_none_falls_back_to_owner() {
+        let (u, p) = resolve_final_credentials(None, Some("pass".into()), Some("owner".into()));
+        assert_eq!(u.as_deref(), Some("owner"));
+        assert_eq!(p.as_deref(), Some("pass"));
+    }
+
+    #[test]
+    fn resolve_creds_username_none_owner_none() {
+        let (u, p) = resolve_final_credentials(None, Some("pass".into()), None);
+        assert!(u.is_none());
+        assert_eq!(p.as_deref(), Some("pass"));
+    }
+
+    #[test]
+    fn resolve_creds_both_none() {
+        let (u, p) = resolve_final_credentials(None, None, Some("owner".into()));
+        assert!(u.is_none());
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn resolve_creds_password_none() {
+        let (u, p) = resolve_final_credentials(Some("admin".into()), None, Some("owner".into()));
+        assert!(u.is_none());
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn resolve_creds_all_none() {
+        let (u, p) = resolve_final_credentials(None, None, None);
+        assert!(u.is_none());
+        assert!(p.is_none());
     }
 }

@@ -89,10 +89,7 @@ async fn handle_recording_stream(
 
     /// Drain any pending client messages (keepalive pings, nvrpause/nvrresume)
     /// without blocking. Returns the updated pause state.
-    async fn drain_incoming(
-        socket: &mut axum::extract::ws::WebSocket,
-        mut paused: bool,
-    ) -> bool {
+    async fn drain_incoming(socket: &mut axum::extract::ws::WebSocket, mut paused: bool) -> bool {
         loop {
             tokio::select! {
                 biased;
@@ -230,15 +227,14 @@ async fn handle_recording_stream(
                                             }
                                         }
                                     }
-                                    pause_offset += std::time::Instant::now().duration_since(pause_start);
+                                    pause_offset +=
+                                        std::time::Instant::now().duration_since(pause_start);
                                 }
 
                                 let guac_elapsed = ts.saturating_sub(b_ts);
-                                let wall_elapsed =
-                                    std::time::Instant::now().duration_since(b_real);
+                                let wall_elapsed = std::time::Instant::now().duration_since(b_real);
                                 let real_elapsed =
-                                    wall_elapsed.saturating_sub(pause_offset).as_millis()
-                                        as u64;
+                                    wall_elapsed.saturating_sub(pause_offset).as_millis() as u64;
 
                                 // Pacing sleep in chunks (max 5s) with keepalives
                                 if guac_elapsed > real_elapsed {
@@ -451,7 +447,7 @@ mod tests {
     #[test]
     fn test_parser_unicode() {
         let mut parser = GuacamoleParser::new();
-        // Guacamole protocol counts characters, not bytes. 
+        // Guacamole protocol counts characters, not bytes.
         // 🚀 is 1 character but 4 bytes in UTF-8.
         parser.push("1.🚀,5.world;".as_bytes());
         let inst = parser.next_instruction().unwrap();
@@ -501,15 +497,15 @@ mod tests {
     fn test_parser_multiple_instructions() {
         let mut parser = GuacamoleParser::new();
         parser.push(b"4.inst,1.1;4.inst,1.2;");
-        
+
         let inst1 = parser.next_instruction().unwrap();
         assert_eq!(inst1.opcode, "inst");
         assert_eq!(inst1.args, vec!["1"]);
-        
+
         let inst2 = parser.next_instruction().unwrap();
         assert_eq!(inst2.opcode, "inst");
         assert_eq!(inst2.args, vec!["2"]);
-        
+
         assert!(parser.next_instruction().is_none());
     }
 }

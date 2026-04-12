@@ -170,6 +170,7 @@ async fn main() -> anyhow::Result<()> {
         db: Some(db),
         session_registry: services::session_registry::SessionRegistry::new(),
         guacd_pool: Some(guacd_pool),
+        started_at: std::time::Instant::now(),
     }));
 
     // ── Spawn recording sync background task ──

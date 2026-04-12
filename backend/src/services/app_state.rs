@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub db: Option<Database>,
     pub session_registry: SessionRegistry,
     pub guacd_pool: Option<GuacdPool>,
+    pub started_at: Instant,
 }
 
 impl std::fmt::Debug for AppState {
@@ -26,6 +28,7 @@ impl std::fmt::Debug for AppState {
             .field("phase", &self.phase)
             .field("config", &self.config)
             .field("db", &self.db)
+            .field("started_at", &self.started_at)
             .finish()
     }
 }
@@ -64,6 +67,7 @@ mod tests {
             db: None,
             session_registry: SessionRegistry::new(),
             guacd_pool: None,
+            started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);
         assert!(debug.contains("Setup"));

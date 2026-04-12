@@ -57,6 +57,8 @@ import {
   getRecordings,
   MetricsSummary,
   MeResponse,
+  getSessionStats,
+  SessionStats,
 } from '../api';
 import { formatDateTime } from '../utils/time';
 import HistoricalPlayer from '../components/HistoricalPlayer';
@@ -199,18 +201,39 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [countdown, setCountdown] = useState(60);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
 
-  function refresh() {
+  const refresh = useCallback(() => {
     setLoading(true);
     Promise.all([
       getServiceHealth().catch(() => null),
       getMetrics().catch(() => null),
     ])
-      .then(([h, m]) => { setHealth(h); setMetrics(m); })
+      .then(([h, m]) => { setHealth(h); setMetrics(m); setLastChecked(new Date()); setCountdown(60); })
       .finally(() => setLoading(false));
-  }
+  }, []);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Auto-refresh countdown
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) { refresh(); return 60; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  function formatUptime(secs: number): string {
+    const d = Math.floor(secs / 86400);
+    const h = Math.floor((secs % 86400) / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    return `${h}h ${m}m`;
+  }
 
   if (loading && !health) {
     return (
@@ -229,122 +252,263 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
     );
   }
 
+  const iconStyle = (color: string) => ({
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    background: `${color}18`,
+    color,
+    flexShrink: 0 as const,
+  });
+
   return (
-    <div className="grid gap-4">
-      <div className="flex justify-between items-center">
-        <p className="text-txt-secondary text-sm">
-          Service configuration is managed through environment variables and docker-compose.
-        </p>
-        <button className="btn-primary shrink-0" onClick={refresh}>
-          <span className="flex items-center gap-2">
-            <svg 
-              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-              className={loading ? 'animate-spin' : ''}
-            >
-              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
-              <path d="M21 3v5h-5"/>
-            </svg>
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </span>
+    <div className="grid gap-5">
+      {/* Header */}
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="!mb-1 text-xl font-bold">System Health</h1>
+          <p className="text-txt-tertiary text-sm italic">Real-time status and diagnostics for core infrastructure.</p>
+        </div>
+        <button
+          className="shrink-0 flex items-center gap-2 text-xs rounded-lg px-3 py-2"
+          style={{ background: 'var(--color-surface-tertiary)', border: '1px solid var(--color-glass-border)', color: 'var(--color-txt-secondary)' }}
+          onClick={refresh}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={loading ? 'animate-spin' : ''}>
+            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+            <path d="M21 3v5h-5"/>
+          </svg>
+          Auto-refreshing in {countdown}s
         </button>
       </div>
 
-      {/* Database */}
-      <div className="card">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="!mb-0">Database</h2>
-          <span className={`badge ${health.database.connected ? 'badge-success' : 'badge-error'}`}>
-            {health.database.connected ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-        <table>
-          <tbody>
-            <tr>
-              <td className="text-txt-secondary w-[140px]">Mode</td>
-              <td className="capitalize">{health.database.mode}</td>
-            </tr>
-            <tr>
-              <td className="text-txt-secondary">Host</td>
-              <td className="font-mono text-[0.8rem]">{health.database.host}</td>
-            </tr>
-          </tbody>
-        </table>
-        <p className="text-txt-tertiary text-xs mt-3">
-          Configure via <code className="bg-surface-tertiary px-1.5 py-0.5 rounded text-xs">DATABASE_URL</code> environment variable.
-        </p>
-      </div>
-
-      {/* guacd */}
-      <div className="card">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="!mb-0">guacd (Gateway)</h2>
-          <span className={`badge ${health.guacd.reachable ? 'badge-success' : 'badge-error'}`}>
-            {health.guacd.reachable ? 'Reachable' : 'Unreachable'}
-          </span>
-        </div>
-        <table>
-          <tbody>
-            <tr>
-              <td className="text-txt-secondary w-[140px]">Host</td>
-              <td className="font-mono text-[0.8rem]">{health.guacd.host}</td>
-            </tr>
-            <tr>
-              <td className="text-txt-secondary">Port</td>
-              <td className="font-mono text-[0.8rem]">{health.guacd.port}</td>
-            </tr>
-            {metrics && (
-              <tr>
-                <td className="text-txt-secondary">Pool Size</td>
-                <td>
-                  <span className="font-mono text-[0.8rem]">{metrics.guacd_pool_size}</span>
-                  <span className="text-txt-tertiary text-xs ml-2">
-                    {metrics.guacd_pool_size > 1 ? `instance${metrics.guacd_pool_size > 2 ? 's' : ''} (round-robin)` : '(single instance)'}
-                  </span>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-        <p className="text-txt-tertiary text-xs mt-3">
-          Configure via <code className="bg-surface-tertiary px-1.5 py-0.5 rounded text-xs">GUACD_HOST</code> and <code className="bg-surface-tertiary px-1.5 py-0.5 rounded text-xs">GUACD_PORT</code> environment variables.
-        </p>
-      </div>
-
-      {/* Vault */}
-      <div className="card">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="!mb-0">Vault (Encryption)</h2>
-          <div className="flex items-center gap-2">
-            {health.vault.configured && (
-              <span className="badge">{health.vault.mode === 'local' ? 'Bundled' : 'External'}</span>
-            )}
-            <span className={`badge ${health.vault.configured ? 'badge-success' : 'badge-warning'}`}>
-              {health.vault.configured ? 'Configured' : 'Not Configured'}
+      {/* Service Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        {/* Database */}
+        <div className="rounded-xl p-5 flex flex-col gap-4" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
+        }}>
+          <div className="flex items-center justify-between">
+            <div style={iconStyle('#8b5cf6')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+              </svg>
+            </div>
+            <span className={`badge ${health.database.connected ? 'badge-success' : 'badge-error'}`}>
+              {health.database.connected ? 'Healthy' : 'Unhealthy'}
             </span>
           </div>
+          <div>
+            <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Database</h3>
+            <p className="text-xs text-txt-tertiary">PostgreSQL Persistence Layer</p>
+          </div>
+          <div className="mt-auto space-y-2 text-xs">
+            {health.database.latency_ms != null && (
+              <div className="flex justify-between">
+                <span className="text-txt-tertiary">Latency</span>
+                <span className="font-semibold text-txt-primary">{health.database.latency_ms}ms</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Mode</span>
+              <span className="font-semibold text-txt-primary capitalize">{health.database.mode}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Host</span>
+              <span className="font-mono text-txt-secondary text-[0.65rem] truncate ml-2" title={health.database.host}>{health.database.host}</span>
+            </div>
+          </div>
         </div>
-        {health.vault.configured ? (
-          <table>
-            <tbody>
-              <tr>
-                <td className="text-txt-secondary w-[140px]">Mode</td>
-                <td className="capitalize">{health.vault.mode === 'local' ? 'Bundled' : 'External'}</td>
-              </tr>
-              <tr>
-                <td className="text-txt-secondary">Address</td>
-                <td className="font-mono text-[0.8rem]">{health.vault.address}</td>
-              </tr>
-            </tbody>
-          </table>
-        ) : (
-          <p className="text-txt-secondary text-sm">
-            Vault is not configured. Credentials will use local encryption.
-          </p>
-        )}
-        <p className="text-txt-tertiary text-xs mt-3">
-          Manage vault configuration in the <button className="text-accent underline bg-transparent border-0 cursor-pointer p-0 text-xs" onClick={onNavigateVault}>Vault tab</button>.
-        </p>
+
+        {/* guacd Gateway */}
+        <div className="rounded-xl p-5 flex flex-col gap-4" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
+        }}>
+          <div className="flex items-center justify-between">
+            <div style={iconStyle('#f59e0b')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              </svg>
+            </div>
+            <span className={`badge ${health.guacd.reachable ? 'badge-success' : 'badge-error'}`}>
+              {health.guacd.reachable ? 'Healthy' : 'Unhealthy'}
+            </span>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-txt-primary mb-0.5">guacd</h3>
+            <p className="text-xs text-txt-tertiary">Remote Desktop Gateway</p>
+          </div>
+          <div className="mt-auto space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Host</span>
+              <span className="font-mono text-txt-secondary">{health.guacd.host}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Port</span>
+              <span className="font-mono text-txt-secondary">{health.guacd.port}</span>
+            </div>
+            {metrics && (
+              <div className="flex justify-between">
+                <span className="text-txt-tertiary">Pool Size</span>
+                <span className="font-semibold text-txt-primary">{metrics.guacd_pool_size}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Vault */}
+        <div className="rounded-xl p-5 flex flex-col gap-4" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
+        }}>
+          <div className="flex items-center justify-between">
+            <div style={iconStyle('#22c55e')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </div>
+            <span className={`badge ${health.vault.configured ? 'badge-success' : 'badge-warning'}`}>
+              {health.vault.configured ? 'Healthy' : 'Not Configured'}
+            </span>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Vault</h3>
+            <p className="text-xs text-txt-tertiary">Encryption & Secret Management</p>
+          </div>
+          <div className="mt-auto space-y-2 text-xs">
+            {health.vault.configured ? (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-txt-tertiary">Mode</span>
+                  <span className="font-semibold text-txt-primary capitalize">{health.vault.mode === 'local' ? 'Bundled' : 'External'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-txt-tertiary">Address</span>
+                  <span className="font-mono text-txt-secondary text-[0.65rem] truncate ml-2" title={health.vault.address}>{health.vault.address}</span>
+                </div>
+              </>
+            ) : (
+              <p className="text-txt-tertiary">
+                Not configured. <button className="text-accent underline bg-transparent border-0 cursor-pointer p-0 text-xs" onClick={onNavigateVault}>Set up Vault</button>
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Schema */}
+        <div className="rounded-xl p-5 flex flex-col gap-4" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
+        }}>
+          <div className="flex items-center justify-between">
+            <div style={iconStyle('#06b6d4')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/>
+              </svg>
+            </div>
+            <span className={`badge ${health.schema.status === 'in_sync' ? 'badge-success' : health.schema.status === 'unavailable' ? 'badge-warning' : 'badge-error'}`}>
+              {health.schema.status === 'in_sync' ? 'Healthy' : health.schema.status === 'unavailable' ? 'Unavailable' : 'Out of Sync'}
+            </span>
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Schema</h3>
+            <p className="text-xs text-txt-tertiary">Database Migrations</p>
+          </div>
+          <div className="mt-auto space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Status</span>
+              <span className="font-semibold text-txt-primary">{health.schema.status === 'in_sync' ? 'In Sync' : health.schema.status === 'unavailable' ? 'Unavailable' : 'Out of Sync'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Applied</span>
+              <span className="font-mono text-txt-secondary">{health.schema.applied_migrations}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-txt-tertiary">Expected</span>
+              <span className="font-mono text-txt-secondary">{health.schema.expected_migrations}</span>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {/* Bottom Stat Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={iconStyle('#8b5cf6')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Uptime</p>
+            <p className="text-sm font-bold text-txt-primary">{formatUptime(health.uptime_secs)}</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={iconStyle('#f59e0b')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Active Sessions</p>
+            <p className="text-sm font-bold text-txt-primary">{metrics?.active_sessions ?? 0}</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={iconStyle('#ef4444')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Strata Version</p>
+            <p className="text-sm font-bold text-txt-primary">v0.10.4</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={iconStyle('#22c55e')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Environment</p>
+            <p className="text-sm font-bold text-txt-primary uppercase">{health.environment}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Last Checked */}
+      {lastChecked && (
+        <p className="text-right text-[0.65rem] text-txt-tertiary">
+          Last Checked: {lastChecked.toLocaleDateString('en-GB')}, {lastChecked.toLocaleTimeString('en-GB')}
+        </p>
+      )}
     </div>
   );
 }
@@ -2657,6 +2821,7 @@ function SessionsTab() {
   const [recordings, setRecordings] = useState<HistoricalRecording[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedRecording, setSelectedRecording] = useState<HistoricalRecording | null>(null);
+  const [stats, setStats] = useState<SessionStats | null>(null);
   
   // Filters
   const [userQuery, setUserQuery] = useState('');
@@ -2678,6 +2843,10 @@ function SessionsTab() {
       .then(setRecordings)
       .catch(() => setRecordings([]))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    getSessionStats().then(setStats).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -2725,7 +2894,153 @@ function SessionsTab() {
     return uMatch && cMatch;
   });
 
+  const statIconStyle = (color: string) => ({
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    background: `${color}18`,
+    color,
+    flexShrink: 0 as const,
+  });
+
   return (
+    <div className="grid gap-5">
+      {/* Stat Cards */}
+      <p className="text-xs text-txt-tertiary italic">Showing data from the last 30 days</p>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={statIconStyle('#8b5cf6')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Total Sessions</p>
+            <p className="text-sm font-bold text-txt-primary">{stats ? stats.total_sessions.toLocaleString() : '—'}</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={statIconStyle('#f59e0b')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Total Hours</p>
+            <p className="text-sm font-bold text-txt-primary">{stats ? stats.total_hours.toFixed(1) : '—'}</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={statIconStyle('#06b6d4')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Unique Users</p>
+            <p className="text-sm font-bold text-txt-primary">{stats ? stats.unique_users.toLocaleString() : '—'}</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl px-4 py-3 flex items-center gap-3" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+        }}>
+          <div style={statIconStyle('#22c55e')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Active Now</p>
+            <p className="text-sm font-bold text-txt-primary">{stats ? stats.active_now : '—'}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Leaderboard Tables */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Top Connections */}
+        <div className="rounded-xl p-5" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
+        }}>
+          <h3 className="text-sm font-bold mb-4" style={{ color: 'var(--color-accent)' }}>Top Connections</h3>
+          {!stats || stats.top_connections.length === 0 ? (
+            <p className="text-sm text-txt-tertiary text-center py-6">No data yet.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-txt-tertiary">
+                  <th className="text-left pb-2 font-semibold">Name</th>
+                  <th className="text-left pb-2 font-semibold">Type</th>
+                  <th className="text-right pb-2 font-semibold">Sessions</th>
+                  <th className="text-right pb-2 font-semibold">Total Hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.top_connections.map((c) => (
+                  <tr key={c.name} className="border-t border-white/5">
+                    <td className="py-2 text-txt-primary font-medium">{c.name}</td>
+                    <td className="py-2"><span className="uppercase text-[0.6rem] font-bold tracking-wider px-1.5 py-0.5 rounded bg-white/5 text-txt-secondary">{c.protocol}</span></td>
+                    <td className="py-2 text-right text-txt-secondary tabular-nums">{c.sessions}</td>
+                    <td className="py-2 text-right text-txt-secondary tabular-nums">{c.total_hours.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Top Users */}
+        <div className="rounded-xl p-5" style={{
+          background: 'var(--color-surface-secondary)',
+          border: '1px solid var(--color-glass-border)',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
+        }}>
+          <h3 className="text-sm font-bold mb-4" style={{ color: 'var(--color-accent)' }}>Top Users</h3>
+          {!stats || stats.top_users.length === 0 ? (
+            <p className="text-sm text-txt-tertiary text-center py-6">No data yet.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-txt-tertiary">
+                  <th className="text-left pb-2 font-semibold">User</th>
+                  <th className="text-right pb-2 font-semibold">Sessions</th>
+                  <th className="text-right pb-2 font-semibold">Total Hours</th>
+                  <th className="text-right pb-2 font-semibold">Last Session</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.top_users.map((u) => (
+                  <tr key={u.username} className="border-t border-white/5">
+                    <td className="py-2 text-txt-primary font-medium">{u.username}</td>
+                    <td className="py-2 text-right text-txt-secondary tabular-nums">{u.sessions}</td>
+                    <td className="py-2 text-right text-txt-secondary tabular-nums">{u.total_hours.toFixed(1)}</td>
+                    <td className="py-2 text-right text-txt-secondary text-[0.65rem]">{u.last_session ? formatDateTime(u.last_session) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
     <div className="card">
       <div className="flex items-center justify-between p-4 bg-surface-secondary/50 border-b border-border mb-6 -mx-7 -mt-7">
         <div className="flex items-center gap-6">
@@ -2933,6 +3248,7 @@ function SessionsTab() {
           onClose={() => setSelectedRecording(null)}
         />
       )}
+    </div>
     </div>
   );
 }

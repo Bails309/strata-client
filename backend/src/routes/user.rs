@@ -1163,6 +1163,7 @@ mod tests {
                 db: None,
                 session_registry: crate::services::session_registry::SessionRegistry::new(),
                 guacd_pool: None,
+                started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;
         assert!(result.is_err());
@@ -1179,6 +1180,7 @@ mod tests {
                 db: None,
                 session_registry: crate::services::session_registry::SessionRegistry::new(),
                 guacd_pool: None,
+                started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;
         assert!(result.is_err());

@@ -5,12 +5,141 @@ use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::Json;
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use crate::db::Recording;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
+
+// ── Session Statistics ──────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SessionStats {
+    pub total_sessions: i64,
+    pub total_hours: f64,
+    pub unique_users: i64,
+    pub active_now: u32,
+    pub top_connections: Vec<TopConnection>,
+    pub top_users: Vec<TopUser>,
+}
+
+#[derive(Serialize)]
+pub struct TopConnection {
+    pub name: String,
+    pub protocol: String,
+    pub sessions: i64,
+    pub total_hours: f64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct TopConnectionRow {
+    name: String,
+    protocol: String,
+    sessions: i64,
+    total_hours: f64,
+}
+
+#[derive(Serialize)]
+pub struct TopUser {
+    pub username: String,
+    pub sessions: i64,
+    pub total_hours: f64,
+    pub last_session: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct TopUserRow {
+    username: String,
+    sessions: i64,
+    total_hours: f64,
+    last_session: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// GET /api/admin/session-stats – aggregate session statistics for the dashboard.
+pub async fn session_stats(
+    State(state): State<SharedState>,
+) -> Result<Json<SessionStats>, AppError> {
+    let (db, active_now) = {
+        let s = state.read().await;
+        let db = s.db.clone().ok_or(AppError::SetupRequired)?;
+        let active = s.session_registry.list().await.len() as u32;
+        (db, active)
+    };
+
+    let cutoff = "NOW() - INTERVAL '30 days'";
+
+    let (total_sessions,): (i64,) = sqlx::query_as(
+        &format!("SELECT COUNT(*) FROM recordings WHERE started_at >= {cutoff}"),
+    )
+    .fetch_one(&db.pool)
+    .await?;
+
+    let (total_hours,): (f64,) = sqlx::query_as(
+        &format!("SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM recordings WHERE started_at >= {cutoff}"),
+    )
+    .fetch_one(&db.pool)
+    .await?;
+
+    let (unique_users,): (i64,) = sqlx::query_as(
+        &format!("SELECT COUNT(DISTINCT user_id) FROM recordings WHERE started_at >= {cutoff}"),
+    )
+    .fetch_one(&db.pool)
+    .await?;
+
+    let top_connections: Vec<TopConnectionRow> = sqlx::query_as(
+        &format!("SELECT connection_name AS name,
+                COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'rdp') AS protocol,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
+         FROM recordings r
+         WHERE started_at >= {cutoff}
+         GROUP BY connection_id, connection_name
+         ORDER BY sessions DESC
+         LIMIT 10"),
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    let top_users: Vec<TopUserRow> = sqlx::query_as(
+        &format!("SELECT username,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours,
+                MAX(started_at) AS last_session
+         FROM recordings
+         WHERE started_at >= {cutoff}
+         GROUP BY user_id, username
+         ORDER BY sessions DESC
+         LIMIT 10"),
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    Ok(Json(SessionStats {
+        total_sessions,
+        total_hours: (total_hours * 10.0).round() / 10.0,
+        unique_users,
+        active_now,
+        top_connections: top_connections
+            .into_iter()
+            .map(|r| TopConnection {
+                name: r.name,
+                protocol: r.protocol,
+                sessions: r.sessions,
+                total_hours: (r.total_hours * 10.0).round() / 10.0,
+            })
+            .collect(),
+        top_users: top_users
+            .into_iter()
+            .map(|r| TopUser {
+                username: r.username,
+                sessions: r.sessions,
+                total_hours: (r.total_hours * 10.0).round() / 10.0,
+                last_session: r.last_session.map(|d| d.to_rfc3339()),
+            })
+            .collect(),
+    }))
+}
 
 #[derive(Deserialize)]
 pub struct ListRecordingsQuery {

@@ -268,6 +268,7 @@ export interface DatabaseHealth {
   connected: boolean;
   mode: string;
   host: string;
+  latency_ms: number | null;
 }
 
 export interface GuacdHealth {
@@ -282,10 +283,19 @@ export interface VaultHealth {
   address: string;
 }
 
+export interface SchemaHealth {
+  status: string;
+  applied_migrations: number;
+  expected_migrations: number;
+}
+
 export interface ServiceHealth {
   database: DatabaseHealth;
   guacd: GuacdHealth;
   vault: VaultHealth;
+  schema: SchemaHealth;
+  uptime_secs: number;
+  environment: string;
 }
 
 export const getServiceHealth = () => request<ServiceHealth>('/admin/health');
@@ -641,3 +651,30 @@ export interface MetricsSummary {
 }
 
 export const getMetrics = () => request<MetricsSummary>('/admin/metrics');
+
+// ── Session Statistics ──────────────────────────────────────────────
+
+export interface TopConnection {
+  name: string;
+  protocol: string;
+  sessions: number;
+  total_hours: number;
+}
+
+export interface TopUser {
+  username: string;
+  sessions: number;
+  total_hours: number;
+  last_session: string | null;
+}
+
+export interface SessionStats {
+  total_sessions: number;
+  total_hours: number;
+  unique_users: number;
+  active_now: number;
+  top_connections: TopConnection[];
+  top_users: TopUser[];
+}
+
+export const getSessionStats = () => request<SessionStats>('/admin/session-stats');

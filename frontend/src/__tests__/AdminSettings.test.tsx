@@ -47,6 +47,8 @@ vi.mock('../api', () => ({
   testAdSyncConnection: vi.fn(),
   testSsoConnection: vi.fn(),
   getAdSyncRuns: vi.fn(),
+  getSessionStats: vi.fn(),
+  getRecordings: vi.fn(),
 }));
 
 vi.mock('../contexts/SettingsContext', () => ({
@@ -77,19 +79,25 @@ import {
   createConnectionFolder, deleteConnectionFolder,
   getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
-  updateAuthMethods, updateSettings, updateRoleMappings,
+  updateAuthMethods, updateSettings, updateRoleMappings, getSessionStats, getRecordings,
 } from '../api';
 
 const healthOk = {
-  database: { connected: true, mode: 'local', host: 'localhost' },
+  database: { connected: true, mode: 'local', host: 'localhost', latency_ms: 5 },
   guacd: { reachable: true, host: 'guacd', port: 4822 },
   vault: { configured: true, mode: 'local', address: 'http://vault:8200' },
+  schema: { status: 'in_sync', applied_migrations: 28, expected_migrations: 28 },
+  uptime_secs: 3600,
+  environment: 'production',
 };
 
 const healthDown = {
-  database: { connected: false, mode: 'local', host: 'localhost' },
+  database: { connected: false, mode: 'local', host: 'localhost', latency_ms: null },
   guacd: { reachable: false, host: 'guacd', port: 4822 },
   vault: { configured: false, mode: '', address: '' },
+  schema: { status: 'unavailable', applied_migrations: 0, expected_migrations: 28 },
+  uptime_secs: 0,
+  environment: 'production',
 };
 
 const metricsOk = {
@@ -135,6 +143,15 @@ function setupDefaults() {
   vi.mocked(getServiceHealth).mockResolvedValue(healthOk);
   vi.mocked(getMetrics).mockResolvedValue(metricsOk);
   vi.mocked(getActiveSessions).mockResolvedValue([]);
+  vi.mocked(getSessionStats).mockResolvedValue({
+    total_sessions: 0,
+    total_hours: 0,
+    unique_users: 0,
+    active_now: 0,
+    top_connections: [],
+    top_users: [],
+  });
+  vi.mocked(getRecordings).mockResolvedValue([]);
 }
 
 describe('AdminSettings', () => {
@@ -150,9 +167,11 @@ describe('AdminSettings', () => {
     renderAdmin();
     // Wait for async init
     await screen.findByText('Admin Settings');
-    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Vault', 'Recordings', 'Access', 'AD Sync', 'Sessions', 'Security']) {
+    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Recordings', 'Access', 'AD Sync', 'Sessions', 'Security']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    // Vault appears in both tab button and health card
+    expect(screen.getAllByText('Vault').length).toBeGreaterThanOrEqual(1);
   });
 
   it('defaults to health tab', async () => {
@@ -187,31 +206,32 @@ describe('HealthTab', () => {
     expect(await screen.findByText('Loading service health...')).toBeInTheDocument();
   });
 
-  it('shows connected/reachable badges when healthy', async () => {
+  it('shows Healthy badges when all services are up', async () => {
     renderAdmin();
-    expect(await screen.findByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Reachable')).toBeInTheDocument();
-    expect(screen.getByText('Configured')).toBeInTheDocument();
+    const badges = await screen.findAllByText('Healthy');
+    expect(badges.length).toBe(4); // Database, guacd, Vault, Schema
   });
 
-  it('shows disconnected/unreachable when down', async () => {
+  it('shows Unhealthy badges when services are down', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthDown);
     renderAdmin();
-    expect(await screen.findByText('Disconnected')).toBeInTheDocument();
-    expect(screen.getByText('Unreachable')).toBeInTheDocument();
-    expect(screen.getByText('Not Configured')).toBeInTheDocument();
+    const unhealthy = await screen.findAllByText('Unhealthy');
+    expect(unhealthy.length).toBe(2); // Database, guacd
+    expect(screen.getByText('Not Configured')).toBeInTheDocument(); // Vault
+    const unavailable = screen.getAllByText('Unavailable');
+    expect(unavailable.length).toBeGreaterThanOrEqual(1); // Schema badge + status text
   });
 
   it('shows vault mode badge', async () => {
     renderAdmin();
-    const badges = await screen.findAllByText('Bundled');
-    expect(badges.length).toBeGreaterThanOrEqual(1);
+    const bundled = await screen.findAllByText('Bundled');
+    expect(bundled.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows vault not-configured message', async () => {
+  it('shows vault not-configured setup link', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthDown);
     renderAdmin();
-    expect(await screen.findByText(/Vault is not configured/)).toBeInTheDocument();
+    expect(await screen.findByText(/Set up Vault/)).toBeInTheDocument();
   });
 
   it('shows vault address when configured', async () => {
@@ -232,18 +252,14 @@ describe('HealthTab', () => {
     expect(screen.getByText('Retry')).toBeInTheDocument();
   });
 
-  it('Refresh button calls API again', async () => {
-    const user = userEvent.setup();
+  it('shows auto-refresh countdown', async () => {
     renderAdmin();
-    await screen.findByText('Connected');
-    await user.click(screen.getByText('Refresh'));
-    expect(getServiceHealth).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(/Auto-refreshing in \d+s/)).toBeInTheDocument();
   });
 
-  it('shows vault external mode badge', async () => {
+  it('shows vault external mode', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...healthOk,
       vault: { configured: true, mode: 'external', address: 'https://vault.corp.com:8200' },
     });
     renderAdmin();
@@ -252,34 +268,29 @@ describe('HealthTab', () => {
     expect(screen.getByText('https://vault.corp.com:8200')).toBeInTheDocument();
   });
 
-  it('shows Refreshing text while loading', async () => {
-    let resolveHealth!: (v: any) => void;
-    vi.mocked(getServiceHealth).mockReturnValue(new Promise((r) => { resolveHealth = r; }));
-    vi.mocked(getMetrics).mockResolvedValue(metricsOk);
-    const user = userEvent.setup();
+  it('shows uptime', async () => {
     renderAdmin();
-    // loading initially shows "Loading service health..."
-    expect(screen.getByText('Loading service health...')).toBeInTheDocument();
-    resolveHealth(healthOk);
-    await screen.findByText('Connected');
-    // Now trigger refresh
-    vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
-    await user.click(screen.getByText('Refresh'));
-    expect(screen.getByText('Refreshing...')).toBeInTheDocument();
+    expect(await screen.findByText('1h 0m')).toBeInTheDocument();
   });
 
-  it('shows pool size pluralization for single instance', async () => {
-    vi.mocked(getMetrics).mockResolvedValue({ ...metricsOk, guacd_pool_size: 1 });
+  it('shows active sessions count', async () => {
     renderAdmin();
-    expect(await screen.findByText('1')).toBeInTheDocument();
-    expect(screen.getByText('(single instance)')).toBeInTheDocument();
+    expect(await screen.findByText('3')).toBeInTheDocument();
   });
 
-  it('shows pool size pluralization for 3+ instances', async () => {
-    vi.mocked(getMetrics).mockResolvedValue({ ...metricsOk, guacd_pool_size: 4 });
+  it('shows environment', async () => {
     renderAdmin();
-    await screen.findByText('4');
-    expect(screen.getByText(/instances? \(round-robin\)/)).toBeInTheDocument();
+    expect(await screen.findByText('production')).toBeInTheDocument();
+  });
+
+  it('shows schema status', async () => {
+    renderAdmin();
+    expect(await screen.findByText('In Sync')).toBeInTheDocument();
+  });
+
+  it('shows database latency', async () => {
+    renderAdmin();
+    expect(await screen.findByText('5ms')).toBeInTheDocument();
   });
 
   it('retry button reloads health', async () => {
@@ -291,14 +302,14 @@ describe('HealthTab', () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthOk);
     vi.mocked(getMetrics).mockResolvedValue(metricsOk);
     await user.click(screen.getByText('Retry'));
-    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    const badges = await screen.findAllByText('Healthy');
+    expect(badges.length).toBe(4);
   });
 
-  it('shows no pool size row when metrics is null', async () => {
-    vi.mocked(getMetrics).mockRejectedValue(new Error('fail'));
+  it('shows last checked timestamp', async () => {
     renderAdmin();
-    await screen.findByText('Connected');
-    expect(screen.queryByText('Pool Size')).not.toBeInTheDocument();
+    await screen.findAllByText('Healthy');
+    expect(screen.getByText(/Last Checked:/)).toBeInTheDocument();
   });
 });
 
@@ -739,8 +750,7 @@ describe('VaultTab', () => {
 
   it('shows external current mode', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...healthOk,
       vault: { configured: true, mode: 'external', address: 'https://vault.corp.com:8200' },
     });
     const user = userEvent.setup();
@@ -1242,6 +1252,144 @@ describe('SessionsTab', () => {
     await user.click(screen.getByText('● Live'));
     // Verify navigation was triggered (Live button uses navigate)
     expect(screen.getByText('● Live')).toBeInTheDocument();
+  });
+
+  it('renders session stat cards with data', async () => {
+    vi.mocked(getSessionStats).mockResolvedValue({
+      total_sessions: 72,
+      total_hours: 1.2,
+      unique_users: 5,
+      active_now: 3,
+      top_connections: [],
+      top_users: [],
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    expect(await screen.findByText('72')).toBeInTheDocument();
+    expect(screen.getByText('1.2')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText(/last 30 days/i)).toBeInTheDocument();
+  });
+
+  it('shows dash placeholders when stats are loading', async () => {
+    vi.mocked(getSessionStats).mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    await screen.findByText('Sessions & Recordings');
+    const dashes = screen.getAllByText('—');
+    expect(dashes.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('renders top connections table', async () => {
+    vi.mocked(getSessionStats).mockResolvedValue({
+      total_sessions: 10,
+      total_hours: 2.5,
+      unique_users: 2,
+      active_now: 0,
+      top_connections: [
+        { name: 'Server X', protocol: 'rdp', sessions: 8, total_hours: 1.5 },
+        { name: 'Server Y', protocol: 'ssh', sessions: 2, total_hours: 1.0 },
+      ],
+      top_users: [],
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    expect(await screen.findByText('Server X')).toBeInTheDocument();
+    expect(screen.getByText('rdp')).toBeInTheDocument();
+    expect(screen.getByText('Server Y')).toBeInTheDocument();
+    expect(screen.getByText('ssh')).toBeInTheDocument();
+  });
+
+  it('renders top users table', async () => {
+    vi.mocked(getSessionStats).mockResolvedValue({
+      total_sessions: 10,
+      total_hours: 2.5,
+      unique_users: 2,
+      active_now: 0,
+      top_connections: [],
+      top_users: [
+        { username: 'alice', sessions: 6, total_hours: 1.0, last_session: '2026-04-10T14:30:00Z' },
+        { username: 'bob', sessions: 4, total_hours: 1.5, last_session: null },
+      ],
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    expect(await screen.findByText('alice')).toBeInTheDocument();
+    expect(screen.getByText('bob')).toBeInTheDocument();
+  });
+
+  it('shows empty state for leaderboard tables', async () => {
+    vi.mocked(getSessionStats).mockResolvedValue({
+      total_sessions: 0,
+      total_hours: 0,
+      unique_users: 0,
+      active_now: 0,
+      top_connections: [],
+      top_users: [],
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    const noDataEls = await screen.findAllByText('No data yet.');
+    expect(noDataEls.length).toBe(2);
+  });
+
+  it('switches to Recording History tab', async () => {
+    vi.mocked(getRecordings).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    await screen.findByText('Sessions & Recordings');
+    await user.click(screen.getByText('Recording History'));
+    expect(await screen.findByText(/no recordings found/i)).toBeInTheDocument();
+  });
+
+  it('renders recording history entries', async () => {
+    vi.mocked(getRecordings).mockResolvedValue([
+      { id: 'r1', session_id: 's1', connection_id: 'c1', connection_name: 'Server A', user_id: 'u1', username: 'admin', started_at: '2026-04-10T10:00:00Z', duration_secs: 3661, storage_path: '/rec/r1', storage_type: 'local' },
+    ]);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    await screen.findByText('Sessions & Recordings');
+    await user.click(screen.getByText('Recording History'));
+    expect(await screen.findByText('1h 1m 1s')).toBeInTheDocument();
+    expect(screen.getByText('local')).toBeInTheDocument();
+  });
+
+  it('filters recording history by username', async () => {
+    vi.mocked(getRecordings).mockResolvedValue([
+      { id: 'r1', session_id: 's1', connection_id: 'c1', connection_name: 'Server A', user_id: 'u1', username: 'alice', started_at: '2026-04-10T10:00:00Z', duration_secs: 60, storage_path: '/rec/r1', storage_type: 'local' },
+      { id: 'r2', session_id: 's2', connection_id: 'c1', connection_name: 'Server A', user_id: 'u2', username: 'bob', started_at: '2026-04-10T11:00:00Z', duration_secs: 120, storage_path: '/rec/r2', storage_type: 'local' },
+    ]);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    await screen.findByText('Sessions & Recordings');
+    await user.click(screen.getByText('Recording History'));
+    await screen.findByText('alice');
+    await user.type(screen.getByPlaceholderText('Search usernames...'), 'alice');
+    expect(screen.getByText('alice')).toBeInTheDocument();
+    expect(screen.queryByText('bob')).not.toBeInTheDocument();
+  });
+
+  it('shows null duration as dash', async () => {
+    vi.mocked(getRecordings).mockResolvedValue([
+      { id: 'r1', session_id: 's1', connection_id: 'c1', connection_name: 'Server A', user_id: 'u1', username: 'admin', started_at: '2026-04-10T10:00:00Z', duration_secs: null as any, storage_path: '/rec/r1', storage_type: 'local' },
+    ]);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Sessions'));
+    await screen.findByText('Sessions & Recordings');
+    await user.click(screen.getByText('Recording History'));
+    await screen.findByText('Server A');
+    // null duration shows as —
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
   });
 });
 

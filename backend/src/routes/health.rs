@@ -61,6 +61,9 @@ pub struct ServiceHealth {
     pub database: DatabaseHealth,
     pub guacd: GuacdHealth,
     pub vault: VaultHealth,
+    pub schema: SchemaHealth,
+    pub uptime_secs: u64,
+    pub environment: String,
 }
 
 #[derive(Serialize)]
@@ -69,6 +72,7 @@ pub struct DatabaseHealth {
     pub mode: String,
     /// Sanitized – host:port/dbname only, no credentials
     pub host: String,
+    pub latency_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -85,15 +89,37 @@ pub struct VaultHealth {
     pub mode: String,
 }
 
+#[derive(Serialize)]
+pub struct SchemaHealth {
+    pub status: String,
+    pub applied_migrations: i64,
+    pub expected_migrations: i64,
+}
+
 /// GET /api/admin/health – read-only service health for the admin dashboard.
 pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHealth> {
     let s = state.read().await;
 
+    // ── Uptime ──
+    let uptime_secs = s.started_at.elapsed().as_secs();
+
+    // ── Environment ──
+    let environment = std::env::var("STRATA_ENV")
+        .or_else(|_| std::env::var("NODE_ENV"))
+        .unwrap_or_else(|_| "production".into());
+
     // ── Database ──
-    let db_connected = if let Some(ref db) = s.db {
-        crate::db::pool::check(&db.pool).await
+    let (db_connected, db_latency_ms) = if let Some(ref db) = s.db {
+        let start = std::time::Instant::now();
+        let ok = crate::db::pool::check(&db.pool).await;
+        let latency = if ok {
+            Some(start.elapsed().as_millis() as u64)
+        } else {
+            None
+        };
+        (ok, latency)
     } else {
-        false
+        (false, None)
     };
 
     let (db_mode, db_host) = if let Some(ref cfg) = s.config {
@@ -106,6 +132,23 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
         (mode, host)
     } else {
         ("unknown".into(), "—".into())
+    };
+
+    // ── Schema ──
+    let expected_migrations = sqlx::migrate!("./migrations").migrations.len() as i64;
+    let (applied_migrations, schema_status) = if let Some(ref db) = s.db {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or(0);
+        let status = if count == expected_migrations {
+            "in_sync".into()
+        } else {
+            "out_of_sync".into()
+        };
+        (count, status)
+    } else {
+        (0, "unavailable".into())
     };
 
     // ── guacd ──
@@ -137,6 +180,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
             connected: db_connected,
             mode: db_mode,
             host: db_host,
+            latency_ms: db_latency_ms,
         },
         guacd: GuacdHealth {
             reachable: guacd_reachable,
@@ -148,6 +192,13 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
             address: vault_addr,
             mode: vault_mode,
         },
+        schema: SchemaHealth {
+            status: schema_status,
+            applied_migrations,
+            expected_migrations,
+        },
+        uptime_secs,
+        environment,
     })
 }
 
@@ -223,6 +274,7 @@ mod tests {
                 connected: true,
                 mode: "local".into(),
                 host: "localhost:5432/strata".into(),
+                latency_ms: Some(5),
             },
             guacd: GuacdHealth {
                 reachable: false,
@@ -234,11 +286,22 @@ mod tests {
                 address: "http://vault:8200".into(),
                 mode: "local".into(),
             },
+            schema: SchemaHealth {
+                status: "in_sync".into(),
+                applied_migrations: 28,
+                expected_migrations: 28,
+            },
+            uptime_secs: 3600,
+            environment: "production".into(),
         };
         let json = serde_json::to_value(&health).unwrap();
         assert_eq!(json["database"]["connected"], true);
+        assert_eq!(json["database"]["latency_ms"], 5);
         assert_eq!(json["guacd"]["port"], 4822);
         assert_eq!(json["vault"]["mode"], "local");
+        assert_eq!(json["schema"]["status"], "in_sync");
+        assert_eq!(json["uptime_secs"], 3600);
+        assert_eq!(json["environment"], "production");
     }
 
     #[tokio::test]
@@ -277,6 +340,7 @@ mod tests {
             connected: false,
             mode: "external".into(),
             host: "remote:5432/db".into(),
+            latency_ms: None,
         };
         let json = serde_json::to_value(&h).unwrap();
         assert_eq!(json["connected"], false);
@@ -337,6 +401,7 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            started_at: std::time::Instant::now(),
         }));
         let result = status(axum::extract::State(state)).await;
         assert_eq!(result.phase, "setup");
@@ -354,15 +419,19 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
         assert!(!result.database.connected);
         assert_eq!(result.database.mode, "unknown");
         assert_eq!(result.database.host, "—");
+        assert!(result.database.latency_ms.is_none());
         assert_eq!(result.guacd.host, "guacd");
         assert_eq!(result.guacd.port, 4822);
         assert!(!result.guacd.reachable);
         assert!(!result.vault.configured);
+        assert_eq!(result.schema.status, "unavailable");
+        assert_eq!(result.environment, "production");
     }
 
     #[tokio::test]
@@ -386,6 +455,7 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
         assert!(!result.database.connected);
@@ -423,6 +493,7 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
         assert_eq!(result.database.mode, "local");

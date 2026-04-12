@@ -128,6 +128,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/recordings/:id/stream",
             get(admin::recordings::stream_recording),
         )
+        .route(
+            "/api/admin/session-stats",
+            get(admin::recordings::session_stats),
+        )
         .route("/api/admin/metrics", get(admin::get_metrics))
         .route(
             "/api/admin/ad-sync-configs",
@@ -344,6 +348,7 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            started_at: std::time::Instant::now(),
         }));
         std::env::remove_var("STRATA_ALLOWED_ORIGINS");
         std::env::remove_var("STRATA_DOMAIN");

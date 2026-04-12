@@ -73,6 +73,14 @@ import {
   removeCredentialMapping, getConnectionInfo, createTunnelTicket,
 } from '../api';
 
+const baseHealth = {
+  database: { connected: true, mode: 'local', host: 'localhost', latency_ms: 5 },
+  guacd: { reachable: true, host: 'guacd', port: 4822 },
+  schema: { status: 'in_sync', applied_migrations: 28, expected_migrations: 28 },
+  uptime_secs: 3600,
+  environment: 'production',
+};
+
 function renderDashboard() {
   return render(
     <BrowserRouter>
@@ -99,8 +107,7 @@ describe('Dashboard', () => {
     vi.mocked(getFavorites).mockResolvedValue([]);
     vi.mocked(getCredentialProfiles).mockResolvedValue([]);
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: false, mode: '', address: '' },
     });
   });
@@ -190,8 +197,7 @@ describe('Dashboard', () => {
 
   it('shows vault configured state with profile selector', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: true, mode: 'local', address: 'http://vault:8200' },
     });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
@@ -345,8 +351,7 @@ describe('Dashboard', () => {
 
   it('handles profile change for a connection', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: true, mode: 'local', address: '' },
     });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
@@ -452,8 +457,7 @@ describe('Dashboard', () => {
 
   it('recent cards show credential status badges', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: true, mode: 'local', address: '' },
     });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
@@ -488,8 +492,7 @@ describe('Dashboard', () => {
 
   it('shows expired status for expired profile', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: true, mode: 'local', address: '' },
     });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
@@ -658,8 +661,7 @@ describe('Dashboard', () => {
 
   it('removes a credential mapping when profile set to empty', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: true, mode: 'local', address: '' },
     });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
@@ -698,8 +700,7 @@ describe('Dashboard', () => {
 
   it('shows expired label in profile selector', async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
-      database: { connected: true, mode: 'local', host: 'localhost' },
-      guacd: { reachable: true, host: 'guacd', port: 4822 },
+      ...baseHealth,
       vault: { configured: true, mode: 'local', address: '' },
     });
     vi.mocked(getCredentialProfiles).mockResolvedValue([

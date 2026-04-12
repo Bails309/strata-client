@@ -540,8 +540,8 @@ html.light .recent-card-btn:hover {
 
   .recent-cards-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1.25rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
   }
 
   .recent-card {
@@ -554,7 +554,7 @@ html.light .recent-card-btn:hover {
     backdrop-filter: blur(20px) saturate(1.4);
     -webkit-backdrop-filter: blur(20px) saturate(1.4);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 1.5rem 1.5rem 1.25rem;
+    padding: 1rem 1rem 0.875rem;
     box-shadow:
       0 4px 24px rgba(0, 0, 0, 0.3),
       0 1px 0 rgba(255, 255, 255, 0.05) inset;
@@ -586,10 +586,10 @@ html.light .recent-card-btn:hover {
 
   .recent-card-dot {
     position: absolute;
-    top: 1.25rem;
-    right: 1.25rem;
-    width: 10px;
-    height: 10px;
+    top: 0.875rem;
+    right: 0.875rem;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
   }
 
@@ -597,32 +597,32 @@ html.light .recent-card-btn:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
     color: var(--color-txt-primary);
   }
 
   .recent-card-title {
-    @apply text-base font-semibold leading-tight mb-1.5;
+    @apply text-sm font-semibold leading-tight mb-1;
     color: var(--color-txt-primary);
-    max-width: calc(100% - 24px);
+    max-width: calc(100% - 20px);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .recent-card-detail {
-    @apply text-sm mb-3;
+    @apply text-xs mb-2;
     color: var(--color-txt-secondary);
   }
 
   .recent-card-meta {
-    @apply text-xs mb-4 space-y-1;
+    @apply text-[0.65rem] mb-3 space-y-0.5;
     color: var(--color-txt-tertiary);
   }
 
@@ -642,9 +642,9 @@ html.light .recent-card-btn:hover {
   }
 
   .btn-connect-glass {
-    @apply cursor-pointer inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all duration-200;
-    padding: 0.5rem 1rem;
-    font-size: 0.8125rem;
+    @apply cursor-pointer inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold transition-all duration-200;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid var(--btn-border, rgba(139, 92, 246, 0.3));
     color: var(--btn-text, var(--color-accent-light));

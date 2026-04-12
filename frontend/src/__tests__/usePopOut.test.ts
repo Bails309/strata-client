@@ -278,7 +278,7 @@ describe('usePopOut', () => {
     expect(mockPopup.addEventListener).toHaveBeenCalledWith('resize', expect.any(Function));
   });
 
-  it('cleans up on unmount', async () => {
+  it('does NOT close popup on unmount (popup persists across route changes)', async () => {
     const session = createMockSession();
     const containerRef = { current: document.createElement('div') };
     const mockPopup = createMockPopupWindow();
@@ -291,7 +291,9 @@ describe('usePopOut', () => {
     });
 
     unmount();
-    expect(mockPopup.close).toHaveBeenCalled();
+    // Popup should remain open — SessionManager handles cleanup when the session ends
+    expect(mockPopup.close).not.toHaveBeenCalled();
+    expect((session as any)._popout).toBeDefined();
   });
 
   it('popOut tries to use Window Management API for secondary screen', async () => {

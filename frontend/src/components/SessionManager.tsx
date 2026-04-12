@@ -23,6 +23,14 @@ export interface GuacSession {
   isPoppedOut?: boolean;
   popOut?: () => void;
   popIn?: () => void;
+  /** Internal pop-out window refs — persists across SessionClient mount/unmount */
+  _popout?: {
+    window: Window;
+    keyboard: Guacamole.Keyboard;
+    mouse: Guacamole.Mouse;
+    touch: Guacamole.Mouse.Touchscreen;
+    cleanup: () => void;
+  };
 }
 
 interface SessionManagerValue {
@@ -81,6 +89,27 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
 
   // Keep ref in sync
   sessionsRef.current = sessions;
+
+  /** Tear down a session's pop-out window, if any. */
+  const cleanupPopout = useCallback((session: GuacSession) => {
+    if (!session._popout) return;
+    const po = session._popout;
+    po.cleanup();
+    po.keyboard.onkeydown = null;
+    po.keyboard.onkeyup = null;
+    po.keyboard.reset();
+    po.mouse.onmousedown = null;
+    po.mouse.onmouseup = null;
+    po.mouse.onmousemove = null;
+    po.touch.onmousedown = null;
+    po.touch.onmouseup = null;
+    po.touch.onmousemove = null;
+    if (!po.window.closed) {
+      try { po.window.close(); } catch { /* ignore */ }
+    }
+    session._popout = undefined;
+    session.isPoppedOut = false;
+  }, []);
 
   const getSession = useCallback((connectionId: string) => {
     return sessionsRef.current.find((s) => s.connectionId === connectionId);
@@ -228,6 +257,7 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
         setSessions((prev) => {
           const s = prev.find((x) => x.id === sessionId);
           if (s) {
+            cleanupPopout(s);
             s.keyboard.onkeydown = null;
             s.keyboard.onkeyup = null;
             s.keyboard.reset();
@@ -278,6 +308,7 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
     setSessions((prev) => {
       const session = prev.find((s) => s.id === id);
       if (session) {
+        cleanupPopout(session);
         session.keyboard.onkeydown = null;
         session.keyboard.onkeyup = null;
         session.keyboard.reset();
@@ -295,7 +326,7 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
       }
       return current;
     });
-  }, []);
+  }, [cleanupPopout]);
 
   // Warn before closing the browser tab when sessions are active
   useEffect(() => {

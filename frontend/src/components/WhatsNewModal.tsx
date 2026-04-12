@@ -6,7 +6,7 @@ const STORAGE_KEY = 'strata-whats-new-dismissed';
  * Bump this version string each release to re-show the modal.
  * The content below should be updated to match.
  */
-export const WHATS_NEW_VERSION = '0.10.3';
+export const WHATS_NEW_VERSION = '0.10.4';
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
@@ -65,11 +65,11 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
 
           <div className="space-y-4 text-[0.8125rem] leading-relaxed text-txt-secondary">
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Auto-Redirect on Session End</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Pop-Out Session Persistence</h3>
               <p>
-                When you sign out of a remote session while other sessions are still active, you're
-                now automatically redirected to the next active session instead of seeing a frozen
-                screen. The "Session Ended" overlay only appears when your last session closes.
+                Pop-out windows now survive when you navigate between the dashboard and session
+                views. Disconnecting one popped-out session no longer causes other pop-out
+                windows to go black or become unresponsive.
               </p>
             </section>
           </div>

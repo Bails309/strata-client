@@ -221,10 +221,10 @@ export default function SessionClient() {
           const next = remaining[remaining.length - 1];
           setActiveSessionId(next.id);
 
-          // Clear dead session's display and attach the next session immediately
-          // so the user sees the live session without waiting for React effects.
+          // Attach the next session's display immediately — unless it's in a
+          // pop-out window (stealing its displayEl would black-out the popup).
           const container = containerRef.current;
-          if (container) {
+          if (container && !(next._popout && !next._popout.window.closed)) {
             container.innerHTML = '';
             container.appendChild(next.displayEl);
             const display = next.client.getDisplay();
@@ -540,8 +540,9 @@ export default function SessionClient() {
       const next = remaining.find((s) => s.id === activeSessionId) || remaining[remaining.length - 1];
       setActiveSessionId(next.id);
 
+      // Attach display — unless the next session is in a pop-out window.
       const container = containerRef.current;
-      if (container) {
+      if (container && !(next._popout && !next._popout.window.closed)) {
         container.innerHTML = '';
         container.appendChild(next.displayEl);
         const display = next.client.getDisplay();
@@ -755,6 +756,9 @@ export default function SessionClient() {
 
 /** Attach a session's display element into a container and scale to fit. */
 function attachSession(session: GuacSession, container: HTMLElement) {
+  // Don't steal the display element from an open popup window
+  if (session._popout && !session._popout.window.closed) return;
+
   const display = session.client.getDisplay();
   const el = session.displayEl;
 

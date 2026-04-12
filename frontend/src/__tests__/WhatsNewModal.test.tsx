@@ -49,7 +49,7 @@ describe('WhatsNewModal', () => {
   it('does not dismiss when clicking inside the modal content', async () => {
     render(<WhatsNewModal userId="user1" />);
     // Click inside the modal content (e.g., a section heading)
-    await userEvent.click(screen.getByText('One-Off Vault Credentials'));
+    await userEvent.click(screen.getByText('Pop-Out Session Persistence'));
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
   });
 

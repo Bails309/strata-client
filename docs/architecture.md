@@ -110,7 +110,7 @@ The central orchestrator. Responsibilities:
 Pages:
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, and group view toggle (flat list or collapsible group headers)
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync, file transfer, and a unified **Session Bar** dock consolidating all tools (Sharing, Keyboard, etc.) into a sleek right-side overlay.
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync, file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Keyboard, etc.) into a sleek right-side overlay, pop-out windows that persist across navigation, and automatic redirect to the next active session when one ends.
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
 - **Login** — unified login portal supporting local credentials and OIDC Single Sign-On; dynamically adjusts based on enabled authentication methods

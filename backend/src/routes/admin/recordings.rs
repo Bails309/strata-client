@@ -69,26 +69,26 @@ pub async fn session_stats(
 
     let cutoff = "NOW() - INTERVAL '30 days'";
 
-    let (total_sessions,): (i64,) = sqlx::query_as(
-        &format!("SELECT COUNT(*) FROM recordings WHERE started_at >= {cutoff}"),
-    )
+    let (total_sessions,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(*) FROM recordings WHERE started_at >= {cutoff}"
+    ))
     .fetch_one(&db.pool)
     .await?;
 
-    let (total_hours,): (f64,) = sqlx::query_as(
-        &format!("SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM recordings WHERE started_at >= {cutoff}"),
-    )
+    let (total_hours,): (f64,) = sqlx::query_as(&format!(
+        "SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM recordings WHERE started_at >= {cutoff}"
+    ))
     .fetch_one(&db.pool)
     .await?;
 
-    let (unique_users,): (i64,) = sqlx::query_as(
-        &format!("SELECT COUNT(DISTINCT user_id) FROM recordings WHERE started_at >= {cutoff}"),
-    )
+    let (unique_users,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COUNT(DISTINCT user_id) FROM recordings WHERE started_at >= {cutoff}"
+    ))
     .fetch_one(&db.pool)
     .await?;
 
-    let top_connections: Vec<TopConnectionRow> = sqlx::query_as(
-        &format!("SELECT connection_name AS name,
+    let top_connections: Vec<TopConnectionRow> = sqlx::query_as(&format!(
+        "SELECT connection_name AS name,
                 COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'rdp') AS protocol,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
@@ -96,13 +96,13 @@ pub async fn session_stats(
          WHERE started_at >= {cutoff}
          GROUP BY connection_id, connection_name
          ORDER BY sessions DESC
-         LIMIT 10"),
-    )
+         LIMIT 10"
+    ))
     .fetch_all(&db.pool)
     .await?;
 
-    let top_users: Vec<TopUserRow> = sqlx::query_as(
-        &format!("SELECT username,
+    let top_users: Vec<TopUserRow> = sqlx::query_as(&format!(
+        "SELECT username,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours,
                 MAX(started_at) AS last_session
@@ -110,8 +110,8 @@ pub async fn session_stats(
          WHERE started_at >= {cutoff}
          GROUP BY user_id, username
          ORDER BY sessions DESC
-         LIMIT 10"),
-    )
+         LIMIT 10"
+    ))
     .fetch_all(&db.pool)
     .await?;
 

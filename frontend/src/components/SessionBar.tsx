@@ -445,11 +445,12 @@ function SessionThumbnail({
       />
       {!sessionBarCollapsed && (
         <>
-          <div className="flex items-center gap-1.5 px-2 py-1 min-w-0">
-            <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent-dim text-accent-light shrink-0">
+          {/* Label Overlay */}
+          <div className="absolute bottom-0 left-0 right-0 p-2 pt-6 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none flex items-center gap-2 min-w-0 z-10">
+            <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent/30 text-accent-light shrink-0 border border-white/10 backdrop-blur-sm">
               {session.protocol.toUpperCase()}
             </span>
-            <span className="text-[0.7rem] font-medium text-txt-primary whitespace-nowrap overflow-hidden text-ellipsis min-w-0">
+            <span className="text-[0.75rem] font-bold text-white whitespace-nowrap overflow-hidden text-ellipsis min-w-0 drop-shadow-md">
               {session.name}
             </span>
           </div>

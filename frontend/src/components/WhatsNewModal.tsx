@@ -6,7 +6,7 @@ const STORAGE_KEY = 'strata-whats-new-dismissed';
  * Bump this version string each release to re-show the modal.
  * The content below should be updated to match.
  */
-export const WHATS_NEW_VERSION = '0.10.2';
+export const WHATS_NEW_VERSION = '0.10.3';
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
@@ -65,44 +65,11 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
 
           <div className="space-y-4 text-[0.8125rem] leading-relaxed text-txt-secondary">
             <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">One-Off Vault Credentials</h3>
+              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Auto-Redirect on Session End</h3>
               <p>
-                You can now select a saved credential profile directly from the login prompt when
-                connecting to a server — no need to permanently map credentials to each connection.
-                Works for both single and tiled (multi-session) connections.
-              </p>
-            </section>
-
-            <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">NVR Playback Controls</h3>
-              <p>
-                Session recordings now feature a progress bar, speed selector (1×, 2×, 4×, 8×), and
-                server-paced replay that preserves original inter-frame timing for accurate playback.
-              </p>
-            </section>
-
-            <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Per-User Recent Connections</h3>
-              <p>
-                Your "Recent Connections" on the dashboard now track only your activity — no more
-                seeing other users' recently accessed servers in your list.
-              </p>
-            </section>
-
-            <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Session Disconnect Handling</h3>
-              <p>
-                Logging out of a remote server now cleanly ends the session with a clear
-                "Session Ended" message, instead of leaving you on a black screen with
-                endless reconnection attempts.
-              </p>
-            </section>
-
-            <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Pop-Out Session Stability</h3>
-              <p>
-                Connecting to additional servers while a session is popped out no longer disrupts
-                the popup window. Pop-out sessions now persist independently until you return them.
+                When you sign out of a remote session while other sessions are still active, you're
+                now automatically redirected to the next active session instead of seeing a frozen
+                screen. The "Session Ended" overlay only appears when your last session closes.
               </p>
             </section>
           </div>

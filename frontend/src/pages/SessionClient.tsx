@@ -54,6 +54,11 @@ export default function SessionClient() {
   const wireHandlersRef = useRef<(session: GuacSession, attempt: number) => void>();
   /** Ref mirror of `error` so effects always read the latest value. */
   const errorRef = useRef('');
+  /** Ref mirror of sessions for stable access inside tunnel-close callbacks. */
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   // Find the session for this connection
   const currentSession = sessions.find(
     (s) => s.connectionId === connectionId && s.id === activeSessionId
@@ -64,6 +69,19 @@ export default function SessionClient() {
   // Keep errorRef in sync with the error state.
   errorRef.current = error;
 
+  // ── Reset stale state when switching to a different connection ──
+  const prevConnectionIdRef = useRef(connectionId);
+  useEffect(() => {
+    if (connectionId !== prevConnectionIdRef.current) {
+      prevConnectionIdRef.current = connectionId;
+      setError('');
+      setReconnecting(null);
+      setSshRequired(null);
+      setPhase('loading');
+      serverDisconnectRef.current = false;
+      userDisconnectRef.current = false;
+    }
+  }, [connectionId]);
 
   // ── Phase 1: Check for existing session or fetch connection info ──
   useEffect(() => {
@@ -191,15 +209,45 @@ export default function SessionClient() {
     let tunnelHadError = false;
 
     const handleTunnelClosed = () => {
-      // If the user navigated away or manually disconnected, skip UI updates.
-      if (userDisconnectRef.current) return;
-
-      // Clean close (no error) or explicit server disconnect → show overlay.
+      // ── Always check for remaining sessions first ──
+      // This must run before the userDisconnect guard because switching
+      // between sessions can leave userDisconnectRef stale.  Redirecting
+      // to a live session is safe regardless of how this tunnel closed.
       if (serverDisconnectRef.current || !tunnelHadError) {
+        const remaining = sessionsRef.current.filter(
+          (s) => s.id !== session.id && !s.error
+        );
+        if (remaining.length > 0) {
+          const next = remaining[remaining.length - 1];
+          setActiveSessionId(next.id);
+
+          // Clear dead session's display and attach the next session immediately
+          // so the user sees the live session without waiting for React effects.
+          const container = containerRef.current;
+          if (container) {
+            container.innerHTML = '';
+            container.appendChild(next.displayEl);
+            const display = next.client.getDisplay();
+            const dw = display.getWidth();
+            const dh = display.getHeight();
+            if (dw > 0 && dh > 0) {
+              display.scale(Math.min(container.clientWidth / dw, container.clientHeight / dh));
+            }
+          }
+
+          navigateRef.current(`/session/${next.connectionId}`);
+          return;
+        }
+
+        // Last session — always show the "Session Ended" overlay even if
+        // userDisconnectRef is stale from prior session switches.
         setReconnecting(null);
         setError('The remote session has ended. You may have logged out of the server.');
         return;
       }
+
+      // If the user navigated away or manually disconnected, skip UI updates.
+      if (userDisconnectRef.current) return;
 
       // Error-based closure (network drop, timeout) → attempt reconnection.
       const elapsed = Date.now() - session.createdAt;
@@ -464,6 +512,52 @@ export default function SessionClient() {
       }
     };
   }, []);
+
+  // ── Detect when our session is removed and redirect to next active session ──
+  // This handles the case where tunnel handlers reference stale refs from a
+  // prior component instance (React Router may unmount/remount SessionClient
+  // when navigating between /session/:connectionId routes).
+  const hadSessionRef = useRef(false);
+  if (currentSession) hadSessionRef.current = true;
+  useEffect(() => {
+    // Reset only when switching to a different connection
+    hadSessionRef.current = false;
+  }, [connectionId]);
+  useEffect(() => {
+    if (!connectionId || error || reconnecting) return;
+    if (phase !== 'connected') return;
+    // Only act if we previously had a session that has now disappeared.
+    // This avoids false-positives during initial session creation.
+    if (!hadSessionRef.current) return;
+
+    // Check if our session still exists in the session list
+    const ourSession = sessions.find((s) => s.connectionId === connectionId);
+    if (ourSession) return; // still alive
+
+    // Session was removed by SessionManager. Redirect to remaining healthy session.
+    const remaining = sessions.filter((s) => !s.error);
+    if (remaining.length > 0) {
+      const next = remaining.find((s) => s.id === activeSessionId) || remaining[remaining.length - 1];
+      setActiveSessionId(next.id);
+
+      const container = containerRef.current;
+      if (container) {
+        container.innerHTML = '';
+        container.appendChild(next.displayEl);
+        const display = next.client.getDisplay();
+        const dw = display.getWidth();
+        const dh = display.getHeight();
+        if (dw > 0 && dh > 0) {
+          display.scale(Math.min(container.clientWidth / dw, container.clientHeight / dh));
+        }
+      }
+
+      navigate(`/session/${next.connectionId}`);
+    } else {
+      // Last session ended — show overlay.
+      setError('The remote session has ended. You may have logged out of the server.');
+    }
+  }, [sessions, connectionId, activeSessionId, error, reconnecting, phase, setActiveSessionId, navigate]);
 
   // SSH runtime credentials
   const submitSshCredentials = useCallback(() => {

@@ -51,6 +51,7 @@ export default function SessionBar() {
   const popoverRef = useRef<HTMLDivElement>(null);
   // Draggable toggle-tab state (vertical offset from center, in px)
   const [tabOffsetY, setTabOffsetY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<{ startY: number; startOffset: number } | null>(null);
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
@@ -70,16 +71,18 @@ export default function SessionBar() {
 
   const onTabPointerMove = useCallback((e: React.PointerEvent) => {
     if (!dragRef.current || !sessionBarCollapsed) return;
+    if (!isDragging) setIsDragging(true);
     const delta = e.clientY - dragRef.current.startY;
     const maxOffset = window.innerHeight / 2 - 48; // keep within viewport
     const newOffset = Math.max(-maxOffset, Math.min(maxOffset, dragRef.current.startOffset + delta));
     setTabOffsetY(newOffset);
-  }, [sessionBarCollapsed]);
+  }, [sessionBarCollapsed, isDragging]);
 
   const onTabPointerUp = useCallback((e: React.PointerEvent) => {
     if (!dragRef.current) return;
     const wasDrag = sessionBarCollapsed && Math.abs(e.clientY - dragRef.current.startY) >= 4;
     dragRef.current = null;
+    setIsDragging(false);
     // If it was a real drag, don't toggle — just reposition
     if (wasDrag) return;
     // Otherwise treat as a click: toggle the bar
@@ -162,7 +165,7 @@ export default function SessionBar() {
       {/* Toggle Tab — draggable vertically when collapsed */}
       <button
         ref={tabButtonRef}
-        className="absolute -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl transition-all duration-200"
+        className={`absolute -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl ${isDragging ? '' : 'transition-all duration-200'}`}
         style={{ 
           top: `calc(50% + ${tabOffsetY}px)`,
           transform: 'translateY(-50%)',

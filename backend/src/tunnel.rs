@@ -622,8 +622,10 @@ async fn handle_guac_handshake(
         // Capture bandwidth before unregistering (the ActiveSession will be dropped)
         let (bw_from, bw_to) = if let Some(ref sess) = bandwidth {
             (
-                sess.bytes_from_guacd.load(std::sync::atomic::Ordering::Relaxed) as i64,
-                sess.bytes_to_guacd.load(std::sync::atomic::Ordering::Relaxed) as i64,
+                sess.bytes_from_guacd
+                    .load(std::sync::atomic::Ordering::Relaxed) as i64,
+                sess.bytes_to_guacd
+                    .load(std::sync::atomic::Ordering::Relaxed) as i64,
             )
         } else {
             (0i64, 0i64)

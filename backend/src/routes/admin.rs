@@ -657,7 +657,9 @@ pub async fn update_vault(
     }
 
     let db = require_running(&state).await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "vault.configured",
         &json!({ "address": audit_address }),
     )
@@ -808,7 +810,9 @@ pub async fn create_kerberos_realm(
     settings::set(&db.pool, "kerberos_enabled", "true").await?;
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "kerberos.realm_created",
         &json!({ "realm": body.realm }),
     )
@@ -918,7 +922,9 @@ pub async fn update_kerberos_realm(
     tx.commit().await?;
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "kerberos.realm_updated",
         &json!({ "realm_id": realm_id.to_string() }),
     )
@@ -951,7 +957,9 @@ pub async fn delete_kerberos_realm(
     }
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "kerberos.realm_deleted",
         &json!({ "realm_id": realm_id.to_string() }),
     )
@@ -1029,7 +1037,9 @@ pub async fn update_recordings(
         };
         settings::set(&db.pool, "recordings_azure_access_key", &stored).await?;
     }
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "recordings.configured",
         &json!({ "enabled": body.enabled }),
     )
@@ -1100,7 +1110,9 @@ pub async fn create_role(
     .bind(body.can_create_sharing_profiles.unwrap_or(false))
     .fetch_one(&db.pool)
     .await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "role.created",
         &json!({ "name": body.name }),
     )
@@ -1211,7 +1223,9 @@ pub async fn update_role(
         .fetch_one(&db.pool)
         .await?;
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "role.updated",
         &json!({ "id": id.to_string(), "name": row.name }),
     )
@@ -1257,7 +1271,9 @@ pub async fn delete_role(
         .execute(&db.pool)
         .await?;
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "role.deleted",
         &json!({ "id": id.to_string(), "name": role_name }),
     )
@@ -1331,7 +1347,9 @@ pub async fn create_connection(
     .bind(&extra)
     .fetch_one(&db.pool)
     .await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "connection.created",
         &json!({ "name": body.name }),
     )
@@ -1365,7 +1383,9 @@ pub async fn update_connection(
     .fetch_optional(&db.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "connection.updated",
         &json!({ "id": id.to_string(), "name": body.name }),
     )
@@ -1388,7 +1408,9 @@ pub async fn delete_connection(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Connection not found".into()));
     }
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "connection.deleted",
         &json!({ "id": id.to_string() }),
     )
@@ -1473,7 +1495,9 @@ pub async fn update_role_mappings(
 
     tx.commit().await?;
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "role_mappings.updated",
         &json!({ "role_id": role_id.to_string() }),
     )
@@ -1555,7 +1579,9 @@ pub async fn restore_user(
         return Err(AppError::NotFound("Deleted user not found".into()));
     }
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "user.restored",
         &json!({ "id": id.to_string() }),
     )
@@ -1580,7 +1606,9 @@ pub async fn delete_user(
         return Err(AppError::NotFound("User not found".into()));
     }
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "user.deleted",
         &json!({ "id": id.to_string() }),
     )
@@ -1646,7 +1674,9 @@ pub async fn create_user(
     .execute(&db.pool)
     .await?;
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "user.created",
         &json!({
             "user_id": user_id,
@@ -1744,7 +1774,9 @@ pub async fn create_connection_folder(
     .bind(body.parent_id)
     .fetch_one(&db.pool)
     .await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "connection_folder.created",
         &json!({ "name": body.name }),
     )
@@ -1789,7 +1821,9 @@ pub async fn delete_connection_folder(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Folder not found".into()));
     }
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "connection_folder.deleted",
         &json!({ "id": id.to_string() }),
     )
@@ -1844,7 +1878,9 @@ pub async fn kill_sessions(
         }
     }
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "sessions.killed",
         &json!({ "count": killed_count, "ids": body.session_ids }),
     )
@@ -2183,7 +2219,9 @@ pub async fn create_ad_sync_config(
     .await?;
 
     settings::set(&db.pool, "ad_sync_enabled", "true").await?;
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "ad_sync.config_created",
         &json!({ "label": body.label }),
     )
@@ -2430,7 +2468,9 @@ pub async fn update_ad_sync_config(
 
     tx.commit().await?;
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "ad_sync.config_updated",
         &json!({ "id": id.to_string() }),
     )
@@ -2460,7 +2500,9 @@ pub async fn delete_ad_sync_config(
         settings::set(&db.pool, "ad_sync_enabled", "false").await?;
     }
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "ad_sync.config_deleted",
         &json!({ "id": id.to_string() }),
     )

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import WhatsNewModal, { WHATS_NEW_VERSION } from '../components/WhatsNewModal';
 
@@ -86,5 +86,30 @@ describe('WhatsNewModal', () => {
     localStorage.setItem(`${STORAGE_KEY}-other-user`, WHATS_NEW_VERSION);
     render(<WhatsNewModal userId="user1" />);
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+  });
+
+  it('updates visibility when userId changes during lifecycle', () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
+    localStorage.setItem(`${STORAGE_KEY}-user1`, WHATS_NEW_VERSION);
+    
+    const { rerender } = render(<WhatsNewModal userId="user1" />);
+    expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
+
+    rerender(<WhatsNewModal userId="user2" />);
+    // User2 hasn't dismissed either modal yet, so welcome should show
+    expect(screen.getByText('Welcome to Strata Client!')).toBeInTheDocument();
+  });
+
+  it('handles backdrop click safety when userId is missing', async () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
+    // We force the modal to be visible then remove userId
+    const { rerender } = render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
+
+    rerender(<WhatsNewModal userId={undefined} />);
+    // Modal should disappear because of the userId check and useEffect cleanup
+    await waitFor(() => {
+      expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
+    });
   });
 });

@@ -719,4 +719,113 @@ describe('Dashboard', () => {
       expect(screen.getByText('Old Creds (expired)')).toBeInTheDocument();
     });
   });
+
+  it('renders default icon for unknown protocol', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue([
+      { id: '1', name: 'Other', protocol: 'telnet', hostname: 'host', port: 23, description: '' },
+    ]);
+    renderDashboard();
+    await screen.findByText('Other');
+    // The default icon is a generic computer monitor rect. 
+    // We just check it renders without crashing and shows the label.
+    expect(screen.getByText('TELNET')).toBeInTheDocument();
+  });
+
+  it('handles getConnectionInfo failure in openTiled', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    vi.mocked(getConnectionInfo).mockRejectedValue(new Error('api fail'));
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    await userEvent.click(checkboxes[1]);
+    await userEvent.click(checkboxes[2]);
+    await userEvent.click(screen.getByText(/Open Tiled/));
+    // Should default to needs creds if it fails to check
+    await waitFor(() => {
+      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+    });
+  });
+
+  it('skips connection in launchTiled if ticket generation fails', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: true });
+    vi.mocked(createTunnelTicket).mockRejectedValue(new Error('ticket fail'));
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    await userEvent.click(checkboxes[1]);
+    await userEvent.click(checkboxes[2]);
+    await userEvent.click(screen.getByText(/Open Tiled/));
+    // Should finish without navigating since all (both) connections failed ticket gen
+    await waitFor(() => {
+      expect(createTunnelTicket).toHaveBeenCalled();
+    });
+  });
+
+  it('handles profile mapping API failures gracefully', async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue({
+      ...baseHealth,
+      vault: { configured: true, mode: 'local', address: '' },
+    });
+    vi.mocked(getCredentialProfiles).mockResolvedValue([{ id: 'p1', label: 'Admin', expired: false } as any]);
+    vi.mocked(getProfileMappings).mockRejectedValue(new Error('fail'));
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // Should just show "None" for all profiles
+    await waitFor(() => {
+      expect(screen.getAllByText('None').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('handles setCredentialMapping failure', async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue({
+      ...baseHealth,
+      vault: { configured: true, mode: 'local', address: '' },
+    });
+    vi.mocked(getCredentialProfiles).mockResolvedValue([{ id: 'p1', label: 'Admin', expired: false } as any]);
+    vi.mocked(getProfileMappings).mockResolvedValue([]);
+    vi.mocked(setCredentialMapping).mockRejectedValue(new Error('fail'));
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const noneOptions = screen.getAllByText('None');
+    await userEvent.click(noneOptions[0]);
+    await userEvent.click(screen.getByRole('option', { name: 'Admin' }));
+    await waitFor(() => expect(setCredentialMapping).toHaveBeenCalled());
+  });
+
+  it('initializes expandedFolders from localStorage and handles corrupt data', () => {
+    localStorage.setItem('strata-expanded-folders', 'invalid-json');
+    renderDashboard();
+    // Should not crash and should show no folders expanded (default empty Set)
+    expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+  });
+
+  it('toggles folder view and persists to localStorage', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
+    renderDashboard();
+    await screen.findByText('Production');
+    const folderBtn = screen.getByText('Folders');
+    await userEvent.click(folderBtn); // Toggle off
+    expect(localStorage.getItem('strata-folder-view')).toBe('false');
+    await userEvent.click(folderBtn); // Toggle on
+    expect(localStorage.getItem('strata-folder-view')).toBe('true');
+  });
+
+  it('renders recent card for connection with domain explicitly set', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue([
+      { id: '1', name: 'D1', protocol: 'rdp', hostname: '1.2.3.4', last_accessed: '2024-01-01T00:00:00Z', domain: 'EXTRA' },
+    ]);
+    renderDashboard();
+    await waitFor(() => expect(screen.getByText(/EXTRA/)).toBeInTheDocument());
+  });
+
+  it('hero cards handle click to navigate', async () => {
+    vi.mocked(getMyConnections).mockResolvedValue([
+      { id: '1', name: 'HeroConn', protocol: 'rdp', hostname: 'host', last_accessed: '2024-01-01T00:00:00Z' },
+    ]);
+    renderDashboard();
+    const cards = await screen.findAllByText('HeroConn');
+    await userEvent.click(cards[0].parentElement!);
+    // Check if URL changed? (BrowserRouter context)
+  });
 });

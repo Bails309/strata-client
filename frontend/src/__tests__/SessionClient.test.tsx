@@ -30,6 +30,8 @@ describe('SessionClient', () => {
   let mockSession: any;
   const mockCreateSession = vi.fn();
   const mockSetActiveSessionId = vi.fn();
+  const mockCloseSession = vi.fn();
+  const mockGetSession = vi.fn();
 
   // Mutable state that tracks what createSession produces, so the mock
   // returns the session in `sessions` on subsequent renders.
@@ -99,17 +101,19 @@ describe('SessionClient', () => {
 
     // useSessionManager reads from mutable `state` so sessions become
     // visible after createSession is called.
+    mockGetSession.mockImplementation((id: string) => state.sessions.find((s: any) => s.connectionId === id));
+
     vi.mocked(SessionManagerModule.useSessionManager).mockImplementation(() => ({
       sessions: state.sessions,
       activeSessionId: state.activeId,
-      getSession: vi.fn((id: string) => state.sessions.find((s: any) => s.connectionId === id)),
+      getSession: mockGetSession,
       createSession: mockCreateSession,
       tiledSessionIds: [],
       setTiledSessionIds: vi.fn(),
       focusedSessionIds: [],
       setFocusedSessionIds: vi.fn(),
       setActiveSessionId: mockSetActiveSessionId,
-      closeSession: vi.fn(),
+      closeSession: mockCloseSession,
       sessionBarCollapsed: false,
       setSessionBarCollapsed: vi.fn(),
       barWidth: 180,
@@ -224,6 +228,122 @@ describe('SessionClient', () => {
 
     await waitFor(() => {
       expect(mockSession.filesystems[0].object.createOutputStream).toHaveBeenCalled();
+    });
+  });
+
+  it('shows Reconnect button on error overlay and reconnects on click', async () => {
+    await renderSessionClient();
+
+    await waitFor(() => {
+      expect(typeof mockSession.tunnel.oninstruction).toBe('function');
+    });
+    await rtlAct(async () => { mockSession.tunnel.oninstruction('disconnect', []); });
+    await rtlAct(async () => { mockSession.tunnel.onstatechange(2); });
+
+    const root = within(document.getElementById('root')!);
+    await waitFor(() => {
+      expect(root.getByText(/session has ended/i)).toBeInTheDocument();
+    });
+
+    mockCreateSession.mockClear();
+    mockCreateSession.mockImplementation(() => {
+      state.sessions = [mockSession];
+      state.activeId = mockSession.id;
+      return mockSession;
+    });
+
+    await rtlAct(async () => { fireEvent.click(root.getByText('Reconnect')); });
+    await rtlAct(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    expect(api.createTunnelTicket).toHaveBeenCalled();
+    expect(mockCreateSession).toHaveBeenCalled();
+  });
+
+  it('shows Reconnecting\u2026 text while reconnect is in progress', async () => {
+    await renderSessionClient();
+
+    await waitFor(() => { expect(typeof mockSession.tunnel.oninstruction).toBe('function'); });
+    await rtlAct(async () => { mockSession.tunnel.oninstruction('disconnect', []); });
+    await rtlAct(async () => { mockSession.tunnel.onstatechange(2); });
+
+    const root = within(document.getElementById('root')!);
+    await waitFor(() => { expect(root.getByText('Reconnect')).toBeInTheDocument(); });
+
+    let resolveTicket!: (v: any) => void;
+    vi.mocked(api.createTunnelTicket).mockReturnValue(
+      new Promise((r) => { resolveTicket = r; }),
+    );
+
+    await rtlAct(async () => {
+      fireEvent.click(root.getByText('Reconnect'));
+    });
+
+    await waitFor(() => {
+      expect(root.getByText('Reconnecting\u2026')).toBeInTheDocument();
+    }, { timeout: 2000 });
+    await rtlAct(async () => { resolveTicket({ ticket: 'new-ticket' }); });
+    await rtlAct(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  });
+
+  it('shows error message when reconnect fails', async () => {
+    await renderSessionClient();
+
+    await waitFor(() => { expect(typeof mockSession.tunnel.oninstruction).toBe('function'); });
+    await rtlAct(async () => { mockSession.tunnel.oninstruction('disconnect', []); });
+    await rtlAct(async () => { mockSession.tunnel.onstatechange(2); });
+
+    const root = within(document.getElementById('root')!);
+    await waitFor(() => { expect(root.getByText('Reconnect')).toBeInTheDocument(); });
+
+    vi.mocked(api.createTunnelTicket).mockRejectedValueOnce(new Error('fail'));
+
+    await rtlAct(async () => { fireEvent.click(root.getByText('Reconnect')); });
+    await rtlAct(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    await waitFor(() => {
+      expect(root.getByText(/Failed to reconnect/i)).toBeInTheDocument();
+    });
+  });
+
+  it('closes existing live session before reconnecting', async () => {
+    await renderSessionClient();
+    await waitFor(() => { expect(mockCreateSession).toHaveBeenCalled(); });
+
+    await waitFor(() => { expect(typeof mockSession.tunnel.oninstruction).toBe('function'); });
+    await rtlAct(async () => { mockSession.tunnel.oninstruction('disconnect', []); });
+    await rtlAct(async () => { mockSession.tunnel.onstatechange(2); });
+
+    const root = within(document.getElementById('root')!);
+    await waitFor(() => { expect(root.getByText('Reconnect')).toBeInTheDocument(); });
+
+    state.sessions = [mockSession];
+    mockGetSession.mockImplementation((id: string) => state.sessions.find((s: any) => s.connectionId === id));
+    mockCloseSession.mockClear();
+
+    mockCreateSession.mockClear();
+    mockCreateSession.mockImplementation(() => {
+      state.sessions = [mockSession];
+      state.activeId = mockSession.id;
+      return mockSession;
+    });
+
+    await rtlAct(async () => { fireEvent.click(root.getByText('Reconnect')); });
+    await rtlAct(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    expect(mockCloseSession).toHaveBeenCalledWith(mockSession.id);
+    expect(mockCreateSession).toHaveBeenCalled();
+  });
+
+  it('shows Exit to Dashboard button on error overlay', async () => {
+    await renderSessionClient();
+
+    await waitFor(() => { expect(typeof mockSession.tunnel.oninstruction).toBe('function'); });
+    await rtlAct(async () => { mockSession.tunnel.oninstruction('disconnect', []); });
+    await rtlAct(async () => { mockSession.tunnel.onstatechange(2); });
+
+    const root = within(document.getElementById('root')!);
+    await waitFor(() => {
+      expect(root.getByText('Exit to Dashboard')).toBeInTheDocument();
     });
   });
 });

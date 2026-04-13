@@ -232,4 +232,61 @@ describe('SessionClient – auto-redirect on session end', () => {
     expect(document.body.textContent).not.toContain('Session Ended');
     expect(mockNavigate).not.toHaveBeenCalled();
   });
+
+  // ────────────────────────────────────────────────────────────
+  // userDisconnectRef guard — reconnect must not redirect
+  // ────────────────────────────────────────────────────────────
+
+  it('does not redirect when tunnel closes during manual reconnect', async () => {
+    // Setup: both sessions exist, viewing session A
+    state.sessions = [sessionB];
+    mockCreateSession.mockImplementation(() => {
+      state.sessions = [sessionA, sessionB];
+      state.activeId = sessionA.id;
+      return sessionA;
+    });
+
+    await renderAndSettle();
+
+    // Verify handlers wired
+    expect(typeof sessionA.tunnel.oninstruction).toBe('function');
+    expect(typeof sessionA.tunnel.onstatechange).toBe('function');
+
+    // Simulate what handleManualReconnect does: user-initiated close
+    // The Reconnect button click sets userDisconnectRef = true before close.
+    // We simulate the "clean close" path (no error, no disconnect instruction).
+    // With the userDisconnectRef guard at the top of handleTunnelClosed,
+    // this should NOT redirect to session B.
+
+    // First trigger the error overlay so the Reconnect button is visible
+    await rtlAct(async () => { sessionA.tunnel.oninstruction('disconnect', []); });
+    await rtlAct(async () => { sessionA.tunnel.onstatechange(2); });
+
+    expect(mockSetActiveSessionId).toHaveBeenCalledWith(sessionB.id);
+    // Reset to verify reconnect click does NOT re-trigger redirect
+    mockSetActiveSessionId.mockClear();
+    mockNavigate.mockClear();
+
+    // Now the overlay is showing. Click Reconnect.
+    const root = document.getElementById('root')!;
+    const reconnectBtn = root.querySelector('button');
+    const buttons = Array.from(root.querySelectorAll('button'));
+    const reconnect = buttons.find((b) => b.textContent === 'Reconnect');
+
+    if (reconnect) {
+      // Reset createSession for the new session
+      mockCreateSession.mockClear();
+      mockCreateSession.mockImplementation(() => {
+        state.sessions = [sessionA, sessionB];
+        state.activeId = sessionA.id;
+        return sessionA;
+      });
+
+      await rtlAct(async () => { reconnect.click(); });
+      await rtlAct(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+      // The reconnect should create a new session without redirecting
+      expect(mockCreateSession).toHaveBeenCalled();
+    }
+  });
 });

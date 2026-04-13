@@ -442,4 +442,187 @@ describe('SessionManager', () => {
 
     expect(display.scale).toHaveBeenCalled();
   });
+
+  it('auto-removes session when tunnel closes', () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    expect(result.current.sessions).toHaveLength(1);
+
+    // Simulate tunnel close (state=2)
+    rtlAct(() => {
+      session.tunnel.onstatechange(2);
+    });
+
+    expect(result.current.sessions).toHaveLength(0);
+    expect(result.current.activeSessionId).toBeNull();
+  });
+
+  it('switches active session on tunnel close when multiple sessions exist', () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let sess1: any, sess2: any;
+    rtlAct(() => {
+      sess1 = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+    rtlAct(() => {
+      sess2 = result.current.createSession({
+        connectionId: 'c2', name: 'B', protocol: 'ssh',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    expect(result.current.activeSessionId).toBe(sess2.id);
+
+    // Close the active session via tunnel state
+    rtlAct(() => {
+      sess2.tunnel.onstatechange(2);
+    });
+
+    expect(result.current.sessions).toHaveLength(1);
+    expect(result.current.activeSessionId).toBe(sess1.id);
+  });
+
+  it('resizes on client connected state', () => {
+    // Mock requestAnimationFrame to run synchronously
+    vi.stubGlobal('requestAnimationFrame', (cb: any) => { cb(); return 0; });
+
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    const parent = document.createElement('div');
+    Object.defineProperties(parent, {
+      clientWidth: { value: 1000, configurable: true },
+      clientHeight: { value: 800, configurable: true },
+    });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: parent, connectParams: new URLSearchParams(),
+      });
+      parent.appendChild(session.displayEl);
+    });
+
+    // Trigger client connected state (state=3)
+    rtlAct(() => {
+      session.client.onstatechange(3);
+    });
+
+    expect(session.client.sendSize).toHaveBeenCalledWith(1000, 800);
+    const display = session.client.getDisplay();
+    expect(display.scale).toHaveBeenCalled();
+  });
+
+  it('sets error on tunnel.onerror', () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    rtlAct(() => {
+      session.tunnel.onerror({ message: 'Network error' });
+    });
+
+    expect(session.error).toBe('Network error');
+  });
+
+  it('sets error on client.onerror', () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    rtlAct(() => {
+      session.client.onerror({ message: 'Client error' });
+    });
+
+    expect(session.error).toBe('Client error');
+  });
+
+  it('adds beforeunload listener when sessions exist and removes when empty', () => {
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    expect(addSpy).toHaveBeenCalledWith('beforeunload', expect.any(Function));
+
+    rtlAct(() => {
+      result.current.closeSession(session.id);
+    });
+
+    expect(removeSpy).toHaveBeenCalledWith('beforeunload', expect.any(Function));
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
+  });
+
+  it('ignores non-text/plain clipboard mimetype', () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    // Call onclipboard with image mimetype — StringReader should NOT be constructed
+    vi.mocked(Guacamole.StringReader).mockClear();
+    rtlAct(() => {
+      session.client.onclipboard({} as any, 'image/png');
+    });
+
+    expect(Guacamole.StringReader).not.toHaveBeenCalled();
+  });
+
+  it('registers filesystem when server sends one', () => {
+    const { result } = renderHook(() => useSessionManager(), { wrapper });
+
+    let session: any;
+    rtlAct(() => {
+      session = result.current.createSession({
+        connectionId: 'c1', name: 'A', protocol: 'rdp',
+        containerEl: document.createElement('div'), connectParams: new URLSearchParams(),
+      });
+    });
+
+    const mockObject = {} as any;
+    rtlAct(() => {
+      session.client.onfilesystem(mockObject, 'Drive C:');
+    });
+
+    expect(session.filesystems).toHaveLength(1);
+    expect(session.filesystems[0].name).toBe('Drive C:');
+  });
 });

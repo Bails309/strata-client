@@ -172,7 +172,7 @@ export default function SessionBar() {
  
   return (
     <>
-    <div className="session-bar" style={{ width: displayWidth }}>
+    <div className="session-bar" style={{ width: displayWidth }} data-testid="session-bar">
       {/* Toggle Tab — draggable vertically when collapsed */}
       <button
         ref={tabButtonRef}

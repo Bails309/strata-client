@@ -248,7 +248,7 @@ export default function SessionClient() {
         // Last session — always show the "Session Ended" overlay even if
         // userDisconnectRef is stale from prior session switches.
         setReconnecting(null);
-        setError('The remote session has ended. You may have logged out of the server.');
+        setError(session.error || 'The remote session has ended. You may have logged out of the server.');
         return;
       }
 

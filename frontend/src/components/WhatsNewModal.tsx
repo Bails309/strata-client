@@ -18,7 +18,10 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
   const [mode, setMode] = useState<ModalMode | null>(null);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      if (visible) setVisible(false);
+      return;
+    }
 
     // 1. Check if welcome was ever seen
     const welcomeDismissed = localStorage.getItem(`${WELCOME_KEY}-${userId}`);

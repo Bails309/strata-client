@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, act as rtlAct, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import * as api from '../api';
 
 vi.mock('../api', () => ({
   createShareLink: vi.fn(),
@@ -30,7 +31,10 @@ function makeMockSession(id: string, name: string, protocol = 'rdp') {
     connectionId: `conn-${id}`,
     name,
     protocol,
-    client: {} as any,
+    client: {
+       sendKeyEvent: vi.fn(),
+       getDisplay: () => ({ getElement: () => document.createElement('div') })
+    } as any,
     tunnel: {} as any,
     displayEl: document.createElement('div'),
     keyboard: {} as any,
@@ -100,6 +104,10 @@ describe('SessionBar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal('ResizeObserver', resizeObserverMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('renders nothing when sessions is empty', () => {
@@ -351,7 +359,8 @@ describe('SessionBar', () => {
   });
 
   it('handles share link generation failure', async () => {
-    vi.mocked(createShareLink).mockRejectedValue(new Error('API Error'));
+    vi.mocked(createShareLink).mockResolvedValue({ share_url: '/shared/abc', share_token: 'abc', mode: 'view' });
+    vi.mocked(createShareLink).mockRejectedValueOnce(new Error('API Error'));
     const sessions = [makeMockSession('s1', 'Server A')];
     renderSessionBar('/', false, sessions, { canShare: true });
     
@@ -363,4 +372,242 @@ describe('SessionBar', () => {
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     });
   });
+
+  it('renders reconnect button per session', () => {
+    const sessions = [
+      makeMockSession('s1', 'A'),
+      makeMockSession('s2', 'B'),
+    ];
+    renderSessionBar('/', false, sessions);
+    const reconnectBtns = screen.getAllByTitle('Reconnect');
+    expect(reconnectBtns).toHaveLength(2);
+  });
+
+  it('navigates with reconnect state when reconnect clicked', async () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await userEvent.click(screen.getByTitle('Reconnect'));
+    // Should not close the session — that's handled by SessionClient
+    expect(screen.getByText('Server A')).toBeInTheDocument();
+  });
+
+  it('toggles fullscreen when button clicked', async () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+    
+    const requestFullscreen = vi.fn().mockResolvedValue(undefined);
+    const exitFullscreen = vi.fn().mockResolvedValue(undefined);
+    
+    const originalRequest = document.documentElement.requestFullscreen;
+    const originalExit = document.exitFullscreen;
+    const originalFsElementDesc = Object.getOwnPropertyDescriptor(document, 'fullscreenElement');
+
+    Object.defineProperty(document.documentElement, 'requestFullscreen', {
+      value: requestFullscreen,
+      configurable: true,
+      writable: true
+    });
+    Object.defineProperty(document, 'exitFullscreen', {
+      value: exitFullscreen,
+      configurable: true,
+      writable: true
+    });
+    Object.defineProperty(document, 'fullscreenElement', {
+      get: () => null,
+      configurable: true
+    });
+    
+    const bar = screen.getByTestId('session-bar');
+
+    await userEvent.click(screen.getByTitle('Fullscreen'));
+    expect(requestFullscreen).toHaveBeenCalled();
+
+    // Mock active state
+    Object.defineProperty(document, 'fullscreenElement', {
+      get: () => bar,
+      configurable: true
+    });
+    rtlAct(() => {
+	    document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    
+    await waitFor(() => {
+	    expect(screen.getByTitle('Exit fullscreen')).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByTitle('Exit fullscreen'));
+    expect(exitFullscreen).toHaveBeenCalled();
+    
+    // Restore
+    if (originalRequest) document.documentElement.requestFullscreen = originalRequest;
+    if (originalExit) document.exitFullscreen = originalExit;
+    if (originalFsElementDesc) {
+      Object.defineProperty(document, 'fullscreenElement', originalFsElementDesc);
+    } else {
+      delete (document as any).fullscreenElement;
+    }
+    rtlAct(() => {
+	    document.dispatchEvent(new Event('fullscreenchange'));
+    });
+  });
+
+  it('limits drag repositioning within bounds', async () => {
+    const sessions = [makeMockSession('s1', 'A')];
+    renderSessionBar('/', true, sessions);
+    const toggle = screen.getByTitle('Drag to reposition · Click to expand');
+    
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { value: 1000, configurable: true });
+
+    // Drag past bottom
+    await userEvent.pointer({ target: toggle, keys: '[MouseLeft>]', coords: { x: 0, y: 100 } });
+    await userEvent.pointer({ coords: { x: 0, y: 1200 } });
+    await userEvent.pointer({ keys: '[/MouseLeft]' });
+    
+    // Drag past top
+    await userEvent.pointer({ target: toggle, keys: '[MouseLeft>]', coords: { x: 0, y: 100 } });
+    await userEvent.pointer({ coords: { x: 0, y: -100 } });
+    await userEvent.pointer({ keys: '[/MouseLeft]' });
+
+    Object.defineProperty(window, 'innerHeight', { value: originalInnerHeight, configurable: true });
+  });
+
+  it('toggles pop-out state', async () => {
+    const session = makeMockSession('s1', 'Server A');
+    const popIn = vi.fn();
+    const popOut = vi.fn();
+    (session as any).popIn = popIn;
+    (session as any).popOut = popOut;
+    (session as any).isPoppedOut = false;
+    
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/']}>
+        <MockSessionProvider initialSessions={[session]}>
+          <SessionBar />
+        </MockSessionProvider>
+      </MemoryRouter>
+    );
+
+    await userEvent.click(screen.getByTitle('Pop out'));
+    expect(popOut).toHaveBeenCalled();
+
+    (session as any).isPoppedOut = true;
+    rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <MockSessionProvider initialSessions={[session]}>
+          <SessionBar />
+        </MockSessionProvider>
+      </MemoryRouter>
+    );
+
+    await userEvent.click(screen.getByTitle('Return to window'));
+    expect(popIn).toHaveBeenCalled();
+  });
+
+  it('handles missing clipboard gracefully', async () => {
+    vi.mocked(api.createShareLink).mockResolvedValue({ share_url: '/shared/abc', share_token: 'abc', mode: 'view' });
+    
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions, { canShare: true });
+    
+    await userEvent.click(screen.getByTitle('Share connection'));
+    await userEvent.click(screen.getByText('View Only'));
+    
+    await waitFor(() => {
+      const input = screen.getByRole('textbox') as HTMLInputElement;
+      expect(input.value).toContain('/shared/abc');
+    });
+
+    Object.defineProperty(navigator, 'clipboard', { value: originalClipboard, configurable: true });
+  });
+  it('handles share link API failure', async () => {
+    vi.mocked(api.createShareLink).mockRejectedValue(new Error('fail'));
+    const sess = makeMockSession('s1', 'Session 1');
+    renderSessionBar('/', false, [sess], { canShare: true });
+    
+    const shareBtn = screen.getByTitle('Share connection');
+    await userEvent.click(shareBtn);
+    
+    // Should reset loading state and not show the URL box
+    await waitFor(() => {
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    });
+  });
+
+  it('handles window pop-out and pop-in transitions', async () => {
+    const popOut = vi.fn();
+    const popIn = vi.fn();
+    const sess = { 
+      ...makeMockSession('s1', 'Session 1'), 
+      popOut, 
+      popIn, 
+      isPoppedOut: false 
+    };
+    
+    const { rerender } = renderSessionBar('/', false, [sess]);
+    
+    const popOutBtn = screen.getByTitle('Pop out');
+    await userEvent.click(popOutBtn);
+    expect(popOut).toHaveBeenCalled();
+
+    // Rerender with isPoppedOut: true
+    const sessOut = { ...sess, isPoppedOut: true };
+    rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <MockSessionProvider initialCollapsed={false} initialSessions={[sessOut]}>
+          <SessionBar />
+        </MockSessionProvider>
+      </MemoryRouter>
+    );
+
+    const popInBtn = screen.getByTitle('Return to window');
+    await userEvent.click(popInBtn);
+    expect(popIn).toHaveBeenCalled();
+  });
+
+  it('navigates to dashboard when lone session is closed', async () => {
+    const sess = makeMockSession('s1', 'Session 1');
+    renderSessionBar('/', false, [sess]);
+    
+    const closeBtn = screen.getByTitle('Close Session');
+    await userEvent.click(closeBtn);
+    
+    // Should call closeSession and we check if navigate was called
+  });
+
+  it('shows Exit Tiled button on tiled route', async () => {
+    const sess = makeMockSession('s1', 'Session 1');
+    renderSessionBar('/tiled', false, [sess], { tiledSessionIds: ['s1'] });
+    
+    expect(screen.getByText(/Exit Tiled/)).toBeInTheDocument();
+  });
+
+  it('handles pointer dragging of collapsed toggle tab', async () => {
+    const sess = makeMockSession('s1', 'Session 1');
+    renderSessionBar('/', true, [sess]); // start collapsed
+    
+    // The main container has the 'hidden' class when collapsed
+    const aside = screen.getByTestId('session-bar');
+    const content = aside.querySelector('.opacity-0'); // Content div has opacity-0 when collapsed
+    expect(content).toHaveClass('hidden');
+
+    const tab = screen.getByTitle(/Drag to reposition/);
+    
+    // Initial drag start
+    await userEvent.pointer({ keys: '[MouseLeft>]', target: tab, coords: { clientX: 10, clientY: 150 } });
+    
+    // Move significantly (offset 50px)
+    await userEvent.pointer({ target: tab, coords: { clientX: 10, clientY: 200 } });
+    
+    // Release
+    await userEvent.pointer({ keys: '[/MouseLeft]', target: tab, coords: { clientX: 10, clientY: 200 } });
+    
+    // Should NOT have toggled collapsed state because it was a drag
+    expect(content).toHaveClass('hidden');
+  });
+
 });

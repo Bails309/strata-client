@@ -201,8 +201,15 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
         // Silently fail if clipboard access is denied
       }
     };
-    // Push local clipboard whenever the display gets focus
+    // Push local clipboard whenever the display gets focus or is clicked.
+    // mouseenter works when the browser already has focus (tabbing between
+    // page areas).  mousedown is critical for the case where the user copies
+    // in another app and clicks directly into the session: mouseenter fires
+    // *before* the click grants transient user-activation, so the Clipboard
+    // API denies access.  mousedown IS the user gesture, so readText()
+    // succeeds.
     displayEl.addEventListener('mouseenter', pushClipboard);
+    displayEl.addEventListener('mousedown', pushClipboard);
     displayEl.addEventListener('focus', pushClipboard, true);
 
     // ── Clipboard sync: local → remote (on paste event) ──

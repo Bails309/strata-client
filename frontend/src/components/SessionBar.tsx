@@ -49,8 +49,42 @@ export default function SessionBar() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
+  // Draggable toggle-tab state (vertical offset from center, in px)
+  const [tabOffsetY, setTabOffsetY] = useState(0);
+  const dragRef = useRef<{ startY: number; startOffset: number } | null>(null);
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
+
+  // Reset toggle-tab position to center when session count changes
+  const sessionCount = sessions.length;
+  useEffect(() => { setTabOffsetY(0); }, [sessionCount]);
+
+  // Drag handlers for the collapsed toggle tab
+  const tabButtonRef = useRef<HTMLButtonElement>(null);
+
+  const onTabPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    dragRef.current = { startY: e.clientY, startOffset: tabOffsetY };
+    tabButtonRef.current?.setPointerCapture(e.pointerId);
+  }, [tabOffsetY]);
+
+  const onTabPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current || !sessionBarCollapsed) return;
+    const delta = e.clientY - dragRef.current.startY;
+    const maxOffset = window.innerHeight / 2 - 48; // keep within viewport
+    const newOffset = Math.max(-maxOffset, Math.min(maxOffset, dragRef.current.startOffset + delta));
+    setTabOffsetY(newOffset);
+  }, [sessionBarCollapsed]);
+
+  const onTabPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    const wasDrag = sessionBarCollapsed && Math.abs(e.clientY - dragRef.current.startY) >= 4;
+    dragRef.current = null;
+    // If it was a real drag, don't toggle — just reposition
+    if (wasDrag) return;
+    // Otherwise treat as a click: toggle the bar
+    setSessionBarCollapsed(!sessionBarCollapsed);
+  }, [sessionBarCollapsed, setSessionBarCollapsed]);
 
   // Sync fullscreen state
   useEffect(() => {
@@ -125,18 +159,24 @@ export default function SessionBar() {
   return (
     <>
     <div className="session-bar" style={{ width: displayWidth }}>
-      {/* Toggle Tab */}
+      {/* Toggle Tab — draggable vertically when collapsed */}
       <button
-        className="absolute top-1/2 -translate-y-1/2 -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl cursor-not-allowed transition-all duration-200"
+        ref={tabButtonRef}
+        className="absolute -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl transition-all duration-200"
         style={{ 
+          top: `calc(50% + ${tabOffsetY}px)`,
+          transform: 'translateY(-50%)',
           background: 'rgba(15, 15, 20, 0.75)', 
           backdropFilter: 'blur(16px)',
           border: '1px solid rgba(255, 255, 255, 0.08)',
           borderRight: 'none',
-          cursor: 'pointer'
+          cursor: sessionBarCollapsed ? 'grab' : 'pointer',
+          touchAction: 'none',
         }}
-        onClick={() => setSessionBarCollapsed(!sessionBarCollapsed)}
-        title={sessionBarCollapsed ? 'Expand sessions' : 'Collapse sessions'}
+        onPointerDown={onTabPointerDown}
+        onPointerMove={onTabPointerMove}
+        onPointerUp={onTabPointerUp}
+        title={sessionBarCollapsed ? 'Drag to reposition · Click to expand' : 'Collapse sessions'}
       >
         <svg 
           width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"

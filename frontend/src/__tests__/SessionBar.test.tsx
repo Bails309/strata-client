@@ -244,7 +244,7 @@ describe('SessionBar', () => {
     const sessions = [makeMockSession('s1', 'A'), makeMockSession('s2', 'B')];
     renderSessionBar('/', true, sessions);
     // When collapsed, the main content is hidden but session count appears inside toggle
-    const toggle = screen.getByTitle('Expand sessions');
+    const toggle = screen.getByTitle('Drag to reposition · Click to expand');
     expect(toggle).toBeInTheDocument();
     expect(toggle.textContent).toContain('2');
   });

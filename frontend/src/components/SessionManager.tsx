@@ -19,6 +19,8 @@ export interface GuacSession {
   filesystems: { object: Guacamole.GuacObject; name: string }[];
   /** Remote clipboard text (last received from the session) */
   remoteClipboard: string;
+  /** Cleanup function for paste event listener */
+  _cleanupPaste?: () => void;
   /** Pop-out state and actions */
   isPoppedOut?: boolean;
   popOut?: () => void;
@@ -203,6 +205,25 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
     displayEl.addEventListener('mouseenter', pushClipboard);
     displayEl.addEventListener('focus', pushClipboard, true);
 
+    // ── Clipboard sync: local → remote (on paste event) ──
+    // This is more reliable than the Clipboard API readText() since
+    // browsers always provide clipboardData on user-initiated paste events.
+    const handlePaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData('text/plain');
+      if (text && text !== session.remoteClipboard) {
+        const stream = client.createClipboardStream('text/plain');
+        const writer = new Guacamole.StringWriter(stream);
+        const CHUNK_SIZE = 4096;
+        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+          writer.sendText(text.substring(i, i + CHUNK_SIZE));
+        }
+        writer.sendEnd();
+        session.remoteClipboard = text;
+      }
+    };
+    window.addEventListener('paste', handlePaste as EventListener);
+    session._cleanupPaste = () => window.removeEventListener('paste', handlePaste as EventListener);
+
     // ── Filesystem objects (RDP drive, SFTP, etc.) ──
     client.onfilesystem = (object: Guacamole.GuacObject, name: string) => {
       session.filesystems.push({ object, name });
@@ -309,6 +330,7 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
       const session = prev.find((s) => s.id === id);
       if (session) {
         cleanupPopout(session);
+        session._cleanupPaste?.();
         session.keyboard.onkeydown = null;
         session.keyboard.onkeyup = null;
         session.keyboard.reset();

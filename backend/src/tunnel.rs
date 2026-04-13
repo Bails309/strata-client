@@ -1330,6 +1330,33 @@ mod tests {
         assert_eq!(m["clipboard-buffer-size"], "8388608"); // 8 MiB
     }
 
+    #[test]
+    fn full_param_map_clipboard_disable_override() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("disable-copy".into(), "true".into());
+        extra.insert("disable-paste".into(), "true".into());
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra,
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["disable-copy"], "true", "extra should override default");
+        assert_eq!(m["disable-paste"], "true", "extra should override default");
+    }
+
     // ── guac_instruction edge cases ────────────────────────────────
 
     #[test]

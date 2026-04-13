@@ -125,12 +125,13 @@ export default function Dashboard() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Build grouped structure for folder view
+  // Build grouped structure for folder view — uses ALL filtered connections
+  // (not paged) so folders aren't split across pages.
   const groupedConnections = useMemo(() => {
     if (!folderView) return null;
     const folderMap = new Map<string, { name: string; connections: Connection[] }>();
     const ungrouped: Connection[] = [];
-    for (const conn of paged) {
+    for (const conn of filtered) {
       const fid = conn.folder_id;
       if (fid && conn.folder_name) {
         if (!folderMap.has(fid)) folderMap.set(fid, { name: conn.folder_name, connections: [] });
@@ -140,7 +141,7 @@ export default function Dashboard() {
       }
     }
     return { folders: [...folderMap.entries()], ungrouped };
-  }, [folderView, paged]);
+  }, [folderView, filtered]);
 
   const toggleFolderCollapse = useCallback((fid: string) => {
     setExpandedFolders(prev => {
@@ -151,13 +152,16 @@ export default function Dashboard() {
     });
   }, []);
 
+  // The visible connections: folder view shows all filtered, flat view shows paged slice
+  const visibleConnections = folderView ? filtered : paged;
+
   // Drive indeterminate state on the "select all" checkbox
   useEffect(() => {
     if (selectAllRef.current) {
-      const some = checked.size > 0 && checked.size < paged.length;
+      const some = checked.size > 0 && checked.size < visibleConnections.length;
       selectAllRef.current.indeterminate = some;
     }
-  }, [checked, paged.length]);
+  }, [checked, visibleConnections.length]);
 
   const protocols = useMemo(() =>
     [...new Set(connections.map(c => c.protocol.toUpperCase()))].sort(),
@@ -201,9 +205,9 @@ export default function Dashboard() {
 
   const toggleAllChecked = useCallback(() => {
     setChecked((prev) =>
-      prev.size === paged.length ? new Set() : new Set(paged.map((c) => c.id)),
+      prev.size === visibleConnections.length ? new Set() : new Set(visibleConnections.map((c) => c.id)),
     );
-  }, [paged]);
+  }, [visibleConnections]);
 
   const openTiled = useCallback(async () => {
     if (checked.size < 2) return;
@@ -482,7 +486,7 @@ export default function Dashboard() {
                 <input
                   ref={selectAllRef}
                   type="checkbox"
-                  checked={paged.length > 0 && checked.size === paged.length}
+                  checked={visibleConnections.length > 0 && checked.size === visibleConnections.length}
                   onChange={toggleAllChecked}
                   className="checkbox"
                   title="Select all"
@@ -554,7 +558,7 @@ export default function Dashboard() {
                 />
               ))
             )}
-            {paged.length === 0 && (
+            {visibleConnections.length === 0 && (
               <tr>
                 <td colSpan={6} className="text-center py-8 text-txt-secondary">
                   {connections.length === 0
@@ -567,8 +571,15 @@ export default function Dashboard() {
         </table>
       </div>
 
-      {/* ── Pagination ── */}
-      {filtered.length > PAGE_SIZE && (
+      {/* ── Pagination (hidden in folder view) ── */}
+      {folderView && filtered.length > 0 && (
+        <div className="mt-4">
+          <span className="text-[0.8125rem] text-txt-secondary">
+            {filtered.length} connection{filtered.length !== 1 ? 's' : ''} in {groupedConnections ? groupedConnections.folders.length + (groupedConnections.ungrouped.length > 0 ? 1 : 0) : 0} folder{(groupedConnections ? groupedConnections.folders.length + (groupedConnections.ungrouped.length > 0 ? 1 : 0) : 0) !== 1 ? 's' : ''}
+          </span>
+        </div>
+      )}
+      {!folderView && filtered.length > PAGE_SIZE && (
         <div className="flex items-center justify-between mt-4 flex-wrap gap-4">
           <span className="text-[0.8125rem] text-txt-secondary">
             Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} connections

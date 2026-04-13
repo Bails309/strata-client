@@ -5,6 +5,7 @@ import Guacamole from 'guacamole-common-js';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import SessionWatermark from '../components/SessionWatermark';
+import { createWinKeyProxy } from '../utils/winKeyProxy';
 
 /**
  * Computes a grid layout (cols × rows) to best fill the available space
@@ -87,12 +88,12 @@ export default function TiledView() {
 
     // Wire up keyboards for focused sessions
     for (const s of focusedSessions) {
+      const winProxy = createWinKeyProxy((p, k) => s.client.sendKeyEvent(p, k));
       s.keyboard.onkeydown = (keysym: number) => {
-        s.client.sendKeyEvent(1, keysym);
-        return true;
+        return winProxy.onkeydown(keysym);
       };
       s.keyboard.onkeyup = (keysym: number) => {
-        s.client.sendKeyEvent(0, keysym);
+        winProxy.onkeyup(keysym);
       };
     }
 

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-04-13
+
+### Added
+- **Windows Key Proxy (Right Ctrl)**: Browsers cannot capture the physical Windows key — the OS intercepts it before the browser sees it. Strata now remaps Right Ctrl as a Windows key proxy, following the VMware / VirtualBox "host key" convention:
+  - **Hold Right Ctrl + key** → sends Win + key to the remote session (e.g., Right Ctrl + E → Win+E to open Explorer)
+  - **Tap Right Ctrl alone** → sends a Win key tap (opens Start menu)
+  - **Multi-key combos** work naturally (e.g., Right Ctrl + Shift + S → Win+Shift+S for screenshot)
+  - Active across all session types: single session, tiled multi-session, pop-out windows, and shared viewer (control mode)
+  - Protocol-aware: effective for RDP and VNC sessions; harmlessly ignored over SSH where the Super key has no meaning
+- **Analytics Dashboard**: New analytics section on the Admin Dashboard with:
+  - Daily usage trend chart (sessions per day + total hours overlay)
+  - Average and median session duration cards
+  - Total bandwidth card with human-readable formatting
+  - Protocol distribution stacked bar chart
+  - Peak hours 24-hour histogram
+- **Session Bandwidth Tracking**: Per-session bandwidth (bytes from/to guacd) is now captured in the recordings table and displayed in the live sessions gauge
+- **Dynamic Capacity Gauge**: The guacd capacity gauge now calculates `recommended_per_instance` dynamically based on host CPU cores and RAM (with 30% reserve), replacing the previous hardcoded value of 20
+
+### Changed
+- **Keyboard Input Architecture**: All four keyboard handler sites (SessionClient, TiledView, usePopOut, SharedViewer) now route through a shared `createWinKeyProxy()` utility, providing consistent key handling and a single point for future keyboard remapping features
+
 ## [0.10.6] — 2026-04-13
 
 ### Added

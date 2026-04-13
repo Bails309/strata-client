@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Guacamole from 'guacamole-common-js';
 import { GuacSession } from './SessionManager';
+import { createWinKeyProxy } from '../utils/winKeyProxy';
 
 /**
  * Hook that manages popping a Guacamole session out into a separate browser window.
@@ -144,12 +145,12 @@ export function usePopOut(
 
     // ── Keyboard input in the popup ──
     const kb = new Guacamole.Keyboard(popup.document);
+    const winProxy = createWinKeyProxy((p, k) => sess.client.sendKeyEvent(p, k));
     kb.onkeydown = (keysym: number) => {
-      sess.client.sendKeyEvent(1, keysym);
-      return true;
+      return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {
-      sess.client.sendKeyEvent(0, keysym);
+      winProxy.onkeyup(keysym);
     };
 
     // Capture-phase key trap to prevent browser shortcuts in popup

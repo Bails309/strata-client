@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useSearchParams } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
+import { createWinKeyProxy } from '../utils/winKeyProxy';
 
 /**
  * Shared session viewer. Accessible without authentication
@@ -49,8 +50,9 @@ export default function SharedViewer() {
     const urlMode = searchParams.get('mode');
     if (urlMode === 'control') {
       const keyboard = new Guacamole.Keyboard(document);
-      keyboard.onkeydown = (keysym: number) => { client.sendKeyEvent(1, keysym); };
-      keyboard.onkeyup = (keysym: number) => { client.sendKeyEvent(0, keysym); };
+      const winProxy = createWinKeyProxy((p, k) => client.sendKeyEvent(p, k));
+      keyboard.onkeydown = (keysym: number) => { return winProxy.onkeydown(keysym); };
+      keyboard.onkeyup = (keysym: number) => { winProxy.onkeyup(keysym); };
     }
 
     display.onresize = () => {

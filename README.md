@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.10.4-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.11.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -56,6 +56,7 @@
 - **Integrated OSK** — Touch toolbar and on-screen keyboard shortcuts integrated directly into the Session Bar dock; no more floating buttons obscuring the remote screen
 - **Smooth Session Resizing** — `ResizeObserver`-driven scaling handles sidebar and dock transitions smoothly without layout artifacts or resolution flashes
 - **Large Clipboard Support** — Protocol-level text chunking supports transferring tens of thousands of lines (64MB+ buffer) between local and remote sessions
+- **Windows Key Proxy (Right Ctrl)** — Right Ctrl acts as a Windows key proxy for RDP and VNC sessions, following the VMware / VirtualBox "host key" convention. Hold Right Ctrl + key to send Win+key combos (e.g., Win+E, Win+R), or tap Right Ctrl alone to open the Start menu. Works across single sessions, tiled multi-session, pop-out windows, and shared viewer
 - **Sidecar guacd scaling** — Round-robin connection pool across multiple guacd instances for horizontal scaling
 - **H.264 GFX encoding** — FreeRDP 3 GFX pipeline with H.264 enabled by default for RDP connections, dramatically reducing bandwidth
 - **Modern SPA** — React + TypeScript + Vite frontend with Tailwind CSS v4, setup wizard, admin dashboard, credential vault, and HTML5 Canvas session client
@@ -119,6 +120,19 @@ cp .env.example .env        # review and edit as needed
 ```bash
 docker compose up -d --build
 ```
+
+### ⌨️ Windows Key Proxy
+
+Browsers cannot capture the physical Windows key — the OS intercepts it before it reaches the page. Strata remaps **Right Ctrl** as a Windows key proxy (the same convention used by VMware Workstation and VirtualBox):
+
+| Action | What the remote session receives |
+|---|---|
+| **Hold Right Ctrl + E** | Win+E (open Explorer) |
+| **Hold Right Ctrl + R** | Win+R (Run dialog) |
+| **Hold Right Ctrl + Shift + S** | Win+Shift+S (screenshot) |
+| **Tap Right Ctrl alone** | Win tap (Start menu) |
+
+This works in all session modes — single session, tiled view, pop-out windows, and shared viewer (control mode). The proxy is active for **RDP and VNC** connections; SSH sessions are unaffected.
 
 > [!NOTE]
 > If you are using an **external database**, ensure `DATABASE_URL` is set in your `.env` file first. If you want to use the **bundled local database**, use the `local-db` profile:

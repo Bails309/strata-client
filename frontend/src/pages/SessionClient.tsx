@@ -8,6 +8,7 @@ import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
 import SessionWatermark from '../components/SessionWatermark';
 import Select from '../components/Select';
+import { createWinKeyProxy } from '../utils/winKeyProxy';
 
 /*
  * Phases:
@@ -437,14 +438,14 @@ export default function SessionClient() {
       return () => { kb.onkeydown = null; kb.onkeyup = null; };
     }
 
+    const winProxy = createWinKeyProxy((p, k) => client.sendKeyEvent(p, k));
     kb.onkeydown = (keysym: number) => {
-      if (!containerFocusedRef.current) return false;
-      client.sendKeyEvent(1, keysym);
-      return true;
+      if (!containerFocusedRef.current) { winProxy.reset(); return false; }
+      return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {
-      if (!containerFocusedRef.current) return;
-      client.sendKeyEvent(0, keysym);
+      if (!containerFocusedRef.current) { winProxy.reset(); return; }
+      winProxy.onkeyup(keysym);
     };
 
     // Capture-phase listener intercepts keys BEFORE the browser can act on

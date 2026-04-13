@@ -332,6 +332,34 @@ Per-connection overrides can disable GFX via the `extra` JSONB field: `{"enable-
 
 ---
 
+## Keyboard Input — Windows Key Proxy
+
+Browsers cannot capture the physical Windows key — the operating system intercepts it at the window-manager level before any `keydown` event reaches the page. This means users cannot natively send Win+E, Win+R, or the Start menu keystroke to a remote desktop session.
+
+### Solution: Right Ctrl as a Host Key
+
+Strata remaps **Right Ctrl** (keysym `0xFFE4`) as a Windows key proxy, following the same "host key" convention used by VMware Workstation and VirtualBox:
+
+| User action | Keysyms sent to guacd |
+|---|---|
+| Hold Right Ctrl + another key | `Super_L` down → key down … key up → `Super_L` up |
+| Tap Right Ctrl alone | `Super_L` down → `Super_L` up |
+| Multi-key combo (e.g., Right Ctrl + Shift + S) | `Super_L` down → `Shift` down → `S` down … releases |
+
+**Key properties:**
+
+- **Right Ctrl is swallowed** — it is never forwarded to the remote session. Users who need a Right Ctrl keystroke on the remote side can use the Session Bar's virtual keyboard combos.
+- **Stateless reset on focus loss** — if the browser tab or container loses focus while Right Ctrl is held, the proxy resets its internal state to prevent stuck Super keys.
+- **Protocol-aware applicability** — the proxy is effective for **RDP** (guacd translates `Super_L` to the Windows key scancode) and **VNC** (keysym passes through to the X server). For **SSH** sessions, the Super keysym is silently ignored by guacd's SSH plugin; Right Ctrl is still intercepted, which is harmless since terminal emulators have no Super modifier.
+- **Consistent across session modes** — the proxy is active in all four keyboard handler locations: single session view, tiled multi-session, pop-out windows, and shared viewer (control mode).
+- **Single utility, no duplication** — all handler sites use the shared `createWinKeyProxy()` function, ensuring consistent behavior and a single point for future keyboard remapping features.
+
+### Security Considerations
+
+The proxy operates entirely in the browser (client-side JavaScript). No keysym remapping or key injection occurs on the backend. The proxy cannot introduce keys that the user did not physically press — it only translates Right Ctrl into Super_L in the keysym stream before forwarding to `client.sendKeyEvent()`.
+
+---
+
 ## Recommendations for Production
 
 1. **TLS everywhere** — use the built-in Caddy profile (`--profile https`) or terminate TLS at an external reverse proxy

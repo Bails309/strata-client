@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
 import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialProfiles, CredentialProfile } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
@@ -31,8 +31,9 @@ const RECONNECT_MAX_DELAY = 30000; // 30 seconds
 export default function SessionClient() {
   const { connectionId } = useParams<{ connectionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sessions, activeSessionId, setActiveSessionId, createSession, getSession, barWidth } = useSessionManager();
+  const { sessions, activeSessionId, setActiveSessionId, createSession, closeSession, getSession, barWidth } = useSessionManager();
   const sidebarWidth = useSidebarWidth();
 
   const [phase, setPhase] = useState<Phase>('loading');
@@ -49,6 +50,7 @@ export default function SessionClient() {
 
   const containerFocusedRef = useRef(false);
   const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
+  const [reconnectLoading, setReconnectLoading] = useState(false);
   const userDisconnectRef = useRef(false);
   const serverDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -210,10 +212,13 @@ export default function SessionClient() {
     let tunnelHadError = false;
 
     const handleTunnelClosed = () => {
-      // ── Always check for remaining sessions first ──
-      // This must run before the userDisconnect guard because switching
-      // between sessions can leave userDisconnectRef stale.  Redirecting
-      // to a live session is safe regardless of how this tunnel closed.
+      // If the caller explicitly marked this as user-initiated (e.g. manual
+      // reconnect), skip all UI side-effects — the caller handles what's next.
+      if (userDisconnectRef.current) return;
+
+      // ── Check for remaining sessions ──
+      // Redirecting to a live session is safe regardless of how this tunnel
+      // closed (server disconnect or clean close without prior error).
       if (serverDisconnectRef.current || !tunnelHadError) {
         const remaining = sessionsRef.current.filter(
           (s) => s.id !== session.id && !s.error
@@ -246,9 +251,6 @@ export default function SessionClient() {
         setError('The remote session has ended. You may have logged out of the server.');
         return;
       }
-
-      // If the user navigated away or manually disconnected, skip UI updates.
-      if (userDisconnectRef.current) return;
 
       // Error-based closure (network drop, timeout) → attempt reconnection.
       const elapsed = Date.now() - session.createdAt;
@@ -311,6 +313,92 @@ export default function SessionClient() {
   }, [attemptReconnect]);
 
   wireHandlersRef.current = wireSessionErrorHandlers;
+
+  // ── Manual reconnect (imperative — bypasses effect dependency chains) ──
+  const handleManualReconnect = useCallback(async () => {
+    if (!connectionId || !containerRef.current) return;
+
+    // Keep the error overlay visible during the async reconnect to avoid a
+    // black screen flash.  Only clear error after the session is attached.
+    setReconnectLoading(true);
+    errorRef.current = '';
+    setReconnecting(null);
+    serverDisconnectRef.current = false;
+
+    // Mark user-initiated so tunnel-close handlers don't fire error overlays
+    // or redirect to other sessions.
+    userDisconnectRef.current = true;
+
+    // Close any existing live session for this connection first.
+    // Capture the session's name before closing — component state may still
+    // hold a stale name from a different connection when triggered via the
+    // SessionBar reconnect navigate.
+    const existing = getSession(connectionId);
+    const sessionName = existing?.name || connectionName || protocol.toUpperCase();
+    const sessionProtocol = existing?.protocol || protocol;
+    if (existing) {
+      closeSession(existing.id);
+    }
+
+    // Now allow the new session to set up its own error handlers
+    userDisconnectRef.current = false;
+
+    const container = containerRef.current;
+    const token = localStorage.getItem('access_token') || '';
+    const dpr = window.devicePixelRatio || 1;
+
+    try {
+      const resp = await createTunnelTicket({
+        connection_id: connectionId,
+        width: container.clientWidth,
+        height: container.clientHeight,
+        dpi: Math.round(96 * dpr),
+        ignore_cert: ignoreCert,
+      });
+
+      const connectParams = new URLSearchParams();
+      connectParams.set('token', token);
+      connectParams.set('ticket', resp.ticket);
+      connectParams.set('width', String(container.clientWidth));
+      connectParams.set('height', String(container.clientHeight));
+      connectParams.set('dpi', String(Math.round(96 * dpr)));
+
+      const session = createSession({
+        connectionId,
+        name: sessionName,
+        protocol: sessionProtocol,
+        containerEl: container,
+        connectParams,
+      });
+
+      wireHandlersRef.current?.(session, 0);
+      attachSession(session, container);
+
+      // Session is created & display attached — now clear the overlay
+      setError('');
+      errorRef.current = '';
+      // Sync component state with the session we just created
+      setConnectionName(sessionName);
+      setProtocol(sessionProtocol);
+      setPhase('connected');
+    } catch {
+      setError('Failed to reconnect. Please try again.');
+    } finally {
+      setReconnectLoading(false);
+    }
+  }, [connectionId, connectionName, protocol, ignoreCert, createSession, closeSession, getSession]);
+
+  // ── Handle reconnect signal from SessionBar ──
+  const reconnectStampRef = useRef<number>(0);
+  useEffect(() => {
+    const stamp = (location.state as any)?.reconnect;
+    if (stamp && stamp !== reconnectStampRef.current) {
+      reconnectStampRef.current = stamp;
+      // Clear router state so a page refresh doesn't re-trigger
+      navigate(location.pathname, { replace: true, state: {} });
+      handleManualReconnect();
+    }
+  }, [location.state, location.pathname, navigate, handleManualReconnect]);
 
   // ── Phase 3: Create or attach session ──
   useEffect(() => {
@@ -525,7 +613,7 @@ export default function SessionClient() {
     hadSessionRef.current = false;
   }, [connectionId]);
   useEffect(() => {
-    if (!connectionId || error || reconnecting) return;
+    if (!connectionId || error || reconnecting || reconnectLoading) return;
     if (phase !== 'connected') return;
     // Only act if we previously had a session that has now disappeared.
     // This avoids false-positives during initial session creation.
@@ -689,9 +777,11 @@ export default function SessionClient() {
                 : error}
             </p>
             <div className="flex gap-3">
-              <button className="btn flex-1" onClick={() => navigate('/')}>Exit to Dashboard</button>
-              {!error.toLowerCase().includes('terminated') && !error.toLowerCase().includes('session has ended') && (
-                <button className="btn-primary flex-1" onClick={() => window.location.reload()}>Retry</button>
+              <button className="btn flex-1" onClick={() => navigate('/')} disabled={reconnectLoading}>Exit to Dashboard</button>
+              {!error.toLowerCase().includes('terminated') && (
+                <button className="btn-primary flex-1" onClick={handleManualReconnect} disabled={reconnectLoading}>
+                  {reconnectLoading ? 'Reconnecting…' : 'Reconnect'}
+                </button>
               )}
             </div>
           </div>

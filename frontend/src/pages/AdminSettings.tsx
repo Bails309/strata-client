@@ -3222,39 +3222,114 @@ function SessionsTab() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Daily Trend Chart */}
           {stats.daily_trend?.length > 0 && (
-            <div className="md:col-span-2 rounded-xl p-5" style={{
+            <div className="md:col-span-2 rounded-xl p-5 flex flex-col" style={{
               background: 'var(--color-surface-secondary)',
               border: '1px solid var(--color-glass-border)',
               boxShadow: '0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)',
             }}>
               <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--color-accent)' }}>Daily Usage (30 days)</h3>
               {(() => {
-                const trend = stats.daily_trend;
+                const raw = stats.daily_trend;
+
+                // Fill missing days so the chart has no gaps
+                const filled: typeof raw = [];
+                if (raw.length > 0) {
+                  const start = new Date(raw[0].date + 'T00:00:00');
+                  const end = new Date(raw[raw.length - 1].date + 'T00:00:00');
+                  const lookup = new Map(raw.map(d => [d.date, d]));
+                  for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
+                    const key = dt.toISOString().slice(0, 10);
+                    filled.push(lookup.get(key) ?? { date: key, sessions: 0, hours: 0, unique_users: 0 });
+                  }
+                }
+                const trend = filled.length > 0 ? filled : raw;
+
                 const maxSessions = Math.max(...trend.map(d => d.sessions), 1);
                 const maxHours = Math.max(...trend.map(d => d.hours), 0.1);
-                const w = 100; // percentage-based for SVG viewBox
-                const h = 80;
-                const barW = w / Math.max(trend.length, 1);
-                // Session bars
-                const sessionBars = trend.map((d, i) => {
-                  const barH = (d.sessions / maxSessions) * (h - 16);
-                  return `<rect x="${i * barW + barW * 0.15}" y="${h - barH}" width="${barW * 0.35}" height="${barH}" rx="1" fill="var(--color-accent)" opacity="0.7"/>`;
+
+                // SVG dimensions
+                const padL = 32;
+                const padR = 8;
+                const padT = 8;
+                const padB = 24;
+                const vbW = 600;
+                const vbH = 160;
+                const plotW = vbW - padL - padR;
+                const plotH = vbH - padT - padB;
+
+                // Bar sizing — fill the plot width naturally
+                const barW = plotW / Math.max(trend.length, 1);
+                const offsetX = padL;
+                const barPad = Math.min(barW * 0.15, 6);
+
+                // Y-axis grid — pick ~4 nice ticks
+                const rawStep = maxSessions / 4;
+                const yStep = rawStep <= 1 ? 1 : rawStep <= 5 ? Math.ceil(rawStep) : Math.ceil(rawStep / 5) * 5;
+                const yTicks: number[] = [];
+                for (let v = 0; v <= maxSessions; v += yStep) yTicks.push(v);
+                if (yTicks[yTicks.length - 1] < maxSessions) yTicks.push(yTicks[yTicks.length - 1] + yStep);
+                const yMax = yTicks[yTicks.length - 1] || 1;
+
+                // Gridlines + Y labels
+                const gridLines = yTicks.map(v => {
+                  const y = padT + plotH - (v / yMax) * plotH;
+                  return `<line x1="${padL}" x2="${vbW - padR}" y1="${y}" y2="${y}" stroke="var(--color-glass-border)" stroke-width="0.5" stroke-dasharray="3,3"/>` +
+                    `<text x="${padL - 4}" y="${y + 2}" text-anchor="end" fill="var(--color-txt-tertiary)" font-size="7" font-family="inherit">${v}</text>`;
                 }).join('');
-                // Hours line
-                const hoursPoints = trend.map((d, i) => {
-                  const x = i * barW + barW * 0.65;
-                  const y = h - (d.hours / maxHours) * (h - 16);
-                  return `${x},${y}`;
-                }).join(' ');
+
+                // Session bars (skip zero-height)
+                const sessionBars = trend.map((d, i) => {
+                  if (d.sessions === 0) return '';
+                  const x = offsetX + i * barW + barPad;
+                  const w = barW - barPad * 2;
+                  const barH = (d.sessions / yMax) * plotH;
+                  const y = padT + plotH - barH;
+                  return `<rect x="${x}" y="${y}" width="${w}" height="${barH}" rx="2" fill="var(--color-accent)" opacity="0.7">` +
+                    `<title>${d.date}\n${d.sessions} session${d.sessions !== 1 ? 's' : ''} · ${d.hours.toFixed(1)} hrs</title></rect>`;
+                }).join('');
+
+                // Hours line + dots
+                const hoursCoords = trend.map((d, i) => {
+                  const x = offsetX + i * barW + barW / 2;
+                  const y = padT + plotH - (d.hours / maxHours) * plotH;
+                  return { x, y, d };
+                });
+                const hoursPolyline = hoursCoords.map(c => `${c.x},${c.y}`).join(' ');
+                const hoursDots = hoursCoords.map(c =>
+                  `<circle cx="${c.x}" cy="${c.y}" r="2.5" fill="#f59e0b" stroke="var(--color-surface-secondary)" stroke-width="1">` +
+                  `<title>${c.d.date}\n${c.d.hours.toFixed(1)} hrs</title></circle>`
+                ).join('');
+
+                // X-axis labels — show all when ≤ 14 days, otherwise evenly spaced
+                const labelIndices = new Set<number>();
+                if (trend.length <= 14) {
+                  trend.forEach((_, i) => labelIndices.add(i));
+                } else {
+                  labelIndices.add(0);
+                  labelIndices.add(trend.length - 1);
+                  const labelStep = Math.max(1, Math.floor(trend.length / 8));
+                  for (let i = labelStep; i < trend.length - 1; i += labelStep) labelIndices.add(i);
+                }
+
+                const xLabels = [...labelIndices].map(i => {
+                  const x = offsetX + i * barW + barW / 2;
+                  const label = trend[i].date.slice(5); // "MM-DD"
+                  return `<text x="${x}" y="${vbH - 4}" text-anchor="middle" fill="var(--color-txt-tertiary)" font-size="7" font-family="inherit">${label}</text>`;
+                }).join('');
+
+                // Baseline axis
+                const baseline = `<line x1="${padL}" x2="${vbW - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="var(--color-glass-border)" stroke-width="0.5"/>`;
+
                 return (
-                  <div>
-                    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-28" preserveAspectRatio="none">
-                      <g dangerouslySetInnerHTML={{ __html: sessionBars }} />
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <svg viewBox={`0 0 ${vbW} ${vbH}`} className="w-full flex-1" style={{ minHeight: '10rem' }} preserveAspectRatio="xMidYMid meet">
+                      <g dangerouslySetInnerHTML={{ __html: baseline + gridLines + sessionBars + xLabels }} />
                       {trend.length > 1 && (
-                        <polyline points={hoursPoints} fill="none" stroke="#f59e0b" strokeWidth="0.5" strokeLinejoin="round" />
+                        <polyline points={hoursPolyline} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
                       )}
+                      <g dangerouslySetInnerHTML={{ __html: hoursDots }} />
                     </svg>
-                    <div className="flex items-center gap-4 mt-2 text-[0.6rem] text-txt-tertiary">
+                    <div className="flex items-center gap-4 mt-1 text-[0.6rem] text-txt-tertiary">
                       <span className="flex items-center gap-1">
                         <span className="inline-block w-2 h-2 rounded-sm" style={{ background: 'var(--color-accent)', opacity: 0.7 }} />
                         Sessions

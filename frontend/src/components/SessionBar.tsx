@@ -66,7 +66,9 @@ export default function SessionBar() {
   const onTabPointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
     dragRef.current = { startY: e.clientY, startOffset: tabOffsetY };
-    tabButtonRef.current?.setPointerCapture(e.pointerId);
+    if (tabButtonRef.current?.setPointerCapture) {
+      tabButtonRef.current.setPointerCapture(e.pointerId);
+    }
   }, [tabOffsetY]);
 
   const onTabPointerMove = useCallback((e: React.PointerEvent) => {
@@ -157,6 +159,15 @@ export default function SessionBar() {
     if (sessions.length <= 1) {
       navigate('/');
     }
+  }
+
+  function handleReconnect(e: React.MouseEvent, session: GuacSession) {
+    e.stopPropagation();
+    const connId = session.connectionId;
+    // Signal SessionClient to handle the reconnect (close + recreate) so that
+    // userDisconnectRef is set before the tunnel closes — preventing the
+    // tunnel-close handler from redirecting to another session.
+    navigate(`/session/${connId}`, { state: { reconnect: Date.now() } });
   }
  
   return (
@@ -394,6 +405,7 @@ export default function SessionBar() {
                 onSwitch={() => handleSwitch(session)}
                 sessionBarCollapsed={sessionBarCollapsed}
                 onClose={(e) => handleClose(e, session)}
+                onReconnect={(e) => handleReconnect(e, session)}
               />
             ))}
           </div>
@@ -431,12 +443,13 @@ export default function SessionBar() {
 }
 
 function SessionThumbnail({
-  session, isActive, onSwitch, onClose, sessionBarCollapsed,
+  session, isActive, onSwitch, onClose, onReconnect, sessionBarCollapsed,
 }: {
   session: GuacSession;
   isActive: boolean;
   onSwitch: () => void;
   onClose: (e: React.MouseEvent) => void;
+  onReconnect: (e: React.MouseEvent) => void;
   sessionBarCollapsed: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -497,6 +510,17 @@ function SessionThumbnail({
               {session.name}
             </span>
           </div>
+          <button
+            className="absolute top-1 right-7 w-[22px] h-[22px] flex items-center justify-center rounded border-0 text-white cursor-pointer opacity-85 p-0 transition-all duration-150 hover:opacity-100 hover:scale-110"
+            style={{ background: 'var(--color-accent)', zIndex: 10 }}
+            onClick={onReconnect}
+            title="Reconnect"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+          </button>
           <button
             className="absolute top-1 right-1 w-[22px] h-[22px] flex items-center justify-center rounded border-0 bg-danger text-white cursor-pointer opacity-85 p-0 transition-all duration-150 hover:opacity-100 hover:scale-110"
             style={{ background: 'var(--color-danger)', zIndex: 10 }}

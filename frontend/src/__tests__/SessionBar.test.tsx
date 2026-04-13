@@ -333,4 +333,34 @@ describe('SessionBar', () => {
     await userEvent.click(screen.getByTitle('Close Session'));
     expect(closeSession).toHaveBeenCalledWith('s1');
   });
+
+  it('handles drag interactions on the toggle tab', async () => {
+    const sessions = [makeMockSession('s1', 'A')];
+    renderSessionBar('/', true, sessions);
+    const toggle = screen.getByTitle('Drag to reposition · Click to expand');
+    
+    // Pointer down
+    await userEvent.pointer({ target: toggle, keys: '[MouseLeft>]', coords: { x: 0, y: 100 } });
+    // Pointer move (significant enough to be a drag)
+    await userEvent.pointer({ coords: { x: 0, y: 150 } });
+    // Pointer up 
+    await userEvent.pointer({ keys: '[/MouseLeft]' });
+    
+    // Should NOT have toggled (because it was a drag)
+    expect(toggle.title).toBe('Drag to reposition · Click to expand');
+  });
+
+  it('handles share link generation failure', async () => {
+    vi.mocked(createShareLink).mockRejectedValue(new Error('API Error'));
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions, { canShare: true });
+    
+    await userEvent.click(screen.getByTitle('Share connection'));
+    await userEvent.click(screen.getByText('View Only'));
+    
+    // Should stay on loading/buttons and not show URL
+    await waitFor(() => {
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    });
+  });
 });

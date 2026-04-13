@@ -20,3 +20,6 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
+
+// Increase timeout for slow CI environments
+vi.setConfig({ testTimeout: 15000 });

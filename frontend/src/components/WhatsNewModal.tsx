@@ -64,7 +64,7 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
       onClick={dismiss}
     >
       <div
-        className="relative w-full max-w-lg rounded-xl overflow-hidden animate-fade-in"
+        className="relative w-full max-w-lg rounded-xl overflow-hidden"
         style={{
           background: 'var(--color-surface-secondary)',
           border: '1px solid var(--color-glass-border)',

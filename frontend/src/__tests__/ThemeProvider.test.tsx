@@ -92,11 +92,15 @@ describe('ThemeProvider', () => {
 
 describe('useTheme', () => {
   it('throws when used outside ThemeProvider', () => {
-    // Suppress console.error for this intentional failure test
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Suppress console.error and console.warn for this intentional failure test
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    
     expect(() => render(<ThemeConsumer />)).toThrow(
       'useTheme must be used within <ThemeProvider>',
     );
-    spy.mockRestore();
+    
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });

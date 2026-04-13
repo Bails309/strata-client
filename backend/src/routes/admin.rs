@@ -3284,6 +3284,7 @@ mod tests {
             action_type: "login".into(),
             details: serde_json::json!({"ip": "127.0.0.1"}),
             current_hash: "abc123".into(),
+            connection_name: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["id"], 1);
@@ -3301,6 +3302,7 @@ mod tests {
             action_type: "system.startup".into(),
             details: serde_json::json!({}),
             current_hash: "def456".into(),
+            connection_name: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["user_id"].is_null());

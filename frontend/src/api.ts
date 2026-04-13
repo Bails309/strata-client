@@ -512,6 +512,7 @@ export interface AuditLog {
   action_type: string;
   details: Record<string, unknown>;
   current_hash: string;
+  connection_name?: string;
 }
 
 export const getAuditLogs = (page = 1, per_page = 50) =>

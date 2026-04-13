@@ -1,4 +1,5 @@
 use axum::extract::{Path, State};
+use axum::Extension;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,7 @@ use uuid::Uuid;
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
+use crate::services::middleware::AuthUser;
 use crate::services::{audit, kerberos, settings};
 
 pub mod recordings;
@@ -260,6 +262,7 @@ const RESTRICTED_SETTINGS: &[&str] = &[
 
 pub async fn update_settings(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<SettingsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -276,7 +279,7 @@ pub async fn update_settings(
     }
     audit::log(
         &db.pool,
-        None,
+        Some(user.id),
         "settings.updated",
         &json!({ "count": body.settings.len() }),
     )
@@ -404,6 +407,7 @@ pub struct SsoUpdateRequest {
 
 pub async fn update_sso(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<SsoUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -439,7 +443,7 @@ pub async fn update_sso(
         ));
     }
 
-    audit::log(&db.pool, None, "sso.configured", &json!({})).await?;
+    audit::log(&db.pool, Some(user.id), "sso.configured", &json!({})).await?;
     Ok(Json(json!({ "status": "sso_updated" })))
 }
 
@@ -453,6 +457,7 @@ pub struct AuthMethodsUpdateRequest {
 
 pub async fn update_auth_methods(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<AuthMethodsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -498,7 +503,7 @@ pub async fn update_auth_methods(
 
     audit::log(
         &db.pool,
-        None,
+        Some(user.id),
         "settings.auth_methods_updated",
         &json!({
             "sso_enabled": body.sso_enabled,
@@ -524,6 +529,7 @@ pub struct VaultUpdateRequest {
 
 pub async fn update_vault(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<VaultUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let _db = require_running(&state).await?;
@@ -651,9 +657,7 @@ pub async fn update_vault(
     }
 
     let db = require_running(&state).await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "vault.configured",
         &json!({ "address": audit_address }),
     )
@@ -674,6 +678,7 @@ pub struct KerberosUpdateRequest {
 
 pub async fn update_kerberos(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<KerberosUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -709,9 +714,7 @@ pub async fn update_kerberos(
     )
     .map_err(|e| AppError::Internal(format!("krb5.conf write failed: {e}")))?;
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "kerberos.configured",
         &json!({ "realm": body.realm }),
     )
@@ -759,6 +762,7 @@ pub struct CreateKerberosRealmRequest {
 
 pub async fn create_kerberos_realm(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateKerberosRealmRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -804,9 +808,7 @@ pub async fn create_kerberos_realm(
     settings::set(&db.pool, "kerberos_enabled", "true").await?;
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "kerberos.realm_created",
         &json!({ "realm": body.realm }),
     )
@@ -826,6 +828,7 @@ pub struct UpdateKerberosRealmRequest {
 
 pub async fn update_kerberos_realm(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(realm_id): Path<Uuid>,
     Json(body): Json<UpdateKerberosRealmRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -915,9 +918,7 @@ pub async fn update_kerberos_realm(
     tx.commit().await?;
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "kerberos.realm_updated",
         &json!({ "realm_id": realm_id.to_string() }),
     )
@@ -927,6 +928,7 @@ pub async fn update_kerberos_realm(
 
 pub async fn delete_kerberos_realm(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(realm_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -949,9 +951,7 @@ pub async fn delete_kerberos_realm(
     }
 
     regenerate_krb5_conf(&db.pool).await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "kerberos.realm_deleted",
         &json!({ "realm_id": realm_id.to_string() }),
     )
@@ -990,6 +990,7 @@ pub struct RecordingsUpdateRequest {
 
 pub async fn update_recordings(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<RecordingsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1028,9 +1029,7 @@ pub async fn update_recordings(
         };
         settings::set(&db.pool, "recordings_azure_access_key", &stored).await?;
     }
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "recordings.configured",
         &json!({ "enabled": body.enabled }),
     )
@@ -1080,6 +1079,7 @@ pub struct CreateRoleRequest {
 
 pub async fn create_role(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateRoleRequest>,
 ) -> Result<Json<RoleRow>, AppError> {
     let db = require_running(&state).await?;
@@ -1100,9 +1100,7 @@ pub async fn create_role(
     .bind(body.can_create_sharing_profiles.unwrap_or(false))
     .fetch_one(&db.pool)
     .await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "role.created",
         &json!({ "name": body.name }),
     )
@@ -1126,6 +1124,7 @@ pub struct UpdateRoleRequest {
 
 pub async fn update_role(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateRoleRequest>,
 ) -> Result<Json<RoleRow>, AppError> {
@@ -1212,9 +1211,7 @@ pub async fn update_role(
         .fetch_one(&db.pool)
         .await?;
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "role.updated",
         &json!({ "id": id.to_string(), "name": row.name }),
     )
@@ -1225,6 +1222,7 @@ pub async fn update_role(
 
 pub async fn delete_role(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1259,9 +1257,7 @@ pub async fn delete_role(
         .execute(&db.pool)
         .await?;
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "role.deleted",
         &json!({ "id": id.to_string(), "name": role_name }),
     )
@@ -1314,6 +1310,7 @@ pub struct CreateConnectionRequest {
 
 pub async fn create_connection(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionRow>, AppError> {
     let db = require_running(&state).await?;
@@ -1334,9 +1331,7 @@ pub async fn create_connection(
     .bind(&extra)
     .fetch_one(&db.pool)
     .await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "connection.created",
         &json!({ "name": body.name }),
     )
@@ -1346,6 +1341,7 @@ pub async fn create_connection(
 
 pub async fn update_connection(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionRow>, AppError> {
@@ -1369,9 +1365,7 @@ pub async fn update_connection(
     .fetch_optional(&db.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "connection.updated",
         &json!({ "id": id.to_string(), "name": body.name }),
     )
@@ -1381,6 +1375,7 @@ pub async fn update_connection(
 
 pub async fn delete_connection(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1393,9 +1388,7 @@ pub async fn delete_connection(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Connection not found".into()));
     }
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "connection.deleted",
         &json!({ "id": id.to_string() }),
     )
@@ -1443,6 +1436,7 @@ pub async fn get_role_mappings(
 
 pub async fn update_role_mappings(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(role_id): axum::extract::Path<Uuid>,
     Json(body): Json<RoleMappingUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1479,9 +1473,7 @@ pub async fn update_role_mappings(
 
     tx.commit().await?;
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "role_mappings.updated",
         &json!({ "role_id": role_id.to_string() }),
     )
@@ -1549,6 +1541,7 @@ pub async fn list_users(
 
 pub async fn restore_user(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1562,9 +1555,7 @@ pub async fn restore_user(
         return Err(AppError::NotFound("Deleted user not found".into()));
     }
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "user.restored",
         &json!({ "id": id.to_string() }),
     )
@@ -1575,6 +1566,7 @@ pub async fn restore_user(
 
 pub async fn delete_user(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1588,9 +1580,7 @@ pub async fn delete_user(
         return Err(AppError::NotFound("User not found".into()));
     }
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "user.deleted",
         &json!({ "id": id.to_string() }),
     )
@@ -1601,6 +1591,7 @@ pub async fn delete_user(
 
 pub async fn create_user(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1655,9 +1646,7 @@ pub async fn create_user(
     .execute(&db.pool)
     .await?;
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "user.created",
         &json!({
             "user_id": user_id,
@@ -1685,6 +1674,7 @@ pub struct AuditLogRow {
     pub action_type: String,
     pub details: serde_json::Value,
     pub current_hash: String,
+    pub connection_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1701,8 +1691,11 @@ pub async fn list_audit_logs(
     let (per_page, offset) = paginate(query.page, query.per_page, 200);
 
     let rows: Vec<AuditLogRow> = sqlx::query_as(
-        "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash
-         FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+        "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash,
+                c.name AS connection_name
+         FROM audit_logs a
+         LEFT JOIN users u ON u.id = a.user_id
+         LEFT JOIN connections c ON c.id = (a.details->>'connection_id')::uuid
          ORDER BY a.id DESC LIMIT $1 OFFSET $2",
     )
     .bind(per_page)
@@ -1740,6 +1733,7 @@ pub struct CreateFolderRequest {
 
 pub async fn create_connection_folder(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateFolderRequest>,
 ) -> Result<Json<ConnectionFolderRow>, AppError> {
     let db = require_running(&state).await?;
@@ -1750,9 +1744,7 @@ pub async fn create_connection_folder(
     .bind(body.parent_id)
     .fetch_one(&db.pool)
     .await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "connection_folder.created",
         &json!({ "name": body.name }),
     )
@@ -1786,6 +1778,7 @@ pub async fn update_connection_folder(
 
 pub async fn delete_connection_folder(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1796,9 +1789,7 @@ pub async fn delete_connection_folder(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Folder not found".into()));
     }
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "connection_folder.deleted",
         &json!({ "id": id.to_string() }),
     )
@@ -1837,6 +1828,7 @@ pub struct KillSessionsRequest {
 
 pub async fn kill_sessions(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<KillSessionsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -1852,9 +1844,7 @@ pub async fn kill_sessions(
         }
     }
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "sessions.killed",
         &json!({ "count": killed_count, "ids": body.session_ids }),
     )
@@ -2082,6 +2072,7 @@ pub struct CreateAdSyncConfigRequest {
 
 pub async fn create_ad_sync_config(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -2156,9 +2147,7 @@ pub async fn create_ad_sync_config(
     .await?;
 
     settings::set(&db.pool, "ad_sync_enabled", "true").await?;
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "ad_sync.config_created",
         &json!({ "label": body.label }),
     )
@@ -2192,6 +2181,7 @@ pub struct UpdateAdSyncConfigRequest {
 
 pub async fn update_ad_sync_config(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -2404,9 +2394,7 @@ pub async fn update_ad_sync_config(
 
     tx.commit().await?;
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "ad_sync.config_updated",
         &json!({ "id": id.to_string() }),
     )
@@ -2416,6 +2404,7 @@ pub async fn update_ad_sync_config(
 
 pub async fn delete_ad_sync_config(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
@@ -2435,9 +2424,7 @@ pub async fn delete_ad_sync_config(
         settings::set(&db.pool, "ad_sync_enabled", "false").await?;
     }
 
-    audit::log(
-        &db.pool,
-        None,
+    audit::log(&db.pool, Some(user.id),
         "ad_sync.config_deleted",
         &json!({ "id": id.to_string() }),
     )

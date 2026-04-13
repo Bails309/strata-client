@@ -813,7 +813,7 @@ describe('Dashboard', () => {
 
   it('renders recent card for connection with domain explicitly set', async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'D1', protocol: 'rdp', hostname: '1.2.3.4', last_accessed: '2024-01-01T00:00:00Z', domain: 'EXTRA' },
+      { id: '1', name: 'D1', protocol: 'rdp', hostname: '1.2.3.4', port: 3389, last_accessed: '2024-01-01T00:00:00Z', domain: 'EXTRA' },
     ]);
     renderDashboard();
     await waitFor(() => expect(screen.getByText(/EXTRA/)).toBeInTheDocument());
@@ -821,7 +821,7 @@ describe('Dashboard', () => {
 
   it('hero cards handle click to navigate', async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'HeroConn', protocol: 'rdp', hostname: 'host', last_accessed: '2024-01-01T00:00:00Z' },
+      { id: '1', name: 'HeroConn', protocol: 'rdp', hostname: 'host', port: 3389, last_accessed: '2024-01-01T00:00:00Z' },
     ]);
     renderDashboard();
     const cards = await screen.findAllByText('HeroConn');

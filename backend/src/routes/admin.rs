@@ -716,7 +716,9 @@ pub async fn update_kerberos(
     )
     .map_err(|e| AppError::Internal(format!("krb5.conf write failed: {e}")))?;
 
-    audit::log(&db.pool, Some(user.id),
+    audit::log(
+        &db.pool,
+        Some(user.id),
         "kerberos.configured",
         &json!({ "realm": body.realm }),
     )

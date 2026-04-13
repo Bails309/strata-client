@@ -269,7 +269,6 @@ describe('SessionClient – auto-redirect on session end', () => {
 
     // Now the overlay is showing. Click Reconnect.
     const root = document.getElementById('root')!;
-    const reconnectBtn = root.querySelector('button');
     const buttons = Array.from(root.querySelectorAll('button'));
     const reconnect = buttons.find((b) => b.textContent === 'Reconnect');
 

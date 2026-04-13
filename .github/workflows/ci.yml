@@ -9,11 +9,16 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   # ── Backend: lint, check, test ────────────────────────────────────
   backend-check:
     name: Backend (Rust)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend
@@ -63,6 +68,8 @@ jobs:
   frontend-check:
     name: Frontend (React)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: frontend
@@ -101,6 +108,8 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [backend-check, frontend-check]
 
     steps:
@@ -163,6 +172,8 @@ jobs:
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [backend-check, frontend-check]
     strategy:
       matrix:

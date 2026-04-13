@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import WhatsNewModal, { WHATS_NEW_VERSION } from '../components/WhatsNewModal';
 
 const STORAGE_KEY = 'strata-whats-new-dismissed';
+const WELCOME_KEY = 'strata-welcome-dismissed';
 
 describe('WhatsNewModal', () => {
   beforeEach(() => {
@@ -14,12 +15,19 @@ describe('WhatsNewModal', () => {
     localStorage.clear();
   });
 
-  it('shows modal when user has not dismissed current version', () => {
+  it('shows welcome modal for first-time users', () => {
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText('Welcome to Strata Client!')).toBeInTheDocument();
+  });
+
+  it('shows whats-new modal when welcome was already dismissed', () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
   });
 
   it('does not show modal when already dismissed for current version', () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     localStorage.setItem(`${STORAGE_KEY}-user1`, WHATS_NEW_VERSION);
     render(<WhatsNewModal userId="user1" />);
     expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
@@ -30,7 +38,18 @@ describe('WhatsNewModal', () => {
     expect(screen.queryByText(`What's New in ${WHATS_NEW_VERSION}`)).not.toBeInTheDocument();
   });
 
-  it('dismisses on "Got it" click and saves to localStorage', async () => {
+  it('dismisses welcome on "Let\'s Go!" click and saves to localStorage', async () => {
+    render(<WhatsNewModal userId="user1" />);
+    expect(screen.getByText('Welcome to Strata Client!')).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Let's Go!"));
+    expect(screen.queryByText('Welcome to Strata Client!')).not.toBeInTheDocument();
+    expect(localStorage.getItem(`${WELCOME_KEY}-user1`)).toBe('true');
+    // Also proactively dismisses whats-new
+    expect(localStorage.getItem(`${STORAGE_KEY}-user1`)).toBe(WHATS_NEW_VERSION);
+  });
+
+  it('dismisses whats-new on "Got it" click and saves to localStorage', async () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
     await userEvent.click(screen.getByText('Got it'));
@@ -39,6 +58,7 @@ describe('WhatsNewModal', () => {
   });
 
   it('dismisses on backdrop click', async () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     const backdrop = screen.getByText(`What's New in ${WHATS_NEW_VERSION}`).closest('.fixed');
     expect(backdrop).toBeTruthy();
@@ -47,19 +67,22 @@ describe('WhatsNewModal', () => {
   });
 
   it('does not dismiss when clicking inside the modal content', async () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     // Click inside the modal content (e.g., a section heading)
-    await userEvent.click(screen.getByText('Pop-Out Session Persistence'));
+    await userEvent.click(screen.getByText('Smart Folder View'));
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
   });
 
   it('shows modal again when version changes from dismissed version', () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     localStorage.setItem(`${STORAGE_KEY}-user1`, '0.0.0-old');
     render(<WhatsNewModal userId="user1" />);
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
   });
 
   it('scopes dismissal per user', () => {
+    localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     localStorage.setItem(`${STORAGE_KEY}-other-user`, WHATS_NEW_VERSION);
     render(<WhatsNewModal userId="user1" />);
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();

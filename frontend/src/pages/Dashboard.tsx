@@ -6,6 +6,8 @@ import Select from '../components/Select';
 import { useSettings } from '../contexts/SettingsContext';
 
 const PAGE_SIZE = 50;
+const FOLDER_VIEW_KEY = 'strata-folder-view';
+const EXPANDED_FOLDERS_KEY = 'strata-expanded-folders';
 
 function ProtocolIcon({ protocol }: { protocol: string }) {
   const p = protocol.toLowerCase();
@@ -56,8 +58,13 @@ export default function Dashboard() {
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [showFavorites, setShowFavorites] = useState(false);
-  const [folderView, setFolderView] = useState(false);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [folderView, setFolderView] = useState(() => localStorage.getItem(FOLDER_VIEW_KEY) === 'true');
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(EXPANDED_FOLDERS_KEY);
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
   const [credProfiles, setCredProfiles] = useState<CredentialProfile[]>([]);
   /** Map of connection_id → profile_id currently assigned */
   const [connProfileMap, setConnProfileMap] = useState<Record<string, string>>({});
@@ -87,7 +94,14 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    getMyConnections().then(setConnections).catch(() => {});
+    getMyConnections().then((conns) => {
+      setConnections(conns);
+      // Auto-enable folder view if folders exist and user hasn't set a preference
+      if (localStorage.getItem(FOLDER_VIEW_KEY) === null && conns.some(c => c.folder_id)) {
+        setFolderView(true);
+        localStorage.setItem(FOLDER_VIEW_KEY, 'true');
+      }
+    }).catch(() => {});
     getServiceHealth().then((h) => setVaultConfigured(h.vault.configured)).catch(() => {});
     getFavorites().then((ids) => setFavorites(new Set(ids))).catch(() => {});
     loadProfiles();
@@ -129,9 +143,10 @@ export default function Dashboard() {
   }, [folderView, paged]);
 
   const toggleFolderCollapse = useCallback((fid: string) => {
-    setCollapsedFolders(prev => {
+    setExpandedFolders(prev => {
       const next = new Set(prev);
       if (next.has(fid)) next.delete(fid); else next.add(fid);
+      try { localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...next])); } catch {}
       return next;
     });
   }, []);
@@ -439,7 +454,7 @@ export default function Dashboard() {
 
         <button
           className={`btn-sm inline-flex items-center gap-1.5 ${folderView ? '!border-accent !text-accent' : ''}`}
-          onClick={() => setFolderView(!folderView)}
+          onClick={() => { const next = !folderView; setFolderView(next); localStorage.setItem(FOLDER_VIEW_KEY, String(next)); }}
           title={folderView ? 'Flat list view' : 'Group by folder'}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={folderView ? 'var(--color-accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -489,7 +504,7 @@ export default function Dashboard() {
                     folderId={fid}
                     folderName={folder.name}
                     connections={folder.connections}
-                    collapsed={collapsedFolders.has(fid)}
+                    collapsed={!expandedFolders.has(fid)}
                     onToggleCollapse={() => toggleFolderCollapse(fid)}
                     checked={checked}
                     toggleChecked={toggleChecked}
@@ -508,7 +523,7 @@ export default function Dashboard() {
                     folderId="__ungrouped"
                     folderName="Ungrouped"
                     connections={groupedConnections.ungrouped}
-                    collapsed={collapsedFolders.has('__ungrouped')}
+                    collapsed={!expandedFolders.has('__ungrouped')}
                     onToggleCollapse={() => toggleFolderCollapse('__ungrouped')}
                     checked={checked}
                     toggleChecked={toggleChecked}

@@ -7,7 +7,7 @@ const WELCOME_KEY = 'strata-welcome-dismissed';
  * Bump this version string each release to re-show the modal.
  * The content below should be updated to match.
  */
-export const WHATS_NEW_VERSION = '0.10.5';
+export const WHATS_NEW_VERSION = '0.10.6';
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
@@ -143,20 +143,20 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
               <>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Session Label Overlay
+                    <span className="text-accent">•</span> Smart Folder View
                   </h3>
                   <p>
-                    Active session thumbnails in the sidebar now display the connection name and protocol directly. 
-                    We've added a translucent gradient and backdrop blur to ensure text remains readable over any desktop background.
+                    The dashboard now automatically enables folder view when your connections are organized into folders.
+                    Folders start collapsed for a cleaner look, and your expand/collapse preferences are remembered across sessions.
                   </p>
                 </section>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Performance & Reliability
+                    <span className="text-accent">•</span> Streamlined Recording Settings
                   </h3>
                   <p>
-                    Included major stabilization fixes for the backend protocol parser and expanded unit test coverage 
-                    to ensure robust handling of Unicode characters and partial data streams.
+                    Simplified the VNC and AD Sync recording configuration by removing system-managed fields.
+                    The recording path and filename are now handled automatically — you only see the options that matter.
                   </p>
                 </section>
               </>

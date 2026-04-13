@@ -2790,20 +2790,34 @@ function VncSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
       </Section>
 
       <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">Recording path and filename are managed automatically by the system. Use the Recordings tab to enable/disable recording globally.</p>
         <FieldGrid>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording.">Recording Path</label>
-            <input value={ex('recording-path')} onChange={(e) => setEx('recording-path', e.target.value)} title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording." />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label title="The filename to use for any created recordings. If omitted, the value 'recording' will be used.">Recording Name</label>
-            <input value={ex('recording-name')} onChange={(e) => setEx('recording-name', e.target.value)} title="The filename to use for any created recordings. If omitted, the value 'recording' will be used." />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
+          <div className="form-group !mb-0">
             <label>&nbsp;</label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} title="Automatically create the recording directory if it does not yet exist.">
-              <input type="checkbox" checked={ex('create-recording-path') === 'true'} onChange={(e) => setEx('create-recording-path', e.target.checked ? 'true' : '')} className="checkbox" />
-              Auto-create recording path
+            <label className="flex items-center gap-2" title="Exclude graphical output from the recording, producing a recording that contains only user input events.">
+              <input type="checkbox" checked={ex('recording-exclude-output') === 'true'} onChange={(e) => setEx('recording-exclude-output', e.target.checked ? 'true' : '')} className="checkbox" />
+              Exclude graphical output
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label className="flex items-center gap-2" title="Exclude user mouse events from the recording, producing a recording without a visible mouse cursor.">
+              <input type="checkbox" checked={ex('recording-exclude-mouse') === 'true'} onChange={(e) => setEx('recording-exclude-mouse', e.target.checked ? 'true' : '')} className="checkbox" />
+              Exclude mouse events
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label className="flex items-center gap-2" title="Exclude user touch events from the recording.">
+              <input type="checkbox" checked={ex('recording-exclude-touch') === 'true'} onChange={(e) => setEx('recording-exclude-touch', e.target.checked ? 'true' : '')} className="checkbox" />
+              Exclude touch events
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label className="flex items-center gap-2" title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed.">
+              <input type="checkbox" checked={ex('recording-include-keys') === 'true'} onChange={(e) => setEx('recording-include-keys', e.target.checked ? 'true' : '')} className="checkbox" />
+              Include key events
             </label>
           </div>
         </FieldGrid>
@@ -3571,53 +3585,9 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
               </div>
 
               <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2 mt-4">Session Recording</div>
-              <div className="grid grid-cols-2 gap-4 mb-2">
-                <label className="block">
-                  <span className="text-sm font-medium flex items-center gap-1">
-                    Recording Path
-                    <span title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording."><svg className="w-3.5 h-3.5 opacity-40 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" /></svg></span>
-                  </span>
-                  <input
-                    className="input mt-1"
-                    value={(editing.connection_defaults ?? {})['recording-path'] || ''}
-                    onChange={(e) => {
-                      const cd = { ...(editing.connection_defaults ?? {}) };
-                      if (e.target.value) {
-                        cd['recording-path'] = e.target.value;
-                      } else {
-                        delete cd['recording-path'];
-                      }
-                      setEditing({ ...editing, connection_defaults: cd });
-                    }}
-                    placeholder="/recordings"
-                    title="The directory in which screen recording files should be created. Specifying this enables graphical screen recording."
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-sm font-medium flex items-center gap-1">
-                    Recording Name
-                    <span title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}."><svg className="w-3.5 h-3.5 opacity-40 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" strokeWidth="2" /><path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" /></svg></span>
-                  </span>
-                  <input
-                    className="input mt-1"
-                    value={(editing.connection_defaults ?? {})['recording-name'] || ''}
-                    onChange={(e) => {
-                      const cd = { ...(editing.connection_defaults ?? {}) };
-                      if (e.target.value) {
-                        cd['recording-name'] = e.target.value;
-                      } else {
-                        delete cd['recording-name'];
-                      }
-                      setEditing({ ...editing, connection_defaults: cd });
-                    }}
-                    placeholder="${GUAC_DATE}-${GUAC_TIME}-${GUAC_USERNAME}"
-                    title="The filename to use for any created recordings. If omitted, the value 'recording' will be used. Supports tokens like ${GUAC_DATE}, ${GUAC_TIME}, ${GUAC_USERNAME}."
-                  />
-                </label>
-              </div>
+              <p className="text-xs opacity-50 mb-2">Recording path and filename are managed automatically by the system.</p>
               <div className="grid grid-cols-2 gap-x-6 gap-y-2">
                 {([
-                  ['create-recording-path', 'Auto-create recording path', 'Automatically create the recording directory if it does not yet exist.'],
                   ['recording-include-keys', 'Include key events', 'Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed.'],
                   ['recording-exclude-mouse', 'Exclude mouse events', 'Exclude user mouse events from the recording, producing a recording without a visible mouse cursor.'],
                   ['recording-exclude-touch', 'Exclude touch events', 'Exclude user touch events from the recording.'],

@@ -114,6 +114,7 @@ describe('Dashboard', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it('renders connection list', async () => {
@@ -291,27 +292,30 @@ describe('Dashboard', () => {
   it('toggles folder view', async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    await userEvent.click(screen.getByText('Folders'));
-    // Folder view should display folder headers
+    // Folder view should auto-enable since connections have folders
     await waitFor(() => {
       expect(screen.getByText('Production')).toBeInTheDocument();
       expect(screen.getByText('Ungrouped')).toBeInTheDocument();
+    });
+    // Clicking Folders should toggle it OFF
+    await userEvent.click(screen.getByText('Folders'));
+    await waitFor(() => {
+      expect(screen.queryByText('Ungrouped')).not.toBeInTheDocument();
     });
   });
 
   it('collapses and expands folders', async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    await userEvent.click(screen.getByText('Folders'));
+    // Folder view auto-enabled; folders start collapsed
     await waitFor(() => expect(screen.getByText('Production')).toBeInTheDocument());
-    // Click Production folder header to collapse (it has (2) count)
+    // Connections should be hidden while collapsed
+    expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+    // Expand Production folder by clicking its header
     await userEvent.click(screen.getByText('Production'));
-    // Connections inside should be hidden
+    // Connections inside should now be visible
     await waitFor(() => {
-      // Server Alpha is in the Production group, should be gone when collapsed
-      expect(screen.getByText('DB Server')).toBeInTheDocument();
+      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
     });
   });
 
@@ -435,8 +439,7 @@ describe('Dashboard', () => {
   it('groups connections in folder view with counts', async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    await userEvent.click(screen.getByText('Folders'));
+    // Folder view auto-enabled since connections have folders; counts visible in headers
     await waitFor(() => {
       expect(screen.getByText('(2)')).toBeInTheDocument(); // Production has 2
       expect(screen.getByText('(1)')).toBeInTheDocument(); // Ungrouped has 1

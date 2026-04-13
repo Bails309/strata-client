@@ -951,8 +951,9 @@ mod tests {
 
     #[test]
     fn validate_login_accepts_normal_input() {
+        let user = String::from("alice");
         let pass = String::from_utf8(vec![b't', b'e', b's', b't']).unwrap();
-        assert!(validate_login_input("alice", &pass).is_ok());
+        assert!(validate_login_input(&user, &pass).is_ok());
     }
 
     #[test]
@@ -963,7 +964,8 @@ mod tests {
 
     #[test]
     fn validate_login_rejects_empty_password() {
-        assert!(validate_login_input("alice", "").is_err());
+        let user = String::from("alice");
+        assert!(validate_login_input(&user, "").is_err());
     }
 
     #[test]
@@ -980,8 +982,9 @@ mod tests {
 
     #[test]
     fn validate_login_rejects_long_password() {
+        let user = String::from("alice");
         let long = "a".repeat(1025);
-        assert!(validate_login_input("alice", &long).is_err());
+        assert!(validate_login_input(&user, &long).is_err());
     }
 
     #[test]

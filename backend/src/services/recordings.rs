@@ -159,9 +159,6 @@ pub async fn upload_to_azure(
     data: Vec<u8>,
 ) -> anyhow::Result<()> {
     let url = cfg.blob_url(blob);
-    if !url.starts_with("https://") {
-        anyhow::bail!("Azure Blob URL must use HTTPS");
-    }
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -170,7 +167,8 @@ pub async fn upload_to_azure(
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("PUT", data.len(), ct, &x_headers, &resource)?;
 
-    let resp = reqwest::Client::new()
+    let client = reqwest::Client::builder().https_only(true).build()?;
+    let resp = client
         .put(&url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
@@ -202,9 +200,6 @@ pub async fn upload_file_to_azure(
     let file_len = meta.len() as usize;
 
     let url = cfg.blob_url(blob);
-    if !url.starts_with("https://") {
-        anyhow::bail!("Azure Blob URL must use HTTPS");
-    }
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -219,7 +214,8 @@ pub async fn upload_file_to_azure(
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = reqwest::Body::wrap_stream(stream);
 
-    let resp = reqwest::Client::new()
+    let client = reqwest::Client::builder().https_only(true).build()?;
+    let resp = client
         .put(&url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
@@ -242,9 +238,6 @@ pub async fn upload_file_to_azure(
 
 pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<Vec<u8>> {
     let url = cfg.blob_url(blob);
-    if !url.starts_with("https://") {
-        anyhow::bail!("Azure Blob URL must use HTTPS");
-    }
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -252,7 +245,8 @@ pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::R
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("GET", 0, "", &x_headers, &resource)?;
 
-    let resp = reqwest::Client::new()
+    let client = reqwest::Client::builder().https_only(true).build()?;
+    let resp = client
         .get(&url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
@@ -274,9 +268,6 @@ pub async fn download_stream_from_azure(
     blob: &str,
 ) -> anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>> {
     let url = cfg.blob_url(blob);
-    if !url.starts_with("https://") {
-        anyhow::bail!("Azure Blob URL must use HTTPS");
-    }
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -284,7 +275,8 @@ pub async fn download_stream_from_azure(
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("GET", 0, "", &x_headers, &resource)?;
 
-    let resp = reqwest::Client::new()
+    let client = reqwest::Client::builder().https_only(true).build()?;
+    let resp = client
         .get(&url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)

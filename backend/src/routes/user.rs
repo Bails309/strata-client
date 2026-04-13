@@ -796,29 +796,29 @@ pub async fn get_recording(
 
     // Try local file first
     let recordings_dir = "/var/lib/guacamole/recordings";
-    let path = format!("{recordings_dir}/{filename}");
+    let recordings_canonical = tokio::fs::canonicalize(recordings_dir)
+        .await
+        .unwrap_or_else(|_| std::path::PathBuf::from(recordings_dir));
+    let candidate = std::path::Path::new(recordings_dir).join(&filename);
 
     // Resolve symlinks and verify the canonical path stays within recordings dir
-    if let Ok(canonical) = tokio::fs::canonicalize(&path).await {
-        let recordings_canonical = tokio::fs::canonicalize(recordings_dir)
-            .await
-            .unwrap_or_else(|_| std::path::PathBuf::from(recordings_dir));
+    if let Ok(canonical) = tokio::fs::canonicalize(&candidate).await {
         if !canonical.starts_with(&recordings_canonical) {
             return Err(AppError::NotFound("Invalid filename".into()));
         }
-    }
-
-    if let Ok(file) = File::open(&path).await {
-        let stream = ReaderStream::new(file);
-        let body = Body::from_stream(stream);
-        return Ok(axum::response::Response::builder()
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{safe_filename}\""),
-            )
-            .body(body)
-            .unwrap());
+        // Open the resolved canonical path, not the user-supplied one
+        if let Ok(file) = File::open(&canonical).await {
+            let stream = ReaderStream::new(file);
+            let body = Body::from_stream(stream);
+            return Ok(axum::response::Response::builder()
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{safe_filename}\""),
+                )
+                .body(body)
+                .unwrap());
+        }
     }
 
     // Fall back to Azure Blob if configured

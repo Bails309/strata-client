@@ -112,10 +112,12 @@ pub async fn get_azure_config(
 impl AzureBlobConfig {
     fn blob_url(&self, blob: &str) -> String {
         let encoded = urlencoding::encode(blob);
-        format!(
+        let url = format!(
             "https://{}.blob.core.windows.net/{}/{}",
             self.account_name, self.container_name, encoded
-        )
+        );
+        debug_assert!(url.starts_with("https://"), "Azure Blob URL must use HTTPS");
+        url
     }
 
     fn sign(
@@ -157,6 +159,7 @@ pub async fn upload_to_azure(
     data: Vec<u8>,
 ) -> anyhow::Result<()> {
     let url = cfg.blob_url(blob);
+    anyhow::ensure!(url.starts_with("https://"), "Azure Blob URL must use HTTPS");
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -197,6 +200,7 @@ pub async fn upload_file_to_azure(
     let file_len = meta.len() as usize;
 
     let url = cfg.blob_url(blob);
+    anyhow::ensure!(url.starts_with("https://"), "Azure Blob URL must use HTTPS");
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -234,6 +238,7 @@ pub async fn upload_file_to_azure(
 
 pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<Vec<u8>> {
     let url = cfg.blob_url(blob);
+    anyhow::ensure!(url.starts_with("https://"), "Azure Blob URL must use HTTPS");
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -263,6 +268,7 @@ pub async fn download_stream_from_azure(
     blob: &str,
 ) -> anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>> {
     let url = cfg.blob_url(blob);
+    anyhow::ensure!(url.starts_with("https://"), "Azure Blob URL must use HTTPS");
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();

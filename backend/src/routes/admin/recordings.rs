@@ -20,8 +20,14 @@ pub struct SessionStats {
     pub total_hours: f64,
     pub unique_users: i64,
     pub active_now: u32,
+    pub avg_duration_mins: f64,
+    pub median_duration_mins: f64,
+    pub total_bandwidth_bytes: i64,
     pub top_connections: Vec<TopConnection>,
     pub top_users: Vec<TopUser>,
+    pub daily_trend: Vec<DailyTrend>,
+    pub protocol_distribution: Vec<ProtocolDistribution>,
+    pub peak_hours: Vec<PeakHour>,
 }
 
 #[derive(Serialize)]
@@ -56,6 +62,48 @@ struct TopUserRow {
     last_session: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+#[derive(Serialize)]
+pub struct DailyTrend {
+    pub date: String,
+    pub sessions: i64,
+    pub hours: f64,
+    pub unique_users: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct DailyTrendRow {
+    date: chrono::NaiveDate,
+    sessions: i64,
+    hours: f64,
+    unique_users: i64,
+}
+
+#[derive(Serialize)]
+pub struct ProtocolDistribution {
+    pub protocol: String,
+    pub sessions: i64,
+    pub total_hours: f64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ProtocolDistributionRow {
+    protocol: String,
+    sessions: i64,
+    total_hours: f64,
+}
+
+#[derive(Serialize)]
+pub struct PeakHour {
+    pub hour: i32,
+    pub sessions: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct PeakHourRow {
+    hour: f64,
+    sessions: i64,
+}
+
 /// GET /api/admin/session-stats – aggregate session statistics for the dashboard.
 pub async fn session_stats(
     State(state): State<SharedState>,
@@ -85,6 +133,66 @@ pub async fn session_stats(
         "SELECT COUNT(DISTINCT user_id) FROM recordings WHERE started_at >= {cutoff}"
     ))
     .fetch_one(&db.pool)
+    .await?;
+
+    // Average duration (minutes)
+    let (avg_duration_mins,): (f64,) = sqlx::query_as(&format!(
+        "SELECT COALESCE(AVG(duration_secs::float) / 60.0, 0.0) FROM recordings WHERE started_at >= {cutoff} AND duration_secs IS NOT NULL"
+    ))
+    .fetch_one(&db.pool)
+    .await?;
+
+    // Median duration (minutes)
+    let (median_duration_mins,): (f64,) = sqlx::query_as(&format!(
+        "SELECT COALESCE((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_secs))::float / 60.0, 0.0) FROM recordings WHERE started_at >= {cutoff} AND duration_secs IS NOT NULL"
+    ))
+    .fetch_one(&db.pool)
+    .await?;
+
+    // Total bandwidth
+    let (total_bandwidth_bytes,): (i64,) = sqlx::query_as(&format!(
+        "SELECT COALESCE(SUM(COALESCE(bytes_from_guacd, 0) + COALESCE(bytes_to_guacd, 0)), 0)::bigint FROM recordings WHERE started_at >= {cutoff}"
+    ))
+    .fetch_one(&db.pool)
+    .await?;
+
+    // Daily trend (last 30 days)
+    let daily_trend: Vec<DailyTrendRow> = sqlx::query_as(&format!(
+        "SELECT started_at::date AS date,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS hours,
+                COUNT(DISTINCT user_id) AS unique_users
+         FROM recordings
+         WHERE started_at >= {cutoff}
+         GROUP BY started_at::date
+         ORDER BY date"
+    ))
+    .fetch_all(&db.pool)
+    .await?;
+
+    // Protocol distribution
+    let protocol_distribution: Vec<ProtocolDistributionRow> = sqlx::query_as(&format!(
+        "SELECT COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'unknown') AS protocol,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
+         FROM recordings r
+         WHERE started_at >= {cutoff}
+         GROUP BY protocol
+         ORDER BY sessions DESC"
+    ))
+    .fetch_all(&db.pool)
+    .await?;
+
+    // Peak hours (0-23)
+    let peak_hours: Vec<PeakHourRow> = sqlx::query_as(&format!(
+        "SELECT EXTRACT(HOUR FROM started_at)::float AS hour,
+                COUNT(*) AS sessions
+         FROM recordings
+         WHERE started_at >= {cutoff}
+         GROUP BY hour
+         ORDER BY hour"
+    ))
+    .fetch_all(&db.pool)
     .await?;
 
     let top_connections: Vec<TopConnectionRow> = sqlx::query_as(&format!(
@@ -120,6 +228,9 @@ pub async fn session_stats(
         total_hours: (total_hours * 10.0).round() / 10.0,
         unique_users,
         active_now,
+        avg_duration_mins: (avg_duration_mins * 10.0).round() / 10.0,
+        median_duration_mins: (median_duration_mins * 10.0).round() / 10.0,
+        total_bandwidth_bytes,
         top_connections: top_connections
             .into_iter()
             .map(|r| TopConnection {
@@ -136,6 +247,30 @@ pub async fn session_stats(
                 sessions: r.sessions,
                 total_hours: (r.total_hours * 10.0).round() / 10.0,
                 last_session: r.last_session.map(|d| d.to_rfc3339()),
+            })
+            .collect(),
+        daily_trend: daily_trend
+            .into_iter()
+            .map(|r| DailyTrend {
+                date: r.date.to_string(),
+                sessions: r.sessions,
+                hours: (r.hours * 10.0).round() / 10.0,
+                unique_users: r.unique_users,
+            })
+            .collect(),
+        protocol_distribution: protocol_distribution
+            .into_iter()
+            .map(|r| ProtocolDistribution {
+                protocol: r.protocol,
+                sessions: r.sessions,
+                total_hours: (r.total_hours * 10.0).round() / 10.0,
+            })
+            .collect(),
+        peak_hours: peak_hours
+            .into_iter()
+            .map(|r| PeakHour {
+                hour: r.hour as i32,
+                sessions: r.sessions,
             })
             .collect(),
     }))

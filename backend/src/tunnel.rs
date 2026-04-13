@@ -619,17 +619,31 @@ async fn handle_guac_handshake(
 
     // ── NVR: unregister session ──
     if let Some(ref ctx) = nvr {
+        // Capture bandwidth before unregistering (the ActiveSession will be dropped)
+        let (bw_from, bw_to) = if let Some(ref sess) = bandwidth {
+            (
+                sess.bytes_from_guacd.load(std::sync::atomic::Ordering::Relaxed) as i64,
+                sess.bytes_to_guacd.load(std::sync::atomic::Ordering::Relaxed) as i64,
+            )
+        } else {
+            (0i64, 0i64)
+        };
+
         ctx.registry.unregister(&ctx.session_id).await;
         tracing::info!("NVR session {} unregistered", ctx.session_id);
 
-        // Update recording duration
+        // Update recording duration + bandwidth
         let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
         let sid = ctx.session_id.clone();
         let pool = ctx.db_pool.clone();
 
         tokio::spawn(async move {
-            let res = sqlx::query("UPDATE recordings SET duration_secs = $1 WHERE session_id = $2")
+            let res = sqlx::query(
+                "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3 WHERE session_id = $4"
+            )
                 .bind(duration)
+                .bind(bw_from)
+                .bind(bw_to)
                 .bind(sid)
                 .execute(&pool)
                 .await;

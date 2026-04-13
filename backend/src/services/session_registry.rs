@@ -345,6 +345,9 @@ impl SessionRegistry {
             total_bytes_to_guacd: total_bytes_out,
             sessions_by_protocol: by_protocol,
             guacd_pool_size: 0, // placeholder — overridden by admin handler
+            recommended_per_instance: 20, // placeholder — overridden by admin handler
+            system_total_memory: 0,
+            system_cpu_cores: 0,
         }
     }
 }
@@ -357,6 +360,13 @@ pub struct MetricsSummary {
     pub total_bytes_to_guacd: u64,
     pub sessions_by_protocol: HashMap<String, u32>,
     pub guacd_pool_size: u32,
+    /// Dynamically computed recommended sessions per guacd instance based on
+    /// host system resources (CPU + RAM), reserving headroom for other processes.
+    pub recommended_per_instance: u32,
+    /// Total system memory in bytes (for display).
+    pub system_total_memory: u64,
+    /// Number of logical CPU cores (for display).
+    pub system_cpu_cores: u32,
 }
 
 #[cfg(test)]
@@ -529,6 +539,9 @@ mod tests {
                 map
             },
             guacd_pool_size: 5,
+            recommended_per_instance: 20,
+            system_total_memory: 0,
+            system_cpu_cores: 0,
         };
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["active_sessions"], 3);

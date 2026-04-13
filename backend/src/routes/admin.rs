@@ -2019,6 +2019,42 @@ pub async fn get_metrics(
     };
     let mut metrics = registry.metrics().await;
     metrics.guacd_pool_size = pool_size;
+
+    // ── Dynamic capacity recommendation based on host resources ──
+    //
+    // Read system CPU and memory via sysinfo.  Reserve 30% headroom for
+    // other processes (backend, nginx, postgres, OS).  Use the more
+    // constraining of the CPU-bound and memory-bound estimates.
+    //
+    // Per-session resource estimates (weighted average across RDP/VNC/SSH):
+    //   RAM  ≈ 150 MB   (RDP ~200, VNC ~100, SSH ~20)
+    //   CPU  ≈ 0.15 cores (RDP ~0.25, VNC ~0.10, SSH ~0.02)
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_memory();
+    let total_mem = sys.total_memory(); // bytes
+    let cpu_cores = {
+        sys.refresh_cpu_list(sysinfo::CpuRefreshKind::default());
+        sys.cpus().len() as u64
+    };
+
+    metrics.system_total_memory = total_mem;
+    metrics.system_cpu_cores = cpu_cores as u32;
+
+    const USABLE_FRACTION: f64 = 0.70; // reserve 30% for OS / sidecar processes
+    const RAM_PER_SESSION_MB: f64 = 150.0;
+    const CPU_PER_SESSION: f64 = 0.15;
+
+    let usable_mem_mb = (total_mem as f64 / 1_048_576.0) * USABLE_FRACTION;
+    let usable_cpu = cpu_cores as f64 * USABLE_FRACTION;
+
+    let by_mem = (usable_mem_mb / RAM_PER_SESSION_MB) as u32;
+    let by_cpu = (usable_cpu / CPU_PER_SESSION) as u32;
+
+    // Bottleneck governs; divide by pool size for per-instance recommendation.
+    let total_recommended = by_mem.min(by_cpu).max(1);
+    metrics.recommended_per_instance = (total_recommended / pool_size).max(1);
+
     Ok(Json(metrics))
 }
 

@@ -649,6 +649,9 @@ export interface MetricsSummary {
   total_bytes_to_guacd: number;
   sessions_by_protocol: Record<string, number>;
   guacd_pool_size: number;
+  recommended_per_instance: number;
+  system_total_memory: number;
+  system_cpu_cores: number;
 }
 
 export const getMetrics = () => request<MetricsSummary>('/admin/metrics');
@@ -669,13 +672,37 @@ export interface TopUser {
   last_session: string | null;
 }
 
+export interface DailyTrend {
+  date: string;
+  sessions: number;
+  hours: number;
+  unique_users: number;
+}
+
+export interface ProtocolDistribution {
+  protocol: string;
+  sessions: number;
+  total_hours: number;
+}
+
+export interface PeakHour {
+  hour: number;
+  sessions: number;
+}
+
 export interface SessionStats {
   total_sessions: number;
   total_hours: number;
   unique_users: number;
   active_now: number;
+  avg_duration_mins: number;
+  median_duration_mins: number;
+  total_bandwidth_bytes: number;
   top_connections: TopConnection[];
   top_users: TopUser[];
+  daily_trend: DailyTrend[];
+  protocol_distribution: ProtocolDistribution[];
+  peak_hours: PeakHour[];
 }
 
 export const getSessionStats = () => request<SessionStats>('/admin/session-stats');

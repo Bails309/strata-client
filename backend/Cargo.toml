@@ -72,6 +72,7 @@ dotenvy = "0.15"
 scopeguard = "1"
 urlencoding = "2.1"
 tempfile = "3"
+sysinfo = "0.33"
 
 [profile.release]
 lto = true

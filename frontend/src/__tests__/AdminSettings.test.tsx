@@ -101,11 +101,14 @@ const healthDown = {
 };
 
 const metricsOk = {
-  active_sessions: 3,
+  active_sessions: 7,
   total_bytes_from_guacd: 1024,
   total_bytes_to_guacd: 512,
-  sessions_by_protocol: { rdp: 2, ssh: 1 },
+  sessions_by_protocol: { rdp: 4, ssh: 3 },
   guacd_pool_size: 2,
+  recommended_per_instance: 18,
+  system_total_memory: 8589934592,
+  system_cpu_cores: 4,
 };
 
 const defaultUser: import('../api').MeResponse = {
@@ -148,8 +151,14 @@ function setupDefaults() {
     total_hours: 0,
     unique_users: 0,
     active_now: 0,
+    avg_duration_mins: 0,
+    median_duration_mins: 0,
+    total_bandwidth_bytes: 0,
     top_connections: [],
     top_users: [],
+    daily_trend: [],
+    protocol_distribution: [],
+    peak_hours: [],
   });
   vi.mocked(getRecordings).mockResolvedValue([]);
 }
@@ -275,7 +284,7 @@ describe('HealthTab', () => {
 
   it('shows active sessions count', async () => {
     renderAdmin();
-    expect(await screen.findByText('3')).toBeInTheDocument();
+    expect(await screen.findByText('7')).toBeInTheDocument();
   });
 
   it('shows environment', async () => {
@@ -1260,8 +1269,14 @@ describe('SessionsTab', () => {
       total_hours: 1.2,
       unique_users: 5,
       active_now: 3,
+      avg_duration_mins: 12.5,
+      median_duration_mins: 9.0,
+      total_bandwidth_bytes: 5242880,
       top_connections: [],
       top_users: [],
+      daily_trend: [],
+      protocol_distribution: [],
+      peak_hours: [],
     });
     const user = userEvent.setup();
     renderAdmin();
@@ -1289,11 +1304,17 @@ describe('SessionsTab', () => {
       total_hours: 2.5,
       unique_users: 2,
       active_now: 0,
+      avg_duration_mins: 15.0,
+      median_duration_mins: 12.0,
+      total_bandwidth_bytes: 0,
       top_connections: [
         { name: 'Server X', protocol: 'rdp', sessions: 8, total_hours: 1.5 },
         { name: 'Server Y', protocol: 'ssh', sessions: 2, total_hours: 1.0 },
       ],
       top_users: [],
+      daily_trend: [],
+      protocol_distribution: [],
+      peak_hours: [],
     });
     const user = userEvent.setup();
     renderAdmin();
@@ -1310,11 +1331,17 @@ describe('SessionsTab', () => {
       total_hours: 2.5,
       unique_users: 2,
       active_now: 0,
+      avg_duration_mins: 15.0,
+      median_duration_mins: 12.0,
+      total_bandwidth_bytes: 0,
       top_connections: [],
       top_users: [
         { username: 'alice', sessions: 6, total_hours: 1.0, last_session: '2026-04-10T14:30:00Z' },
         { username: 'bob', sessions: 4, total_hours: 1.5, last_session: null },
       ],
+      daily_trend: [],
+      protocol_distribution: [],
+      peak_hours: [],
     });
     const user = userEvent.setup();
     renderAdmin();
@@ -1329,8 +1356,14 @@ describe('SessionsTab', () => {
       total_hours: 0,
       unique_users: 0,
       active_now: 0,
+      avg_duration_mins: 0,
+      median_duration_mins: 0,
+      total_bandwidth_bytes: 0,
       top_connections: [],
       top_users: [],
+      daily_trend: [],
+      protocol_distribution: [],
+      peak_hours: [],
     });
     const user = userEvent.setup();
     renderAdmin();

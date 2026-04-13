@@ -3,11 +3,8 @@ import { useState, useEffect } from 'react';
 const STORAGE_KEY = 'strata-whats-new-dismissed';
 const WELCOME_KEY = 'strata-welcome-dismissed';
 
-/**
- * Bump this version string each release to re-show the modal.
- * The content below should be updated to match.
- */
-export const WHATS_NEW_VERSION = '0.10.6';
+/** Current app version — sourced from package.json via Vite define. */
+export const WHATS_NEW_VERSION = __APP_VERSION__;
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */

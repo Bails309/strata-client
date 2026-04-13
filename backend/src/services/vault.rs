@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -111,15 +111,13 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
     let b64 = base64::engine::general_purpose::STANDARD;
 
     // 1. Generate random DEK (32 bytes for AES-256)
-    let mut dek = [0u8; 32];
-    OsRng.fill_bytes(&mut dek);
+    let mut dek: [u8; 32] = OsRng.gen();
 
     // 2. Encrypt plaintext with DEK
     let cipher = Aes256Gcm::new_from_slice(&dek)
         .map_err(|e| AppError::Internal(format!("AES init: {e}")))?;
 
-    let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce_bytes: [u8; 12] = OsRng.gen();
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher

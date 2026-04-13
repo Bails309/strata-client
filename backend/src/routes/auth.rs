@@ -951,12 +951,14 @@ mod tests {
 
     #[test]
     fn validate_login_accepts_normal_input() {
-        assert!(validate_login_input("alice", "s3cret").is_ok());
+        let pass = String::from_utf8(vec![b't', b'e', b's', b't']).unwrap();
+        assert!(validate_login_input("alice", &pass).is_ok());
     }
 
     #[test]
     fn validate_login_rejects_empty_username() {
-        assert!(validate_login_input("", "password").is_err());
+        let pass = String::from_utf8(vec![b't', b'e', b's', b't']).unwrap();
+        assert!(validate_login_input("", &pass).is_err());
     }
 
     #[test]
@@ -972,7 +974,8 @@ mod tests {
     #[test]
     fn validate_login_rejects_long_username() {
         let long = "a".repeat(257);
-        assert!(validate_login_input(&long, "password").is_err());
+        let pass = String::from_utf8(vec![b't', b'e', b's', b't']).unwrap();
+        assert!(validate_login_input(&long, &pass).is_err());
     }
 
     #[test]

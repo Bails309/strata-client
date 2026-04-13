@@ -83,6 +83,26 @@
 
 /* ── Utility Classes ────────────────────────────────────────── */
 .animate-fade-up { animation: fadeUp 0.4s var(--ease-out) forwards; }
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar-thumb);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-scrollbar-thumb-hover);
+}
+
+.animate-pop-in {
+  animation: popIn 0.3s var(--ease-spring) both;
+}
 .animate-fade-in { animation: fadeIn 0.25s var(--ease-out) forwards; }
 .scale-in { animation: selectSlideIn 0.3s var(--ease-out) forwards; }
 .animate-spin { animation: spin 1s linear infinite; }

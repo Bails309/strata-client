@@ -1,51 +1,78 @@
 import { useState, useEffect } from 'react';
 
 const STORAGE_KEY = 'strata-whats-new-dismissed';
+const WELCOME_KEY = 'strata-welcome-dismissed';
 
 /**
  * Bump this version string each release to re-show the modal.
  * The content below should be updated to match.
  */
-export const WHATS_NEW_VERSION = '0.10.4';
+export const WHATS_NEW_VERSION = '0.10.5';
 
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
   userId: string | undefined;
 }
 
+type ModalMode = 'welcome' | 'whats-new';
+
 export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
   const [visible, setVisible] = useState(false);
+  const [mode, setMode] = useState<ModalMode | null>(null);
 
   useEffect(() => {
     if (!userId) return;
-    const key = `${STORAGE_KEY}-${userId}`;
-    const dismissed = localStorage.getItem(key);
-    if (dismissed !== WHATS_NEW_VERSION) {
+
+    // 1. Check if welcome was ever seen
+    const welcomeDismissed = localStorage.getItem(`${WELCOME_KEY}-${userId}`);
+    if (!welcomeDismissed) {
+      setMode('welcome');
+      setVisible(true);
+      return;
+    }
+
+    // 2. Fallback to what's new check
+    const dismissedVersion = localStorage.getItem(`${STORAGE_KEY}-${userId}`);
+    if (dismissedVersion !== WHATS_NEW_VERSION) {
+      setMode('whats-new');
       setVisible(true);
     }
   }, [userId]);
 
   function dismiss() {
-    if (userId) {
+    if (!userId) {
+      setVisible(false);
+      return;
+    }
+
+    if (mode === 'welcome') {
+      localStorage.setItem(`${WELCOME_KEY}-${userId}`, 'true');
+      // Proactively dismiss current what's-new so they don't get double-popped
+      localStorage.setItem(`${STORAGE_KEY}-${userId}`, WHATS_NEW_VERSION);
+    } else {
       localStorage.setItem(`${STORAGE_KEY}-${userId}`, WHATS_NEW_VERSION);
     }
+
     setVisible(false);
   }
 
-  if (!visible) return null;
+  if (!visible || !mode) return null;
+
+  const isWelcome = mode === 'welcome';
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
       onClick={dismiss}
     >
       <div
-        className="relative w-full max-w-lg mx-4 rounded-xl overflow-hidden animate-fade-in"
+        className="relative w-full max-w-lg rounded-xl overflow-hidden animate-fade-in"
         style={{
           background: 'var(--color-surface-secondary)',
           border: '1px solid var(--color-glass-border)',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.4), 0 24px 64px rgba(0,0,0,0.3), inset 0 1px 0 var(--color-glass-highlight-strong)',
+          boxShadow:
+            '0 8px 32px rgba(0,0,0,0.4), 0 24px 64px rgba(0,0,0,0.3), inset 0 1px 0 var(--color-glass-highlight-strong)',
         }}
         onClick={e => e.stopPropagation()}
       >
@@ -55,30 +82,95 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
           style={{ background: 'linear-gradient(90deg, var(--color-accent), var(--color-accent-light))' }}
         />
 
-        <div className="p-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
           {/* Title */}
           <div className="flex items-center gap-3 mb-1">
-            <span className="text-xl">&#x1f680;</span>
-            <h2 className="!mb-0 text-lg font-semibold">What's New in {WHATS_NEW_VERSION}</h2>
+            <span className="text-xl">{isWelcome ? '👋' : '🚀'}</span>
+            <h2 className="!mb-0 text-xl font-semibold tracking-tight">
+              {isWelcome ? 'Welcome to Strata Client!' : `What's New in ${WHATS_NEW_VERSION}`}
+            </h2>
           </div>
-          <p className="text-xs text-txt-tertiary mb-5">April 2026</p>
+          <p className="text-xs text-txt-tertiary mb-6 uppercase tracking-widest font-medium">
+            {isWelcome ? 'The modern remote gateway' : 'April 2026 Update'}
+          </p>
 
-          <div className="space-y-4 text-[0.8125rem] leading-relaxed text-txt-secondary">
-            <section>
-              <h3 className="text-sm font-semibold text-txt-primary mb-1.5">Pop-Out Session Persistence</h3>
-              <p>
-                Pop-out windows now survive when you navigate between the dashboard and session
-                views. Disconnecting one popped-out session no longer causes other pop-out
-                windows to go black or become unresponsive.
-              </p>
-            </section>
+          <div className="space-y-5 text-[0.875rem] leading-relaxed text-txt-secondary">
+            {isWelcome ? (
+              <>
+                <p>
+                  We're excited to have you here! Strata is your unified gateway for high-performance remote access.
+                </p>
+                <div className="grid gap-4 mt-2">
+                  <div className="flex gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
+                      <span className="text-sm">🖥️</span>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-txt-primary text-sm mb-0.5">Clientless Remotes</h4>
+                      <p className="text-xs">Connect to RDP, SSH, and VNC directly in your browser with no plugins required.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
+                      <span className="text-sm">🤝</span>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-txt-primary text-sm mb-0.5">Seamless Collaboration</h4>
+                      <p className="text-xs">Share your active sessions via Control or View-only links for instant support.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
+                      <span className="text-sm">📂</span>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-txt-primary text-sm mb-0.5">Integrated File Browser</h4>
+                      <p className="text-xs">Seamlessly transfer files between your local device and remote hosts.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
+                      <span className="text-sm">🎥</span>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-txt-primary text-sm mb-0.5">Admin Session Replay</h4>
+                      <p className="text-xs">Review connection history with DVR-style NVR playback for full administrative auditing.</p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <section>
+                  <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
+                    <span className="text-accent">•</span> Session Label Overlay
+                  </h3>
+                  <p>
+                    Active session thumbnails in the sidebar now display the connection name and protocol directly. 
+                    We've added a translucent gradient and backdrop blur to ensure text remains readable over any desktop background.
+                  </p>
+                </section>
+                <section>
+                  <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
+                    <span className="text-accent">•</span> Performance & Reliability
+                  </h3>
+                  <p>
+                    Included major stabilization fixes for the backend protocol parser and expanded unit test coverage 
+                    to ensure robust handling of Unicode characters and partial data streams.
+                  </p>
+                </section>
+              </>
+            )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 pb-5 flex justify-end">
-          <button className="btn-primary" onClick={dismiss}>
-            Got it
+        <div className="px-6 pb-6 pt-2 flex justify-end">
+          <button
+            className="btn-primary min-w-[100px] hover:scale-105 active:scale-95 transition-transform"
+            onClick={dismiss}
+          >
+            {isWelcome ? "Let's Go!" : 'Got it'}
           </button>
         </div>
       </div>

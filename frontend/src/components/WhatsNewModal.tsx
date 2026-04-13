@@ -140,20 +140,31 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
               <>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Smart Folder View
+                    <span className="text-accent">•</span> Windows Key Proxy (Right Ctrl)
                   </h3>
                   <p>
-                    The dashboard now automatically enables folder view when your connections are organized into folders.
-                    Folders start collapsed for a cleaner look, and your expand/collapse preferences are remembered across sessions.
+                    Browsers can't capture the Windows key — the OS intercepts it. Strata now remaps <strong>Right Ctrl</strong> as
+                    a Windows key proxy, following the VMware/VirtualBox convention. Hold Right Ctrl + a key to send Win+key combos
+                    (e.g., <kbd style={{ fontSize: '0.75rem', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-primary)' }}>RCtrl</kbd>+<kbd style={{ fontSize: '0.75rem', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-primary)' }}>E</kbd> → Win+E),
+                    or tap it alone to open the Start menu. Works across all session types.
                   </p>
                 </section>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Streamlined Recording Settings
+                    <span className="text-accent">•</span> Analytics Dashboard
                   </h3>
                   <p>
-                    Simplified the VNC and AD Sync recording configuration by removing system-managed fields.
-                    The recording path and filename are now handled automatically — you only see the options that matter.
+                    New analytics section for admins with daily usage trends, session duration stats, total bandwidth,
+                    protocol distribution, and peak hours — all in beautifully rendered charts.
+                  </p>
+                </section>
+                <section>
+                  <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
+                    <span className="text-accent">•</span> Dynamic Capacity Gauge
+                  </h3>
+                  <p>
+                    The guacd capacity gauge now calculates recommended sessions per instance dynamically based on
+                    your host's CPU and RAM, replacing the old hardcoded value.
                   </p>
                 </section>
               </>

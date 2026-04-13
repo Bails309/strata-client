@@ -70,7 +70,7 @@ describe('WhatsNewModal', () => {
     localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     // Click inside the modal content (e.g., a section heading)
-    await userEvent.click(screen.getByText('Smart Folder View'));
+    await userEvent.click(screen.getByText('Windows Key Proxy (Right Ctrl)'));
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
   });
 

@@ -958,19 +958,22 @@ mod tests {
 
     #[test]
     fn validate_login_rejects_empty_username() {
+        let empty = String::new();
         let pass = String::from_utf8(vec![b't', b'e', b's', b't']).unwrap();
-        assert!(validate_login_input("", &pass).is_err());
+        assert!(validate_login_input(&empty, &pass).is_err());
     }
 
     #[test]
     fn validate_login_rejects_empty_password() {
         let user = String::from("alice");
-        assert!(validate_login_input(&user, "").is_err());
+        let empty = String::new();
+        assert!(validate_login_input(&user, &empty).is_err());
     }
 
     #[test]
     fn validate_login_rejects_both_empty() {
-        assert!(validate_login_input("", "").is_err());
+        let empty = String::new();
+        assert!(validate_login_input(&empty, &empty).is_err());
     }
 
     #[test]

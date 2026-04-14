@@ -77,16 +77,22 @@ impl Database {
         let migrator = sqlx::migrate!("./migrations");
 
         // TODO(v1.0): Remove this fixup block — all environments will have
-        //             the correct checksum by then.
+        //             the correct migration 029 by then.
         // One-time fixup: migration 029 was revised after its initial deployment.
-        // Align the stored checksum so the migrator accepts the current file.
-        if let Some(m) = migrator.iter().find(|m| m.version == 29) {
-            let _ = sqlx::query(
-                "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = 29 AND checksum <> $1",
-            )
-            .bind(m.checksum.as_ref())
-            .execute(&self.pool)
-            .await;
+        // Delete the stored record so the migrator re-runs it.  The SQL is
+        // fully idempotent (IF NOT EXISTS) so re-application is safe.
+        match sqlx::query(
+            "DELETE FROM _sqlx_migrations WHERE version = 29",
+        )
+        .execute(&self.pool)
+        .await
+        {
+            Ok(r) => {
+                if r.rows_affected() > 0 {
+                    tracing::info!("Cleared stale migration 029 record – will re-apply");
+                }
+            }
+            Err(e) => tracing::warn!("Migration 029 fixup failed: {e}"),
         }
 
         // sqlx::migrate!().run() requires a Pool, but we hold the lock on

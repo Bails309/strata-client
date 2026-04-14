@@ -209,6 +209,28 @@ export interface MeResponse {
 
 export const getMe = () => request<MeResponse>('/user/me');
 
+/** Auth probe that always returns 200 (never 401) — used for initial page-load
+ *  auth checks so the browser console stays clean. Returns the full user
+ *  profile when authenticated. */
+export interface AuthCheckResponse {
+  authenticated: boolean;
+  user?: MeResponse;
+}
+export async function checkAuthStatus(): Promise<AuthCheckResponse> {
+  const token = localStorage.getItem('access_token');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  try {
+    const res = await fetch(`${API_BASE}/auth/check`, { headers, credentials: 'include' });
+    if (res.ok) return res.json();
+    return { authenticated: false };
+  } catch {
+    return { authenticated: false };
+  }
+}
+
 // ── Settings ────────────────────────────────────────────────────────
 
 export const getSettings = () => request<Record<string, string>>('/admin/settings');

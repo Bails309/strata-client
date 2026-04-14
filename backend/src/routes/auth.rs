@@ -632,6 +632,162 @@ fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         })
 }
 
+/// GET /api/auth/check – token validation that **always returns 200**.
+///
+/// Returns `{ "authenticated": true, "user": { ... } }` with the full user
+/// profile (permissions, watermark, vault) when the access token is valid, or
+/// `{ "authenticated": false }` otherwise.  Unlike `/api/user/me` (which
+/// returns 401 on failure), this endpoint never produces an error status, so
+/// the browser's console stays clean on the login page.
+pub async fn check_auth(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+    #[derive(serde::Deserialize)]
+    struct Claims {
+        sub: String,
+        #[serde(default = "default_access")]
+        token_type: String,
+    }
+    fn default_access() -> String {
+        "access".to_string()
+    }
+
+    let not_auth = || Json(json!({ "authenticated": false }));
+
+    // Extract Bearer token
+    let token = match headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        Some(t) => t,
+        None => return not_auth(),
+    };
+
+    // Check revocation
+    if crate::services::token_revocation::is_revoked(token) {
+        return not_auth();
+    }
+
+    // Validate JWT
+    let secret = match crate::config::JWT_SECRET.get() {
+        Some(s) => s.clone(),
+        None => return not_auth(),
+    };
+
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&["strata-local"]);
+    validation.set_required_spec_claims(&["sub", "exp", "iat", "iss"]);
+
+    let token_data = match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    ) {
+        Ok(d) => d,
+        Err(_) => return not_auth(),
+    };
+
+    if token_data.claims.token_type != "access" {
+        return not_auth();
+    }
+
+    let user_id: uuid::Uuid = match token_data.claims.sub.parse() {
+        Ok(id) => id,
+        Err(_) => return not_auth(),
+    };
+
+    // Look up user + permissions in DB
+    let db = match {
+        let s = state.read().await;
+        s.db.clone()
+    } {
+        Some(db) => db,
+        None => return not_auth(),
+    };
+
+    #[derive(sqlx::FromRow)]
+    struct UserRow {
+        id: uuid::Uuid,
+        username: String,
+        full_name: Option<String>,
+        #[sqlx(rename = "name")]
+        role: String,
+        can_manage_system: bool,
+        can_manage_users: bool,
+        can_manage_connections: bool,
+        can_view_audit_logs: bool,
+        can_create_users: bool,
+        can_create_user_groups: bool,
+        can_create_connections: bool,
+        can_create_connection_folders: bool,
+        can_create_sharing_profiles: bool,
+    }
+
+    let row: Option<UserRow> = sqlx::query_as(
+        "SELECT u.id, u.username, u.full_name, r.name,
+                r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
+                r.can_create_users, r.can_create_user_groups, r.can_create_connections,
+                r.can_create_connection_folders, r.can_create_sharing_profiles
+         FROM users u JOIN roles r ON u.role_id = r.id
+         WHERE u.id = $1 AND u.deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&db.pool)
+    .await
+    .unwrap_or(None);
+
+    let user = match row {
+        Some(u) => u,
+        None => return not_auth(),
+    };
+
+    // Derive client_ip from X-Forwarded-For (rightmost entry from trusted proxy)
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.rsplit(',').map(|s| s.trim()).find(|s| !s.is_empty()).map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    // Watermark setting
+    let watermark_enabled = settings::get(&db.pool, "watermark_enabled")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+
+    // Vault configured?
+    let vault_configured = {
+        let s = state.read().await;
+        s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some()
+    };
+
+    Json(json!({
+        "authenticated": true,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role,
+            "sub": user_id.to_string(),
+            "client_ip": client_ip,
+            "watermark_enabled": watermark_enabled == "true",
+            "vault_configured": vault_configured,
+            "can_manage_system": user.can_manage_system,
+            "can_manage_users": user.can_manage_users,
+            "can_manage_connections": user.can_manage_connections,
+            "can_view_audit_logs": user.can_view_audit_logs,
+            "can_create_users": user.can_create_users,
+            "can_create_user_groups": user.can_create_user_groups,
+            "can_create_connections": user.can_create_connections,
+            "can_create_connection_folders": user.can_create_connection_folders,
+            "can_create_sharing_profiles": user.can_create_sharing_profiles,
+        }
+    }))
+}
+
 /// POST /api/auth/refresh – exchange a valid refresh token for a new access token.
 pub async fn refresh(
     State(state): State<SharedState>,

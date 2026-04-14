@@ -84,6 +84,7 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
 
   // Fetch sharing permission from the user's own profile
   useEffect(() => {
+    if (!localStorage.getItem('access_token')) return;
     getMe().then((me: any) => {
       setCanShare(me.can_manage_system || me.can_create_sharing_profiles);
     }).catch(() => {});

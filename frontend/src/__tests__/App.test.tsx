@@ -45,6 +45,31 @@ function fakeJwt(expOffsetSec = 3600) {
   return `h.${payload}.s`;
 }
 
+/** Create a URL-aware fetch mock. For /auth/check returns `authResult`,
+ *  for everything else returns `otherResult`. */
+function mockFetch(
+  authResult: object | null,
+  otherResult: object | null = authResult,
+) {
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/auth/check')) {
+      if (authResult === null) throw new Error('network error');
+      return new Response(JSON.stringify(authResult), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (otherResult === null) throw new Error('network error');
+    return new Response(JSON.stringify(otherResult), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+}
+
+const authedUser = { authenticated: true, user: { id: '1', username: 'admin', role: 'admin' } };
+
 function renderApp(initialRoute = '/') {
   return render(
     <MemoryRouter initialEntries={[initialRoute]}>
@@ -63,26 +88,20 @@ describe('App routing', () => {
   });
 
   it('redirects to /login when not authenticated', async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response('', { status: 401 });
-    }) as unknown as typeof fetch;
-
+    // No token in localStorage → no fetch at all
     renderApp('/');
     expect(await screen.findByText('Login Page')).toBeInTheDocument();
   });
 
   it('renders shared viewer without auth', async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response('', { status: 401 });
-    }) as unknown as typeof fetch;
-
     renderApp('/shared/abc123');
     expect(await screen.findByText('Shared')).toBeInTheDocument();
   });
 
-  it('discards pre-0.12.0 token without token_expiry', async () => {
+  it('clears stale token when /auth/check says not authenticated', async () => {
     localStorage.setItem('access_token', fakeJwt());
-    // Do NOT set token_expiry — simulates a stale pre-0.12.0 token
+    mockFetch({ authenticated: false });
+
     renderApp('/');
     expect(await screen.findByText('Login Page')).toBeInTheDocument();
     expect(localStorage.getItem('access_token')).toBeNull();
@@ -90,36 +109,15 @@ describe('App routing', () => {
 
   it('renders dashboard when authenticated', async () => {
     localStorage.setItem('access_token', fakeJwt());
-    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }) as unknown as typeof fetch;
+    mockFetch(authedUser);
 
     renderApp('/');
     expect(await screen.findByText('Dashboard')).toBeInTheDocument();
   });
 
-  it('clears token and redirects on invalid token', async () => {
-    localStorage.setItem('access_token', fakeJwt(-3600));
-    localStorage.setItem('token_expiry', String(Date.now() - 3600000));
-    globalThis.fetch = vi.fn(async () => {
-      return new Response('', { status: 401 });
-    }) as unknown as typeof fetch;
-
-    renderApp('/');
-    expect(await screen.findByText('Login Page')).toBeInTheDocument();
-    expect(localStorage.getItem('access_token')).toBeNull();
-  });
-
   it('handles fetch error gracefully', async () => {
     localStorage.setItem('access_token', fakeJwt());
-    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
-    globalThis.fetch = vi.fn(async () => {
-      throw new Error('network error');
-    }) as unknown as typeof fetch;
+    mockFetch(null); // both calls throw
 
     renderApp('/');
     expect(await screen.findByText('Login Page')).toBeInTheDocument();
@@ -127,7 +125,6 @@ describe('App routing', () => {
 
   it('shows loading spinner while auth state is pending', () => {
     localStorage.setItem('access_token', fakeJwt());
-    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
     globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
 
     renderApp('/');
@@ -136,13 +133,7 @@ describe('App routing', () => {
 
   it('logs out and redirects to login', async () => {
     localStorage.setItem('access_token', fakeJwt());
-    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }) as unknown as typeof fetch;
+    mockFetch(authedUser);
 
     renderApp('/');
     expect(await screen.findByText('Dashboard')).toBeInTheDocument();
@@ -152,24 +143,15 @@ describe('App routing', () => {
   });
 
   it('calls handleLogin and navigates to dashboard', async () => {
-    // Start at login
-    globalThis.fetch = vi.fn(async () => {
-      return new Response('', { status: 401 });
-    }) as unknown as typeof fetch;
-
+    // Start at login — no token
     renderApp('/login');
     await screen.findByText('Login Page');
 
-    // Simulate login
+    // Simulate login: set token and wire up success responses
     localStorage.setItem('access_token', fakeJwt());
     localStorage.setItem('token_expiry', String(Date.now() + 3600000));
-    // Success response for getMe and getSettings
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ id: 1, username: 'admin', branding: { name: 'Strata' } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }) as unknown as typeof fetch;
+    // handleLogin calls checkAuthStatus → /auth/check, and SettingsProvider calls /admin/settings
+    mockFetch(authedUser);
 
     await act(async () => {
       await userEvent.click(screen.getByText('mock-login'));

@@ -401,6 +401,7 @@ describe('SessionManager', () => {
   });
 
   it('fetches sharing permissions on mount', async () => {
+    localStorage.setItem('access_token', 'test-token');
     const { getMe } = await import('../api');
     vi.mocked(getMe).mockResolvedValue({ id: '1', username: 'admin', role: 'admin', client_ip: '127.0.0.1', watermark_enabled: false, vault_configured: false, can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true });
 

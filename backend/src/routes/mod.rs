@@ -27,6 +27,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/refresh", post(auth::refresh))
+        .route("/api/auth/check", get(auth::check_auth))
         .route("/api/auth/sso/login", get(auth::sso_login))
         .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))

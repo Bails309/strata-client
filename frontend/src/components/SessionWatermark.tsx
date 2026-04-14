@@ -46,7 +46,6 @@ export default function SessionWatermark() {
     const text = `${user.username}  •  ${user.client_ip || 'N/A'}  •  ${timestamp}`;
     const fontSize = 14;
     ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
     ctx.textBaseline = 'middle';
 
     const metrics = ctx.measureText(text);
@@ -62,9 +61,19 @@ export default function SessionWatermark() {
     const startX = -diag;
     const startY = -diag;
 
+    // Dark pass (visible on light backgrounds)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
     for (let y = startY; y < diag; y += rowHeight) {
       for (let x = startX; x < diag; x += textWidth) {
         ctx.fillText(text, x, y);
+      }
+    }
+
+    // Light pass offset by 1px (visible on dark backgrounds)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    for (let y = startY; y < diag; y += rowHeight) {
+      for (let x = startX; x < diag; x += textWidth) {
+        ctx.fillText(text, x + 1, y + 1);
       }
     }
 
@@ -89,12 +98,12 @@ export default function SessionWatermark() {
     <canvas
       ref={canvasRef}
       style={{
-        position: 'absolute',
+        position: 'fixed',
         inset: 0,
-        width: '100%',
-        height: '100%',
+        width: '100vw',
+        height: '100vh',
         pointerEvents: 'none',
-        zIndex: 12,
+        zIndex: 9999,
       }}
     />
   );

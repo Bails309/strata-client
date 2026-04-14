@@ -272,6 +272,7 @@ mod tests {
     #[test]
     fn service_health_serializes() {
         let health = ServiceHealth {
+            version: "0.11.2",
             database: DatabaseHealth {
                 connected: true,
                 mode: "local".into(),

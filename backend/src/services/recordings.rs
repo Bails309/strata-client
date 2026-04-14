@@ -458,7 +458,7 @@ mod tests {
             access_key: String::new(),
         };
         assert_eq!(
-            cfg.blob_url("session-123.guac"),
+            cfg.blob_url("session-123.guac").unwrap().as_str(),
             "https://mystorageaccount.blob.core.windows.net/recordings/session-123.guac"
         );
     }
@@ -471,7 +471,7 @@ mod tests {
             access_key: String::new(),
         };
         assert_eq!(
-            cfg.blob_url("file.bin"),
+            cfg.blob_url("file.bin").unwrap().as_str(),
             "https://acct.blob.core.windows.net/custom-container/file.bin"
         );
     }
@@ -516,8 +516,8 @@ mod tests {
             container_name: "rec".into(),
             access_key: String::new(),
         };
-        let url = cfg.blob_url("file with spaces.guac");
-        assert!(url.contains("file%20with%20spaces.guac"));
+        let url = cfg.blob_url("file with spaces.guac").unwrap();
+        assert!(url.as_str().contains("file%20with%20spaces.guac"));
     }
 
     #[test]

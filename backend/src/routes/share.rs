@@ -274,11 +274,10 @@ pub async fn ws_shared_tunnel(
 
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
 
-    // ── Auto-inject Kerberos realm KDC configuration (same as tunnel.rs) ──
+    // ── Auto-inject KDC URL from Kerberos realm config (same as tunnel.rs) ──
     if protocol == "rdp" {
-        let explicit_auth_pkg = extra.get("auth-pkg").cloned().unwrap_or_default();
-        if explicit_auth_pkg == "kerberos" {
-            if let Some(ref dom) = domain {
+        if let Some(ref dom) = domain {
+            if extra.get("kdc-url").map_or(true, |v| v.is_empty()) {
                 let realm_upper = dom.to_uppercase();
                 let realm_row: Option<(String,)> = sqlx::query_as(
                     "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
@@ -295,13 +294,10 @@ pub async fn ws_shared_tunnel(
                         .trim()
                         .to_string();
 
-                    if !first_kdc.is_empty()
-                        && extra.get("kdc-url").map_or(true, |v| v.is_empty())
-                    {
+                    if !first_kdc.is_empty() {
+                        tracing::info!(kdc = %first_kdc, realm = %realm_upper,
+                            "Auto-injecting kdc-url from Kerberos realm config");
                         extra.insert("kdc-url".into(), first_kdc);
-                    }
-                    if extra.get("security").map_or(true, |v| v.is_empty() || v == "any") {
-                        extra.insert("security".into(), "nla".into());
                     }
                 }
             }

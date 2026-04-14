@@ -264,15 +264,17 @@ pub async fn ws_tunnel(
     // Parse extra JSONB into a HashMap for guacd params
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
 
-    // ── Auto-inject Kerberos realm KDC configuration ─────────────
-    // When the connection has auth-pkg explicitly set to "kerberos" and
-    // a domain that matches a configured Kerberos realm, auto-populate
-    // the kdc-url and security=nla from the realm config.  We do NOT
-    // force auth-pkg=kerberos on connections that haven't opted in.
+    // ── Auto-inject KDC URL from Kerberos realm configuration ─────
+    // When the connection's domain matches a configured Kerberos realm,
+    // provide the KDC URL so FreeRDP can obtain a Kerberos ticket during
+    // SPNEGO negotiation.  We do NOT force auth-pkg or security mode –
+    // the server and client negotiate the best available method.  If the
+    // server is Kerberos-only, SPNEGO will select Kerberos (it now has
+    // the KDC URL to obtain a ticket).  If the server supports NTLM,
+    // that will also work since we haven't disabled it.
     if protocol == "rdp" {
-        let explicit_auth_pkg = extra.get("auth-pkg").cloned().unwrap_or_default();
-        if explicit_auth_pkg == "kerberos" {
-            if let Some(ref dom) = domain {
+        if let Some(ref dom) = domain {
+            if extra.get("kdc-url").map_or(true, |v| v.is_empty()) {
                 let realm_upper = dom.to_uppercase();
                 let realm_row: Option<(String,)> = sqlx::query_as(
                     "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
@@ -289,15 +291,10 @@ pub async fn ws_tunnel(
                         .trim()
                         .to_string();
 
-                    // Set kdc-url from realm config if not explicitly configured
-                    if !first_kdc.is_empty()
-                        && extra.get("kdc-url").map_or(true, |v| v.is_empty())
-                    {
+                    if !first_kdc.is_empty() {
+                        tracing::info!(kdc = %first_kdc, realm = %realm_upper,
+                            "Auto-injecting kdc-url from Kerberos realm config");
                         extra.insert("kdc-url".into(), first_kdc);
-                    }
-                    // Ensure security is NLA for Kerberos
-                    if extra.get("security").map_or(true, |v| v.is_empty() || v == "any") {
-                        extra.insert("security".into(), "nla".into());
                     }
                 }
             }

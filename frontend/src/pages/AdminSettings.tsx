@@ -2564,7 +2564,7 @@ function RdpSections({
         </FieldGrid>
         {(!ex('auth-pkg') || ex('auth-pkg') === '') && (
           <p className="text-xs text-zinc-400 mt-2">
-            When set to <strong>Default (auto-detect)</strong>, the RDP client will negotiate the authentication method with the server automatically. To use Kerberos, select <strong>Kerberos only</strong> above — the KDC will be pulled from the matching realm in the <strong>Kerberos</strong> tab if the connection&apos;s domain matches.
+            When set to <strong>Default (auto-detect)</strong>, the client and server negotiate the best authentication method via SPNEGO. If the connection&apos;s domain matches a realm in the <strong>Kerberos</strong> tab, the KDC URL is automatically provided so Kerberos tickets can be obtained. Kerberos-only servers will use Kerberos; servers that support NTLM will negotiate normally.
           </p>
         )}
       </Section>

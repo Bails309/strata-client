@@ -711,10 +711,11 @@ pub async fn check_auth(
     };
 
     // Look up user + permissions in DB
-    let db = match {
+    let db_opt = {
         let s = state.read().await;
         s.db.clone()
-    } {
+    };
+    let db = match db_opt {
         Some(db) => db,
         None => return not_auth(),
     };

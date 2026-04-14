@@ -76,6 +76,40 @@ impl Database {
 
         let migrator = sqlx::migrate!("./migrations");
 
+        // ── Checksum repair ────────────────────────────────────────────
+        // Adding .gitattributes (*.sql text eol=lf) normalized line endings
+        // from CRLF → LF, which changes SHA-384 checksums for every file.
+        // This one-time fixup updates stored checksums to match the current
+        // (LF-normalized) content without re-running any migration SQL.
+        // TODO(v1.0): remove once all environments have been upgraded past 0.11.1
+        {
+            let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+                "SELECT version, checksum FROM _sqlx_migrations ORDER BY version"
+            )
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap_or_default();
+
+            for migration in migrator.iter() {
+                if let Some((_, stored_cksum)) = rows.iter().find(|(v, _)| *v == migration.version) {
+                    let expected: &[u8] = &migration.checksum;
+                    if stored_cksum != expected {
+                        tracing::warn!(
+                            version = migration.version,
+                            "Checksum mismatch for applied migration – repairing (line-ending normalisation)"
+                        );
+                        let _ = sqlx::query(
+                            "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2"
+                        )
+                        .bind(expected)
+                        .bind(migration.version)
+                        .execute(&mut *conn)
+                        .await;
+                    }
+                }
+            }
+        }
+
         // sqlx::migrate!().run() requires a Pool, but we hold the lock on
         // `conn`.  The lock prevents other instances from running migrations
         // concurrently.  The migrator may use any pool connection for DDL,

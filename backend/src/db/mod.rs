@@ -76,9 +76,10 @@ impl Database {
 
         let migrator = sqlx::migrate!("./migrations");
 
+        // TODO(v1.0): Remove this fixup block — all environments will have
+        //             the correct checksum by then.
         // One-time fixup: migration 029 was revised after its initial deployment.
         // Align the stored checksum so the migrator accepts the current file.
-        // Safe to remove once all environments have been updated past 0.11.1.
         if let Some(m) = migrator.iter().find(|m| m.version == 29) {
             let _ = sqlx::query(
                 "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = 29 AND checksum <> $1",

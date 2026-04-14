@@ -272,7 +272,41 @@ pub async fn ws_shared_tunnel(
 
     let (protocol, hostname, port, domain, _name, extra_json) = conn;
 
-    let extra = crate::tunnel::json_to_string_map(&extra_json);
+    let mut extra = crate::tunnel::json_to_string_map(&extra_json);
+
+    // ── Auto-inject Kerberos realm configuration (same as tunnel.rs) ──
+    if protocol == "rdp" {
+        if let Some(ref dom) = domain {
+            let realm_upper = dom.to_uppercase();
+            let realm_row: Option<(String,)> = sqlx::query_as(
+                "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
+            )
+            .bind(&realm_upper)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            if let Some((kdc_csv,)) = realm_row {
+                let first_kdc = kdc_csv
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+
+                if extra.get("auth-pkg").map_or(true, |v| v.is_empty()) {
+                    extra.insert("auth-pkg".into(), "kerberos".into());
+                }
+                if !first_kdc.is_empty()
+                    && extra.get("kdc-url").map_or(true, |v| v.is_empty())
+                {
+                    extra.insert("kdc-url".into(), first_kdc);
+                }
+                if extra.get("security").map_or(true, |v| v.is_empty() || v == "any") {
+                    extra.insert("security".into(), "nla".into());
+                }
+            }
+        }
+    }
 
     // Load the OWNER's credentials (the person who shared).
     // First try the newer credential_profiles system, then fall back to

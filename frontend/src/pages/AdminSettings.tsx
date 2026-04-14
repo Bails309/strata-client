@@ -2541,11 +2541,11 @@ function RdpSections({
             <Select
               value={ex('auth-pkg')}
               onChange={(v) => setEx('auth-pkg', v)}
-              placeholder="Default"
+              placeholder="Default (auto-detect)"
               options={[
-                { value: '', label: 'Default' },
-                { value: 'Negotiate', label: 'Negotiate (Kerberos/NTLM)' },
-                { value: 'NTLM', label: 'NTLM only' },
+                { value: '', label: 'Default (auto-detect)' },
+                { value: 'kerberos', label: 'Kerberos only' },
+                { value: 'ntlm', label: 'NTLM only' },
               ]}
             />
           </div>

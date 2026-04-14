@@ -262,7 +262,48 @@ pub async fn ws_tunnel(
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Parse extra JSONB into a HashMap for guacd params
-    let extra = crate::tunnel::json_to_string_map(&extra_json);
+    let mut extra = crate::tunnel::json_to_string_map(&extra_json);
+
+    // ── Auto-inject Kerberos realm configuration ──────────────────
+    // When the connection has a domain that matches a configured Kerberos
+    // realm, automatically apply auth-pkg and kdc-url unless the connection
+    // has explicitly overridden them.
+    if protocol == "rdp" {
+        if let Some(ref dom) = domain {
+            let realm_upper = dom.to_uppercase();
+            let realm_row: Option<(String,)> = sqlx::query_as(
+                "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
+            )
+            .bind(&realm_upper)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            if let Some((kdc_csv,)) = realm_row {
+                // Use the first KDC server from the comma-separated list
+                let first_kdc = kdc_csv
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+
+                // Set auth-pkg to kerberos if not explicitly configured
+                if extra.get("auth-pkg").map_or(true, |v| v.is_empty()) {
+                    extra.insert("auth-pkg".into(), "kerberos".into());
+                }
+                // Set kdc-url from realm config if not explicitly configured
+                if !first_kdc.is_empty()
+                    && extra.get("kdc-url").map_or(true, |v| v.is_empty())
+                {
+                    extra.insert("kdc-url".into(), first_kdc);
+                }
+                // Ensure security is NLA for Kerberos
+                if extra.get("security").map_or(true, |v| v.is_empty() || v == "any") {
+                    extra.insert("security".into(), "nla".into());
+                }
+            }
+        }
+    }
 
     // Attempt to load and decrypt user credentials from credential profiles
     let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {

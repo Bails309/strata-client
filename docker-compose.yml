@@ -15,6 +15,7 @@ services:
       - krb5-config:/etc/krb5
     environment:
       - KRB5_CONFIG=/etc/krb5/krb5.conf
+      - KRB5_TRACE=/dev/stderr
     security_opt:
       - no-new-privileges:true
     cap_drop:

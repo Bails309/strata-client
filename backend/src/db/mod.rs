@@ -74,11 +74,25 @@ impl Database {
 
         tracing::info!("Advisory lock acquired – running migrations");
 
+        let migrator = sqlx::migrate!("./migrations");
+
+        // One-time fixup: migration 029 was revised after its initial deployment.
+        // Align the stored checksum so the migrator accepts the current file.
+        // Safe to remove once all environments have been updated past 0.11.1.
+        if let Some(m) = migrator.iter().find(|m| m.version == 29) {
+            let _ = sqlx::query(
+                "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = 29 AND checksum <> $1",
+            )
+            .bind(m.checksum.as_ref())
+            .execute(&self.pool)
+            .await;
+        }
+
         // sqlx::migrate!().run() requires a Pool, but we hold the lock on
         // `conn`.  The lock prevents other instances from running migrations
         // concurrently.  The migrator may use any pool connection for DDL,
         // which is safe because only one process reaches this point.
-        let result = sqlx::migrate!("./migrations").run(&self.pool).await;
+        let result = migrator.run(&self.pool).await;
 
         // Always release the lock, even if migrations failed
         let unlock_result = sqlx::query("SELECT pg_advisory_unlock($1)")

@@ -2564,7 +2564,7 @@ function RdpSections({
         </FieldGrid>
         {(!ex('auth-pkg') || ex('auth-pkg') === '') && (
           <p className="text-xs text-zinc-400 mt-2">
-            When set to <strong>Default (auto-detect)</strong>, the client and server negotiate the best authentication method via SPNEGO. If the connection&apos;s domain matches a realm in the <strong>Kerberos</strong> tab, the KDC URL is automatically provided so Kerberos tickets can be obtained. Kerberos-only servers will use Kerberos; servers that support NTLM will negotiate normally.
+            When set to <strong>Default (auto-detect)</strong>, the client and server negotiate the best authentication method via SPNEGO. Realms configured in the <strong>Kerberos</strong> tab are written to the shared <code className="text-zinc-300">krb5.conf</code> which guacd uses automatically — Kerberos-only servers will use Kerberos; servers that support NTLM will negotiate normally.
           </p>
         )}
       </Section>

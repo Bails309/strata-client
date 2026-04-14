@@ -262,44 +262,7 @@ pub async fn ws_tunnel(
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Parse extra JSONB into a HashMap for guacd params
-    let mut extra = crate::tunnel::json_to_string_map(&extra_json);
-
-    // ── Auto-inject KDC URL from Kerberos realm configuration ─────
-    // When the connection's domain matches a configured Kerberos realm,
-    // provide the KDC URL so FreeRDP can obtain a Kerberos ticket during
-    // SPNEGO negotiation.  We do NOT force auth-pkg or security mode –
-    // the server and client negotiate the best available method.  If the
-    // server is Kerberos-only, SPNEGO will select Kerberos (it now has
-    // the KDC URL to obtain a ticket).  If the server supports NTLM,
-    // that will also work since we haven't disabled it.
-    if protocol == "rdp" {
-        if let Some(ref dom) = domain {
-            if extra.get("kdc-url").map_or(true, |v| v.is_empty()) {
-                let realm_upper = dom.to_uppercase();
-                let realm_row: Option<(String,)> = sqlx::query_as(
-                    "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
-                )
-                .bind(&realm_upper)
-                .fetch_optional(&db.pool)
-                .await?;
-
-                if let Some((kdc_csv,)) = realm_row {
-                    let first_kdc = kdc_csv
-                        .split(',')
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-
-                    if !first_kdc.is_empty() {
-                        tracing::info!(kdc = %first_kdc, realm = %realm_upper,
-                            "Auto-injecting kdc-url from Kerberos realm config");
-                        extra.insert("kdc-url".into(), first_kdc);
-                    }
-                }
-            }
-        }
-    }
+    let extra = crate::tunnel::json_to_string_map(&extra_json);
 
     // Attempt to load and decrypt user credentials from credential profiles
     let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {

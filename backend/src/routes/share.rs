@@ -272,37 +272,7 @@ pub async fn ws_shared_tunnel(
 
     let (protocol, hostname, port, domain, _name, extra_json) = conn;
 
-    let mut extra = crate::tunnel::json_to_string_map(&extra_json);
-
-    // ── Auto-inject KDC URL from Kerberos realm config (same as tunnel.rs) ──
-    if protocol == "rdp" {
-        if let Some(ref dom) = domain {
-            if extra.get("kdc-url").map_or(true, |v| v.is_empty()) {
-                let realm_upper = dom.to_uppercase();
-                let realm_row: Option<(String,)> = sqlx::query_as(
-                    "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
-                )
-                .bind(&realm_upper)
-                .fetch_optional(&db.pool)
-                .await?;
-
-                if let Some((kdc_csv,)) = realm_row {
-                    let first_kdc = kdc_csv
-                        .split(',')
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-
-                    if !first_kdc.is_empty() {
-                        tracing::info!(kdc = %first_kdc, realm = %realm_upper,
-                            "Auto-injecting kdc-url from Kerberos realm config");
-                        extra.insert("kdc-url".into(), first_kdc);
-                    }
-                }
-            }
-        }
-    }
+    let extra = crate::tunnel::json_to_string_map(&extra_json);
 
     // Load the OWNER's credentials (the person who shared).
     // First try the newer credential_profiles system, then fall back to

@@ -5,7 +5,6 @@ services:
       context: ./guacd
       dockerfile: Dockerfile
     image: strata/custom-guacd:latest
-    command: ["-b", "0.0.0.0", "-L", "debug", "-f"]
     restart: unless-stopped
     networks:
       - guac-internal
@@ -15,7 +14,6 @@ services:
       - krb5-config:/etc/krb5
     environment:
       - KRB5_CONFIG=/etc/krb5/krb5.conf
-      - KRB5_TRACE=/dev/stderr
     security_opt:
       - no-new-privileges:true
     cap_drop:

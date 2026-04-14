@@ -1633,23 +1633,20 @@ pub async fn update_user(
     let db = require_running(&state).await?;
 
     // Verify the target role exists
-    let role_exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM roles WHERE id = $1")
-            .bind(body.role_id)
-            .fetch_optional(&db.pool)
-            .await?;
+    let role_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM roles WHERE id = $1")
+        .bind(body.role_id)
+        .fetch_optional(&db.pool)
+        .await?;
 
     if role_exists.is_none() {
         return Err(AppError::NotFound("Role not found".into()));
     }
 
-    let result = sqlx::query(
-        "UPDATE users SET role_id = $1 WHERE id = $2 AND deleted_at IS NULL",
-    )
-    .bind(body.role_id)
-    .bind(id)
-    .execute(&db.pool)
-    .await?;
+    let result = sqlx::query("UPDATE users SET role_id = $1 WHERE id = $2 AND deleted_at IS NULL")
+        .bind(body.role_id)
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("User not found".into()));
@@ -1678,13 +1675,12 @@ pub async fn create_user(
     let username = body.username.to_lowercase();
 
     // Check if user already exists
-    let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $2",
-    )
-    .bind(&email)
-    .bind(&username)
-    .fetch_optional(&db.pool)
-    .await?;
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $2")
+            .bind(&email)
+            .bind(&username)
+            .fetch_optional(&db.pool)
+            .await?;
 
     if existing.is_some() {
         return Err(AppError::Validation(format!(

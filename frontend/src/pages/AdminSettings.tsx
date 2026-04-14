@@ -1832,12 +1832,12 @@ function AccessTab({
                       </span>
                     </td>
                     <td>
-                      <select
-                        className="bg-surface-secondary border border-border rounded px-2 py-1 text-sm font-medium opacity-80 cursor-pointer hover:border-accent transition-colors"
+                      <Select
+                        className="w-32"
                         value={roles.find(r => r.name === u.role_name)?.id || ''}
                         disabled={!!u.deleted_at}
-                        onChange={async (e) => {
-                          const newRoleId = e.target.value;
+                        options={roles.map(r => ({ value: r.id, label: r.name }))}
+                        onChange={async (newRoleId) => {
                           try {
                             await updateUser(u.id, { role_id: newRoleId });
                             const refreshed = await getUsers();
@@ -1846,11 +1846,7 @@ function AccessTab({
                             alert(err.message || 'Failed to update role');
                           }
                         }}
-                      >
-                        {roles.map(r => (
-                          <option key={r.id} value={r.id}>{r.name}</option>
-                        ))}
-                      </select>
+                      />
                     </td>
                     <td className="font-mono text-[0.7rem] text-txt-tertiary">
                       {u.sub || <span className="opacity-30">—</span>}

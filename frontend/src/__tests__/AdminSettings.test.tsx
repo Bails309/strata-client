@@ -1097,10 +1097,11 @@ describe('AccessTab', () => {
     renderAdmin();
     await user.click(screen.getByText('Access'));
     await screen.findByText('alice');
-    // The role column should be a dropdown select
-    const roleSelect = screen.getByDisplayValue('admin');
-    expect(roleSelect.tagName).toBe('SELECT');
-    await user.selectOptions(roleSelect, 'r2');
+    // The role column uses the custom Select component
+    const roleTrigger = screen.getByRole('button', { name: 'admin' });
+    await user.click(roleTrigger);
+    const option = await screen.findByRole('option', { name: 'user' });
+    await user.click(option);
     expect(updateUser).toHaveBeenCalledWith('u1', { role_id: 'r2' });
   });
 

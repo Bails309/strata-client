@@ -11,9 +11,11 @@ interface SelectProps {
   onChange: (value: string) => void;
   options: Option[];
   placeholder?: string;
+  disabled?: boolean;
+  className?: string;
 }
 
-export default function Select({ value, onChange, options, placeholder }: SelectProps) {
+export default function Select({ value, onChange, options, placeholder, disabled, className }: SelectProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
@@ -61,11 +63,12 @@ export default function Select({ value, onChange, options, placeholder }: Select
   }, [open, positionMenu]);
 
   return (
-    <div className="relative w-full" ref={ref}>
+    <div className={`relative ${className || 'w-full'}`} ref={ref}>
       <button
         type="button"
-        className={`cs-trigger ${open ? 'cs-trigger-open' : ''}`}
-        onClick={() => setOpen(!open)}
+        className={`cs-trigger ${open ? 'cs-trigger-open' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        onClick={() => !disabled && setOpen(!open)}
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
       >

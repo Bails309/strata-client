@@ -76,25 +76,6 @@ impl Database {
 
         let migrator = sqlx::migrate!("./migrations");
 
-        // TODO(v1.0): Remove this fixup block — all environments will have
-        //             the correct migration 029 by then.
-        // One-time fixup: migration 029 was revised after its initial deployment.
-        // Delete the stored record so the migrator re-runs it.  The SQL is
-        // fully idempotent (IF NOT EXISTS) so re-application is safe.
-        match sqlx::query(
-            "DELETE FROM _sqlx_migrations WHERE version = 29",
-        )
-        .execute(&self.pool)
-        .await
-        {
-            Ok(r) => {
-                if r.rows_affected() > 0 {
-                    tracing::info!("Cleared stale migration 029 record – will re-apply");
-                }
-            }
-            Err(e) => tracing::warn!("Migration 029 fixup failed: {e}"),
-        }
-
         // sqlx::migrate!().run() requires a Pool, but we hold the lock on
         // `conn`.  The lock prevents other instances from running migrations
         // concurrently.  The migrator may use any pool connection for DDL,

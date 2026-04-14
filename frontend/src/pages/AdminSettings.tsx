@@ -2537,7 +2537,7 @@ function RdpSections({
       <Section title="Kerberos / NLA">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <label title="The authentication package to use for Network Level Authentication (NLA). 'Negotiate' tries Kerberos first, then falls back to NTLM. 'NTLM' forces NTLM only.">Auth Package</label>
+            <label title="The authentication package to use for Network Level Authentication (NLA).">Auth Package</label>
             <Select
               value={ex('auth-pkg')}
               onChange={(v) => setEx('auth-pkg', v)}
@@ -2549,15 +2549,24 @@ function RdpSections({
               ]}
             />
           </div>
-          <div className="form-group !mb-0">
-            <label title="The URL of the Kerberos Key Distribution Center (KDC) to use for obtaining Kerberos tickets.">KDC URL</label>
-            <input value={ex('kdc-url')} onChange={(e) => setEx('kdc-url', e.target.value)} placeholder="kdc.example.com" title="The URL of the Kerberos Key Distribution Center (KDC) to use for obtaining Kerberos tickets." />
-          </div>
-          <div className="form-group !mb-0">
-            <label title="The file path for the Kerberos credential cache. The cache stores obtained tickets for reuse.">Kerberos Cache Path</label>
-            <input value={ex('kerberos-cache')} onChange={(e) => setEx('kerberos-cache', e.target.value)} placeholder="/tmp/krb5cc_guacd" title="The file path for the Kerberos credential cache. The cache stores obtained tickets for reuse." />
-          </div>
+          {ex('auth-pkg') === 'kerberos' && (
+            <>
+              <div className="form-group !mb-0">
+                <label title="The URL of the Kerberos Key Distribution Center (KDC) to use for obtaining Kerberos tickets. Only needed if not using the global Kerberos realm configuration.">KDC URL</label>
+                <input value={ex('kdc-url')} onChange={(e) => setEx('kdc-url', e.target.value)} placeholder="kdc.example.com" title="The URL of the Kerberos Key Distribution Center (KDC). Leave blank to use the KDC from the matching Kerberos realm." />
+              </div>
+              <div className="form-group !mb-0">
+                <label title="The file path for the Kerberos credential cache. The cache stores obtained tickets for reuse.">Kerberos Cache Path</label>
+                <input value={ex('kerberos-cache')} onChange={(e) => setEx('kerberos-cache', e.target.value)} placeholder="/tmp/krb5cc_guacd" title="The file path for the Kerberos credential cache. Leave blank for default." />
+              </div>
+            </>
+          )}
         </FieldGrid>
+        {(!ex('auth-pkg') || ex('auth-pkg') === '') && (
+          <p className="text-xs text-zinc-400 mt-2">
+            When set to <strong>Default (auto-detect)</strong>, the RDP client will negotiate the authentication method with the server automatically. To use Kerberos, select <strong>Kerberos only</strong> above — the KDC will be pulled from the matching realm in the <strong>Kerberos</strong> tab if the connection&apos;s domain matches.
+          </p>
+        )}
       </Section>
     </>
   );

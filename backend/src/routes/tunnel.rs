@@ -264,42 +264,41 @@ pub async fn ws_tunnel(
     // Parse extra JSONB into a HashMap for guacd params
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
 
-    // ── Auto-inject Kerberos realm configuration ──────────────────
-    // When the connection has a domain that matches a configured Kerberos
-    // realm, automatically apply auth-pkg and kdc-url unless the connection
-    // has explicitly overridden them.
+    // ── Auto-inject Kerberos realm KDC configuration ─────────────
+    // When the connection has auth-pkg explicitly set to "kerberos" and
+    // a domain that matches a configured Kerberos realm, auto-populate
+    // the kdc-url and security=nla from the realm config.  We do NOT
+    // force auth-pkg=kerberos on connections that haven't opted in.
     if protocol == "rdp" {
-        if let Some(ref dom) = domain {
-            let realm_upper = dom.to_uppercase();
-            let realm_row: Option<(String,)> = sqlx::query_as(
-                "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
-            )
-            .bind(&realm_upper)
-            .fetch_optional(&db.pool)
-            .await?;
+        let explicit_auth_pkg = extra.get("auth-pkg").cloned().unwrap_or_default();
+        if explicit_auth_pkg == "kerberos" {
+            if let Some(ref dom) = domain {
+                let realm_upper = dom.to_uppercase();
+                let realm_row: Option<(String,)> = sqlx::query_as(
+                    "SELECT kdc_servers FROM kerberos_realms WHERE UPPER(realm) = $1 LIMIT 1",
+                )
+                .bind(&realm_upper)
+                .fetch_optional(&db.pool)
+                .await?;
 
-            if let Some((kdc_csv,)) = realm_row {
-                // Use the first KDC server from the comma-separated list
-                let first_kdc = kdc_csv
-                    .split(',')
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
+                if let Some((kdc_csv,)) = realm_row {
+                    let first_kdc = kdc_csv
+                        .split(',')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
 
-                // Set auth-pkg to kerberos if not explicitly configured
-                if extra.get("auth-pkg").map_or(true, |v| v.is_empty()) {
-                    extra.insert("auth-pkg".into(), "kerberos".into());
-                }
-                // Set kdc-url from realm config if not explicitly configured
-                if !first_kdc.is_empty()
-                    && extra.get("kdc-url").map_or(true, |v| v.is_empty())
-                {
-                    extra.insert("kdc-url".into(), first_kdc);
-                }
-                // Ensure security is NLA for Kerberos
-                if extra.get("security").map_or(true, |v| v.is_empty() || v == "any") {
-                    extra.insert("security".into(), "nla".into());
+                    // Set kdc-url from realm config if not explicitly configured
+                    if !first_kdc.is_empty()
+                        && extra.get("kdc-url").map_or(true, |v| v.is_empty())
+                    {
+                        extra.insert("kdc-url".into(), first_kdc);
+                    }
+                    // Ensure security is NLA for Kerberos
+                    if extra.get("security").map_or(true, |v| v.is_empty() || v == "any") {
+                        extra.insert("security".into(), "nla".into());
+                    }
                 }
             }
         }

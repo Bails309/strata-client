@@ -5,6 +5,7 @@ services:
       context: ./guacd
       dockerfile: Dockerfile
     image: strata/custom-guacd:latest
+    command: ["-b", "0.0.0.0", "-L", "debug", "-f"]
     restart: unless-stopped
     networks:
       - guac-internal

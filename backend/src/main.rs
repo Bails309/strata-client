@@ -285,7 +285,7 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO users (username, email, password_hash, auth_type, role_id)
          VALUES ($1, $2, $3, 'local', $4)
-         ON CONFLICT (username) DO NOTHING",
+         ON CONFLICT (LOWER(username)) WHERE deleted_at IS NULL DO NOTHING",
     )
     .bind(&username)
     .bind(&username)

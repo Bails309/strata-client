@@ -332,10 +332,20 @@ pub async fn login(
     }
 
     // Generate access token (short-lived) and refresh token (longer-lived)
-    let (access_token, access_jti) =
-        create_local_jwt(user.id, &user.username, &user.role, "access", ACCESS_TOKEN_TTL)?;
-    let (refresh_token, _refresh_jti) =
-        create_local_jwt(user.id, &user.username, &user.role, "refresh", REFRESH_TOKEN_TTL)?;
+    let (access_token, access_jti) = create_local_jwt(
+        user.id,
+        &user.username,
+        &user.role,
+        "access",
+        ACCESS_TOKEN_TTL,
+    )?;
+    let (refresh_token, _refresh_jti) = create_local_jwt(
+        user.id,
+        &user.username,
+        &user.role,
+        "refresh",
+        REFRESH_TOKEN_TTL,
+    )?;
 
     let client_ip = extract_client_ip(&headers);
     let user_agent = headers
@@ -749,7 +759,12 @@ pub async fn check_auth(
     let client_ip = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.rsplit(',').map(|s| s.trim()).find(|s| !s.is_empty()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.rsplit(',')
+                .map(|s| s.trim())
+                .find(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_default();
 
     // Watermark setting
@@ -845,13 +860,12 @@ pub async fn refresh(
         .parse()
         .map_err(|_| AppError::Auth("Invalid token subject".into()))?;
 
-    let exists: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&db.pool)
-    .await
-    .map_err(AppError::Database)?;
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_optional(&db.pool)
+            .await
+            .map_err(AppError::Database)?;
 
     if exists.is_none() {
         return Err(AppError::Auth("User no longer exists".into()));
@@ -1073,10 +1087,20 @@ pub async fn sso_callback(
     }
 
     // Success — generate access + refresh tokens
-    let (access_token, _access_jti) =
-        create_local_jwt(row.id, &row.username, &row.role_name, "access", ACCESS_TOKEN_TTL)?;
-    let (refresh_token, _refresh_jti) =
-        create_local_jwt(row.id, &row.username, &row.role_name, "refresh", REFRESH_TOKEN_TTL)?;
+    let (access_token, _access_jti) = create_local_jwt(
+        row.id,
+        &row.username,
+        &row.role_name,
+        "access",
+        ACCESS_TOKEN_TTL,
+    )?;
+    let (refresh_token, _refresh_jti) = create_local_jwt(
+        row.id,
+        &row.username,
+        &row.role_name,
+        "refresh",
+        REFRESH_TOKEN_TTL,
+    )?;
 
     audit::log(
         &db.pool,
@@ -1164,8 +1188,10 @@ mod tests {
         // Set the JWT secret if not already set
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let (t1, jti1) = create_local_jwt(uid, "alice", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
-        let (t2, jti2) = create_local_jwt(uid, "alice", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
+        let (t1, jti1) =
+            create_local_jwt(uid, "alice", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
+        let (t2, jti2) =
+            create_local_jwt(uid, "alice", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
         // jti makes each token unique
         assert_ne!(t1, t2);
         assert_ne!(jti1, jti2);
@@ -1175,7 +1201,8 @@ mod tests {
     fn create_local_jwt_contains_expected_claims() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let (token, _jti) = create_local_jwt(uid, "bob", "user", "access", ACCESS_TOKEN_TTL).unwrap();
+        let (token, _jti) =
+            create_local_jwt(uid, "bob", "user", "access", ACCESS_TOKEN_TTL).unwrap();
 
         // Decode without verification to inspect claims
         use base64::Engine;
@@ -1232,7 +1259,8 @@ mod tests {
     fn create_local_jwt_exp_matches_ttl() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let (token, _jti) = create_local_jwt(uid, "carol", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
+        let (token, _jti) =
+            create_local_jwt(uid, "carol", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
         use base64::Engine;
         let parts: Vec<&str> = token.split('.').collect();
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1329,7 +1357,8 @@ mod tests {
     async fn logout_with_valid_local_jwt() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let (token, _jti) = create_local_jwt(uid, "test_user", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
+        let (token, _jti) =
+            create_local_jwt(uid, "test_user", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,

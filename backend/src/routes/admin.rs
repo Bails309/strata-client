@@ -1756,15 +1756,13 @@ pub async fn reset_user_password(
     let db = require_running(&state).await?;
 
     // Verify user exists and is a local account
-    let auth_type: Option<String> = sqlx::query_scalar(
-        "SELECT auth_type FROM users WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await?;
+    let auth_type: Option<String> =
+        sqlx::query_scalar("SELECT auth_type FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await?;
 
-    let auth_type =
-        auth_type.ok_or_else(|| AppError::NotFound("User not found".into()))?;
+    let auth_type = auth_type.ok_or_else(|| AppError::NotFound("User not found".into()))?;
     if auth_type != "local" {
         return Err(AppError::Validation(
             "Password reset is only available for local accounts".into(),

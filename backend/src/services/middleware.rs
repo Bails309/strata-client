@@ -202,7 +202,9 @@ async fn try_local_jwt(
 
     // Reject refresh tokens used as access tokens
     if claims.token_type == "refresh" {
-        return Err(AppError::Auth("Refresh tokens cannot be used for API access".into()));
+        return Err(AppError::Auth(
+            "Refresh tokens cannot be used for API access".into(),
+        ));
     }
 
     // Verify user still exists in DB

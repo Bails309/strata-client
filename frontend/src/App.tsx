@@ -110,7 +110,7 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             <SessionBar />
-            <SessionTimeoutWarning />
+            <SessionTimeoutWarning onExpired={handleLogout} />
             <WhatsNewModal userId={user?.id} />
           </>
         )}

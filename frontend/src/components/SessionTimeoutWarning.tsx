@@ -6,7 +6,7 @@ const WARNING_LEAD_SECS = 120;
 /** How often (ms) to check the expiry timestamp. */
 const CHECK_INTERVAL_MS = 1000;
 
-export default function SessionTimeoutWarning() {
+export default function SessionTimeoutWarning({ onExpired }: { onExpired?: () => void }) {
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [extending, setExtending] = useState(false);
@@ -25,10 +25,15 @@ export default function SessionTimeoutWarning() {
       if (remaining > WARNING_LEAD_SECS) {
         setDismissed(false);
       }
+
+      // Force logout when the timer reaches zero
+      if (remaining === 0 && onExpired) {
+        onExpired();
+      }
     }, CHECK_INTERVAL_MS);
 
     return () => clearInterval(id);
-  }, []);
+  }, [onExpired]);
 
   const handleExtend = useCallback(async () => {
     setExtending(true);

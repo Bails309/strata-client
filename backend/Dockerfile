@@ -4,13 +4,14 @@ FROM rust:1.94-alpine AS builder
 RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static
 
 WORKDIR /app
-COPY Cargo.toml ./
-COPY Cargo.lock* ./
+COPY backend/Cargo.toml ./
+COPY backend/Cargo.lock* ./
+COPY VERSION ./
 # Create dummy main for dependency caching
 RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release 2>/dev/null || true
 RUN rm -rf src
 
-COPY . .
+COPY backend/ .
 RUN touch src/main.rs && cargo build --release
 
 # ── Runtime stage ─────────────────────────────────────────────────────
@@ -21,7 +22,7 @@ RUN apk add --no-cache ca-certificates krb5 openldap-clients cyrus-sasl-gssapiv2
 COPY --from=builder /app/target/release/strata-backend /usr/local/bin/strata-backend
 
 RUN mkdir -p /app/config /app/migrations
-COPY migrations /app/migrations
+COPY backend/migrations /app/migrations
 
 # Non-root user. The entrypoint fixes ownership on Docker volumes then drops to strata.
 RUN addgroup -S strata && adduser -S strata -G strata \
@@ -32,7 +33,7 @@ RUN addgroup -S strata && adduser -S strata -G strata \
 WORKDIR /app
 EXPOSE 8080
 
-COPY entrypoint.sh /entrypoint.sh
+COPY backend/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

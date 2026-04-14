@@ -35,6 +35,7 @@ import {
   getUsers,
   createUser,
   deleteUser,
+  updateUser,
   restoreUser,
   getActiveSessions,
   getAdSyncConfigs,
@@ -484,6 +485,9 @@ function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
           <div>
             <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">Strata Version</p>
             <p className="text-sm font-bold text-txt-primary">v{__APP_VERSION__}</p>
+            {health.version && health.version !== __APP_VERSION__ && (
+              <p className="text-[0.6rem] text-yellow-400">Backend: v{health.version}</p>
+            )}
           </div>
         </div>
 
@@ -1828,7 +1832,25 @@ function AccessTab({
                       </span>
                     </td>
                     <td>
-                      <span className="text-sm font-medium opacity-80">{u.role_name}</span>
+                      <select
+                        className="bg-surface-secondary border border-border rounded px-2 py-1 text-sm font-medium opacity-80 cursor-pointer hover:border-accent transition-colors"
+                        value={roles.find(r => r.name === u.role_name)?.id || ''}
+                        disabled={!!u.deleted_at}
+                        onChange={async (e) => {
+                          const newRoleId = e.target.value;
+                          try {
+                            await updateUser(u.id, { role_id: newRoleId });
+                            const refreshed = await getUsers();
+                            onUsersChanged(refreshed);
+                          } catch (err: any) {
+                            alert(err.message || 'Failed to update role');
+                          }
+                        }}
+                      >
+                        {roles.map(r => (
+                          <option key={r.id} value={r.id}>{r.name}</option>
+                        ))}
+                      </select>
                     </td>
                     <td className="font-mono text-[0.7rem] text-txt-tertiary">
                       {u.sub || <span className="opacity-30">—</span>}

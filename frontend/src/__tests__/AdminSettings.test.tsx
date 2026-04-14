@@ -37,6 +37,7 @@ vi.mock('../api', () => ({
   updateConnectionFolder: vi.fn(),
   deleteConnectionFolder: vi.fn(),
   getUsers: vi.fn(),
+  updateUser: vi.fn(),
   getActiveSessions: vi.fn(),
   killSessions: vi.fn(),
   getAdSyncConfigs: vi.fn(),
@@ -80,6 +81,7 @@ import {
   getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
   updateAuthMethods, updateSettings, updateRoleMappings, getSessionStats, getRecordings,
+  updateUser,
 } from '../api';
 
 const healthOk = {
@@ -1084,6 +1086,22 @@ describe('AccessTab', () => {
     // OIDC sub column shows — for empty sub
     const dashes = screen.getAllByText('—');
     expect(dashes.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('allows changing a user role via dropdown', async () => {
+    vi.mocked(getUsers).mockResolvedValue([
+      { id: 'u1', username: 'alice', email: 'alice@example.com', auth_type: 'sso', role_name: 'admin', sub: '' },
+    ]);
+    vi.mocked(updateUser).mockResolvedValue({ status: 'updated' });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('alice');
+    // The role column should be a dropdown select
+    const roleSelect = screen.getByDisplayValue('admin');
+    expect(roleSelect.tagName).toBe('SELECT');
+    await user.selectOptions(roleSelect, 'r2');
+    expect(updateUser).toHaveBeenCalledWith('u1', { role_id: 'r2' });
   });
 
   it('shows no folders empty state', async () => {

@@ -290,6 +290,7 @@ export interface SchemaHealth {
 }
 
 export interface ServiceHealth {
+  version?: string;
   database: DatabaseHealth;
   guacd: GuacdHealth;
   vault: VaultHealth;
@@ -430,6 +431,9 @@ export const createUser = (data: CreateUserRequest) =>
 
 export const deleteUser = (id: string) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: 'DELETE' });
+
+export const updateUser = (id: string, data: { role_id: string }) =>
+  request<{ status: string }>(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
 export const restoreUser = (id: string) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: 'POST' });

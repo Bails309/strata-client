@@ -58,6 +58,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
 /// Service-health response for the admin dashboard.
 #[derive(Serialize)]
 pub struct ServiceHealth {
+    pub version: &'static str,
     pub database: DatabaseHealth,
     pub guacd: GuacdHealth,
     pub vault: VaultHealth,
@@ -176,6 +177,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
     };
 
     Json(ServiceHealth {
+        version: env!("STRATA_VERSION"),
         database: DatabaseHealth {
             connected: db_connected,
             mode: db_mode,

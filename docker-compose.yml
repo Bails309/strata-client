@@ -61,8 +61,8 @@ services:
   # ── 2. Rust Backend (Proxy / API) ───────────────────────────────────
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     image: strata/backend:latest
     restart: unless-stopped
     networks:
@@ -102,8 +102,8 @@ services:
   # ── 3. Frontend SPA ─────────────────────────────────────────────────
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     image: strata/frontend:latest
     restart: unless-stopped
     read_only: true

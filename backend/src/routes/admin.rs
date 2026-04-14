@@ -1532,6 +1532,11 @@ pub struct CreateUserRequest {
 }
 
 #[derive(Deserialize)]
+pub struct UpdateUserRequest {
+    pub role_id: Uuid,
+}
+
+#[derive(Deserialize)]
 pub struct UserListQuery {
     pub include_deleted: Option<bool>,
 }
@@ -1619,6 +1624,48 @@ pub async fn delete_user(
     Ok(Json(json!({ "status": "deleted" })))
 }
 
+pub async fn update_user(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(body): Json<UpdateUserRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Verify the target role exists
+    let role_exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM roles WHERE id = $1")
+            .bind(body.role_id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+    if role_exists.is_none() {
+        return Err(AppError::NotFound("Role not found".into()));
+    }
+
+    let result = sqlx::query(
+        "UPDATE users SET role_id = $1 WHERE id = $2 AND deleted_at IS NULL",
+    )
+    .bind(body.role_id)
+    .bind(id)
+    .execute(&db.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("User not found".into()));
+    }
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "user.role_changed",
+        &json!({ "user_id": id.to_string(), "role_id": body.role_id.to_string() }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "updated" })))
+}
+
 pub async fn create_user(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
@@ -1626,20 +1673,25 @@ pub async fn create_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
+    // Normalize email and username to lowercase for case-insensitive matching
+    let email = body.email.to_lowercase();
+    let username = body.username.to_lowercase();
+
     // Check if user already exists
-    let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
-        .bind(&body.email)
-        .fetch_optional(&db.pool)
-        .await?;
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $2",
+    )
+    .bind(&email)
+    .bind(&username)
+    .fetch_optional(&db.pool)
+    .await?;
 
     if existing.is_some() {
         return Err(AppError::Validation(format!(
             "User with email {} already exists",
-            body.email
+            email
         )));
     }
-
-    let username = body.username.clone();
 
     let (password_hash, plaintext_password) = if body.auth_type == "local" {
         use rand::{distributions::Alphanumeric, Rng};
@@ -1668,7 +1720,7 @@ pub async fn create_user(
     )
     .bind(user_id)
     .bind(&username)
-    .bind(&body.email)
+    .bind(&email)
     .bind(&body.full_name)
     .bind(&password_hash)
     .bind(&body.auth_type)

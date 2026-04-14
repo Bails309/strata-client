@@ -3,11 +3,11 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { readFileSync } from 'fs';
 
-const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
+const appVersion = readFileSync('../VERSION', 'utf-8').trim();
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   plugins: [react()],
   resolve: {

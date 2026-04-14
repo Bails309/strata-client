@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    tracing::info!("Strata Backend starting …");
+    tracing::info!(version = env!("STRATA_VERSION"), "Strata Backend starting …");
 
     // ── Resolve configuration from environment + persisted config ──
     let config_path = AppConfig::config_path();

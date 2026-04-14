@@ -2,9 +2,10 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY package.json package-lock.json* ./
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
-COPY . .
+COPY VERSION ../VERSION
+COPY frontend/ .
 RUN npm run build
 
 # ── Runtime stage (nginx) ─────────────────────────────────────────────
@@ -13,10 +14,10 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copy configuration fragments and SSL initialization script
-COPY common.fragment /etc/nginx/common.fragment
-COPY http_only.conf /etc/nginx/http_only.conf
-COPY https_enabled.conf /etc/nginx/https_enabled.conf
-COPY ssl-init.sh /docker-entrypoint.d/40-ssl-init.sh
+COPY frontend/common.fragment /etc/nginx/common.fragment
+COPY frontend/http_only.conf /etc/nginx/http_only.conf
+COPY frontend/https_enabled.conf /etc/nginx/https_enabled.conf
+COPY frontend/ssl-init.sh /docker-entrypoint.d/40-ssl-init.sh
 
 # Ensure Unix line endings on all config files (Windows checkouts may have CRLF)
 RUN sed -i 's/\r$//' /etc/nginx/common.fragment \

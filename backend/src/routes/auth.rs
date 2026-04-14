@@ -272,7 +272,7 @@ pub async fn login(
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
                 r.can_create_connection_folders, r.can_create_sharing_profiles
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE (u.username = $1 OR u.email = $1) AND u.auth_type = 'local' AND u.deleted_at IS NULL",
+         WHERE (LOWER(u.username) = LOWER($1) OR LOWER(u.email) = LOWER($1)) AND u.auth_type = 'local' AND u.deleted_at IS NULL",
     )
     .bind(&body.username)
     .fetch_optional(&db.pool)
@@ -601,7 +601,7 @@ pub async fn sso_callback(
     let row: Option<SsoUserRow> = sqlx::query_as(
         "SELECT u.id, u.username, r.name as role_name, u.sub, u.full_name
          FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.email = $1",
+         WHERE LOWER(u.email) = LOWER($1) AND u.deleted_at IS NULL",
     )
     .bind(user_email)
     .fetch_optional(&db.pool)

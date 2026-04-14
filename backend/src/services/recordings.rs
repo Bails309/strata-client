@@ -110,14 +110,18 @@ pub async fn get_azure_config(
 }
 
 impl AzureBlobConfig {
-    fn blob_url(&self, blob: &str) -> String {
+    fn blob_url(&self, blob: &str) -> anyhow::Result<reqwest::Url> {
         let encoded = urlencoding::encode(blob);
-        let url = format!(
+        let raw = format!(
             "https://{}.blob.core.windows.net/{}/{}",
             self.account_name, self.container_name, encoded
         );
-        debug_assert!(url.starts_with("https://"), "Azure Blob URL must use HTTPS");
-        url
+        let url = reqwest::Url::parse(&raw)
+            .map_err(|e| anyhow::anyhow!("Invalid Azure Blob URL: {e}"))?;
+        if url.scheme() != "https" {
+            anyhow::bail!("Refusing to transmit credentials: Azure Blob URL must use HTTPS");
+        }
+        Ok(url)
     }
 
     fn sign(
@@ -158,7 +162,7 @@ pub async fn upload_to_azure(
     blob: &str,
     data: Vec<u8>,
 ) -> anyhow::Result<()> {
-    let url = cfg.blob_url(blob);
+    let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -169,7 +173,7 @@ pub async fn upload_to_azure(
 
     let client = reqwest::Client::builder().https_only(true).build()?;
     let resp = client
-        .put(&url)
+        .put(url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
         .header("x-ms-version", "2023-11-03")
@@ -199,7 +203,7 @@ pub async fn upload_file_to_azure(
         .map_err(|e| anyhow::anyhow!("Cannot stat {file_path}: {e}"))?;
     let file_len = meta.len() as usize;
 
-    let url = cfg.blob_url(blob);
+    let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -216,7 +220,7 @@ pub async fn upload_file_to_azure(
 
     let client = reqwest::Client::builder().https_only(true).build()?;
     let resp = client
-        .put(&url)
+        .put(url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
         .header("x-ms-version", "2023-11-03")
@@ -237,7 +241,7 @@ pub async fn upload_file_to_azure(
 }
 
 pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<Vec<u8>> {
-    let url = cfg.blob_url(blob);
+    let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -247,7 +251,7 @@ pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::R
 
     let client = reqwest::Client::builder().https_only(true).build()?;
     let resp = client
-        .get(&url)
+        .get(url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
         .header("x-ms-version", "2023-11-03")
@@ -267,7 +271,7 @@ pub async fn download_stream_from_azure(
     cfg: &AzureBlobConfig,
     blob: &str,
 ) -> anyhow::Result<impl futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>> {
-    let url = cfg.blob_url(blob);
+    let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
         .to_string();
@@ -277,7 +281,7 @@ pub async fn download_stream_from_azure(
 
     let client = reqwest::Client::builder().https_only(true).build()?;
     let resp = client
-        .get(&url)
+        .get(url)
         .header("Authorization", auth)
         .header("x-ms-date", &date)
         .header("x-ms-version", "2023-11-03")

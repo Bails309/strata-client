@@ -347,7 +347,7 @@ git pull
 docker compose up -d --build
 ```
 
-The backend automatically runs any new SQL migrations on startup using advisory locks, so it is safe to scale horizontally. Migrations `001` through `015` are applied in order (initial schema, local auth, session sharing, last-accessed tracking, user favorites, connection groups, share mode, credential profiles, credential expiry, profile TTL, multi-realm Kerberos, AD sync, keytab auth, CA cert, multi search base).
+The backend automatically runs any new SQL migrations on startup using advisory locks, so it is safe to scale horizontally. Migrations `001` through `030` are applied in order. If a previously-applied migration's checksum has changed (e.g. due to line-ending normalisation), the backend auto-repairs the stored checksum before proceeding, so no manual database intervention is required.
 
 ### Custom guacd
 

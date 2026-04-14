@@ -143,31 +143,29 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
               <>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Windows Key Proxy (Right Ctrl)
+                    <span className="text-accent">•</span> Inline Role Management
                   </h3>
                   <p>
-                    Browsers can't capture the Windows key — the OS intercepts it. Strata now remaps <strong>Right Ctrl</strong> as
-                    a Windows key proxy, following the VMware/VirtualBox convention. Hold Right Ctrl + a key to send Win+key combos
-                    (e.g., <kbd style={{ fontSize: '0.75rem', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-primary)' }}>RCtrl</kbd>+<kbd style={{ fontSize: '0.75rem', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-glass-border)', background: 'var(--color-surface-primary)' }}>E</kbd> → Win+E),
-                    or tap it alone to open the Start menu. Works across all session types.
+                    Admins can now change a user's role directly from the Users table via a sleek inline dropdown —
+                    no more navigating to a separate edit screen. All role changes are audit-logged.
                   </p>
                 </section>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Analytics Dashboard
+                    <span className="text-accent">•</span> Case-Insensitive Login
                   </h3>
                   <p>
-                    New analytics section for admins with daily usage trends, session duration stats, total bandwidth,
-                    protocol distribution, and peak hours — all in beautifully rendered charts.
+                    SSO and local login now match emails and usernames case-insensitively, fixing sign-in
+                    failures when the identity provider returns a differently-cased email than was originally stored.
                   </p>
                 </section>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Dynamic Capacity Gauge
+                    <span className="text-accent">•</span> Improved Session Watermark
                   </h3>
                   <p>
-                    The guacd capacity gauge now calculates recommended sessions per instance dynamically based on
-                    your host's CPU and RAM, replacing the old hardcoded value.
+                    The session watermark now renders with dual light/dark text passes and a fixed overlay,
+                    ensuring it's always visible regardless of the remote desktop background.
                   </p>
                 </section>
               </>

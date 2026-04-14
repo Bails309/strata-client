@@ -83,15 +83,15 @@ impl Database {
         // (LF-normalized) content without re-running any migration SQL.
         // TODO(v1.0): remove once all environments have been upgraded past 0.11.1
         {
-            let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-                "SELECT version, checksum FROM _sqlx_migrations ORDER BY version"
-            )
-            .fetch_all(&mut *conn)
-            .await
-            .unwrap_or_default();
+            let rows: Vec<(i64, Vec<u8>)> =
+                sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")
+                    .fetch_all(&mut *conn)
+                    .await
+                    .unwrap_or_default();
 
             for migration in migrator.iter() {
-                if let Some((_, stored_cksum)) = rows.iter().find(|(v, _)| *v == migration.version) {
+                if let Some((_, stored_cksum)) = rows.iter().find(|(v, _)| *v == migration.version)
+                {
                     let expected: &[u8] = &migration.checksum;
                     if stored_cksum != expected {
                         tracing::warn!(
@@ -99,7 +99,7 @@ impl Database {
                             "Checksum mismatch for applied migration – repairing (line-ending normalisation)"
                         );
                         let _ = sqlx::query(
-                            "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2"
+                            "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2",
                         )
                         .bind(expected)
                         .bind(migration.version)

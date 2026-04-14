@@ -1690,9 +1690,9 @@ pub async fn create_user(
     }
 
     let (password_hash, plaintext_password) = if body.auth_type == "local" {
-        use rand::{distributions::Alphanumeric, Rng};
-        let plain: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
+        use rand::{distr::Alphanumeric, Rng};
+        let plain: String = rand::rng()
+            .sample_iter(Alphanumeric)
             .take(16)
             .map(char::from)
             .collect();

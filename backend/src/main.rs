@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         use base64::Engine;
         let mut key = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
         let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
         tracing::info!("Generated new JWT signing secret");
 
@@ -268,7 +268,7 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
         // Generate a random 16-character password for first boot
         use base64::Engine;
         let mut buf = [0u8; 12];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut buf);
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
     });
 

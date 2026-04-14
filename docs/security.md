@@ -28,6 +28,36 @@ Strata Client supports standard OpenID Connect for user authentication. The iden
 
 For environments without an OIDC provider, Strata Client supports built-in username/password authentication. Passwords are hashed using Argon2id before storage. Local authentication can be globally disabled via the Admin Settings; when disabled, the backend strictly rejects all local login attempts with a 401.
 
+**Password Policy:**
+- Minimum 12 characters enforced on user creation and password change
+- Maximum 1024 characters to prevent abuse
+- Argon2id hashing with cryptographically random salts
+- Users can change their own password via `PUT /api/auth/password` (requires current password verification)
+- Admins can force-reset any user's password via `POST /api/admin/users/:id/reset-password`
+
+### Session Management
+
+Authentication uses a **dual-token architecture** aligned with OWASP session timeout recommendations:
+
+| Token | TTL | Storage | Purpose |
+|---|---|---|---|
+| Access token | 20 minutes | `localStorage` (Bearer header) | API authentication |
+| Refresh token | 8 hours | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | Silent access token renewal |
+
+**Flow:**
+1. On login, the backend issues both an access token (in the JSON response) and a refresh token (as an `HttpOnly` cookie scoped to `/api/auth/refresh`)
+2. The frontend uses the access token for all API requests via `Authorization: Bearer`
+3. When the access token expires (401 response), the frontend silently calls `POST /api/auth/refresh` with the cookie
+4. If refresh succeeds, a new access token is issued and the original request is retried transparently
+5. If refresh fails (cookie expired or revoked), the user is redirected to the login page
+6. A **session timeout warning** toast appears 2 minutes before access token expiry, offering an "Extend Session" button
+
+**Token claims:** Both tokens include a `token_type` claim (`"access"` or `"refresh"`). The auth middleware rejects refresh tokens used as access tokens. A `default_token_type()` provides backward compatibility for pre-existing tokens during upgrade.
+
+**Refresh token isolation:** The refresh cookie is scoped to `Path=/api/auth/refresh` and uses `SameSite=Strict`, preventing it from being sent to any other endpoint or in cross-site requests.
+
+**Per-user session tracking:** Each login records an entry in the `active_sessions` table with the token's JTI (UUID), user ID, IP address, user agent, and expiry time. This provides visibility into how many active sessions a user has.
+
 ### Authentication Method Enforcement
 
 Administrators can toggle `local_auth_enabled` and `sso_enabled` independently.
@@ -44,8 +74,12 @@ After token validation, the backend looks up the user in the local database by O
 | Route Group | Middleware |
 |---|---|
 | `/api/health`, `/api/status`, `/api/setup/*` | None (public) |
+| `/api/auth/login`, `/api/auth/sso/*` | None (public, rate-limited) |
+| `/api/auth/refresh` | None (public, validates `HttpOnly` refresh cookie) |
 | `/api/shared/tunnel/:token` | None (public, share-token validated; mode determines input forwarding) |
+| `/api/auth/password` | `require_auth` |
 | `/api/admin/*` | `require_auth` + `require_admin` |
+| `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
 
 **Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user's role grants them access to the target connection, including mappings via connection folders (`role_folders`).

@@ -14,8 +14,19 @@ import Layout from './components/Layout';
 import { SessionManagerProvider } from './components/SessionManager';
 import SessionBar from './components/SessionBar';
 import WhatsNewModal from './components/WhatsNewModal';
-import { getMe, MeResponse } from './api';
+import SessionTimeoutWarning from './components/SessionTimeoutWarning';
+import { getMe, refreshAccessToken, MeResponse } from './api';
 import { SettingsProvider } from './contexts/SettingsContext';
+
+/** Decode a JWT payload and return the exp claim (seconds), or null. */
+function getTokenExp(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return typeof payload.exp === 'number' ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -23,10 +34,34 @@ export default function App() {
   const navigate = useNavigate();
 
   const checkAuth = useCallback(async () => {
-    const token = localStorage.getItem('access_token');
+    let token = localStorage.getItem('access_token');
     if (!token) {
       setAuthenticated(false);
       return;
+    }
+
+    // Tokens issued before 0.12.0 did not store token_expiry in localStorage.
+    // If the token exists but token_expiry is missing, it's a stale token from
+    // a previous version — discard it without making any network request to
+    // avoid a noisy 401 in the browser console.
+    const exp = getTokenExp(token);
+    if (exp === null || !localStorage.getItem('token_expiry')) {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('token_expiry');
+      setAuthenticated(false);
+      return;
+    }
+
+    // If the token is expired, try a silent refresh before hitting the API.
+    if (exp * 1000 < Date.now()) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('token_expiry');
+        setAuthenticated(false);
+        return;
+      }
+      token = localStorage.getItem('access_token');
     }
 
     try {
@@ -51,6 +86,7 @@ export default function App() {
 
   function handleLogout() {
     localStorage.removeItem('access_token');
+    localStorage.removeItem('token_expiry');
     setAuthenticated(false);
     setUser(null);
     navigate('/login');
@@ -95,6 +131,7 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
             <SessionBar />
+            <SessionTimeoutWarning />
             <WhatsNewModal userId={user?.id} />
           </>
         )}

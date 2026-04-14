@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::error::AppError;
+use crate::routes::auth;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{audit, kerberos, settings};
@@ -1691,11 +1692,14 @@ pub async fn create_user(
 
     let (password_hash, plaintext_password) = if body.auth_type == "local" {
         use rand::{distr::Alphanumeric, Rng};
+        let gen_len = auth::MIN_PASSWORD_LENGTH.max(16);
         let plain: String = rand::rng()
             .sample_iter(Alphanumeric)
-            .take(16)
+            .take(gen_len)
             .map(char::from)
             .collect();
+
+        auth::validate_password(&plain)?;
 
         use argon2::{password_hash::SaltString, PasswordHasher};
         let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
@@ -1740,6 +1744,65 @@ pub async fn create_user(
         "id": user_id,
         "username": username,
         "password": plaintext_password // Returned only once for local users
+    })))
+}
+
+/// POST /api/admin/users/:id/reset-password – generate a new password for a local user.
+pub async fn reset_user_password(
+    State(state): State<SharedState>,
+    Extension(admin): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Verify user exists and is a local account
+    let auth_type: Option<String> = sqlx::query_scalar(
+        "SELECT auth_type FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&db.pool)
+    .await?;
+
+    let auth_type =
+        auth_type.ok_or_else(|| AppError::NotFound("User not found".into()))?;
+    if auth_type != "local" {
+        return Err(AppError::Validation(
+            "Password reset is only available for local accounts".into(),
+        ));
+    }
+
+    // Generate a new random password
+    use rand::{distr::Alphanumeric, Rng};
+    let gen_len = auth::MIN_PASSWORD_LENGTH.max(16);
+    let plain: String = rand::rng()
+        .sample_iter(Alphanumeric)
+        .take(gen_len)
+        .map(char::from)
+        .collect();
+
+    use argon2::{password_hash::SaltString, PasswordHasher};
+    let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let hash = argon2::Argon2::default()
+        .hash_password(plain.as_bytes(), &salt)
+        .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
+        .to_string();
+
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&hash)
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
+
+    audit::log(
+        &db.pool,
+        Some(admin.id),
+        "user.password_reset",
+        &json!({ "target_user_id": id.to_string() }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "password": plain
     })))
 }
 

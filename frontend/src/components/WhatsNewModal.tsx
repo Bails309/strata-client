@@ -91,7 +91,7 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
             </h2>
           </div>
           <p className="text-xs text-txt-tertiary mb-6 uppercase tracking-widest font-medium">
-            {isWelcome ? 'The modern remote gateway' : 'April 2026 Update'}
+            {isWelcome ? 'The modern remote gateway' : 'Security Update'}
           </p>
 
           <div className="space-y-5 text-[0.875rem] leading-relaxed text-txt-secondary">
@@ -143,29 +143,29 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
               <>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Inline Role Management
+                    <span className="text-accent">•</span> Enhanced Session Security
                   </h3>
                   <p>
-                    Admins can now change a user's role directly from the Users table via a sleek inline dropdown —
-                    no more navigating to a separate edit screen. All role changes are audit-logged.
+                    Sessions now use short-lived 20-minute access tokens with automatic silent refresh.
+                    A countdown toast warns you 2 minutes before expiry with an option to extend your session.
                   </p>
                 </section>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Case-Insensitive Login
+                    <span className="text-accent">•</span> Password Management
                   </h3>
                   <p>
-                    SSO and local login now match emails and usernames case-insensitively, fixing sign-in
-                    failures when the identity provider returns a differently-cased email than was originally stored.
+                    New password policy enforces a minimum of 12 characters. Users can now change their own
+                    password, and admins can force-reset passwords from the user management panel.
                   </p>
                 </section>
                 <section>
                   <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Improved Session Watermark
+                    <span className="text-accent">•</span> CSP Hardened
                   </h3>
                   <p>
-                    The session watermark now renders with dual light/dark text passes and a fixed overlay,
-                    ensuring it's always visible regardless of the remote desktop background.
+                    Content Security Policy now blocks inline scripts for stronger XSS protection,
+                    with no impact to the application's functionality.
                   </p>
                 </section>
               </>

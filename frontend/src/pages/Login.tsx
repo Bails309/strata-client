@@ -25,6 +25,7 @@ export default function Login({ onLogin }: Props) {
       // Clear the fragment to remove the token from the URL / browser history
       window.history.replaceState(null, '', window.location.pathname);
       localStorage.setItem('access_token', token);
+      localStorage.setItem('token_expiry', String(Date.now() + 1200 * 1000));
       onLogin();
       return;
     }
@@ -49,6 +50,8 @@ export default function Login({ onLogin }: Props) {
     try {
       const res = await login({ username, password });
       localStorage.setItem('access_token', res.access_token);
+      const ttl = res.expires_in ?? 1200;
+      localStorage.setItem('token_expiry', String(Date.now() + ttl * 1000));
       onLogin();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed');

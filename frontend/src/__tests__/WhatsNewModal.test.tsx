@@ -70,7 +70,7 @@ describe('WhatsNewModal', () => {
     localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     // Click inside the modal content (e.g., a section heading)
-    await userEvent.click(screen.getByText('Inline Role Management'));
+    await userEvent.click(screen.getByText('Enhanced Session Security'));
     expect(screen.getByText(`What's New in ${WHATS_NEW_VERSION}`)).toBeInTheDocument();
   });
 

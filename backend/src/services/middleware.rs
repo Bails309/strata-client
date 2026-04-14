@@ -166,6 +166,15 @@ async fn try_local_jwt(
         #[allow(dead_code)]
         role: String,
         iss: String,
+        /// Token type: "access" or "refresh". Only access tokens are accepted
+        /// for API authentication. Defaults to "access" for backward
+        /// compatibility with tokens issued before the refresh-token feature.
+        #[serde(default = "default_token_type")]
+        token_type: String,
+    }
+
+    fn default_token_type() -> String {
+        "access".to_string()
     }
 
     let secret = match crate::config::JWT_SECRET.get() {
@@ -189,6 +198,11 @@ async fn try_local_jwt(
     let claims = token_data.claims;
     if claims.iss != "strata-local" {
         return Ok(None);
+    }
+
+    // Reject refresh tokens used as access tokens
+    if claims.token_type == "refresh" {
+        return Err(AppError::Auth("Refresh tokens cannot be used for API access".into()));
     }
 
     // Verify user still exists in DB

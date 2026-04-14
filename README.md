@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.11.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.12.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -42,6 +42,9 @@
 - **Envelope encryption** — User credentials encrypted with AES-256-GCM; Data Encryption Keys wrapped via HashiCorp Vault Transit
 - **OIDC / SSO** — Full OpenID Connect flow with dynamic JWKS validation (Keycloak, Entra ID, etc.)
 - **Local authentication** — Built-in username/password auth for environments without an OIDC provider
+- **Password policy** — Minimum 12-character password enforcement on creation and change, with dedicated password change and admin reset endpoints
+- **Access + refresh tokens** — Short-lived 20-minute access tokens with 8-hour `HttpOnly` refresh cookies, silent frontend refresh, and a pre-expiry countdown warning toast — aligned with OWASP session timeout guidance
+- **Per-user session tracking** — Active login sessions recorded in the database with JTI, IP, user agent, and expiry for audit visibility
 - **Kerberos / NLA** — Dynamic `krb5.conf` generation pushed to the `guacd` container at runtime; multi-realm support with per-realm KDCs and lifetimes
 - **Active Directory LDAP sync** — Automatic computer account import from AD via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, multiple search bases per source, filter presets, gMSA/MSA exclusion, and configurable connection defaults (RDP performance flags, session recording settings)
 - **AD auth methods** — Simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI) per AD source; custom CA certificate upload for internal LDAPS

@@ -1,7 +1,7 @@
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Redirect;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -119,6 +119,25 @@ pub fn validate_login_input(username: &str, password: &str) -> Result<(), AppErr
     Ok(())
 }
 
+/// Minimum password length for new or changed passwords.
+pub const MIN_PASSWORD_LENGTH: usize = 12;
+
+/// Validate a new password meets the password policy.
+/// This is enforced on user creation and password changes, NOT on login
+/// (to avoid locking out users with legacy passwords).
+pub fn validate_password(password: &str) -> Result<(), AppError> {
+    if password.len() < MIN_PASSWORD_LENGTH {
+        return Err(AppError::Validation(format!(
+            "Password must be at least {} characters",
+            MIN_PASSWORD_LENGTH
+        )));
+    }
+    if password.len() > 1024 {
+        return Err(AppError::Validation("Password is too long".into()));
+    }
+    Ok(())
+}
+
 /// Check a sliding-window rate limit. Prunes expired entries and rejects if
 /// the number of recent attempts for `key` meets or exceeds `max_attempts`.
 /// Returns `true` if the request should be **rejected** (over limit).
@@ -207,7 +226,7 @@ pub async fn login(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // Check if local auth is enabled
     {
         let s = state.read().await;
@@ -312,8 +331,31 @@ pub async fn login(
         map.remove(&body.username);
     }
 
-    // Generate a local JWT
-    let token = create_local_jwt(user.id, &user.username, &user.role)?;
+    // Generate access token (short-lived) and refresh token (longer-lived)
+    let (access_token, access_jti) =
+        create_local_jwt(user.id, &user.username, &user.role, "access", ACCESS_TOKEN_TTL)?;
+    let (refresh_token, _refresh_jti) =
+        create_local_jwt(user.id, &user.username, &user.role, "refresh", REFRESH_TOKEN_TTL)?;
+
+    let client_ip = extract_client_ip(&headers);
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+
+    // Record the session for per-user tracking
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ACCESS_TOKEN_TTL as i64);
+    let _ = sqlx::query(
+        "INSERT INTO active_sessions (jti, user_id, expires_at, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(access_jti)
+    .bind(user.id)
+    .bind(expires_at)
+    .bind(&client_ip)
+    .bind(&user_agent)
+    .execute(&db.pool)
+    .await;
 
     audit::log(
         &db.pool,
@@ -323,28 +365,59 @@ pub async fn login(
     )
     .await?;
 
-    Ok(Json(json!({
-        "access_token": token,
-        "token_type": "Bearer",
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "can_manage_system": user.can_manage_system,
-            "can_manage_users": user.can_manage_users,
-            "can_manage_connections": user.can_manage_connections,
-            "can_view_audit_logs": user.can_view_audit_logs,
-            "can_create_users": user.can_create_users,
-            "can_create_user_groups": user.can_create_user_groups,
-            "can_create_connections": user.can_create_connections,
-            "can_create_connection_folders": user.can_create_connection_folders,
-            "can_create_sharing_profiles": user.can_create_sharing_profiles,
-        }
-    })))
+    let response = axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .header(
+            "Set-Cookie",
+            format!(
+                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age={}",
+                refresh_token, REFRESH_TOKEN_TTL
+            ),
+        )
+        .body(axum::body::Body::from(
+            serde_json::to_string(&json!({
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": ACCESS_TOKEN_TTL,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "role": user.role,
+                    "can_manage_system": user.can_manage_system,
+                    "can_manage_users": user.can_manage_users,
+                    "can_manage_connections": user.can_manage_connections,
+                    "can_view_audit_logs": user.can_view_audit_logs,
+                    "can_create_users": user.can_create_users,
+                    "can_create_user_groups": user.can_create_user_groups,
+                    "can_create_connections": user.can_create_connections,
+                    "can_create_connection_folders": user.can_create_connection_folders,
+                    "can_create_sharing_profiles": user.can_create_sharing_profiles,
+                }
+            }))
+            .unwrap(),
+        ))
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
+
+    Ok(response)
 }
 
+/// Access token TTL (20 minutes).
+const ACCESS_TOKEN_TTL: usize = 1200;
+/// Refresh token TTL (8 hours).
+const REFRESH_TOKEN_TTL: usize = 28800;
+
 /// Create a local JWT signed with a server-side HMAC key.
-fn create_local_jwt(user_id: Uuid, username: &str, role: &str) -> Result<String, AppError> {
+/// `token_type` should be `"access"` or `"refresh"`.
+/// `ttl_secs` is the token lifetime in seconds.
+/// Returns `(token_string, jti)`.
+fn create_local_jwt(
+    user_id: Uuid,
+    username: &str,
+    role: &str,
+    token_type: &str,
+    ttl_secs: usize,
+) -> Result<(String, Uuid), AppError> {
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde::Serialize;
 
@@ -357,6 +430,7 @@ fn create_local_jwt(user_id: Uuid, username: &str, role: &str) -> Result<String,
         exp: usize,
         iat: usize,
         jti: String,
+        token_type: String,
     }
 
     let secret = crate::config::JWT_SECRET
@@ -369,26 +443,30 @@ fn create_local_jwt(user_id: Uuid, username: &str, role: &str) -> Result<String,
         .unwrap()
         .as_secs() as usize;
 
+    let jti = Uuid::new_v4();
     let claims = LocalClaims {
         sub: user_id.to_string(),
         username: username.to_string(),
         role: role.to_string(),
         iss: "strata-local".into(),
-        exp: now + 86400, // 24 hours
+        exp: now + ttl_secs,
         iat: now,
-        jti: Uuid::new_v4().to_string(),
+        jti: jti.to_string(),
+        token_type: token_type.to_string(),
     };
 
-    encode(
+    let token = encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
-    .map_err(|e| AppError::Internal(format!("JWT creation failed: {e}")))
+    .map_err(|e| AppError::Internal(format!("JWT creation failed: {e}")))?;
+
+    Ok((token, jti))
 }
 
-/// POST /api/auth/logout – revoke the current token.
-pub async fn logout(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppError> {
+/// POST /api/auth/logout – revoke the current token and refresh token.
+pub async fn logout(headers: HeaderMap) -> Result<axum::response::Response, AppError> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -427,7 +505,216 @@ pub async fn logout(headers: HeaderMap) -> Result<Json<serde_json::Value>, AppEr
 
     crate::services::token_revocation::revoke(token, exp);
 
-    Ok(Json(json!({ "status": "logged_out" })))
+    // Also revoke the refresh token if present in cookies
+    if let Some(refresh_token) = extract_cookie(&headers, "refresh_token") {
+        let refresh_exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + REFRESH_TOKEN_TTL as u64;
+        crate::services::token_revocation::revoke(refresh_token, refresh_exp);
+    }
+
+    // Clear the refresh token cookie
+    let response = axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .header(
+            "Set-Cookie",
+            "refresh_token=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age=0",
+        )
+        .body(axum::body::Body::from(
+            serde_json::to_string(&json!({ "status": "logged_out" })).unwrap(),
+        ))
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
+
+    Ok(response)
+}
+
+// ── Password Change ────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// PUT /api/auth/password – change the authenticated user's password.
+pub async fn change_password(
+    State(state): State<SharedState>,
+    Extension(user): Extension<crate::services::middleware::AuthUser>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate the new password meets policy
+    validate_password(&body.new_password)?;
+
+    let db = {
+        let s = state.read().await;
+        s.db.clone()
+            .ok_or(AppError::Internal("Database not available".into()))?
+    };
+
+    // Fetch current password hash
+    let hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND auth_type = 'local' AND deleted_at IS NULL")
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await
+            .map_err(AppError::Database)?
+            .flatten();
+
+    let hash = hash.ok_or_else(|| {
+        AppError::Validation("Password change is only available for local accounts".into())
+    })?;
+
+    // Verify current password
+    use argon2::{Argon2, PasswordHash, PasswordVerifier};
+    let parsed_hash = PasswordHash::new(&hash)
+        .map_err(|_| AppError::Internal("Invalid stored password hash".into()))?;
+    Argon2::default()
+        .verify_password(body.current_password.as_bytes(), &parsed_hash)
+        .map_err(|_| AppError::Auth("Current password is incorrect".into()))?;
+
+    // Hash new password
+    use argon2::password_hash::SaltString;
+    use argon2::PasswordHasher;
+    let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let new_hash = Argon2::default()
+        .hash_password(body.new_password.as_bytes(), &salt)
+        .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
+        .to_string();
+
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&new_hash)
+        .bind(user.id)
+        .execute(&db.pool)
+        .await
+        .map_err(AppError::Database)?;
+
+    // Revoke the current token so the user must re-authenticate
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if let Some(token) = token {
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + 86400;
+        crate::services::token_revocation::revoke(token, exp);
+    }
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "auth.password_changed",
+        &json!({ "username": user.username }),
+    )
+    .await?;
+
+    Ok(Json(json!({ "status": "password_changed" })))
+}
+
+// ── Token Refresh ──────────────────────────────────────────────────────
+
+/// Extract a named cookie value from the Cookie header.
+fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|pair| {
+                let pair = pair.trim();
+                pair.strip_prefix(&format!("{}=", name))
+            })
+        })
+}
+
+/// POST /api/auth/refresh – exchange a valid refresh token for a new access token.
+pub async fn refresh(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let refresh_token = extract_cookie(&headers, "refresh_token")
+        .ok_or_else(|| AppError::Auth("Missing refresh token".into()))?;
+
+    // Check if the refresh token has been revoked
+    if crate::services::token_revocation::is_revoked(refresh_token) {
+        return Err(AppError::Auth("Refresh token has been revoked".into()));
+    }
+
+    // Decode and validate the refresh token
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+    #[derive(serde::Deserialize)]
+    struct RefreshClaims {
+        sub: String,
+        username: String,
+        role: String,
+        token_type: String,
+    }
+
+    let secret = crate::config::JWT_SECRET
+        .get()
+        .ok_or_else(|| AppError::Internal("JWT_SECRET not configured".into()))?
+        .clone();
+
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&["strata-local"]);
+    validation.set_required_spec_claims(&["sub", "exp", "iat", "iss"]);
+
+    let token_data = decode::<RefreshClaims>(
+        refresh_token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .map_err(|_| AppError::Auth("Invalid or expired refresh token".into()))?;
+
+    let claims = token_data.claims;
+    if claims.token_type != "refresh" {
+        return Err(AppError::Auth("Invalid token type".into()));
+    }
+
+    // Verify user still exists
+    let db = {
+        let s = state.read().await;
+        s.db.clone()
+            .ok_or(AppError::Internal("Database not available".into()))?
+    };
+
+    let user_id: Uuid = claims
+        .sub
+        .parse()
+        .map_err(|_| AppError::Auth("Invalid token subject".into()))?;
+
+    let exists: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(AppError::Database)?;
+
+    if exists.is_none() {
+        return Err(AppError::Auth("User no longer exists".into()));
+    }
+
+    // Issue a new access token
+    let (access_token, _jti) = create_local_jwt(
+        user_id,
+        &claims.username,
+        &claims.role,
+        "access",
+        ACCESS_TOKEN_TTL,
+    )?;
+
+    Ok(Json(json!({
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_TTL
+    })))
 }
 
 // ── SSO / OIDC ─────────────────────────────────────────────────────────
@@ -500,7 +787,7 @@ pub async fn sso_callback(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Query(params): Query<SsoCallbackParams>,
-) -> Result<Redirect, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // Validate CSRF state parameter
     let state_value = params.state.as_deref().unwrap_or_default();
     {
@@ -629,8 +916,11 @@ pub async fn sso_callback(
             .await?;
     }
 
-    // Success — generate JWT
-    let token = create_local_jwt(row.id, &row.username, &row.role_name)?;
+    // Success — generate access + refresh tokens
+    let (access_token, _access_jti) =
+        create_local_jwt(row.id, &row.username, &row.role_name, "access", ACCESS_TOKEN_TTL)?;
+    let (refresh_token, _refresh_jti) =
+        create_local_jwt(row.id, &row.username, &row.role_name, "refresh", REFRESH_TOKEN_TTL)?;
 
     audit::log(
         &db.pool,
@@ -640,10 +930,25 @@ pub async fn sso_callback(
     )
     .await?;
 
-    // Redirect back to frontend with the token in a URL fragment.
+    // Redirect back to frontend with the access token in a URL fragment.
     // Fragments (#) are never sent to servers in Referer headers, never logged
     // by proxies/CDNs, and don't appear in server access logs.
-    Ok(Redirect::to(&format!("/login#token={}", token)))
+    // The refresh token is set as an HttpOnly cookie for security.
+    let redirect_url = format!("/login#token={}", access_token);
+    let response = axum::response::Response::builder()
+        .status(303)
+        .header("Location", &redirect_url)
+        .header(
+            "Set-Cookie",
+            format!(
+                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age={}",
+                refresh_token, REFRESH_TOKEN_TTL
+            ),
+        )
+        .body(axum::body::Body::empty())
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
+
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -687,10 +992,13 @@ mod tests {
         // JWT_SECRET is a OnceLock, calling without init should fail
         // Since it might already be set from other tests, we just verify
         // the function signature exists and returns a Result
-        let result = create_local_jwt(Uuid::new_v4(), "test", "admin");
+        let result = create_local_jwt(Uuid::new_v4(), "test", "admin", "access", ACCESS_TOKEN_TTL);
         // Either succeeds (if secret was set by another test) or fails with expected error
         match result {
-            Ok(token) => assert!(!token.is_empty()),
+            Ok((token, jti)) => {
+                assert!(!token.is_empty());
+                assert!(!jti.is_nil());
+            }
             Err(e) => assert!(format!("{e}").contains("JWT_SECRET")),
         }
     }
@@ -700,17 +1008,18 @@ mod tests {
         // Set the JWT secret if not already set
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let t1 = create_local_jwt(uid, "alice", "admin").unwrap();
-        let t2 = create_local_jwt(uid, "alice", "admin").unwrap();
+        let (t1, jti1) = create_local_jwt(uid, "alice", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
+        let (t2, jti2) = create_local_jwt(uid, "alice", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
         // jti makes each token unique
         assert_ne!(t1, t2);
+        assert_ne!(jti1, jti2);
     }
 
     #[test]
     fn create_local_jwt_contains_expected_claims() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let token = create_local_jwt(uid, "bob", "user").unwrap();
+        let (token, _jti) = create_local_jwt(uid, "bob", "user", "access", ACCESS_TOKEN_TTL).unwrap();
 
         // Decode without verification to inspect claims
         use base64::Engine;
@@ -764,10 +1073,10 @@ mod tests {
     }
 
     #[test]
-    fn create_local_jwt_exp_is_24h_from_iat() {
+    fn create_local_jwt_exp_matches_ttl() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let token = create_local_jwt(uid, "carol", "admin").unwrap();
+        let (token, _jti) = create_local_jwt(uid, "carol", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
         use base64::Engine;
         let parts: Vec<&str> = token.split('.').collect();
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -777,7 +1086,7 @@ mod tests {
         let claims: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         let iat = claims["iat"].as_u64().unwrap();
         let exp = claims["exp"].as_u64().unwrap();
-        assert_eq!(exp - iat, 86400);
+        assert_eq!(exp - iat, ACCESS_TOKEN_TTL as u64);
     }
 
     #[test]
@@ -856,15 +1165,15 @@ mod tests {
         );
         let result = logout(headers).await;
         assert!(result.is_ok());
-        let json = result.unwrap();
-        assert_eq!(json.0["status"], "logged_out");
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
     }
 
     #[tokio::test]
     async fn logout_with_valid_local_jwt() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
         let uid = Uuid::new_v4();
-        let token = create_local_jwt(uid, "test_user", "admin").unwrap();
+        let (token, _jti) = create_local_jwt(uid, "test_user", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,
@@ -872,8 +1181,8 @@ mod tests {
         );
         let result = logout(headers).await;
         assert!(result.is_ok());
-        let json = result.unwrap();
-        assert_eq!(json.0["status"], "logged_out");
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
     }
 
     // ── get_base_url additional cases ──────────────────────────────

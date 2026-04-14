@@ -3,6 +3,41 @@
 
 const API_BASE = '/api';
 
+/** Default access token TTL in seconds (must match backend ACCESS_TOKEN_TTL). */
+const DEFAULT_ACCESS_TTL = 1200;
+
+/** Flag to prevent concurrent refresh attempts. */
+let isRefreshing = false;
+let refreshPromise: Promise<boolean> | null = null;
+
+/** Attempt to refresh the access token using the HttpOnly refresh cookie. */
+export async function refreshAccessToken(): Promise<boolean> {
+  if (isRefreshing && refreshPromise) return refreshPromise;
+  isRefreshing = true;
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem('access_token', data.access_token);
+        const ttl = data.expires_in ?? DEFAULT_ACCESS_TTL;
+        localStorage.setItem('token_expiry', String(Date.now() + ttl * 1000));
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      isRefreshing = false;
+      refreshPromise = null;
+    }
+  })();
+  return refreshPromise;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('access_token');
   const headers: Record<string, string> = {
@@ -10,7 +45,35 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
+
+  // If we get a 401 and this isn't the refresh endpoint itself, try refreshing.
+  // Only attempt refresh if we actually had a token (expired); if no token was
+  // sent at all, just surface the 401 to the caller without a redirect—this
+  // prevents an infinite reload loop when unauthenticated components (e.g.
+  // SettingsProvider) call protected endpoints on the login page.
+  if (res.status === 401 && path !== '/auth/refresh' && token) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      // Retry with the new token
+      const newToken = localStorage.getItem('access_token');
+      const retryHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
+      };
+      const retryRes = await fetch(`${API_BASE}${path}`, { ...options, headers: retryHeaders, credentials: 'include' });
+      if (!retryRes.ok) {
+        const body = await retryRes.json().catch(() => ({}));
+        throw new ApiError(retryRes.status, body.error || retryRes.statusText);
+      }
+      return retryRes.json();
+    }
+    // Refresh failed — clear local state and redirect to login
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('token_expiry');
+    window.location.href = '/login';
+    throw new ApiError(401, 'Session expired');
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -59,6 +122,7 @@ export interface LoginRequest {
 export interface LoginResponse {
   access_token: string;
   token_type: string;
+  expires_in?: number;
   user: {
     id: string;
     username: string;
@@ -75,8 +139,19 @@ export interface LoginResponse {
   };
 }
 
-export const login = (data: LoginRequest) =>
-  request<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(data) });
+export const login = async (data: LoginRequest): Promise<LoginResponse> => {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, body.error || res.statusText);
+  }
+  return res.json();
+};
 
 export async function logout() {
   try {
@@ -85,13 +160,30 @@ export async function logout() {
       await fetch(`${API_BASE}/auth/logout`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
     }
   } catch {
     // Best-effort — proceed with local cleanup even if server call fails
   }
   localStorage.removeItem('access_token');
+  localStorage.removeItem('token_expiry');
 }
+
+// ── Password Change ─────────────────────────────────────────────────
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export const changePassword = (data: ChangePasswordRequest) =>
+  request<{ status: string }>('/auth/password', { method: 'PUT', body: JSON.stringify(data) });
+
+// ── Admin Password Reset ────────────────────────────────────────────
+
+export const resetUserPassword = (userId: string) =>
+  request<{ password: string }>(`/admin/users/${userId}/reset-password`, { method: 'POST' });
 
 // ── Current User ────────────────────────────────────────────────────
 

@@ -39,6 +39,12 @@ vi.mock('../components/ThemeProvider', () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+/** Build a minimal JWT-shaped string with an `exp` claim so checkAuth accepts it. */
+function fakeJwt(expOffsetSec = 3600) {
+  const payload = btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + expOffsetSec }));
+  return `h.${payload}.s`;
+}
+
 function renderApp(initialRoute = '/') {
   return render(
     <MemoryRouter initialEntries={[initialRoute]}>
@@ -74,8 +80,17 @@ describe('App routing', () => {
     expect(await screen.findByText('Shared')).toBeInTheDocument();
   });
 
+  it('discards pre-0.12.0 token without token_expiry', async () => {
+    localStorage.setItem('access_token', fakeJwt());
+    // Do NOT set token_expiry — simulates a stale pre-0.12.0 token
+    renderApp('/');
+    expect(await screen.findByText('Login Page')).toBeInTheDocument();
+    expect(localStorage.getItem('access_token')).toBeNull();
+  });
+
   it('renders dashboard when authenticated', async () => {
-    localStorage.setItem('access_token', 'valid-token');
+    localStorage.setItem('access_token', fakeJwt());
+    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
         status: 200,
@@ -88,7 +103,8 @@ describe('App routing', () => {
   });
 
   it('clears token and redirects on invalid token', async () => {
-    localStorage.setItem('access_token', 'expired-token');
+    localStorage.setItem('access_token', fakeJwt(-3600));
+    localStorage.setItem('token_expiry', String(Date.now() - 3600000));
     globalThis.fetch = vi.fn(async () => {
       return new Response('', { status: 401 });
     }) as unknown as typeof fetch;
@@ -99,7 +115,8 @@ describe('App routing', () => {
   });
 
   it('handles fetch error gracefully', async () => {
-    localStorage.setItem('access_token', 'some-token');
+    localStorage.setItem('access_token', fakeJwt());
+    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
     globalThis.fetch = vi.fn(async () => {
       throw new Error('network error');
     }) as unknown as typeof fetch;
@@ -109,7 +126,8 @@ describe('App routing', () => {
   });
 
   it('shows loading spinner while auth state is pending', () => {
-    localStorage.setItem('access_token', 'pending-token');
+    localStorage.setItem('access_token', fakeJwt());
+    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
     globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
 
     renderApp('/');
@@ -117,7 +135,8 @@ describe('App routing', () => {
   });
 
   it('logs out and redirects to login', async () => {
-    localStorage.setItem('access_token', 'valid-token');
+    localStorage.setItem('access_token', fakeJwt());
+    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ id: 1, username: 'admin' }), {
         status: 200,
@@ -142,7 +161,8 @@ describe('App routing', () => {
     await screen.findByText('Login Page');
 
     // Simulate login
-    localStorage.setItem('access_token', 'fresh-token');
+    localStorage.setItem('access_token', fakeJwt());
+    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
     // Success response for getMe and getSettings
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ id: 1, username: 'admin', branding: { name: 'Strata' } }), {

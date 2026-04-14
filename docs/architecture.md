@@ -86,7 +86,8 @@ The central orchestrator. Responsibilities:
 - **Database** — connects to local or external PostgreSQL; runs advisory-lock-protected migrations
 - **Auth** — multi-method authentication system:
   - **SSO/OIDC** — dynamic IdP discovery via JWKS, secure client secret storage in Vault, and automatic session establishment.
-  - **Local Auth** — built-in credentials ( Argon2id) with global enable/disable toggle.
+  - **Local Auth** — built-in credentials (Argon2id) with global enable/disable toggle, minimum 12-character password policy, and dedicated password change / admin reset endpoints.
+  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), silent frontend refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast.
   - **Enforcement** — strict backend policy check on every login attempt ensures disabled methods cannot be accessed.
 - **Vault** — envelope encryption for stored credentials via Vault Transit
 - **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
@@ -206,9 +207,10 @@ kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin ser
 ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert, connection_defaults)
 ad_sync_runs ─────── per-config sync run history with stats
 audit_logs ─────── hash-chained append-only event log
+active_sessions ── per-user login session tracking (JTI, IP, user agent, expiry)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `015_multi_search_base.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `029_active_sessions.sql` for the full DDL.
 
 ## Directory Structure
 
@@ -254,7 +256,7 @@ strata-client/
 │   └── src/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
-│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, ThemeProvider, WhatsNewModal)
+│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, SessionTimeoutWarning, ThemeProvider, WhatsNewModal)
 │       └── pages/         Page components (Dashboard, SessionClient, AdminSettings, AuditLogs, Login, SetupWizard, SharedViewer)
 ├── guacd/                 Custom guacd build
 │   └── Dockerfile

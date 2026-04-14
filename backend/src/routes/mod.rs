@@ -26,6 +26,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/status", get(health::status))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/refresh", post(auth::refresh))
         .route("/api/auth/sso/login", get(auth::sso_login))
         .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))
@@ -115,6 +116,10 @@ pub fn build_router(state: SharedState) -> Router {
                 .post(admin::restore_user)
                 .put(admin::update_user),
         )
+        .route(
+            "/api/admin/users/:id/reset-password",
+            post(admin::reset_user_password),
+        )
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
         .route("/api/admin/sessions", get(admin::list_active_sessions))
         .route("/api/admin/sessions/kill", post(admin::kill_sessions))
@@ -169,6 +174,7 @@ pub fn build_router(state: SharedState) -> Router {
 
     // ── Authenticated user routes ────────────────────────────────────
     let user_routes = Router::new()
+        .route("/api/auth/password", put(auth::change_password))
         .route("/api/user/me", get(user::me))
         .route("/api/user/connections", get(user::my_connections))
         .route("/api/user/credentials", put(user::update_credential))

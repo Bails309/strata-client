@@ -71,7 +71,7 @@ First-boot initialization. Only available when `phase == "setup"`.
 
 ### `POST /api/auth/login`
 
-Standard local username/password login. Only available if `local_auth_enabled` is true.
+Standard local username/password login. Only available if `local_auth_enabled` is true. Returns an access token in the response body and sets a refresh token as an `HttpOnly` cookie.
 
 **Request Body**
 ```json
@@ -80,6 +80,23 @@ Standard local username/password login. Only available if `local_auth_enabled` i
   "password": "password"
 }
 ```
+
+**Response** `200 OK`
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "Bearer",
+  "expires_in": 1200,
+  "user": {
+    "id": "uuid",
+    "username": "admin",
+    "role": "admin",
+    "can_manage_system": true
+  }
+}
+```
+
+**Set-Cookie**: `refresh_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age=28800`
 
 ### `GET /api/auth/sso/login`
 
@@ -96,6 +113,64 @@ The handle for the OIDC provider's callback. Exchange the authorization code for
 - `state`: The CSRF state token.
 
 **Success**: `303 See Other` redirect back to the frontend dashboard.
+
+### `POST /api/auth/refresh`
+
+Exchange a valid refresh cookie for a new access token. The refresh token is sent automatically as an `HttpOnly` cookie.
+
+**Request**: No body required. The refresh token cookie is sent automatically by the browser.
+
+**Response** `200 OK`
+```json
+{
+  "access_token": "eyJ...",
+  "expires_in": 1200
+}
+```
+
+**Error** `401 Unauthorized` — refresh cookie missing, expired, or revoked.
+
+### `PUT /api/auth/password`
+
+Change the authenticated user's password. Requires a valid access token. Revokes the current session on success (user must re-login).
+
+**Request Body**
+```json
+{
+  "current_password": "old-password",
+  "new_password": "new-secure-password"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `current_password` | string | Yes | The user's current password |
+| `new_password` | string | Yes | New password (minimum 12 characters, maximum 1024) |
+
+**Response** `200 OK`
+```json
+{ "status": "password_changed" }
+```
+
+**Errors:**
+- `400` — new password does not meet policy requirements
+- `401` — current password incorrect
+- `404` — user not found or not a local auth user
+
+### `POST /api/auth/logout`
+
+Invalidates the current access token and refresh cookie. The access token JTI is added to the server-side revocation list.
+
+**Headers**: `Authorization: Bearer <token>`
+
+**Response** `200 OK`
+```json
+{ "status": "logged_out" }
+```
+
+---
+
+## Admin Endpoints
 
 All admin endpoints require authentication **and** the `admin` role.
 
@@ -414,6 +489,20 @@ List all users.
   }
 ]
 ```
+
+#### `POST /api/admin/users/:id/reset-password`
+
+Force-reset a user's password. Generates a new random 16-character password and returns it once.
+
+**Response** `200 OK`
+```json
+{
+  "password": "aB3xK9mR2pQ7wZ1v"
+}
+```
+
+**Errors:**
+- `404` — user not found or not a local auth user
 
 ### Audit Logs
 

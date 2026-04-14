@@ -18,6 +18,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [loading, setLoading] = useState(true);
 
   const refreshSettings = useCallback(async () => {
+    // Skip fetching admin settings when not authenticated — avoids noisy
+    // 401 errors in the browser console on the login page.
+    if (!localStorage.getItem('access_token')) {
+      setLoading(false);
+      return;
+    }
     try {
       const data = await getSettings();
       setSettings(data);

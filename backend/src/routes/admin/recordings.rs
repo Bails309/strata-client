@@ -488,7 +488,6 @@ async fn handle_recording_stream(
                             (Some(b_ts), Some(b_real)) => {
                                 let first_ts = first_guac_ts.unwrap_or(b_ts);
                                 let abs_elapsed = ts.saturating_sub(first_ts);
-                                let guac_elapsed = ts.saturating_sub(b_ts);
 
                                 // ── Seeking: fast-forward without pacing ──
                                 if seeking {

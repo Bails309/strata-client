@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import { createElement } from 'react';
+import { MemoryRouter } from 'react-router-dom';
+
+const routerWrapper = ({ children }: { children: React.ReactNode }) =>
+  createElement(MemoryRouter, null, children);
 
 // Mock guacamole-common-js
 vi.mock('guacamole-common-js', () => ({
@@ -99,27 +104,27 @@ describe('usePopOut', () => {
   it('returns isPoppedOut=false initially', () => {
     const session = createMockSession();
     const containerRef = { current: document.createElement('div') };
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
     expect(result.current.isPoppedOut).toBe(false);
   });
 
   it('returns popOut and returnDisplay functions', () => {
     const session = createMockSession();
     const containerRef = { current: document.createElement('div') };
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
     expect(typeof result.current.popOut).toBe('function');
     expect(typeof result.current.returnDisplay).toBe('function');
   });
 
   it('handles undefined session gracefully', () => {
     const containerRef = { current: document.createElement('div') };
-    const { result } = renderHook(() => usePopOut(undefined, containerRef as any));
+    const { result } = renderHook(() => usePopOut(undefined, containerRef as any), { wrapper: routerWrapper });
     expect(result.current.isPoppedOut).toBe(false);
   });
 
   it('returnDisplay is no-op when no session', () => {
     const containerRef = { current: document.createElement('div') };
-    const { result } = renderHook(() => usePopOut(undefined, containerRef as any));
+    const { result } = renderHook(() => usePopOut(undefined, containerRef as any), { wrapper: routerWrapper });
     act(() => {
       result.current.returnDisplay();
     });
@@ -130,7 +135,7 @@ describe('usePopOut', () => {
     const session = createMockSession();
     const containerRef = { current: document.createElement('div') };
     vi.spyOn(window, 'open').mockReturnValue(null);
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -145,7 +150,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -161,7 +166,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -176,7 +181,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -196,7 +201,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -215,7 +220,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -235,7 +240,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -254,7 +259,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -269,7 +274,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -284,7 +289,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result, unmount } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result, unmount } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -310,7 +315,7 @@ describe('usePopOut', () => {
       ],
     });
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -335,7 +340,7 @@ describe('usePopOut', () => {
     // Mock getScreenDetails that throws (permission denied)
     (window as any).getScreenDetails = vi.fn().mockRejectedValue(new Error('Permission denied'));
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -357,7 +362,7 @@ describe('usePopOut', () => {
     const Guacamole = (await import('guacamole-common-js')).default;
     vi.mocked(Guacamole.Keyboard).mockImplementation(function() { return mockKb as any; });
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -376,7 +381,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -391,7 +396,7 @@ describe('usePopOut', () => {
     const mockPopup = createMockPopupWindow();
     vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();
@@ -417,7 +422,7 @@ describe('usePopOut', () => {
       return { onEach: touchOnEach, onmousedown: null, onmouseup: null, onmousemove: null } as any;
     });
 
-    const { result } = renderHook(() => usePopOut(session as any, containerRef as any));
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
 
     await act(async () => {
       await result.current.popOut();

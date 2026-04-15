@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.5] — 2026-04-16
+
+### Fixed
+- **NVR Live Rewind Black Screen**: Rewinding a live session (30s, 1m, 3m, or 5m) would display a black screen because the backend sent intermediate `sync` instructions during the replay phase, causing the Guacamole client to queue hundreds of intermediate frames. Sync instructions are now suppressed during replay and a single sync is sent after all drawing operations, rendering the target frame atomically.
+- **NVR Player Default Speed**: The NVR player now defaults to 1× speed instead of 4× when first opened.
+- **NVR Speed Change During Live Phase**: Changing playback speed while watching a live session no longer triggers an unnecessary reconnect. Speed changes during the live phase are applied in-place.
+- **Popout Window Close Reconnect**: Closing a popped-out session window no longer leaves a white screen on the main page. The display element is adopted back into the main document and the user is navigated to the session page.
+
 ## [0.14.4] — 2026-04-15
 
 ### Added

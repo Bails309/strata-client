@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
 import { GuacSession } from './SessionManager';
 import { createWinKeyProxy } from '../utils/winKeyProxy';
@@ -15,6 +16,8 @@ export function usePopOut(
   session: GuacSession | undefined,
   containerRef: React.RefObject<HTMLDivElement | null>,
 ) {
+  const navigate = useNavigate();
+
   // Derive initial state from the session — if it already has a popup open
   // (e.g. we navigated away and came back), reflect that immediately.
   const [isPoppedOut, setIsPoppedOut] = useState(() => !!session?._popout && !session._popout.window.closed);
@@ -66,6 +69,11 @@ export function usePopOut(
         display.scale(Math.min(cw / dw, ch / dh));
       }
       session.client.sendSize(cw, ch);
+    } else if (session.displayEl) {
+      // No container — user navigated away from the session page while the
+      // popup was open.  Adopt the display element back into the main document
+      // so it isn't destroyed with the popup, then navigate to the session.
+      try { document.adoptNode(session.displayEl); } catch { /* already in main doc */ }
     }
 
     // Close the popup window
@@ -75,7 +83,13 @@ export function usePopOut(
     session._popout = undefined;
     session.isPoppedOut = false;
     setIsPoppedOut(false);
-  }, [session, containerRef]);
+
+    // If the session page isn't mounted (no container), navigate back to it
+    // so the display can be re-attached naturally.
+    if (!container) {
+      navigate(`/session/${session.connectionId}`);
+    }
+  }, [session, containerRef, navigate]);
 
   const popOut = useCallback(async () => {
     if (!session || isPoppedOut) return;

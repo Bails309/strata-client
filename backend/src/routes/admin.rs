@@ -2103,6 +2103,14 @@ pub async fn observe_session_ws(
             }
 
             // Phase 1: Paced replay of buffered frames
+            //
+            // During replay we suppress `sync` instructions so the
+            // Guacamole client accumulates all drawing ops into a single
+            // frame instead of queuing hundreds of intermediate frames
+            // (which causes a black screen).  A single `sync` is sent
+            // after the loop so the client flushes once.
+            let mut last_sync_inst: Option<String> = None;
+
             if !timed_frames.is_empty() {
                 let is_live_only = offset == 0;
 
@@ -2135,9 +2143,24 @@ pub async fn observe_session_ws(
                         }
                     }
 
+                    // Skip sync instructions during replay — save the last
+                    // one so we can flush the display in one shot afterwards.
+                    if frame.starts_with("4.sync") {
+                        last_sync_inst = Some(frame.clone());
+                        continue;
+                    }
+
                     if socket.send(Message::Text(frame.clone())).await.is_err() {
                         return;
                     }
+                }
+            }
+
+            // Flush the display with the last sync instruction so all
+            // accumulated drawing ops render as a single atomic frame.
+            if let Some(sync) = last_sync_inst {
+                if socket.send(Message::Text(sync)).await.is_err() {
+                    return;
                 }
             }
 

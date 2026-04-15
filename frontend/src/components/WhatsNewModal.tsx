@@ -25,6 +25,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.5',
+    subtitle: 'NVR & Popout Fixes',
+    sections: [
+      {
+        title: 'Live Rewind Black Screen Fix',
+        description:
+          'Rewinding a live session no longer shows a black screen. All rewind durations (30s, 1m, 3m, 5m) now render the target frame instantly.',
+      },
+      {
+        title: 'NVR Player Speed Improvements',
+        description:
+          'The NVR player now defaults to 1× speed, and changing speed during a live session no longer causes an unnecessary reconnect.',
+      },
+      {
+        title: 'Popout Window Close Fix',
+        description:
+          'Closing a popped-out session window now correctly returns you to the session page instead of leaving a white screen.',
+      },
+    ],
+  },
+  {
     version: '0.14.4',
     subtitle: 'Recording Skip & Speed Controls',
     sections: [

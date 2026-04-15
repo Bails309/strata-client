@@ -20,7 +20,7 @@ export default function NvrPlayer() {
     const o = searchParams.get('offset');
     return o ? parseInt(o, 10) : 300;
   });
-  const [speed, setSpeed] = useState(4);
+  const [speed, setSpeed] = useState(1);
   const [errorMsg, setErrorMsg] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const elapsedRef = useRef(0);
@@ -285,7 +285,13 @@ export default function NvrPlayer() {
             {[1, 2, 4, 8].map((s) => (
               <button
                 key={s}
-                onClick={() => connect(offset, s)}
+                onClick={() => {
+                  if (phase === 'replaying') {
+                    connect(offset, s);
+                  } else {
+                    setSpeed(s);
+                  }
+                }}
                 className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
                   speed === s
                     ? 'bg-accent/30 text-accent font-medium'

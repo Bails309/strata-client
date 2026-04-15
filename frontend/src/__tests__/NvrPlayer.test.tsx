@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -50,7 +50,8 @@ vi.mock('guacamole-common-js', () => ({
 }));
 
 vi.mock('../api', () => ({
-  buildNvrObserveUrl: vi.fn(() => 'ws://localhost/nvr'),
+  buildNvrObserveUrl: vi.fn(() => Promise.resolve('ws://localhost/nvr')),
+  ensureFreshToken: vi.fn(() => Promise.resolve('test-token')),
 }));
 
 import NvrPlayer from '../pages/NvrPlayer';
@@ -116,6 +117,8 @@ describe('NvrPlayer', () => {
 
   it('shows error phase on client error', async () => {
     renderNvrPlayer();
+    // Wait for async connect to finish and set up callbacks
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockOnerror?.({ message: 'Connection refused' });
     });
@@ -123,8 +126,9 @@ describe('NvrPlayer', () => {
     expect(screen.getByText('Connection refused')).toBeInTheDocument();
   });
 
-  it('shows error phase on tunnel error', () => {
+  it('shows error phase on tunnel error', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockTunnelOnerror?.({ message: 'Tunnel failed' });
     });
@@ -132,8 +136,9 @@ describe('NvrPlayer', () => {
     expect(screen.getByText('Tunnel failed')).toBeInTheDocument();
   });
 
-  it('shows ended phase when tunnel closes', () => {
+  it('shows ended phase when tunnel closes', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockTunnelOnstatechange?.(0); // Guacamole.Tunnel.CLOSED
     });
@@ -141,8 +146,9 @@ describe('NvrPlayer', () => {
     expect(screen.getByText('Session has ended')).toBeInTheDocument();
   });
 
-  it('shows Return to Sessions button in ended state', () => {
+  it('shows Return to Sessions button in ended state', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockTunnelOnstatechange?.(0);
     });
@@ -165,8 +171,9 @@ describe('NvrPlayer', () => {
     expect(mockClient.connect).toHaveBeenCalled();
   });
 
-  it('transitions to live phase when instruction gap exceeds threshold', () => {
+  it('transitions to live phase when instruction gap exceeds threshold', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     // Simulate a burst of instructions, then a gap
     act(() => {
       for (let i = 0; i < 60; i++) {
@@ -189,16 +196,18 @@ describe('NvrPlayer', () => {
     expect(screen.getByText('0:00')).toBeInTheDocument();
   });
 
-  it('default error message when status has no message', () => {
+  it('default error message when status has no message', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockOnerror?.({});
     });
     expect(screen.getByText('Connection error')).toBeInTheDocument();
   });
 
-  it('default tunnel error message when status has no message', () => {
+  it('default tunnel error message when status has no message', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockTunnelOnerror?.({});
     });
@@ -228,8 +237,9 @@ describe('NvrPlayer', () => {
     expect(screen.queryByText(/—/)).not.toBeInTheDocument();
   });
 
-  it('shows error overlay with error message text', () => {
+  it('shows error overlay with error message text', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockOnerror?.({ message: 'Forbidden' });
     });
@@ -237,8 +247,9 @@ describe('NvrPlayer', () => {
     expect(screen.getByText('Error')).toBeInTheDocument();
   });
 
-  it('shows Connecting phase when non-CLOSED tunnel state changes', () => {
+  it('shows Connecting phase when non-CLOSED tunnel state changes', async () => {
     renderNvrPlayer();
+    await waitFor(() => expect(mockClient.connect).toHaveBeenCalled());
     act(() => {
       mockTunnelOnstatechange?.(1); // Some non-CLOSED state
     });

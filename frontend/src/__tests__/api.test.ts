@@ -677,18 +677,19 @@ describe('buildRecordingStreamUrl', () => {
   });
 });
 
-// ── buildNvrObserveUrl (pure function, no fetch) ────────────────────
+// ── buildNvrObserveUrl (async – ensures fresh token) ────────────────
 
 describe('buildNvrObserveUrl', () => {
   beforeEach(() => localStorage.clear());
 
-  it('builds wss: URL when page is https', () => {
+  it('builds wss: URL when page is https', async () => {
     Object.defineProperty(window, 'location', {
       value: { protocol: 'https:', host: 'app.example.com' },
       writable: true,
     });
     localStorage.setItem('access_token', 'jwt123');
-    const url = buildNvrObserveUrl('sess1', 120);
+    localStorage.setItem('token_expiry', String(Date.now() + 600_000));
+    const url = await buildNvrObserveUrl('sess1', 120);
     expect(url).toContain('wss://app.example.com');
     expect(url).toContain('/api/admin/sessions/sess1/observe');
     expect(url).toContain('token=jwt123');
@@ -696,32 +697,38 @@ describe('buildNvrObserveUrl', () => {
     expect(url).toContain('speed=4'); // default speed
   });
 
-  it('builds ws: URL when page is http', () => {
+  it('builds ws: URL when page is http', async () => {
     Object.defineProperty(window, 'location', {
       value: { protocol: 'http:', host: 'localhost:3000' },
       writable: true,
     });
-    const url = buildNvrObserveUrl('sess2');
+    localStorage.setItem('access_token', 'tok');
+    localStorage.setItem('token_expiry', String(Date.now() + 600_000));
+    const url = await buildNvrObserveUrl('sess2');
     expect(url).toContain('ws://localhost:3000');
     expect(url).toContain('offset=300'); // default
     expect(url).toContain('speed=4');    // default
   });
 
-  it('encodes session id in URL', () => {
+  it('encodes session id in URL', async () => {
     Object.defineProperty(window, 'location', {
       value: { protocol: 'http:', host: 'localhost' },
       writable: true,
     });
-    const url = buildNvrObserveUrl('id with spaces');
+    localStorage.setItem('access_token', 'tok');
+    localStorage.setItem('token_expiry', String(Date.now() + 600_000));
+    const url = await buildNvrObserveUrl('id with spaces');
     expect(url).toContain('id%20with%20spaces');
   });
 
-  it('omits token param when no token stored', () => {
+  it('omits token param when no token stored and refresh fails', async () => {
     Object.defineProperty(window, 'location', {
       value: { protocol: 'http:', host: 'localhost' },
       writable: true,
     });
-    const url = buildNvrObserveUrl('s1');
+    // Mock a failed refresh
+    mockFetch(null, 401);
+    const url = await buildNvrObserveUrl('s1');
     expect(url).not.toContain('token=');
   });
 

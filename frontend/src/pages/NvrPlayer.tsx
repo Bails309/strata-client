@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { buildNvrObserveUrl } from '../api';
+import { buildNvrObserveUrl, ensureFreshToken } from '../api';
 
 type Phase = 'connecting' | 'replaying' | 'live' | 'ended' | 'error';
 
@@ -48,7 +48,7 @@ export default function NvrPlayer() {
   }, []);
 
   // Connect / reconnect
-  const connect = useCallback((rewindSecs: number, playbackSpeed: number) => {
+  const connect = useCallback(async (rewindSecs: number, playbackSpeed: number) => {
     if (!sessionId || !containerRef.current) return;
     cleanup();
 
@@ -64,7 +64,16 @@ export default function NvrPlayer() {
     elapsedRef.current = 0;
     setElapsed(0);
 
-    const fullUrl = buildNvrObserveUrl(sessionId, rewindSecs, playbackSpeed);
+    // Ensure the access token is fresh before opening the WebSocket
+    // (WS connections cannot use the normal 401-retry interceptor).
+    const token = await ensureFreshToken();
+    if (!token) {
+      setPhase('error');
+      setErrorMsg('Session expired — please log in again.');
+      return;
+    }
+
+    const fullUrl = await buildNvrObserveUrl(sessionId, rewindSecs, playbackSpeed);
     const qIdx = fullUrl.indexOf('?');
     const tunnelBase = qIdx >= 0 ? fullUrl.substring(0, qIdx) : fullUrl;
     const tunnelQuery = qIdx >= 0 ? fullUrl.substring(qIdx + 1) : '';
@@ -119,7 +128,14 @@ export default function NvrPlayer() {
 
     tunnel.onerror = (status: Guacamole.Status) => {
       setPhase('error');
-      setErrorMsg(status?.message || 'Tunnel error');
+      const code = status?.code;
+      if (code === 519 || code === 520) {
+        setErrorMsg('Session not found — it may have ended.');
+      } else if (code === 515) {
+        setErrorMsg('Authentication failed — your session may have expired.');
+      } else {
+        setErrorMsg(status?.message || 'Tunnel error');
+      }
     };
 
     tunnel.onstatechange = (state: number) => {
@@ -311,10 +327,16 @@ export default function NvrPlayer() {
         </div>
       )}
 
-      {/* Error message */}
+      {/* Error message with retry */}
       {phase === 'error' && errorMsg && (
-        <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm">
-          {errorMsg}
+        <div className="px-4 py-2 bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm flex items-center gap-3">
+          <span>{errorMsg}</span>
+          <button
+            onClick={() => connect(offset, speed)}
+            className="text-xs px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 transition-colors"
+          >
+            Retry
+          </button>
         </div>
       )}
 

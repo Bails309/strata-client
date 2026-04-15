@@ -774,14 +774,30 @@ export function buildMyRecordingStreamUrl(recordingId: string): string {
 }
 
 /**
+ * Ensure the access token in localStorage is fresh.  If the token has
+ * expired (or is about to within 30 s), try a silent refresh first.
+ * Returns the current valid token, or `null` if refresh failed.
+ */
+export async function ensureFreshToken(): Promise<string | null> {
+  const token = localStorage.getItem('access_token');
+  const expiry = Number(localStorage.getItem('token_expiry') || '0');
+  if (token && expiry > Date.now() + 30_000) return token;
+  // Token missing or expiring soon — try refresh
+  const ok = await refreshAccessToken();
+  return ok ? localStorage.getItem('access_token') : token;
+}
+
+/**
  * Build a WebSocket URL for the NVR observe endpoint.
+ * Ensures the access token is fresh before embedding it in the URL
+ * (WebSocket connections cannot use the normal 401-retry interceptor).
  * @param sessionId  The active session to observe
  * @param offsetSecs How many seconds of buffer to replay (0 = live only)
  * @param speed      Playback speed multiplier (default 4×, 0 = instant)
  */
-export function buildNvrObserveUrl(sessionId: string, offsetSecs = 300, speed = 4): string {
+export async function buildNvrObserveUrl(sessionId: string, offsetSecs = 300, speed = 4): Promise<string> {
+  const token = await ensureFreshToken();
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = localStorage.getItem('access_token');
   const params = new URLSearchParams();
   if (token) params.set('token', token);
   params.set('offset', String(offsetSecs));

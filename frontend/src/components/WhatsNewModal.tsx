@@ -25,6 +25,22 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.2',
+    subtitle: 'NVR & Sessions Permission Fixes',
+    sections: [
+      {
+        title: 'NVR Observer Connection Fix',
+        description:
+          'Live session observation no longer fails silently when your access token has expired. The player now refreshes the token before connecting and shows clear error messages with a Retry button if something goes wrong.',
+      },
+      {
+        title: 'Sessions Sidebar Visibility Fix',
+        description:
+          'Users with the "View own sessions" role permission can now see the Sessions link in the sidebar. Previously this was hidden because the auth check endpoint was missing the permission field.',
+      },
+    ],
+  },
+  {
     version: '0.14.1',
     subtitle: 'Credential Renewal & Clipboard Fix',
     sections: [

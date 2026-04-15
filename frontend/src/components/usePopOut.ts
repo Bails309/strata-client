@@ -161,6 +161,47 @@ export function usePopOut(
     };
     popup.document.addEventListener('keydown', trapKeyDown, true);
 
+    // ── Clipboard sync for the popup window ──
+    // The main window's paste listener doesn't fire in the popup, so we
+    // need dedicated handlers here.
+    const pushClipboardPopup = async () => {
+      try {
+        const text = await popup.navigator.clipboard?.readText();
+        if (text && text !== sess.remoteClipboard) {
+          const stream = sess.client.createClipboardStream('text/plain');
+          const writer = new Guacamole.StringWriter(stream);
+          const CHUNK_SIZE = 4096;
+          for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+            writer.sendText(text.substring(i, i + CHUNK_SIZE));
+          }
+          writer.sendEnd();
+          sess.remoteClipboard = text;
+        }
+      } catch {
+        // Clipboard access denied in popup — ignore
+      }
+    };
+
+    const handlePastePopup = (e: Event) => {
+      const ce = e as ClipboardEvent;
+      const text = ce.clipboardData?.getData('text/plain');
+      if (text && text !== sess.remoteClipboard) {
+        const stream = sess.client.createClipboardStream('text/plain');
+        const writer = new Guacamole.StringWriter(stream);
+        const CHUNK_SIZE = 4096;
+        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+          writer.sendText(text.substring(i, i + CHUNK_SIZE));
+        }
+        writer.sendEnd();
+        sess.remoteClipboard = text;
+      }
+    };
+
+    sess.displayEl.addEventListener('mouseenter', pushClipboardPopup);
+    sess.displayEl.addEventListener('mousedown', pushClipboardPopup);
+    popup.addEventListener('focus', pushClipboardPopup);
+    popup.document.addEventListener('paste', handlePastePopup);
+
     // ── Handle resize in the popup ──
     const display = sess.client.getDisplay();
 
@@ -197,7 +238,15 @@ export function usePopOut(
       clearInterval(pollId);
       popup.removeEventListener('resize', handleResize);
       popup.removeEventListener('pagehide', onUnload);
-      try { popup.document.removeEventListener('keydown', trapKeyDown, true); } catch { /* popup may already be closed */ }
+      popup.removeEventListener('focus', pushClipboardPopup);
+      try {
+        popup.document.removeEventListener('keydown', trapKeyDown, true);
+        popup.document.removeEventListener('paste', handlePastePopup);
+      } catch { /* popup may already be closed */ }
+      try {
+        sess.displayEl.removeEventListener('mouseenter', pushClipboardPopup);
+        sess.displayEl.removeEventListener('mousedown', pushClipboardPopup);
+      } catch { /* ignore */ }
     };
 
     // ── Store all pop-out state on the session (persists across route changes) ──

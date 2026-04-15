@@ -456,6 +456,7 @@ export interface Connection {
   folder_name?: string;
   extra?: Record<string, string>;
   last_accessed?: string;
+  watermark?: string;
 }
 
 export const getConnections = () => request<Connection[]>('/admin/connections');
@@ -615,6 +616,7 @@ export interface ConnectionInfo {
   protocol: string;
   has_credentials: boolean;
   ignore_cert?: boolean;
+  watermark?: string;
 }
 
 export const getConnectionInfo = (connectionId: string) =>

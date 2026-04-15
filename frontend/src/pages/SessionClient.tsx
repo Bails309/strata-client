@@ -44,6 +44,7 @@ export default function SessionClient() {
   const [sshRequired, setSshRequired] = useState<string[] | null>(null);
   const [hasDomain, setHasDomain] = useState(false);
   const [ignoreCert, setIgnoreCert] = useState(false);
+  const [connectionWatermark, setConnectionWatermark] = useState<string>('inherit');
   const [vaultProfiles, setVaultProfiles] = useState<CredentialProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const pendingCredsRef = useRef<{ username: string; password: string; credential_profile_id?: string }>({ username: '', password: '' });
@@ -116,6 +117,7 @@ export default function SessionClient() {
         setConnectionName(connDetail?.name || info.protocol.toUpperCase());
         setHasDomain(!!connDetail?.domain);
         setIgnoreCert(!!info.ignore_cert);
+        setConnectionWatermark(info.watermark || 'inherit');
         if (info.has_credentials) {
           setPhase('connected');
         } else if (info.protocol === 'rdp') {
@@ -708,7 +710,7 @@ export default function SessionClient() {
       }, [currentSession, isPoppedOut, popOut, returnDisplay]) as any}
 
       {/* Touch controls and watermark */}
-      {currentSession && <SessionWatermark />}
+      {currentSession && <SessionWatermark connectionWatermark={connectionWatermark} />}
 
       {/* Pop-out placeholder */}
       {isPoppedOut && (

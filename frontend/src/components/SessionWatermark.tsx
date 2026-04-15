@@ -6,7 +6,12 @@ import { getMe, MeResponse } from '../api';
  * Displays the logged-in user's name, IP address, and a rotating timestamp.
  * Uses `pointer-events: none` so it never intercepts mouse/touch input.
  */
-export default function SessionWatermark() {
+interface SessionWatermarkProps {
+  /** Per-connection watermark override: 'inherit' | 'on' | 'off' */
+  connectionWatermark?: string;
+}
+
+export default function SessionWatermark({ connectionWatermark = 'inherit' }: SessionWatermarkProps) {
   const [user, setUser] = useState<MeResponse | null>(null);
   const [timestamp, setTimestamp] = useState(() => formatTimestamp());
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -92,7 +97,9 @@ export default function SessionWatermark() {
     return () => ro.disconnect();
   }, []);
 
-  if (!user || !user.watermark_enabled) return null;
+  // Per-connection override: 'on' always shows, 'off' always hides, 'inherit' uses global
+  if (connectionWatermark === 'off') return null;
+  if (!user || (connectionWatermark === 'inherit' && !user.watermark_enabled)) return null;
 
   return (
     <canvas

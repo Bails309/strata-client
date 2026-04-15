@@ -1156,7 +1156,7 @@ function AccessTab({
   };
   const [formMode, setFormMode] = useState<'closed' | 'add' | 'edit'>('closed');
   const [formId, setFormId] = useState<string | null>(null);
-  const [formCore, setFormCore] = useState({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', folder_id: '' });
+  const [formCore, setFormCore] = useState({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', folder_id: '', watermark: 'inherit' });
   const [formExtra, setFormExtra] = useState<Record<string, string>>({});
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderParent, setNewFolderParent] = useState('');
@@ -1204,7 +1204,7 @@ function AccessTab({
   function openAdd() {
     setFormMode('add');
     setFormId(null);
-    setFormCore({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', folder_id: '' });
+    setFormCore({ name: '', protocol: 'rdp', hostname: '', port: 3389, domain: '', description: '', folder_id: '', watermark: 'inherit' });
     setFormExtra({ 'server-layout': 'en-gb-qwerty', 'timezone': 'Europe/London' });
     setTimeout(() => connFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
@@ -1212,7 +1212,7 @@ function AccessTab({
   function openEdit(c: Connection) {
     setFormMode('edit');
     setFormId(c.id);
-    setFormCore({ name: c.name, protocol: c.protocol, hostname: c.hostname, port: c.port, domain: c.domain || '', description: c.description || '', folder_id: c.folder_id || '' });
+    setFormCore({ name: c.name, protocol: c.protocol, hostname: c.hostname, port: c.port, domain: c.domain || '', description: c.description || '', folder_id: c.folder_id || '', watermark: c.watermark || 'inherit' });
     setFormExtra(c.extra ? { ...c.extra } : {});
     setTimeout(() => connFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
@@ -1658,7 +1658,7 @@ function AccessTab({
               <input value={formCore.domain} onChange={(e) => setFormCore({ ...formCore, domain: e.target.value })} placeholder="EXAMPLE.COM" />
             </div>
           </div>
-          <div className="mb-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+          <div className="mb-4" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
             <div className="form-group !mb-0">
               <label>Description</label>
               <input value={formCore.description} onChange={(e) => setFormCore({ ...formCore, description: e.target.value })} placeholder="Optional description" />
@@ -1672,6 +1672,18 @@ function AccessTab({
                 options={[
                   { value: '', label: 'No folder' },
                   ...folders.map(f => ({ value: f.id, label: f.parent_id ? `  └ ${f.name}` : f.name })),
+                ]}
+              />
+            </div>
+            <div className="form-group !mb-0">
+              <label>Session Watermark</label>
+              <Select
+                value={formCore.watermark}
+                onChange={(v) => setFormCore({ ...formCore, watermark: v })}
+                options={[
+                  { value: 'inherit', label: 'Inherit (global setting)' },
+                  { value: 'on', label: 'Always on' },
+                  { value: 'off', label: 'Always off' },
                 ]}
               />
             </div>

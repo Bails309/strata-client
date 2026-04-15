@@ -109,6 +109,7 @@ pub struct UserConnectionRow {
     pub folder_id: Option<Uuid>,
     pub folder_name: Option<String>,
     pub last_accessed: Option<chrono::DateTime<chrono::Utc>>,
+    pub watermark: String,
 }
 
 pub async fn my_connections(
@@ -123,7 +124,7 @@ pub async fn my_connections(
         // seeded this table from global data; subsequent connections update this per-user.
         sqlx::query_as(
             "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, uca.last_accessed
+                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark
              FROM connections c
              LEFT JOIN connection_folders cf ON cf.id = c.folder_id
              LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
@@ -136,7 +137,7 @@ pub async fn my_connections(
     } else {
         sqlx::query_as(
             "SELECT DISTINCT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, uca.last_accessed
+                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark
              FROM connections c
              LEFT JOIN connection_folders cf ON cf.id = c.folder_id
              LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
@@ -729,9 +730,9 @@ pub async fn connection_info(
         (db, vault)
     };
 
-    // Fetch protocol and extra params for this connection
-    let (protocol, extra): (String, Option<serde_json::Value>) = sqlx::query_as(
-        "SELECT protocol, extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
+    // Fetch protocol, extra params, and watermark setting for this connection
+    let (protocol, extra, watermark): (String, Option<serde_json::Value>, String) = sqlx::query_as(
+        "SELECT protocol, extra, watermark FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
     )
     .bind(connection_id)
     .fetch_optional(&db.pool)
@@ -767,6 +768,7 @@ pub async fn connection_info(
         "protocol": protocol,
         "has_credentials": has_vault_creds,
         "ignore_cert": ignore_cert,
+        "watermark": watermark,
     })))
 }
 

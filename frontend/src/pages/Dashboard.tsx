@@ -8,6 +8,7 @@ import { useSettings } from '../contexts/SettingsContext';
 const PAGE_SIZE = 50;
 const FOLDER_VIEW_KEY = 'strata-folder-view';
 const EXPANDED_FOLDERS_KEY = 'strata-expanded-folders';
+const SHOW_FAVORITES_KEY = 'strata-show-favorites';
 
 function ProtocolIcon({ protocol }: { protocol: string }) {
   const p = protocol.toLowerCase();
@@ -57,7 +58,7 @@ export default function Dashboard() {
   const [tiledCreds, setTiledCreds] = useState<Record<string, { username: string; password: string; credential_profile_id?: string }>>({});
   const [vaultConfigured, setVaultConfigured] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [showFavorites, setShowFavorites] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(() => localStorage.getItem(SHOW_FAVORITES_KEY) === 'true');
   const [folderView, setFolderView] = useState(() => localStorage.getItem(FOLDER_VIEW_KEY) === 'true');
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -447,7 +448,7 @@ export default function Dashboard() {
 
         <button
           className={`btn-sm inline-flex items-center gap-1.5 ${showFavorites ? '!border-accent !text-accent' : ''}`}
-          onClick={() => setShowFavorites(!showFavorites)}
+          onClick={() => { const next = !showFavorites; setShowFavorites(next); localStorage.setItem(SHOW_FAVORITES_KEY, String(next)); }}
           title={showFavorites ? 'Show all connections' : 'Show favorites only'}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill={showFavorites ? 'var(--color-accent)' : 'none'} stroke={showFavorites ? 'var(--color-accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

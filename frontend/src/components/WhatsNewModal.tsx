@@ -25,6 +25,22 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.3',
+    subtitle: 'Fullscreen Recordings & User Session Observe',
+    sections: [
+      {
+        title: 'Recording Player Fullscreen',
+        description:
+          'The historical recording player now has a fullscreen button for distraction-free playback. The default modal is also wider for a better viewing experience.',
+      },
+      {
+        title: 'Live/Rewind for Your Own Sessions',
+        description:
+          'Users with the "View own sessions" permission can now use the Live and Rewind buttons on their own active sessions — no admin privileges required.',
+      },
+    ],
+  },
+  {
     version: '0.14.2',
     subtitle: 'NVR & Sessions Permission Fixes',
     sections: [

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { buildNvrObserveUrl, ensureFreshToken } from '../api';
+import { buildNvrObserveUrl, buildUserNvrObserveUrl, ensureFreshToken } from '../api';
 
 type Phase = 'connecting' | 'replaying' | 'live' | 'ended' | 'error';
 
@@ -12,6 +12,8 @@ export default function NvrPlayer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const tunnelRef = useRef<Guacamole.Tunnel | null>(null);
+
+  const useAdminEndpoint = searchParams.get('admin') === '1';
 
   const [phase, setPhase] = useState<Phase>('connecting');
   const [offset, setOffset] = useState(() => {
@@ -73,7 +75,7 @@ export default function NvrPlayer() {
       return;
     }
 
-    const fullUrl = await buildNvrObserveUrl(sessionId, rewindSecs, playbackSpeed);
+    const fullUrl = await (useAdminEndpoint ? buildNvrObserveUrl : buildUserNvrObserveUrl)(sessionId, rewindSecs, playbackSpeed);
     const qIdx = fullUrl.indexOf('?');
     const tunnelBase = qIdx >= 0 ? fullUrl.substring(0, qIdx) : fullUrl;
     const tunnelQuery = qIdx >= 0 ? fullUrl.substring(qIdx + 1) : '';

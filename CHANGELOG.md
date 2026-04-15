@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.3] — 2026-04-15
+
+### Added
+- **Recording Player Fullscreen Mode**: The historical recording player now has a fullscreen toggle button in both the header bar and a dedicated CSS class for true full-viewport playback. The default modal width has also been increased from `max-w-5xl` to `max-w-7xl` for a larger viewing area.
+- **Live/Rewind for Own Sessions**: Users with the `can_view_sessions` permission can now observe and rewind their own live sessions — not just admins. A new user-scoped WebSocket endpoint (`GET /api/user/sessions/:id/observe`) verifies session ownership before allowing observation.
+
+### Changed
+- **NVR Observe Route Guard**: The `/observe/:sessionId` frontend route now also allows users with `can_view_sessions`, matching the new user-scoped observe endpoint.
+- **Sessions Page Actions Column**: The Live and Rewind buttons are now visible for all users who can see the Sessions page. Admin users connect via the admin endpoint; regular users connect via the user-scoped endpoint automatically.
+
 ## [0.14.2] — 2026-04-15
 
 ### Fixed

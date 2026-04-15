@@ -195,13 +195,13 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                   <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">Remote Host</th>
                   <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">Active Since</th>
                   <th className="p-4 text-right text-xs font-semibold uppercase tracking-wider text-txt-tertiary">Traffic</th>
-                  {isAdmin && <th className="p-4 text-right text-xs font-semibold uppercase tracking-wider text-txt-tertiary">Actions</th>}
+                  <th className="p-4 text-right text-xs font-semibold uppercase tracking-wider text-txt-tertiary">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 8 : 5} className="p-12 text-center">
+                    <td colSpan={isAdmin ? 8 : 6} className="p-12 text-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="p-3 bg-nav-link-hover rounded-full">
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-txt-tertiary">
@@ -258,6 +258,26 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                         </div>
                       </td>
                       {isAdmin && (
+                        <td className="p-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              className="btn btn-secondary text-xs py-1 px-2"
+                              onClick={() => navigate(`/observe/${encodeURIComponent(session.session_id)}?offset=0&admin=1&name=${encodeURIComponent(session.connection_name)}&user=${encodeURIComponent(session.username)}`)}
+                              title="Watch live"
+                            >
+                              <span className="inline-flex items-center gap-1 animate-pulse text-red-500">● Live</span>
+                            </button>
+                            <button
+                              className="btn btn-secondary text-xs py-1 px-2"
+                              onClick={() => navigate(`/observe/${encodeURIComponent(session.session_id)}?offset=300&admin=1&name=${encodeURIComponent(session.connection_name)}&user=${encodeURIComponent(session.username)}`)}
+                              title="Rewind and replay the last 5 minutes"
+                            >
+                              ⏪ Rewind
+                            </button>
+                          </div>
+                        </td>
+                      )}
+                      {!isAdmin && (
                         <td className="p-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
                             <button

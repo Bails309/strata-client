@@ -102,7 +102,7 @@ export default function App() {
                 <Route path="/admin" element={(user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections || user?.can_create_users || user?.can_create_user_groups || user?.can_create_connections || user?.can_create_connection_folders || user?.can_create_sharing_profiles) ? <AdminSettings user={user} /> : <Navigate to="/" replace />} />
                 <Route path="/session/:connectionId" element={<SessionClient />} />
                 <Route path="/tiled" element={<TiledView />} />
-                <Route path="/observe/:sessionId" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <NvrPlayer /> : <Navigate to="/" replace />} />
+                <Route path="/observe/:sessionId" element={(user?.can_manage_system || user?.can_view_audit_logs || user?.can_view_sessions) ? <NvrPlayer /> : <Navigate to="/" replace />} />
                 <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
                 <Route path="/sessions" element={(user?.can_view_sessions || user?.can_manage_system || user?.can_view_audit_logs) ? <Sessions user={user} /> : <Navigate to="/" replace />} />
                 <Route path="/docs" element={<Documentation />} />

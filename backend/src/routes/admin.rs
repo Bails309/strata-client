@@ -1964,7 +1964,7 @@ pub async fn delete_connection_folder(
 
 /// Encode a Guacamole protocol instruction as a `String` from opcode + args.
 /// Format: `<opcode_len>.<opcode>,<arg1_len>.<arg1>,…;`
-fn format_guac_inst(opcode: &str, args: &[&str]) -> String {
+pub fn format_guac_inst(opcode: &str, args: &[&str]) -> String {
     let mut out = format!("{}.{}", opcode.len(), opcode);
     for arg in args {
         out.push_str(&format!(",{}.{}", arg.len(), arg));
@@ -2047,6 +2047,16 @@ pub async fn observe_session(
         .get(&session_id)
         .await
         .ok_or_else(|| AppError::NotFound("Active session not found".into()))?;
+
+    observe_session_ws(ws, session, query).await
+}
+
+/// Core observe logic shared by admin and user observe endpoints.
+pub async fn observe_session_ws(
+    ws: axum::extract::WebSocketUpgrade,
+    session: std::sync::Arc<crate::services::session_registry::ActiveSession>,
+    query: ObserveQuery,
+) -> Result<impl axum::response::IntoResponse, AppError> {
 
     let offset = query.offset.unwrap_or(300); // default: replay full buffer
     let speed = query.speed.unwrap_or(4.0).max(0.0); // default 4× speed

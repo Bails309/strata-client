@@ -842,8 +842,15 @@ html.light .recent-card-btn:hover {
 }
 
 .player-card {
-  @apply w-full max-w-5xl rounded-xl overflow-hidden shadow-2xl bg-surface border border-white/10 flex flex-col;
+  @apply w-full max-w-7xl rounded-xl overflow-hidden shadow-2xl bg-surface border border-white/10 flex flex-col;
   max-height: 90vh;
+}
+
+.player-card-fullscreen {
+  @apply max-w-none rounded-none border-0;
+  max-height: 100vh;
+  width: 100vw;
+  height: 100vh;
 }
 
 .player-header {

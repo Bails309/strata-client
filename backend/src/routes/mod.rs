@@ -226,6 +226,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::my_recording_stream),
         )
         .route("/api/user/sessions", get(user::my_active_sessions))
+        .route(
+            "/api/user/sessions/:id/observe",
+            get(user::my_observe_session),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public

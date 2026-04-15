@@ -10,12 +10,14 @@ interface Props {
 
 export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const tunnelRef = useRef<Guacamole.Tunnel | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [playing, setPlaying] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   
   // Progress tracking
   const [progressMs, setProgressMs] = useState(0);
@@ -134,6 +136,22 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
     return cleanup;
   }, [recording.id, connect, cleanup]);
 
+  // Track fullscreen changes (e.g. user presses Escape)
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!cardRef.current) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      cardRef.current.requestFullscreen();
+    }
+  }, []);
+
   const formatMs = (ms: number) => {
     const totalSecs = Math.floor(ms / 1000);
     const m = Math.floor(totalSecs / 60);
@@ -145,7 +163,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
 
   return (
     <div className="player-overlay" onClick={onClose}>
-      <div className="player-card animate-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
+      <div ref={cardRef} className={`player-card animate-in zoom-in duration-200 ${isFullscreen ? 'player-card-fullscreen' : ''}`} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="player-header">
           <div className="flex flex-col">
@@ -156,12 +174,25 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
               Recorded Session — {recording.username}
             </span>
           </div>
-          <button 
-            onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={toggleFullscreen}
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"/></svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+              )}
+            </button>
+            <button 
+              onClick={onClose}
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
         </div>
 
         {/* Video Area */}

@@ -907,6 +907,33 @@ pub async fn my_active_sessions(
     Ok(Json(mine))
 }
 
+/// GET /api/user/sessions/:id/observe — observe a live session owned by the authenticated user.
+pub async fn my_observe_session(
+    ws: axum::extract::WebSocketUpgrade,
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::admin::ObserveQuery>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let _db = require_running(&state).await?;
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+
+    let session = registry
+        .get(&session_id)
+        .await
+        .ok_or_else(|| AppError::NotFound("Active session not found".into()))?;
+
+    // Verify the session belongs to the authenticated user
+    if session.user_id != user.id {
+        return Err(AppError::NotFound("Active session not found".into()));
+    }
+
+    super::admin::observe_session_ws(ws, session, query).await
+}
+
 // ── User's own recordings ─────────────────────────────────────────────
 
 #[derive(Deserialize)]

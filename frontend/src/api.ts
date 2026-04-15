@@ -805,6 +805,20 @@ export async function buildNvrObserveUrl(sessionId: string, offsetSecs = 300, sp
   return `${proto}//${window.location.host}/api/admin/sessions/${encodeURIComponent(sessionId)}/observe?${params}`;
 }
 
+/**
+ * Build a WebSocket URL for the user-scoped NVR observe endpoint.
+ * Only allows observing the authenticated user's own sessions.
+ */
+export async function buildUserNvrObserveUrl(sessionId: string, offsetSecs = 300, speed = 4): Promise<string> {
+  const token = await ensureFreshToken();
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  params.set('offset', String(offsetSecs));
+  params.set('speed', String(speed));
+  return `${proto}//${window.location.host}/api/user/sessions/${encodeURIComponent(sessionId)}/observe?${params}`;
+}
+
 // ── Metrics ─────────────────────────────────────────────────────────
 
 export interface MetricsSummary {

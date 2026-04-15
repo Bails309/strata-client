@@ -2,21 +2,17 @@
 
 ## Overview
 
-Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs five containers; optional profiles add a Caddy reverse proxy (auto-HTTPS) and additional guacd sidecar instances.
+Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs four containers (frontend/nginx, backend, guacd, Vault); optional profiles add a bundled PostgreSQL instance and additional guacd sidecar instances for horizontal scaling.
 
 ```
                           ┌─────────────────────────────────────────────┐
                           │           Docker Compose Network            │
                           │           (guac-internal bridge)            │
                           │                                             │
-                          │  ┌─────────┐ (opt)                          │
-                          │  │  Caddy  │──:80/:443 auto-TLS             │
-                          │  └────┬────┘                                │
-                          │       │                                     │
-  Browser ────HTTPS/WSS──►│  ┌───▼───────┐        ┌──────────────────┐  │
+  Browser ────HTTPS/WSS──►│  ┌───────────┐        ┌──────────────────┐  │
                           │  │  frontend  │──/api─►│     backend      │  │
                           │  │  (nginx)   │        │  (Rust / Axum)   │  │
-                          │  │   :80      │        │   :8080          │  │
+                          │  │  :80/:443  │        │   :8080          │  │
                           │  └───────────┘        └────────┬─────────┘  │
                           │                           │         │        │
                           │                     TCP 4822    SQL / HTTP   │
@@ -39,17 +35,6 @@ Strata Client is a microservices system that replaces the legacy Java/Tomcat + A
 ```
 
 ## Containers
-
-### 0. Caddy (Optional)
-
-| Item | Value |
-|---|---|
-| Image | `caddy:2-alpine` |
-| Profile | `https` |
-| Source | `Caddyfile` |
-| Ports | 80, 443 (TCP + UDP/QUIC) |
-
-Optional reverse proxy activated with `--profile https`. Routes `/api/*` to the backend and all other traffic to the frontend nginx. When `STRATA_DOMAIN` is set, Caddy automatically obtains and renews Let's Encrypt TLS certificates. Adds security headers and gzip/zstd compression.
 
 ### 1. Custom guacd
 
@@ -87,7 +72,7 @@ The central orchestrator. Responsibilities:
 - **Auth** — multi-method authentication system:
   - **SSO/OIDC** — dynamic IdP discovery via JWKS, secure client secret storage in Vault, and automatic session establishment.
   - **Local Auth** — built-in credentials (Argon2id) with global enable/disable toggle, minimum 12-character password policy, and dedicated password change / admin reset endpoints.
-  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), silent frontend refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast.
+  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), proactive activity-based silent refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast.
   - **Enforcement** — strict backend policy check on every login attempt ensures disabled methods cannot be accessed.
 - **Vault** — envelope encryption for stored credentials via Vault Transit
 - **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
@@ -106,7 +91,14 @@ The central orchestrator. Responsibilities:
 | Styling | Tailwind CSS v4 |
 | Runtime | nginx (production) |
 | Source | `frontend/` |
-| Port | 80 (mapped to 3000 on host) |
+| Ports | 80 (HTTP), 443 (HTTPS when certs mounted) |
+
+The frontend nginx container serves as the primary gateway for all external traffic. It handles:
+- **Reverse proxying** — routes `/api/*` to the Rust backend (including WebSocket upgrades for tunnel connections)
+- **SSL termination** — when TLS certificates are mounted at `/etc/nginx/ssl/`, nginx serves HTTPS on port 443 with Mozilla Intermediate cipher configuration, HSTS, and automatic HTTP→HTTPS redirection
+- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`, and `Permissions-Policy` on every response
+- **Compression** — gzip for text, CSS, JS, JSON, and SVG assets
+- **SPA fallback** — `try_files` to `index.html` for client-side routing
 
 Pages:
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
@@ -206,11 +198,11 @@ connection_shares ── temporary share links with mode (view/control)
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
 ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert, connection_defaults)
 ad_sync_runs ─────── per-config sync run history with stats
-audit_logs ─────── hash-chained append-only event log
+recordings ─────── session recording metadata with bandwidth metrics
 active_sessions ── per-user login session tracking (JTI, IP, user agent, expiry)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `029_active_sessions.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `032_connection_watermark.sql` for the full DDL.
 
 ## Directory Structure
 
@@ -249,18 +241,22 @@ strata-client/
 │           ├── settings.rs    system_settings CRUD
 │           ├── vault.rs       Envelope encryption
 │           └── vault_provisioning.rs  Bundled Vault lifecycle
-├── frontend/              React SPA
+├── frontend/              React SPA + nginx gateway
 │   ├── Dockerfile
-│   ├── nginx.conf
+│   ├── common.fragment    Shared nginx config (proxy rules, security headers, compression)
+│   ├── http_only.conf     HTTP-only server block
+│   ├── https_enabled.conf HTTPS server block (SSL termination + HSTS)
+│   ├── connection-upgrade.conf  WebSocket upgrade header mapping
+│   ├── ssl-init.sh        Entrypoint: selects HTTP or HTTPS config based on cert presence
 │   ├── package.json
 │   └── src/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
 │       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, SessionTimeoutWarning, ThemeProvider, WhatsNewModal)
-│       └── pages/         Page components (Dashboard, SessionClient, AdminSettings, AuditLogs, Login, SetupWizard, SharedViewer)
+│       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Login, SetupWizard, SharedViewer)
 ├── guacd/                 Custom guacd build
 │   └── Dockerfile
-├── Caddyfile              Caddy reverse proxy config (optional)
+├── certs/                 TLS certificates (mount for HTTPS)
 ├── docker-compose.yml     Full stack orchestration
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md

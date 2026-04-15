@@ -6,6 +6,508 @@ const WELCOME_KEY = 'strata-welcome-dismissed';
 /** Current app version — sourced from package.json via Vite define. */
 export const WHATS_NEW_VERSION = __APP_VERSION__;
 
+/* ── Release card data ─────────────────────────────────────────────── */
+
+interface ReleaseSection {
+  title: string;
+  description: string;
+}
+
+export interface ReleaseCard {
+  version: string;
+  subtitle: string;
+  sections: ReleaseSection[];
+}
+
+/**
+ * Ordered newest-first. Add a new entry at the top for each release.
+ * Only include versions with user-facing changes worth highlighting.
+ */
+export const RELEASE_CARDS: ReleaseCard[] = [
+  {
+    version: '0.13.2',
+    subtitle: 'Docs, Stability & CI',
+    sections: [
+      {
+        title: 'In-App Documentation',
+        description:
+          'New Docs page in the sidebar with Architecture, Security, and API Reference rendered inline, plus a full release history carousel covering every version back to v0.1.0.',
+      },
+      {
+        title: 'Session Idle Timeout Fix',
+        description:
+          'Active users are no longer logged out after 20 minutes while using remote sessions. The access token now proactively refreshes in the background when activity is detected.',
+      },
+      {
+        title: 'Backend CI Fix',
+        description:
+          'Fixed missing watermark field in five backend test struct initialisers that caused cargo clippy failures in CI.',
+      },
+    ],
+  },
+  {
+    version: '0.13.1',
+    subtitle: 'Improvements & Fixes',
+    sections: [
+      {
+        title: "What's New Carousel",
+        description:
+          'This modal now lets you browse all previous release notes with navigation arrows — no more missing what changed in earlier versions.',
+      },
+      {
+        title: 'guacd Scaling Fix',
+        description:
+          'The GUACD_INSTANCES environment variable is now correctly forwarded to the backend container, so scaled guacd pools are detected on startup.',
+      },
+      {
+        title: 'Architecture Docs Refreshed',
+        description:
+          'Removed stale Caddy references and updated documentation to reflect the current nginx-based gateway with SSL termination and security headers.',
+      },
+    ],
+  },
+  {
+    version: '0.13.0',
+    subtitle: 'New Features & Fixes',
+    sections: [
+      {
+        title: 'Per-Connection Watermark',
+        description:
+          'Connections now have their own watermark setting (Inherit / Always on / Always off) that overrides the global toggle, giving admins fine-grained control.',
+      },
+      {
+        title: 'Persistent Favorites Filter',
+        description:
+          'The dashboard favorites toggle now remembers your preference across sessions — no need to re-enable it every time you log in.',
+      },
+      {
+        title: 'Clipboard in Popout Windows',
+        description:
+          'Pasting text copied after a session was popped out now works correctly. The popout window syncs its own clipboard with the remote session.',
+      },
+    ],
+  },
+  {
+    version: '0.12.0',
+    subtitle: 'Security Update',
+    sections: [
+      {
+        title: 'Enhanced Session Security',
+        description:
+          'Sessions now use short-lived 20-minute access tokens with automatic silent refresh. A countdown toast warns you 2 minutes before expiry with an option to extend your session.',
+      },
+      {
+        title: 'Password Management',
+        description:
+          'New password policy enforces a minimum of 12 characters. Users can now change their own password, and admins can force-reset passwords from the user management panel.',
+      },
+      {
+        title: 'CSP Hardened',
+        description:
+          "Content Security Policy now blocks inline scripts for stronger XSS protection, with no impact to the application's functionality.",
+      },
+    ],
+  },
+  {
+    version: '0.11.2',
+    subtitle: 'Fixes & Modernisation',
+    sections: [
+      {
+        title: 'Migration Checksum Auto-Repair',
+        description:
+          'Deploying after line-ending normalisation no longer causes crash loops. The migrator detects and auto-repairs stale checksums on startup.',
+      },
+      {
+        title: 'Role Dropdown Modernised',
+        description:
+          'The admin user-role dropdown now uses the unified custom Select component with portal rendering and animations, matching all other dropdowns.',
+      },
+    ],
+  },
+  {
+    version: '0.11.1',
+    subtitle: 'Role Management & Fixes',
+    sections: [
+      {
+        title: 'User Role Management',
+        description:
+          'Admins can now change a user\'s role directly from the Users table via an inline dropdown, with audit logging of role changes.',
+      },
+      {
+        title: 'Case-Insensitive Login',
+        description:
+          'SSO and local login now use case-insensitive email and username matching, fixing login failures when providers return differently-cased emails.',
+      },
+      {
+        title: 'Session Watermark Visibility',
+        description:
+          'The session watermark now renders with both dark and light text passes, making it visible over any remote desktop background.',
+      },
+    ],
+  },
+  {
+    version: '0.11.0',
+    subtitle: 'Productivity & Analytics',
+    sections: [
+      {
+        title: 'Windows Key Proxy (Right Ctrl)',
+        description:
+          'Hold Right Ctrl + key to send Win+key to the remote session. Tap Right Ctrl alone to open the Start menu. Works in single sessions, tiled view, and pop-outs.',
+      },
+      {
+        title: 'Analytics Dashboard',
+        description:
+          'New admin analytics with daily usage trends, session duration stats, bandwidth tracking, protocol distribution, and peak hours histogram.',
+      },
+      {
+        title: 'Dynamic Capacity Gauge',
+        description:
+          'The guacd capacity gauge now calculates recommended sessions per instance dynamically based on host CPU and RAM.',
+      },
+    ],
+  },
+  {
+    version: '0.10.6',
+    subtitle: 'Folder View & Cleanup',
+    sections: [
+      {
+        title: 'Folder View Auto-Select',
+        description:
+          'The dashboard now automatically enables folder view when connections belong to folders, with folders collapsed by default for a cleaner layout.',
+      },
+      {
+        title: 'Persistent Folder Preferences',
+        description:
+          'Folder view toggle and per-folder expand/collapse states are persisted in localStorage so your dashboard layout is remembered across sessions.',
+      },
+      {
+        title: 'Recording Form Cleanup',
+        description:
+          'Removed system-managed recording fields from VNC and AD Sync forms, leaving only the user-configurable options.',
+      },
+    ],
+  },
+  {
+    version: '0.10.5',
+    subtitle: 'Session Labels & Test Coverage',
+    sections: [
+      {
+        title: 'Session Label Overlay',
+        description:
+          'Active session thumbnails now display the connection name and protocol as a sleek overlay with a dark gradient and backdrop blur for readability.',
+      },
+      {
+        title: 'Backend Test Coverage',
+        description:
+          'Comprehensive unit test suite for the GuacamoleParser covering Unicode handling, partial data buffering, and malformed input recovery.',
+      },
+    ],
+  },
+  {
+    version: '0.10.4',
+    subtitle: 'Pop-Out Stability',
+    sections: [
+      {
+        title: 'Pop-Out Session Persistence',
+        description:
+          'Pop-out windows now survive navigation between the dashboard and session views. State is stored on the session object instead of local React refs.',
+      },
+      {
+        title: 'Multi-Session Pop-Out Fix',
+        description:
+          'Disconnecting one popped-out session no longer causes other pop-out sessions to go black or become unresponsive.',
+      },
+    ],
+  },
+  {
+    version: '0.10.3',
+    subtitle: 'Session Redirect Fix',
+    sections: [
+      {
+        title: 'Auto-Redirect on Session End',
+        description:
+          'When a remote session ends and other sessions are still active, the client now automatically redirects to the next active session instead of freezing on a stale screen.',
+      },
+    ],
+  },
+  {
+    version: '0.10.2',
+    subtitle: 'Vault Credentials & Recordings',
+    sections: [
+      {
+        title: 'One-Off Vault Credentials',
+        description:
+          'Select a saved vault credential profile directly from the connection prompt for a single session, without permanently mapping it to the connection.',
+      },
+      {
+        title: 'NVR Playback Controls',
+        description:
+          'Session recordings now include a progress bar, speed selector (1×/2×/4×/8×), and server-paced replay with proper inter-frame timing.',
+      },
+      {
+        title: 'Per-User Recent Connections',
+        description:
+          'Connection access history is now tracked per-user, so each user sees only their own recent connections on the dashboard.',
+      },
+    ],
+  },
+  {
+    version: '0.10.1',
+    subtitle: 'Stability & Fixes',
+    sections: [
+      {
+        title: 'Build Stabilisation',
+        description:
+          'Resolved critical build-time regressions in both the Rust backend and TypeScript frontend, including CSS syntax and Azure recording streaming.',
+      },
+      {
+        title: 'Permission Fixes',
+        description:
+          'Fixed folder-level permission tunnel access, admin tab visibility for restricted roles, and hardened tunnel ticket creation with comprehensive permission validation.',
+      },
+    ],
+  },
+  {
+    version: '0.10.0',
+    subtitle: 'Session Bar & AD Sync Defaults',
+    sections: [
+      {
+        title: 'Unified Session Bar',
+        description:
+          'All session controls (Sharing, File Browser, Fullscreen, Pop-out, On-Screen Keyboard) consolidated into a single sleek right-side dock.',
+      },
+      {
+        title: 'AD Sync Connection Defaults',
+        description:
+          'AD sync sources can now specify default Guacamole parameters (RDP performance flags, recording settings) applied to all synced connections.',
+      },
+      {
+        title: 'Connection Parameter Tooltips',
+        description:
+          'All connection settings now display descriptive hover tooltips sourced from the official Apache Guacamole documentation.',
+      },
+    ],
+  },
+  {
+    version: '0.9.0',
+    subtitle: 'Live Sessions & Admin Tools',
+    sections: [
+      {
+        title: 'Active Sessions Dashboard',
+        description:
+          'New real-time admin dashboard for monitoring all active tunnel connections, including bandwidth tracking, duration, and remote host metadata.',
+      },
+      {
+        title: 'Administrative Session Kill',
+        description:
+          'Admins can now terminate any active session directly from the Live Sessions dashboard for instant access revocation.',
+      },
+      {
+        title: 'Reconnection Stability',
+        description:
+          'Overhauled session reconnection logic with 10-second stability thresholds and explicit retry counters to prevent infinite loops on permanent failures.',
+      },
+    ],
+  },
+  {
+    version: '0.8.0',
+    subtitle: 'Infrastructure & Security',
+    sections: [
+      {
+        title: 'Nginx Gateway',
+        description:
+          'Removed Caddy reverse proxy. Nginx now handles SSL termination, API/WebSocket proxying, security headers, and automatic HTTP-to-HTTPS redirection.',
+      },
+      {
+        title: 'Manual SSL Support',
+        description:
+          'Mount your own SSL certificates (cert.pem, key.pem) to the certs/ volume for HTTPS without an external proxy.',
+      },
+      {
+        title: 'User Restoration',
+        description:
+          'Administrators can now restore soft-deleted user accounts from the Admin Settings dashboard within the 7-day retention window.',
+      },
+    ],
+  },
+  {
+    version: '0.7.0',
+    subtitle: 'RBAC & Folders',
+    sections: [
+      {
+        title: 'Granular RBAC Permissions',
+        description:
+          'Nine role-based permissions for fine-grained access control over system, users, connections, audit logs, and sharing profiles.',
+      },
+      {
+        title: 'Connection Folders',
+        description:
+          'Renamed connection groups to folders across the full stack with CRUD endpoints, collapsible folder headers, and per-folder connection counts.',
+      },
+      {
+        title: 'Docker Security Hardening',
+        description:
+          'Backend and frontend containers now run as non-root users with pre-created directories and correct volume permissions.',
+      },
+    ],
+  },
+  {
+    version: '0.6.2',
+    subtitle: 'Test Coverage & Hardening',
+    sections: [
+      {
+        title: 'Test Coverage Expansion',
+        description:
+          'Branch coverage raised from ~55% to 70% across 605 tests. Coverage thresholds enforced: statements 74%, branches 69%, functions 62%, lines 75%.',
+      },
+      {
+        title: 'Backend Security Hardening',
+        description:
+          'Fixed Unicode protocol parsing, NVR instruction filtering, Kerberos temp file handling, OIDC issuer validation, and Content-Disposition header injection.',
+      },
+    ],
+  },
+  {
+    version: '0.6.1',
+    subtitle: 'Security & Performance',
+    sections: [
+      {
+        title: 'Security Fixes',
+        description:
+          'Fixed tunnel soft-delete bypass, OIDC issuer validation, shared tunnel pool bypass, and Content-Disposition header injection.',
+      },
+      {
+        title: 'AD Sync Bulk Operations',
+        description:
+          'Replaced individual LDAP-to-DB updates with high-performance bulk upsert and soft-delete queries for faster Active Directory sync.',
+      },
+    ],
+  },
+  {
+    version: '0.6.0',
+    subtitle: 'SSO / OIDC',
+    sections: [
+      {
+        title: 'SSO / OIDC Support',
+        description:
+          'Integrated OpenID Connect authentication with Keycloak support, including automatic OIDC discovery and secure client secret storage via Vault.',
+      },
+      {
+        title: 'Configurable Auth Methods',
+        description:
+          'Admins can toggle between Local Authentication and SSO/OIDC in the Security settings, with strict backend enforcement.',
+      },
+    ],
+  },
+  {
+    version: '0.5.0',
+    subtitle: 'Active Directory Sync',
+    sections: [
+      {
+        title: 'AD LDAP Sync',
+        description:
+          'Automatic computer account import from Active Directory via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, and multiple search bases.',
+      },
+      {
+        title: 'Multi-Realm Kerberos',
+        description:
+          'Support for multiple Kerberos realms with dynamic krb5.conf generation, per-realm KDC configuration, and keytab-based authentication for AD sync.',
+      },
+      {
+        title: 'Credential Profiles',
+        description:
+          'Saved credential profiles with optional TTL expiry. Pick a saved profile from the connection card or enter credentials inline.',
+      },
+    ],
+  },
+  {
+    version: '0.4.0',
+    subtitle: 'Recordings, Sharing & Scaling',
+    sections: [
+      {
+        title: 'Azure Blob Session Recordings',
+        description:
+          'Session recordings can be synced to Azure Blob Storage with background upload, automatic fallback download, and SharedKey authentication.',
+      },
+      {
+        title: 'Control Mode Shares',
+        description:
+          'Share links now support View (read-only) and Control (full keyboard and mouse) modes with distinct icons and colour badges.',
+      },
+      {
+        title: 'guacd Scaling & PWA',
+        description:
+          'Round-robin connection pool across multiple guacd instances, plus Progressive Web App support with service worker caching and touch toolbar.',
+      },
+    ],
+  },
+  {
+    version: '0.3.0',
+    subtitle: 'Live NVR & Organisation',
+    sections: [
+      {
+        title: 'Live Session NVR',
+        description:
+          'In-memory ring buffer captures up to 5 minutes of session activity. Admins can observe live sessions and rewind to see what happened before a support call.',
+      },
+      {
+        title: 'Connection Groups & Favorites',
+        description:
+          'Organise connections into collapsible folder groups. Star/unstar connections for quick access with a favorites filter on the dashboard.',
+      },
+      {
+        title: 'Theme Toggle',
+        description:
+          'Light/dark/system theme toggle in the sidebar with refined dark theme surfaces and premium animated checkboxes.',
+      },
+    ],
+  },
+  {
+    version: '0.2.0',
+    subtitle: 'Multi-Session & Vault',
+    sections: [
+      {
+        title: 'Multi-Session Tiled View',
+        description:
+          'Tiled multi-session layout with responsive grid, per-tile focus, Ctrl/Cmd+click multi-focus, and keyboard broadcast to all focused tiles.',
+      },
+      {
+        title: 'Clipboard & File Transfer',
+        description:
+          'Bidirectional clipboard sync, drag-and-drop file upload, in-browser file browser with directory navigation, and RDP virtual drive mounting.',
+      },
+      {
+        title: 'Bundled HashiCorp Vault',
+        description:
+          'Auto-initialised Vault container with Transit envelope encryption, automatic unseal on startup, and setup wizard mode selector.',
+      },
+    ],
+  },
+  {
+    version: '0.1.0',
+    subtitle: 'Initial Release',
+    sections: [
+      {
+        title: 'Core Platform',
+        description:
+          'Docker Compose orchestration, custom guacd with FreeRDP 3 and Kerberos support, Rust/Axum backend with PostgreSQL, and React/Vite frontend.',
+      },
+      {
+        title: 'Session Management',
+        description:
+          'WebSocket tunnel to guacd with Guacamole protocol handshake, role-based connection access, dynamic Kerberos config, and session recording.',
+      },
+      {
+        title: 'Security Foundation',
+        description:
+          'Vault Transit envelope encryption (AES-256-GCM) with memory zeroisation, OIDC token validation, SHA-256 hash-chained audit logging, and admin RBAC.',
+      },
+    ],
+  },
+];
+
+/* ── Component ─────────────────────────────────────────────────────── */
+
 interface WhatsNewModalProps {
   /** User ID — used to scope dismissal per-user */
   userId: string | undefined;
@@ -16,6 +518,7 @@ type ModalMode = 'welcome' | 'whats-new';
 export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
   const [visible, setVisible] = useState(false);
   const [mode, setMode] = useState<ModalMode | null>(null);
+  const [cardIndex, setCardIndex] = useState(0);
 
   useEffect(() => {
     if (!userId) {
@@ -35,6 +538,7 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
     const dismissedVersion = localStorage.getItem(`${STORAGE_KEY}-${userId}`);
     if (dismissedVersion !== WHATS_NEW_VERSION) {
       setMode('whats-new');
+      setCardIndex(0);
       setVisible(true);
     }
   }, [userId]);
@@ -59,6 +563,10 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
   if (!visible || !mode) return null;
 
   const isWelcome = mode === 'welcome';
+  const card = RELEASE_CARDS[cardIndex];
+  const totalCards = RELEASE_CARDS.length;
+  const hasPrev = cardIndex < totalCards - 1;
+  const hasNext = cardIndex > 0;
 
   return (
     <div
@@ -87,11 +595,11 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
           <div className="flex items-center gap-3 mb-1">
             <span className="text-xl">{isWelcome ? '👋' : '🚀'}</span>
             <h2 className="!mb-0 text-xl font-semibold tracking-tight">
-              {isWelcome ? 'Welcome to Strata Client!' : `What's New in ${WHATS_NEW_VERSION}`}
+              {isWelcome ? 'Welcome to Strata Client!' : `What's New in ${card.version}`}
             </h2>
           </div>
           <p className="text-xs text-txt-tertiary mb-6 uppercase tracking-widest font-medium">
-            {isWelcome ? 'The modern remote gateway' : 'Security Update'}
+            {isWelcome ? 'The modern remote gateway' : card.subtitle}
           </p>
 
           <div className="space-y-5 text-[0.875rem] leading-relaxed text-txt-secondary">
@@ -141,40 +649,48 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
               </>
             ) : (
               <>
-                <section>
-                  <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Enhanced Session Security
-                  </h3>
-                  <p>
-                    Sessions now use short-lived 20-minute access tokens with automatic silent refresh.
-                    A countdown toast warns you 2 minutes before expiry with an option to extend your session.
-                  </p>
-                </section>
-                <section>
-                  <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> Password Management
-                  </h3>
-                  <p>
-                    New password policy enforces a minimum of 12 characters. Users can now change their own
-                    password, and admins can force-reset passwords from the user management panel.
-                  </p>
-                </section>
-                <section>
-                  <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
-                    <span className="text-accent">•</span> CSP Hardened
-                  </h3>
-                  <p>
-                    Content Security Policy now blocks inline scripts for stronger XSS protection,
-                    with no impact to the application's functionality.
-                  </p>
-                </section>
+                {card.sections.map((s, i) => (
+                  <section key={i}>
+                    <h3 className="text-sm font-semibold text-txt-primary mb-1.5 flex items-center gap-2">
+                      <span className="text-accent">•</span> {s.title}
+                    </h3>
+                    <p>{s.description}</p>
+                  </section>
+                ))}
               </>
             )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 pb-6 pt-2 flex justify-end">
+        <div className="px-6 pb-6 pt-2 flex items-center justify-between">
+          {/* Navigation (only in whats-new mode with multiple cards) */}
+          {!isWelcome && totalCards > 1 ? (
+            <div className="flex items-center gap-3">
+              <button
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-txt-secondary transition-colors disabled:opacity-30 disabled:cursor-default hover:enabled:bg-surface-tertiary hover:enabled:text-txt-primary"
+                onClick={() => setCardIndex(i => i + 1)}
+                disabled={!hasPrev}
+                aria-label="Older release"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              <span className="text-xs text-txt-tertiary tabular-nums">
+                {cardIndex + 1} / {totalCards}
+              </span>
+              <button
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-txt-secondary transition-colors disabled:opacity-30 disabled:cursor-default hover:enabled:bg-surface-tertiary hover:enabled:text-txt-primary"
+                onClick={() => setCardIndex(i => i - 1)}
+                disabled={!hasNext}
+                aria-label="Newer release"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+            </div>
+          ) : (
+            <div />
+          )}
+
           <button
             className="btn-primary min-w-[100px] hover:scale-105 active:scale-95 transition-transform"
             onClick={dismiss}

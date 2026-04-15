@@ -1031,3 +1031,133 @@ html.light .recent-card-btn:hover {
               border-color 0.3s var(--ease-out),
               box-shadow 0.3s var(--ease-out) !important;
 }
+
+/* ── Prose Docs — rendered markdown styling ────────────────── */
+.prose-docs {
+  color: var(--color-txt-secondary);
+  font-size: 0.875rem;
+  line-height: 1.75;
+  max-width: 80ch;
+}
+.prose-docs h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-txt-primary);
+  margin: 0 0 0.75rem;
+  letter-spacing: -0.025em;
+}
+.prose-docs h2 {
+  font-size: 1.25rem;
+  font-weight: 650;
+  color: var(--color-txt-primary);
+  margin: 2rem 0 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.prose-docs h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-txt-primary);
+  margin: 1.5rem 0 0.5rem;
+}
+.prose-docs h4 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-txt-primary);
+  margin: 1.25rem 0 0.4rem;
+}
+.prose-docs p {
+  margin: 0.75rem 0;
+}
+.prose-docs a {
+  color: var(--color-accent-light);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-docs a:hover {
+  color: var(--color-accent);
+}
+.prose-docs strong {
+  color: var(--color-txt-primary);
+  font-weight: 600;
+}
+.prose-docs ul, .prose-docs ol {
+  margin: 0.75rem 0;
+  padding-left: 1.5rem;
+}
+.prose-docs ul {
+  list-style-type: disc;
+}
+.prose-docs ol {
+  list-style-type: decimal;
+}
+.prose-docs li {
+  margin: 0.25rem 0;
+}
+.prose-docs li > ul, .prose-docs li > ol {
+  margin: 0.25rem 0;
+}
+.prose-docs code {
+  font-size: 0.8125rem;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--color-surface-tertiary);
+  color: var(--color-accent-light);
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+}
+.prose-docs pre {
+  margin: 1rem 0;
+  padding: 1rem 1.25rem;
+  border-radius: 0.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.prose-docs pre code {
+  background: none;
+  padding: 0;
+  color: var(--color-txt-secondary);
+  border-radius: 0;
+}
+.prose-docs table {
+  width: 100%;
+  margin: 1rem 0;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.prose-docs th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-txt-primary);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid var(--color-border);
+  background: var(--color-surface-secondary);
+}
+.prose-docs td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.prose-docs tr:hover td {
+  background: var(--color-row-hover);
+}
+.prose-docs blockquote {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-accent-dim);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.prose-docs blockquote p {
+  margin: 0;
+}
+.prose-docs hr {
+  margin: 2rem 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+}
+.prose-docs img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}

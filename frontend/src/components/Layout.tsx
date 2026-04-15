@@ -36,6 +36,11 @@ const NAV_ITEMS = [
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   )},
+  { to: '/docs', label: 'Docs', icon: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+    </svg>
+  )},
 ];
 
 export default function Layout({ user, onLogout }: { user: MeResponse | null, onLogout: () => void }) {

@@ -1,9 +1,9 @@
 .git
 *.md
 !README.md
+!docs/*.md
 LICENSE
 NOTICE
-docs/
 e2e/
 certs/
 guacd/

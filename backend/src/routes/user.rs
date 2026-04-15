@@ -1066,6 +1066,7 @@ mod tests {
             folder_id: None,
             folder_name: Some("Production".into()),
             last_accessed: None,
+            watermark: "inherit".into(),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "server-1");
@@ -1248,6 +1249,7 @@ mod tests {
             folder_id: Some(Uuid::nil()),
             folder_name: Some("Production".into()),
             last_accessed: Some(chrono::Utc::now()),
+            watermark: "inherit".into(),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["folder_name"], "Production");
@@ -1267,6 +1269,7 @@ mod tests {
             folder_id: None,
             folder_name: None,
             last_accessed: None,
+            watermark: "on".into(),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["folder_id"].is_null());

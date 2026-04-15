@@ -14,9 +14,13 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@docs': path.resolve(__dirname, '../docs'),
     },
   },
   server: {
+    fs: {
+      allow: ['..'],
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8080',

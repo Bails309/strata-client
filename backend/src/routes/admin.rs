@@ -3036,6 +3036,7 @@ mod tests {
             folder_id: None,
             extra: serde_json::json!({"color-depth": "24"}),
             last_accessed: None,
+            watermark: "inherit".into(),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["hostname"], "10.0.0.1");
@@ -3452,6 +3453,7 @@ mod tests {
             folder_id: Some(Uuid::nil()),
             extra: serde_json::json!({"color-depth": "32", "enable-wallpaper": "true"}),
             last_accessed: Some(chrono::Utc::now()),
+            watermark: "inherit".into(),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["extra"]["color-depth"], "32");

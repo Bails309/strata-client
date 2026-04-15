@@ -2057,9 +2057,12 @@ pub async fn observe_session(
 
         let size = buffer.last_size().map(|s| s.to_string());
 
-        // Always send at least 5 s of recent frames so the observer has a
-        // complete initial screen state, even for "Jump to Live" (offset 0).
-        let effective_offset = if offset == 0 { 5 } else { offset };
+        // For "Jump to Live" (offset 0), replay the full buffer so the
+        // observer receives enough drawing instructions to reconstruct
+        // the complete screen state (e.g., the initial PNG tiles that
+        // drew the terminal/desktop).  The replay loop skips pacing
+        // when is_live_only is true, so the dump is near-instant.
+        let effective_offset = if offset == 0 { 300 } else { offset };
         let timed = buffer.frames_with_timing(effective_offset);
 
         let rx = session.broadcast_tx.subscribe();

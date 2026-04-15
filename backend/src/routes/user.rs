@@ -974,8 +974,12 @@ pub async fn my_recording_stream(
     State(state): State<SharedState>,
     Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
+    Query(query): Query<crate::routes::admin::recordings::RecordingStreamQuery>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let db = require_running(&state).await?;
+
+    let seek_ms = query.seek.unwrap_or(0);
+    let speed = query.speed.unwrap_or(1.0).clamp(0.25, 16.0);
 
     // Fetch recording and verify ownership
     let recording: crate::db::Recording =
@@ -991,7 +995,7 @@ pub async fn my_recording_stream(
         .on_upgrade(move |socket| async move {
             if let Err(e) =
                 crate::routes::admin::recordings::handle_user_recording_stream(
-                    socket, state, recording,
+                    socket, state, recording, seek_ms, speed,
                 )
                 .await
             {

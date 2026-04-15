@@ -870,7 +870,8 @@ html.light .recent-card-btn:hover {
 }
 
 .player-timeline-progress {
-  @apply absolute top-0 left-0 h-full bg-accent transition-all duration-300;
+  @apply absolute top-0 left-0 h-full bg-accent;
+  transition: width 0.5s linear;
 }
 
 .player-btn {
@@ -886,6 +887,35 @@ html.light .recent-card-btn:hover {
 }
 
 .player-btn-active-replay {
+  @apply border-accent text-accent;
+  background: var(--color-accent-dim);
+}
+
+.player-skip-btn {
+  @apply flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide transition-all cursor-pointer;
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-txt-tertiary);
+}
+
+.player-skip-btn:hover {
+  @apply border-accent text-txt-primary;
+  background: var(--color-accent-dim);
+}
+
+.player-speed-btn {
+  @apply px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer;
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-txt-tertiary);
+}
+
+.player-speed-btn:hover {
+  @apply border-accent text-txt-primary;
+  background: var(--color-accent-dim);
+}
+
+.player-speed-btn-active {
   @apply border-accent text-accent;
   background: var(--color-accent-dim);
 }

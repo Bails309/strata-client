@@ -51,6 +51,7 @@ vi.mock('guacamole-common-js', () => ({
 
 vi.mock('../api', () => ({
   buildNvrObserveUrl: vi.fn(() => Promise.resolve('ws://localhost/nvr')),
+  buildUserNvrObserveUrl: vi.fn(() => Promise.resolve('ws://localhost/nvr/user')),
   ensureFreshToken: vi.fn(() => Promise.resolve('test-token')),
 }));
 

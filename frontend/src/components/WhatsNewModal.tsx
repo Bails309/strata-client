@@ -25,6 +25,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.4',
+    subtitle: 'Recording Skip & Speed Controls',
+    sections: [
+      {
+        title: 'Skip Forward & Back',
+        description:
+          'Jump to any point in a recording with skip buttons — 30 seconds, 1 minute, 3 minutes, or 5 minutes forward or back.',
+      },
+      {
+        title: 'Playback Speed',
+        description:
+          'Play recordings at 1×, 2×, 4×, or 8× speed. The speed selector is in the bottom-right of the player controls.',
+      },
+      {
+        title: 'Smoother Playback & Seeking',
+        description:
+          'Recordings no longer freeze during idle periods, and seeking to a position renders instantly instead of showing a black screen.',
+      },
+    ],
+  },
+  {
     version: '0.14.3',
     subtitle: 'Fullscreen Recordings & User Session Observe',
     sections: [

@@ -8,6 +8,14 @@ interface Props {
   streamUrlBuilder?: (id: string) => string;
 }
 
+const SPEEDS = [1, 2, 4, 8] as const;
+const SKIP_BUTTONS = [
+  { label: '30s', ms: 30_000 },
+  { label: '1m', ms: 60_000 },
+  { label: '3m', ms: 180_000 },
+  { label: '5m', ms: 300_000 },
+];
+
 export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -18,11 +26,13 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
   const [errorMsg, setErrorMsg] = useState('');
   const [playing, setPlaying] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  
+  const [speed, setSpeed] = useState(1);
+
   // Progress tracking
   const [progressMs, setProgressMs] = useState(0);
   const [durationMs, setDurationMs] = useState(recording.duration_secs ? recording.duration_secs * 1000 : 0);
   const recordingEndedRef = useRef(false);
+  const progressRef = useRef(0);
 
   const cleanup = useCallback(() => {
     if (tunnelRef.current) {
@@ -35,7 +45,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
     }
   }, []);
 
-  const connect = useCallback(() => {
+  const connectWithParams = useCallback((seekMs = 0, playbackSpeed = 1) => {
     if (!containerRef.current) return;
     cleanup();
 
@@ -47,7 +57,9 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
     setPlaying(true);
     recordingEndedRef.current = false;
 
-    const url = (streamUrlBuilder || buildRecordingStreamUrl)(recording.id);
+    let url = (streamUrlBuilder || buildRecordingStreamUrl)(recording.id);
+    if (seekMs > 0) url += `&seek=${seekMs}`;
+    if (playbackSpeed !== 1) url += `&speed=${playbackSpeed}`;
     const qIdx = url.indexOf('?');
     const tunnelBase = qIdx >= 0 ? url.substring(0, qIdx) : url;
     const tunnelQuery = qIdx >= 0 ? url.substring(qIdx + 1) : '';
@@ -68,12 +80,20 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
       if (opcode === 'nvrheader') {
         const total = parseInt(args[0] || '0', 10);
         setDurationMs(total);
-        setLoading(false);
+        if (seekMs === 0) setLoading(false);
         return;
       }
       if (opcode === 'nvrprogress') {
         const current = parseInt(args[0] || '0', 10);
         setProgressMs(current);
+        progressRef.current = current;
+        return;
+      }
+      if (opcode === 'nvrseeked') {
+        const pos = parseInt(args[0] || '0', 10);
+        setProgressMs(pos);
+        progressRef.current = pos;
+        setLoading(false);
         return;
       }
       if (opcode === 'nvrend') {
@@ -98,10 +118,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
     };
 
     tunnel.onstatechange = (state: number) => {
-      // Suppress errors from normal end-of-recording close (CLOSED = 2)
       if (state === 2 && recordingEndedRef.current) {
-        // Clean disconnect after nvrend — clear any error that may have
-        // been set by a race between the close frame and our handler.
         setErrorMsg('');
       }
     };
@@ -129,14 +146,15 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
     return () => {
       resizeObserver.disconnect();
     };
-  }, [recording.id, cleanup]);
+  }, [recording.id, cleanup, streamUrlBuilder, durationMs]);
 
+  // Initial connect
   useEffect(() => {
-    connect();
+    connectWithParams(0, 1);
     return cleanup;
-  }, [recording.id, connect, cleanup]);
+  }, [recording.id]);
 
-  // Track fullscreen changes (e.g. user presses Escape)
+  // Track fullscreen changes
   useEffect(() => {
     const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handler);
@@ -152,6 +170,19 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
     }
   }, []);
 
+  const handleSpeedChange = useCallback((newSpeed: number) => {
+    setSpeed(newSpeed);
+    connectWithParams(progressRef.current, newSpeed);
+  }, [connectWithParams]);
+
+  const handleSkip = useCallback((deltaMs: number) => {
+    const target = Math.max(0, Math.min(progressRef.current + deltaMs, durationMs));
+    setSpeed(prev => {
+      connectWithParams(target, prev);
+      return prev;
+    });
+  }, [durationMs, connectWithParams]);
+
   const formatMs = (ms: number) => {
     const totalSecs = Math.floor(ms / 1000);
     const m = Math.floor(totalSecs / 60);
@@ -160,6 +191,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
   };
 
   const progressPct = durationMs > 0 ? (progressMs / durationMs) * 100 : 0;
+  const controlsDisabled = loading || recordingEndedRef.current;
 
   return (
     <div className="player-overlay" onClick={onClose}>
@@ -175,7 +207,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
             </span>
           </div>
           <div className="flex items-center gap-1">
-            <button 
+            <button
               onClick={toggleFullscreen}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
               title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
@@ -186,7 +218,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
               )}
             </button>
-            <button 
+            <button
               onClick={onClose}
               className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-tertiary text-txt-tertiary hover:text-txt-primary transition-colors"
             >
@@ -198,7 +230,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
         {/* Video Area */}
         <div className="player-container">
           <div ref={containerRef} className="w-full h-full flex items-center justify-center" />
-          
+
           {loading && (
             <div className="player-loading">
               <div className="spinner" />
@@ -210,7 +242,7 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
               <div className="bg-danger/10 border border-danger/30 p-4 rounded-lg flex items-center gap-3">
                 <svg className="w-6 h-6 text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                 <div className="text-danger font-medium">{errorMsg}</div>
-                <button onClick={connect} className="btn btn-sm btn-secondary ml-2">Retry</button>
+                <button onClick={() => connectWithParams(0, speed)} className="btn btn-sm btn-secondary ml-2">Retry</button>
               </div>
             </div>
           )}
@@ -219,16 +251,17 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
         {/* Controls */}
         <div className="player-controls">
           <div className="player-timeline">
-            <div 
-              className="player-timeline-progress" 
+            <div
+              className="player-timeline-progress"
               style={{ width: `${progressPct}%` }}
             />
           </div>
-          
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button 
-                className={`w-10 h-10 flex items-center justify-center rounded-full bg-accent text-white shadow-lg transition-transform active:scale-95 ${loading || recordingEndedRef.current ? 'opacity-50 pointer-events-none' : ''}`}
+
+          <div className="flex items-center justify-between gap-3">
+            {/* Left: play/pause + time */}
+            <div className="flex items-center gap-3">
+              <button
+                className={`w-9 h-9 flex items-center justify-center rounded-full bg-accent text-white shadow-lg transition-transform active:scale-95 ${controlsDisabled ? 'opacity-50 pointer-events-none' : ''}`}
                 onClick={() => {
                   if (!tunnelRef.current) return;
                   if (playing) {
@@ -241,26 +274,57 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
                 }}
               >
                 {playing ? (
-                  <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+                  <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
                 ) : (
-                  <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                  <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                 )}
               </button>
 
-              <div className="text-sm font-mono text-txt-secondary flex items-center gap-1.5">
+              <div className="text-xs font-mono text-txt-secondary flex items-center gap-1">
                 <span className="text-txt-primary font-bold">{formatMs(progressMs)}</span>
                 <span className="opacity-40">/</span>
                 <span>{formatMs(durationMs)}</span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="px-3 py-1 bg-surface-tertiary rounded border border-border text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
-                {recording.storage_type} storage
-              </div>
-              <div className="px-3 py-1 bg-accent/10 rounded border border-accent/20 text-[10px] font-bold uppercase tracking-wider text-accent">
-                {new Date(recording.started_at).toLocaleString()}
-              </div>
+            {/* Center: skip controls */}
+            <div className="flex items-center gap-1">
+              {SKIP_BUTTONS.map(({ label, ms }) => (
+                <button
+                  key={`back-${label}`}
+                  className={`player-skip-btn ${controlsDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                  onClick={() => handleSkip(-ms)}
+                  title={`Skip back ${label}`}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+                  {label}
+                </button>
+              ))}
+              <div className="w-px h-5 bg-border mx-1" />
+              {SKIP_BUTTONS.map(({ label, ms }) => (
+                <button
+                  key={`fwd-${label}`}
+                  className={`player-skip-btn ${controlsDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                  onClick={() => handleSkip(ms)}
+                  title={`Skip forward ${label}`}
+                >
+                  {label}
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M13 6v12l8.5-6L13 6zM4 18l8.5-6L4 6v12z"/></svg>
+                </button>
+              ))}
+            </div>
+
+            {/* Right: speed selector */}
+            <div className="flex items-center gap-1">
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  className={`player-speed-btn ${speed === s ? 'player-speed-btn-active' : ''} ${controlsDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                  onClick={() => handleSpeedChange(s)}
+                >
+                  {s}x
+                </button>
+              ))}
             </div>
           </div>
         </div>

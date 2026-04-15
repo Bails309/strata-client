@@ -316,6 +316,7 @@ pub async fn stream_recording(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
     Path(id): Path<uuid::Uuid>,
+    Query(query): Query<RecordingStreamQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     let (db, _config) = {
         let s = state.read().await;
@@ -334,10 +335,13 @@ pub async fn stream_recording(
         .await?
         .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
 
+    let seek_ms = query.seek.unwrap_or(0);
+    let speed = query.speed.unwrap_or(1.0).clamp(0.25, 16.0);
+
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |socket| async move {
-            if let Err(e) = handle_recording_stream(socket, state, recording).await {
+            if let Err(e) = handle_recording_stream(socket, state, recording, seek_ms, speed).await {
                 tracing::error!("Recording stream error: {e}");
             }
         }))
@@ -348,21 +352,31 @@ pub async fn handle_user_recording_stream(
     socket: axum::extract::ws::WebSocket,
     state: SharedState,
     recording: Recording,
+    seek_ms: u64,
+    speed: f64,
 ) -> anyhow::Result<()> {
-    handle_recording_stream(socket, state, recording).await
+    handle_recording_stream(socket, state, recording, seek_ms, speed).await
 }
 
 async fn handle_recording_stream(
     mut socket: axum::extract::ws::WebSocket,
     state: SharedState,
     recording: Recording,
+    seek_ms: u64,
+    initial_speed: f64,
 ) -> anyhow::Result<()> {
     let mut paused = false;
+    let mut speed = initial_speed;
+    let mut seeking = seek_ms > 0;
     let mut pause_offset = std::time::Duration::ZERO;
 
-    /// Drain any pending client messages (keepalive pings, nvrpause/nvrresume)
-    /// without blocking. Returns the updated pause state.
-    async fn drain_incoming(socket: &mut axum::extract::ws::WebSocket, mut paused: bool) -> bool {
+    /// Drain any pending client messages (keepalive pings, nvrpause/nvrresume/nvrspeed)
+    /// without blocking. Returns the updated (paused, speed) state.
+    async fn drain_incoming(
+        socket: &mut axum::extract::ws::WebSocket,
+        mut paused: bool,
+        mut speed: f64,
+    ) -> (bool, f64) {
         loop {
             tokio::select! {
                 biased;
@@ -374,6 +388,8 @@ async fn handle_recording_stream(
                                 paused = true;
                             } else if t == "9.nvrresume;" {
                                 paused = false;
+                            } else if let Some(s) = parse_nvrspeed(t) {
+                                speed = s;
                             }
                         }
                         Some(Ok(_)) => {} // ignore binary/ping/pong
@@ -386,7 +402,7 @@ async fn handle_recording_stream(
                 }
             }
         }
-        paused
+        (paused, speed)
     }
 
     let mut reader = if recording.storage_type == "local" {
@@ -443,7 +459,8 @@ async fn handle_recording_stream(
         .await?;
 
     let mut parser = GuacamoleParser::new();
-    let mut base_guac_ts: Option<u64> = None;
+    let mut first_guac_ts: Option<u64> = None; // never changes — for absolute progress
+    let mut base_guac_ts: Option<u64> = None;  // reset on speed change — for pacing
     let mut base_real_ts: Option<std::time::Instant> = None;
     let mut last_progress_sent = std::time::Instant::now();
 
@@ -464,110 +481,175 @@ async fn handle_recording_stream(
                     if let Ok(ts) = ts_str.parse::<u64>() {
                         match (base_guac_ts, base_real_ts) {
                             (None, None) => {
+                                first_guac_ts = Some(ts);
                                 base_guac_ts = Some(ts);
                                 base_real_ts = Some(std::time::Instant::now());
                             }
                             (Some(b_ts), Some(b_real)) => {
-                                // Drain pending messages (incl. pause/resume)
-                                paused = drain_incoming(&mut socket, paused).await;
+                                let first_ts = first_guac_ts.unwrap_or(b_ts);
+                                let abs_elapsed = ts.saturating_sub(first_ts);
+                                let guac_elapsed = ts.saturating_sub(b_ts);
 
-                                // While paused, wait and send keepalives
-                                if paused {
-                                    let pause_start = std::time::Instant::now();
-                                    while paused {
-                                        tokio::select! {
-                                            biased;
-                                            msg = socket.next() => {
-                                                match msg {
-                                                    Some(Ok(axum::extract::ws::Message::Text(ref t))) => {
-                                                        let s: &str = t;
-                                                        if s == "9.nvrresume;" {
-                                                            paused = false;
-                                                        }
-                                                    }
-                                                    Some(Err(_)) | None => {
-                                                        return Ok(());
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                                                socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
-                                            }
-                                        }
+                                // ── Seeking: fast-forward without pacing ──
+                                if seeking {
+                                    if abs_elapsed >= seek_ms {
+                                        // Seek complete — reset timing for normal playback
+                                        seeking = false;
+                                        base_guac_ts = Some(ts);
+                                        base_real_ts = Some(std::time::Instant::now());
+                                        pause_offset = std::time::Duration::ZERO;
+                                        let seeked = format_guac_instruction(
+                                            "nvrseeked",
+                                            &[&abs_elapsed.to_string()],
+                                        );
+                                        socket
+                                            .send(axum::extract::ws::Message::Text(seeked))
+                                            .await?;
+                                    } else if last_progress_sent.elapsed().as_millis() > 200 {
+                                        let prog = format_guac_instruction(
+                                            "nvrprogress",
+                                            &[&abs_elapsed.to_string()],
+                                        );
+                                        let _ = socket
+                                            .send(axum::extract::ws::Message::Text(prog))
+                                            .await;
+                                        last_progress_sent = std::time::Instant::now();
                                     }
-                                    pause_offset +=
-                                        std::time::Instant::now().duration_since(pause_start);
                                 }
 
-                                let guac_elapsed = ts.saturating_sub(b_ts);
-                                let wall_elapsed = std::time::Instant::now().duration_since(b_real);
-                                let real_elapsed =
-                                    wall_elapsed.saturating_sub(pause_offset).as_millis() as u64;
+                                if !seeking {
+                                    // ── Drain pending messages (incl. speed) ──
+                                    let (p, s) =
+                                        drain_incoming(&mut socket, paused, speed).await;
+                                    paused = p;
+                                    if s != speed {
+                                        speed = s;
+                                        base_guac_ts = Some(ts);
+                                        base_real_ts = Some(std::time::Instant::now());
+                                        pause_offset = std::time::Duration::ZERO;
+                                    }
 
-                                // Pacing sleep in chunks (max 5s) with keepalives
-                                if guac_elapsed > real_elapsed {
-                                    let mut remaining_ms = guac_elapsed - real_elapsed;
-                                    while remaining_ms > 0 {
-                                        let chunk = remaining_ms.min(5000);
-                                        tokio::select! {
-                                            biased;
-                                            msg = socket.next() => {
-                                                match msg {
-                                                    Some(Ok(axum::extract::ws::Message::Text(ref t))) => {
-                                                        let s: &str = t;
-                                                        if s == "8.nvrpause;" {
-                                                            paused = true;
-                                                            // Enter pause loop
-                                                            let pause_start = std::time::Instant::now();
-                                                            while paused {
-                                                                tokio::select! {
-                                                                    biased;
-                                                                    msg2 = socket.next() => {
-                                                                        match msg2 {
-                                                                            Some(Ok(axum::extract::ws::Message::Text(ref t2))) => {
-                                                                                let s2: &str = t2;
-                                                                                if s2 == "9.nvrresume;" {
-                                                                                    paused = false;
-                                                                                }
-                                                                            }
-                                                                            Some(Err(_)) | None => return Ok(()),
-                                                                            _ => {}
-                                                                        }
-                                                                    }
-                                                                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                                                                        socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
-                                                                    }
-                                                                }
+                                    // ── Pause loop ──
+                                    if paused {
+                                        let pause_start = std::time::Instant::now();
+                                        while paused {
+                                            tokio::select! {
+                                                biased;
+                                                msg = socket.next() => {
+                                                    match msg {
+                                                        Some(Ok(axum::extract::ws::Message::Text(ref t))) => {
+                                                            let sv: &str = t;
+                                                            if sv == "9.nvrresume;" {
+                                                                paused = false;
+                                                            } else if let Some(ns) = parse_nvrspeed(sv) {
+                                                                speed = ns;
                                                             }
-                                                            pause_offset += std::time::Instant::now().duration_since(pause_start);
-                                                            // Recalculate remaining after resume
-                                                            let new_wall = std::time::Instant::now().duration_since(b_real);
-                                                            let new_real = new_wall.saturating_sub(pause_offset).as_millis() as u64;
-                                                            remaining_ms = guac_elapsed.saturating_sub(new_real);
                                                         }
+                                                        Some(Err(_)) | None => {
+                                                            return Ok(());
+                                                        }
+                                                        _ => {}
                                                     }
-                                                    Some(Err(_)) | None => return Ok(()),
-                                                    _ => {}
                                                 }
-                                            }
-                                            _ = tokio::time::sleep(std::time::Duration::from_millis(chunk)) => {
-                                                remaining_ms -= chunk;
-                                                if remaining_ms > 0 {
+                                                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
                                                     socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
                                                 }
                                             }
                                         }
+                                        pause_offset +=
+                                            std::time::Instant::now().duration_since(pause_start);
                                     }
-                                }
 
-                                // Send progress update periodically (every 500ms at most)
-                                if last_progress_sent.elapsed().as_millis() > 500 {
-                                    let elapsed_str = guac_elapsed.to_string();
-                                    let prog =
-                                        format_guac_instruction("nvrprogress", &[&elapsed_str]);
-                                    socket.send(axum::extract::ws::Message::Text(prog)).await?;
-                                    last_progress_sent = std::time::Instant::now();
+                                    // ── Speed-adjusted pacing ──
+                                    let guac_elapsed = ts.saturating_sub(
+                                        base_guac_ts.unwrap_or(b_ts),
+                                    );
+                                    let wall_elapsed = std::time::Instant::now().duration_since(
+                                        base_real_ts.unwrap_or(b_real),
+                                    );
+                                    let real_ms =
+                                        wall_elapsed.saturating_sub(pause_offset).as_millis()
+                                            as u64;
+                                    let target_wall = (guac_elapsed as f64 / speed) as u64;
+
+                                    if target_wall > real_ms {
+                                        let total_wall = target_wall - real_ms;
+                                        let mut remaining_wall = total_wall;
+                                        while remaining_wall > 0 {
+                                            let chunk = remaining_wall.min(500);
+                                            tokio::select! {
+                                                biased;
+                                                msg = socket.next() => {
+                                                    match msg {
+                                                        Some(Ok(axum::extract::ws::Message::Text(ref t))) => {
+                                                            let sv: &str = t;
+                                                            if sv == "8.nvrpause;" {
+                                                                paused = true;
+                                                                let pause_start = std::time::Instant::now();
+                                                                while paused {
+                                                                    tokio::select! {
+                                                                        biased;
+                                                                        msg2 = socket.next() => {
+                                                                            match msg2 {
+                                                                                Some(Ok(axum::extract::ws::Message::Text(ref t2))) => {
+                                                                                    let s2: &str = t2;
+                                                                                    if s2 == "9.nvrresume;" {
+                                                                                        paused = false;
+                                                                                    } else if let Some(ns) = parse_nvrspeed(s2) {
+                                                                                        speed = ns;
+                                                                                    }
+                                                                                }
+                                                                                Some(Err(_)) | None => return Ok(()),
+                                                                                _ => {}
+                                                                            }
+                                                                        }
+                                                                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                                                                            socket.send(axum::extract::ws::Message::Text("3.nop;".into())).await?;
+                                                                        }
+                                                                    }
+                                                                }
+                                                                pause_offset += std::time::Instant::now().duration_since(pause_start);
+                                                                // Recalculate with new speed/pause offset
+                                                                let new_wall = std::time::Instant::now().duration_since(base_real_ts.unwrap_or(b_real));
+                                                                let new_real = new_wall.saturating_sub(pause_offset).as_millis() as u64;
+                                                                let new_target = (guac_elapsed as f64 / speed) as u64;
+                                                                remaining_wall = new_target.saturating_sub(new_real);
+                                                            } else if let Some(ns) = parse_nvrspeed(sv) {
+                                                                speed = ns;
+                                                                base_guac_ts = Some(ts);
+                                                                base_real_ts = Some(std::time::Instant::now());
+                                                                pause_offset = std::time::Duration::ZERO;
+                                                                remaining_wall = 0;
+                                                            }
+                                                        }
+                                                        Some(Err(_)) | None => return Ok(()),
+                                                        _ => {}
+                                                    }
+                                                }
+                                                _ = tokio::time::sleep(std::time::Duration::from_millis(chunk)) => {
+                                                    remaining_wall -= chunk;
+                                                    // Smooth progress: interpolate absolute position
+                                                    let remaining_guac = (remaining_wall as f64 * speed) as u64;
+                                                    let interp = abs_elapsed.saturating_sub(remaining_guac);
+                                                    let prog = format_guac_instruction("nvrprogress", &[&interp.to_string()]);
+                                                    socket.send(axum::extract::ws::Message::Text(prog)).await?;
+                                                    last_progress_sent = std::time::Instant::now();
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Send progress update periodically
+                                    if last_progress_sent.elapsed().as_millis() > 500 {
+                                        let prog = format_guac_instruction(
+                                            "nvrprogress",
+                                            &[&abs_elapsed.to_string()],
+                                        );
+                                        socket
+                                            .send(axum::extract::ws::Message::Text(prog))
+                                            .await?;
+                                        last_progress_sent = std::time::Instant::now();
+                                    }
                                 }
                             }
                             _ => {}
@@ -576,10 +658,16 @@ async fn handle_recording_stream(
                 }
             }
 
-            // Send standard instruction
-            socket
-                .send(axum::extract::ws::Message::Text(instruction.raw))
-                .await?;
+            // During seeking, skip sending sync instructions so the Guacamole
+            // client accumulates all drawing ops into ONE frame instead of
+            // queuing hundreds of intermediate frames (which causes a black
+            // screen or fast-replay artefact).  Non-sync drawing instructions
+            // are always sent so the display state builds up correctly.
+            if !(seeking && instruction.opcode == "sync") {
+                socket
+                    .send(axum::extract::ws::Message::Text(instruction.raw))
+                    .await?;
+            }
         }
     }
 
@@ -600,6 +688,25 @@ pub fn format_guac_instruction(opcode: &str, args: &[&str]) -> String {
     }
     out.push(';');
     out
+}
+
+/// Parse an `nvrspeed` Guacamole message like `8.nvrspeed,1.4;` into the speed value.
+fn parse_nvrspeed(msg: &str) -> Option<f64> {
+    let rest = msg.strip_prefix("8.nvrspeed,")?;
+    let rest = rest.strip_suffix(';')?;
+    let dot = rest.find('.')?;
+    let value = &rest[dot + 1..];
+    value.parse::<f64>().ok().filter(|&v| v >= 0.25 && v <= 16.0)
+}
+
+/// Query parameters for recording stream endpoints.
+#[derive(Deserialize)]
+pub struct RecordingStreamQuery {
+    /// Seek to this position in the recording (milliseconds from start).
+    /// The backend fast-forwards without pacing until reaching this point.
+    pub seek: Option<u64>,
+    /// Initial playback speed multiplier (default 1.0). Range [0.25, 16].
+    pub speed: Option<f64>,
 }
 
 struct GuacamoleInstruction {

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.4] — 2026-04-15
+
+### Added
+- **Recording Player Skip Controls**: Skip forward and back by 30 seconds, 1 minute, 3 minutes, or 5 minutes during recording playback. Seeking disconnects and reconnects at the target position, with a loading indicator while the backend fast-forwards.
+- **Recording Player Speed Controls**: Play recordings at 1×, 2×, 4×, or 8× speed. Speed changes reconnect at the current position with the new playback rate.
+
+### Fixed
+- **Recording Playback Freezing During Idle Periods**: Recordings that contained long idle gaps (no screen updates) would freeze the progress bar and then jump forward. The backend now sends interpolated progress updates every 500 ms during pacing sleep, and the CSS progress bar uses a smooth linear transition.
+- **Black Screen on Seek/Rewind**: Seeking to a position in a recording would show a black screen or fast-replay artefact because the backend was sending intermediate `sync` instructions during the seek phase, causing the Guacamole client to queue hundreds of frames. The backend now suppresses `sync` instructions while seeking so all drawing operations accumulate into a single atomic frame at the target position.
+
 ## [0.14.3] — 2026-04-15
 
 ### Added

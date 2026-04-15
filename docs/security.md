@@ -81,6 +81,8 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/admin/*` | `require_auth` + `require_admin` |
 | `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
+| `/api/user/sessions` | `require_auth` (filtered to own sessions) |
+| `/api/user/recordings` | `require_auth` (filtered to own recordings) |
 
 **Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user's role grants them access to the target connection, including mappings via connection folders (`role_folders`).
 
@@ -139,6 +141,7 @@ When establishing a tunnel, the backend resolves credentials in the following pr
 
 1. **One-off vault profile** — A `credential_profile_id` supplied on the tunnel ticket. The profile is decrypted directly from the user's `credential_profiles` table (no permanent `credential_mappings` entry required). The profile must belong to the requesting user and must not be expired.
 2. **Permanently mapped vault profile** — A credential profile linked to the connection via the `credential_mappings` table.
+3. **Expired profile renewal** — When a mapped profile has expired, the connection info endpoint returns its metadata. The pre-connect prompt offers an "Update & Connect" form so the user can renew the credentials (via `PUT /api/user/credential-profiles/:id`) and connect in a single step, without leaving the session flow.
 3. **Ticket credentials** — Username/password supplied in the one-time tunnel ticket (from the credential prompt form).
 4. **Query string fallback** — Legacy credential parameters on the WebSocket URL (kept for backward compatibility).
 

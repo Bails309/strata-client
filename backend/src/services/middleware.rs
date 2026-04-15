@@ -28,6 +28,7 @@ pub struct AuthUser {
     pub can_create_connections: bool,
     pub can_create_connection_folders: bool,
     pub can_create_sharing_profiles: bool,
+    pub can_view_sessions: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -46,6 +47,7 @@ struct UserPermissionsRow {
     pub can_create_connections: bool,
     pub can_create_connection_folders: bool,
     pub can_create_sharing_profiles: bool,
+    pub can_view_sessions: bool,
 }
 
 impl AuthUser {
@@ -217,7 +219,7 @@ async fn try_local_jwt(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles
+                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
@@ -244,6 +246,7 @@ async fn try_local_jwt(
         can_create_connections: user.can_create_connections,
         can_create_connection_folders: user.can_create_connection_folders,
         can_create_sharing_profiles: user.can_create_sharing_profiles,
+        can_view_sessions: user.can_view_sessions,
     }))
 }
 
@@ -268,7 +271,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles
+                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.sub = $1 AND u.deleted_at IS NULL",
     )
@@ -299,6 +302,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         can_create_connections: user.can_create_connections,
         can_create_connection_folders: user.can_create_connection_folders,
         can_create_sharing_profiles: user.can_create_sharing_profiles,
+        can_view_sessions: user.can_view_sessions,
     })
 }
 
@@ -339,6 +343,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         let cloned = user.clone();
         assert_eq!(user.id, cloned.id);
@@ -364,6 +369,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         let debug = format!("{:?}", user);
         assert!(debug.contains("bob"));
@@ -388,6 +394,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         assert_eq!(user.id, id);
         assert_eq!(user.sub, "oidc|12345");
@@ -412,6 +419,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         let mut cloned = user.clone();
         cloned.username = "eve".into();
@@ -438,6 +446,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         match field {
             "can_manage_system" => user.can_manage_system = true,
@@ -449,6 +458,7 @@ mod tests {
             "can_create_connections" => user.can_create_connections = true,
             "can_create_connection_folders" => user.can_create_connection_folders = true,
             "can_create_sharing_profiles" => user.can_create_sharing_profiles = true,
+            "can_view_sessions" => user.can_view_sessions = true,
             _ => {}
         }
         user
@@ -502,6 +512,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         assert!(user.full_name.is_none());
     }
@@ -523,6 +534,7 @@ mod tests {
             can_create_connections: true,
             can_create_connection_folders: true,
             can_create_sharing_profiles: true,
+            can_view_sessions: true,
         };
         assert!(user.has_any_admin_permission());
         assert_eq!(user.role, "admin");

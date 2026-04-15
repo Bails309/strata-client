@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.13.2-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.14.1-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -49,12 +49,13 @@
 - **Active Directory LDAP sync** — Automatic computer account import from AD via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, multiple search bases per source, filter presets, gMSA/MSA exclusion, and configurable connection defaults (RDP performance flags, session recording settings)
 - **AD auth methods** — Simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI) per AD source; custom CA certificate upload for internal LDAPS
 - **Connection parameter tooltips** — Hover tooltips on all connection settings sourced from the official [Apache Guacamole documentation](https://guacamole.apache.org/doc/gug/configuring-guacamole.html)
-- **Granular RBAC** — 9-permission role system: administer system, audit logs, create users, create roles, create connections, create connection folders, and sharing connections — with `can_manage_system` as a super-admin override
-- **Credential profiles** — Saved per-user credential profiles with optional TTL expiry and profile selector on the Dashboard
+- **Granular RBAC** — 10-permission role system: administer system, audit logs, view sessions, create users, create roles, create connections, create connection folders, and sharing connections — with `can_manage_system` as a super-admin override
+- **Credential profiles** — Saved per-user credential profiles with optional TTL expiry, profile selector on the Dashboard, and in-line renewal when credentials expire at connect time
 - **Session recording** — Toggleable Guacamole-native session capture with configurable retention
 - **Immutable audit log** — SHA-256 hash-chained, append-only audit trail
 - **Tiled multi-session view** — Open multiple connections side-by-side in a responsive grid with per-tile focus control and keyboard broadcast
 - **Live session NVR** — TiVo-style admin session observation with a 5-minute rewind buffer; jump into any active session and scrub backwards to see what a user did
+- **Unified Sessions Page** — Role-based sessions view combining live session monitoring and recording history; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Unified Session Bar** — Consolidated session controls (Sharing, File Browser, Fullscreen, Pop-out, OSK) into a single, sleek, zero-footprint collapsible right-side dock
 - **Integrated OSK** — Touch toolbar and on-screen keyboard shortcuts integrated directly into the Session Bar dock; no more floating buttons obscuring the remote screen
 - **Smooth Session Resizing** — `ResizeObserver`-driven scaling handles sidebar and dock transitions smoothly without layout artifacts or resolution flashes

@@ -123,19 +123,19 @@ describe('WhatsNewModal', () => {
     expect(screen.getByLabelText('Newer release')).toBeInTheDocument();
   });
 
-  it('navigates to older release on left arrow click', async () => {
+  it('navigates to older release on right arrow click', async () => {
     localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
     // Start on first (newest) card
     expect(screen.getByText(`What's New in ${RELEASE_CARDS[0].version}`)).toBeInTheDocument();
 
-    // Click left arrow to go to older card
+    // Click right arrow to go to older card
     await userEvent.click(screen.getByLabelText('Older release'));
     expect(screen.getByText(`What's New in ${RELEASE_CARDS[1].version}`)).toBeInTheDocument();
     expect(screen.getByText(`2 / ${RELEASE_CARDS.length}`)).toBeInTheDocument();
   });
 
-  it('navigates back to newer release on right arrow click', async () => {
+  it('navigates back to newer release on left arrow click', async () => {
     localStorage.setItem(`${WELCOME_KEY}-user1`, 'true');
     render(<WhatsNewModal userId="user1" />);
 

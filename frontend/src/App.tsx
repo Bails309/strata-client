@@ -8,9 +8,9 @@ import SessionClient from './pages/SessionClient';
 import TiledView from './pages/TiledView';
 import SharedViewer from './pages/SharedViewer';
 import AuditLogs from './pages/AuditLogs';
-import ActiveSessions from './pages/ActiveSessions';
 import NvrPlayer from './pages/NvrPlayer';
 import Documentation from './pages/Documentation';
+import Sessions from './pages/Sessions';
 import Layout from './components/Layout';
 import { SessionManagerProvider } from './components/SessionManager';
 import SessionBar from './components/SessionBar';
@@ -104,7 +104,7 @@ export default function App() {
                 <Route path="/tiled" element={<TiledView />} />
                 <Route path="/observe/:sessionId" element={<NvrPlayer />} />
                 <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
-                <Route path="/admin/sessions" element={user?.can_manage_system ? <ActiveSessions /> : <Navigate to="/" replace />} />
+                <Route path="/sessions" element={(user?.can_view_sessions || user?.can_manage_system || user?.can_view_audit_logs) ? <Sessions user={user} /> : <Navigate to="/" replace />} />
                 <Route path="/docs" element={<Documentation />} />
               </Route>
               <Route path="/shared/:shareToken" element={<SharedViewer />} />

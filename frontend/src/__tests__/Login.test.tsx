@@ -88,7 +88,7 @@ describe('Login page', () => {
     vi.mocked(login).mockResolvedValueOnce({
       access_token: 'jwt-abc-123',
       token_type: 'Bearer',
-      user: { id: '1', username: 'admin', role: 'admin', can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true },
+      user: { id: '1', username: 'admin', role: 'admin', can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true, can_view_sessions: true },
     });
 
     renderLogin(onLogin);

@@ -5,9 +5,10 @@ import { buildRecordingStreamUrl, HistoricalRecording } from '../api';
 interface Props {
   recording: HistoricalRecording;
   onClose: () => void;
+  streamUrlBuilder?: (id: string) => string;
 }
 
-export default function HistoricalPlayer({ recording, onClose }: Props) {
+export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
   const tunnelRef = useRef<Guacamole.Tunnel | null>(null);
@@ -44,7 +45,7 @@ export default function HistoricalPlayer({ recording, onClose }: Props) {
     setPlaying(true);
     recordingEndedRef.current = false;
 
-    const url = buildRecordingStreamUrl(recording.id);
+    const url = (streamUrlBuilder || buildRecordingStreamUrl)(recording.id);
     const qIdx = url.indexOf('?');
     const tunnelBase = qIdx >= 0 ? url.substring(0, qIdx) : url;
     const tunnelQuery = qIdx >= 0 ? url.substring(qIdx + 1) : '';

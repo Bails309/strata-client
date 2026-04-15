@@ -51,6 +51,7 @@ const adminUser: import('../api').MeResponse = {
   can_create_connections: true,
   can_create_connection_folders: true,
   can_create_sharing_profiles: true,
+  can_view_sessions: true,
 };
 
 function renderLayout(route = '/') {

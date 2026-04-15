@@ -136,6 +136,7 @@ export interface LoginResponse {
     can_create_connections: boolean;
     can_create_connection_folders: boolean;
     can_create_sharing_profiles: boolean;
+    can_view_sessions: boolean;
   };
 }
 
@@ -205,6 +206,7 @@ export interface MeResponse {
   can_create_connections: boolean;
   can_create_connection_folders: boolean;
   can_create_sharing_profiles: boolean;
+  can_view_sessions: boolean;
 }
 
 export const getMe = () => request<MeResponse>('/user/me');
@@ -429,6 +431,7 @@ export interface Role {
   can_create_connections: boolean;
   can_create_connection_folders: boolean;
   can_create_sharing_profiles: boolean;
+  can_view_sessions: boolean;
 }
 
 export const getRoles = () => request<Role[]>('/admin/roles');
@@ -617,6 +620,11 @@ export interface ConnectionInfo {
   has_credentials: boolean;
   ignore_cert?: boolean;
   watermark?: string;
+  expired_profile?: {
+    id: string;
+    label: string;
+    ttl_hours: number;
+  };
 }
 
 export const getConnectionInfo = (connectionId: string) =>
@@ -704,6 +712,8 @@ export interface ActiveSession {
 
 export const getActiveSessions = () => request<ActiveSession[]>('/admin/sessions');
 
+export const getMyActiveSessions = () => request<ActiveSession[]>('/user/sessions');
+
 export const killSessions = (session_ids: string[]) =>
   request<{ status: string; killed_count: number }>('/admin/sessions/kill', {
     method: 'POST',
@@ -743,6 +753,24 @@ export function buildRecordingStreamUrl(recordingId: string): string {
   const params = new URLSearchParams();
   if (token) params.set('token', token);
   return `${proto}//${window.location.host}/api/admin/recordings/${encodeURIComponent(recordingId)}/stream?${params}`;
+}
+
+// ── My Recordings (user-scoped) ─────────────────────────────────────
+
+export const getMyRecordings = (params: { connection_id?: string; limit?: number; offset?: number } = {}) => {
+  const q = new URLSearchParams();
+  if (params.connection_id) q.set('connection_id', params.connection_id);
+  if (params.limit) q.set('limit', String(params.limit));
+  if (params.offset) q.set('offset', String(params.offset));
+  return request<HistoricalRecording[]>(`/user/recordings?${q.toString()}`);
+};
+
+export function buildMyRecordingStreamUrl(recordingId: string): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const token = localStorage.getItem('access_token');
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  return `${proto}//${window.location.host}/api/user/recordings/${encodeURIComponent(recordingId)}/stream?${params}`;
 }
 
 /**

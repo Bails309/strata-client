@@ -31,9 +31,9 @@ const NAV_ITEMS = [
       <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 7h8M8 12h8M8 17h5"/>
     </svg>
   )},
-  { to: '/admin/sessions', label: 'Live Sessions', icon: (
+  { to: '/sessions', label: 'Sessions', icon: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+      <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
     </svg>
   )},
   { to: '/docs', label: 'Docs', icon: (
@@ -88,6 +88,9 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
                 if (item.to === '/admin/sessions') {
                   return user?.can_manage_system;
                 }
+                if (item.to === '/sessions') {
+                  return user?.can_view_sessions || user?.can_manage_system || user?.can_view_audit_logs;
+                }
                 if (item.to === '/credentials') {
                   return user?.vault_configured;
                 }
@@ -96,7 +99,7 @@ export default function Layout({ user, onLogout }: { user: MeResponse | null, on
                 const active = item.to === '/'
                   ? (location.pathname === '/' || location.pathname.startsWith('/session/'))
                   : item.to === '/admin'
-                    ? location.pathname === '/admin' || (location.pathname.startsWith('/admin/') && !location.pathname.startsWith('/admin/sessions'))
+                    ? location.pathname === '/admin' || location.pathname.startsWith('/admin/')
                     : location.pathname.startsWith(item.to);
                 return (
                   <Link

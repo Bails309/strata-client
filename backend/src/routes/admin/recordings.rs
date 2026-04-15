@@ -343,6 +343,15 @@ pub async fn stream_recording(
         }))
 }
 
+/// Public wrapper so the user recording route can reuse the stream logic.
+pub async fn handle_user_recording_stream(
+    socket: axum::extract::ws::WebSocket,
+    state: SharedState,
+    recording: Recording,
+) -> anyhow::Result<()> {
+    handle_recording_stream(socket, state, recording).await
+}
+
 async fn handle_recording_stream(
     mut socket: axum::extract::ws::WebSocket,
     state: SharedState,

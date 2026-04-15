@@ -220,6 +220,12 @@ pub fn build_router(state: SharedState) -> Router {
             post(share::create_share),
         )
         .route("/api/user/shares/:share_id", delete(share::revoke_share))
+        .route("/api/user/recordings", get(user::my_recordings))
+        .route(
+            "/api/user/recordings/:id/stream",
+            get(user::my_recording_stream),
+        )
+        .route("/api/user/sessions", get(user::my_active_sessions))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public

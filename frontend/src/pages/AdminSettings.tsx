@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { getTimezones } from '../utils/time';
 import { useSettings } from '../contexts/SettingsContext';
 import Select from '../components/Select';
@@ -37,7 +36,6 @@ import {
   deleteUser,
   updateUser,
   restoreUser,
-  getActiveSessions,
   getAdSyncConfigs,
   createAdSyncConfig,
   updateAdSyncConfig,
@@ -53,16 +51,12 @@ import {
   ConnectionFolder,
   User,
   ServiceHealth,
-  ActiveSession,
-  HistoricalRecording,
-  getRecordings,
   MetricsSummary,
   MeResponse,
   getSessionStats,
   SessionStats,
 } from '../api';
 import { formatDateTime } from '../utils/time';
-import HistoricalPlayer from '../components/HistoricalPlayer';
 
 type Tab = 'health' | 'display' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'ad-sync' | 'sessions' | 'security';
 
@@ -1101,6 +1095,7 @@ function AccessTab({
     can_create_connections: boolean;
     can_create_connection_folders: boolean;
     can_create_sharing_profiles: boolean;
+    can_view_sessions: boolean;
   }>({
     name: '',
     can_manage_system: false,
@@ -1112,6 +1107,7 @@ function AccessTab({
     can_create_connections: false,
     can_create_connection_folders: false,
     can_create_sharing_profiles: false,
+    can_view_sessions: false,
   });
   const [confirmModal, setConfirmModal] = useState<{
     title: string;
@@ -1140,6 +1136,7 @@ function AccessTab({
       can_create_connections: r.can_create_connections,
       can_create_connection_folders: r.can_create_connection_folders,
       can_create_sharing_profiles: r.can_create_sharing_profiles,
+      can_view_sessions: r.can_view_sessions,
     });
     setRoleModalTab('permissions');
     setAssignmentConnectionIds([]);
@@ -1311,7 +1308,8 @@ function AccessTab({
                       {r.can_create_connections && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Connections</span>}
                       {r.can_create_connection_folders && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Folders</span>}
                       {r.can_create_sharing_profiles && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Sharing</span>}
-                      {!r.can_manage_system && !r.can_manage_users && !r.can_manage_connections && !r.can_view_audit_logs && !r.can_create_users && !r.can_create_user_groups && !r.can_create_connections && !r.can_create_connection_folders && !r.can_create_sharing_profiles && (
+                      {r.can_view_sessions && <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">Sessions</span>}
+                      {!r.can_manage_system && !r.can_manage_users && !r.can_manage_connections && !r.can_view_audit_logs && !r.can_create_users && !r.can_create_user_groups && !r.can_create_connections && !r.can_create_connection_folders && !r.can_create_sharing_profiles && !r.can_view_sessions && (
                         <span className="text-txt-tertiary text-[10px] italic">No permissions</span>
                       )}
                     </div>
@@ -1362,6 +1360,7 @@ function AccessTab({
                   can_create_connections: false,
                   can_create_connection_folders: false,
                   can_create_sharing_profiles: false,
+                  can_view_sessions: false,
                 });
                 setAssignmentConnectionIds([]);
                 setAssignmentFolderIds([]);
@@ -1458,6 +1457,13 @@ function AccessTab({
                         <div className="flex flex-col">
                           <span className="text-sm font-medium">Sharing Connections</span>
                           <span className="text-[10px] text-txt-tertiary">Share active RDP / SSH sessions with others</span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input type="checkbox" className="checkbox" checked={newRole.can_view_sessions} onChange={e => setNewRole({...newRole, can_view_sessions: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">View own sessions</span>
+                          <span className="text-[10px] text-txt-tertiary">View live and recorded sessions (own sessions only)</span>
                         </div>
                       </label>
                     </div>
@@ -3083,87 +3089,19 @@ function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
 
 function SessionsTab() {
   const { formatDateTime } = useSettings();
-  const [subTab, setSubTab] = useState<'live' | 'history'>('live');
-  const [sessions, setSessions] = useState<ActiveSession[]>([]);
-  const [recordings, setRecordings] = useState<HistoricalRecording[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedRecording, setSelectedRecording] = useState<HistoricalRecording | null>(null);
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
-  
-  // Filters
-  const [userQuery, setUserQuery] = useState('');
-  const [connQuery, setConnQuery] = useState('');
-
-  const navigate = useNavigate();
-
-  const refreshSessions = useCallback(() => {
-    setLoading(true);
-    getActiveSessions()
-      .then(setSessions)
-      .catch(() => setSessions([]))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const refreshHistory = useCallback(() => {
-    setLoading(true);
-    getRecordings()
-      .then(setRecordings)
-      .catch(() => setRecordings([]))
-      .finally(() => setLoading(false));
-  }, []);
 
   useEffect(() => {
     getSessionStats().then(setStats).catch(() => {});
     getMetrics().then(setMetrics).catch(() => {});
   }, []);
 
-  // Refresh metrics alongside live sessions
+  // Refresh metrics periodically
   useEffect(() => {
-    if (subTab === 'live') {
-      const interval = setInterval(() => { getMetrics().then(setMetrics).catch(() => {}); }, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [subTab]);
-
-  useEffect(() => {
-    if (subTab === 'live') {
-      refreshSessions();
-      const interval = setInterval(refreshSessions, 5000);
-      return () => clearInterval(interval);
-    } else {
-      refreshHistory();
-    }
-  }, [subTab, refreshSessions, refreshHistory]);
-
-  function formatDuration(startedAt: string) {
-    const start = new Date(startedAt).getTime();
-    const now = Date.now();
-    const secs = Math.floor((now - start) / 1000);
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = secs % 60;
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
-  }
-
-  function formatHistoricalDuration(secs: number | null) {
-    if (secs === null) return '—';
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const s = secs % 60;
-    if (h > 0) return `${h}h ${m}m ${s}s`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
-  }
-
-  function formatBuffer(secs: number) {
-    if (secs < 60) return `${secs}s`;
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return s > 0 ? `${m}m ${s}s` : `${m}m`;
-  }
+    const interval = setInterval(() => { getMetrics().then(setMetrics).catch(() => {}); }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   function formatBytes(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
@@ -3171,12 +3109,6 @@ function SessionsTab() {
     if (bytes < 1_073_741_824) return `${(bytes / 1_048_576).toFixed(1)} MB`;
     return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
   }
-
-  const filteredHistory = recordings.filter(r => {
-    const uMatch = !userQuery || r.username.toLowerCase().includes(userQuery.toLowerCase());
-    const cMatch = !connQuery || r.connection_name.toLowerCase().includes(connQuery.toLowerCase());
-    return uMatch && cMatch;
-  });
 
   const statIconStyle = (color: string) => ({
     width: 36,
@@ -3592,223 +3524,6 @@ function SessionsTab() {
 
       {/* guacd Capacity Gauge */}
       {metrics && <GuacdCapacityGauge metrics={metrics} />}
-
-    <div className="card">
-      <div className="flex items-center justify-between p-4 bg-surface-secondary/50 border-b border-border mb-6 -mx-7 -mt-7">
-        <div className="flex items-center gap-6">
-          <div className="flex flex-col">
-            <h3 className="text-lg font-semibold text-txt-primary">Sessions & Recordings</h3>
-            <p className="text-sm text-txt-secondary mt-0.5">
-              Manage live connections or browse historical session records.
-            </p>
-          </div>
-          
-          <div className="tabs !mb-0 py-1 px-1">
-            <button 
-              className={`tab text-xs py-1.5 ${subTab === 'live' ? 'tab-active' : ''}`}
-              onClick={() => setSubTab('live')}
-            >
-              Live Sessions
-              {sessions.length > 0 && (
-                <span className="ml-2 px-1.5 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">
-                  {sessions.length}
-                </span>
-              )}
-            </button>
-            <button 
-              className={`tab text-xs py-1.5 ${subTab === 'history' ? 'tab-active' : ''}`}
-              onClick={() => setSubTab('history')}
-            >
-              Recording History
-            </button>
-          </div>
-        </div>
-
-        <button
-          onClick={subTab === 'live' ? refreshSessions : refreshHistory}
-          className="btn-sm-primary"
-          disabled={loading}
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
-      </div>
-
-      {subTab === 'live' ? (
-        <>
-          {sessions.length === 0 && !loading ? (
-            <div className="text-center py-12 text-txt-secondary">
-              <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              <p>No active sessions</p>
-              <p className="text-xs mt-1">Sessions appear here when users connect to remote desktops.</p>
-            </div>
-          ) : (
-            <div className="table-responsive">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th>Connection</th>
-                    <th>Duration</th>
-                    <th>Bandwidth</th>
-                    <th>Buffer</th>
-                    <th className="text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((s) => (
-                    <tr key={s.session_id}>
-                      <td>
-                        <span className="font-medium text-txt-primary">{s.username}</span>
-                      </td>
-                      <td>
-                        <span className="text-txt-primary">{s.connection_name}</span>
-                      </td>
-                      <td>
-                        <span className="text-txt-secondary text-sm font-mono tabular-nums">
-                          {formatDuration(s.started_at)}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="text-txt-secondary text-[0.7rem] font-mono tabular-nums">
-                          <span title="From server">↓{formatBytes(s.bytes_from_guacd)}</span>
-                          {' '}
-                          <span title="To server" className="text-txt-tertiary">↑{formatBytes(s.bytes_to_guacd)}</span>
-                        </span>
-                      </td>
-                      <td>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400">
-                          {formatBuffer(s.buffer_depth_secs)}
-                        </span>
-                      </td>
-                      <td className="text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            className="btn btn-secondary text-xs py-1 px-2"
-                            onClick={() => navigate(`/observe/${encodeURIComponent(s.session_id)}?offset=0&name=${encodeURIComponent(s.connection_name)}&user=${encodeURIComponent(s.username)}`)}
-                            title="Watch live"
-                          >
-                            <span className="inline-flex items-center gap-1 animate-pulse text-red-500">
-                              ● Live
-                            </span>
-                          </button>
-                          <button
-                            className="btn btn-secondary text-xs py-1 px-2"
-                            onClick={() => navigate(`/observe/${encodeURIComponent(s.session_id)}?offset=300&name=${encodeURIComponent(s.connection_name)}&user=${encodeURIComponent(s.username)}`)}
-                            title="Rewind and replay the last 5 minutes"
-                          >
-                            ⏪ Rewind
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          {/* Filters */}
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="form-group !mb-0">
-              <label>Filter by User</label>
-              <input 
-                value={userQuery} 
-                onChange={e => setUserQuery(e.target.value)}
-                placeholder="Search usernames..."
-                className="input-sm"
-              />
-            </div>
-            <div className="form-group !mb-0">
-              <label>Filter by Connection</label>
-              <input 
-                value={connQuery} 
-                onChange={e => setConnQuery(e.target.value)}
-                placeholder="Search connections..."
-                className="input-sm"
-              />
-            </div>
-          </div>
-
-          {filteredHistory.length === 0 && !loading ? (
-            <div className="text-center py-12 text-txt-secondary">
-              <svg className="w-12 h-12 mx-auto mb-3 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <p>No recordings found</p>
-              <p className="text-xs mt-1">Recordings are indexed once a session terminates.</p>
-            </div>
-          ) : (
-            <div className="table-responsive">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th>Connection</th>
-                    <th>Started At</th>
-                    <th>Duration</th>
-                    <th>Storage</th>
-                    <th className="text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredHistory.map((r) => (
-                    <tr key={r.id}>
-                      <td>
-                        <span className="font-medium text-txt-primary">{r.username}</span>
-                      </td>
-                      <td>
-                        <span className="text-txt-primary">{r.connection_name}</span>
-                      </td>
-                      <td>
-                        <span className="text-txt-secondary text-sm">
-                          {formatDateTime(r.started_at)}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="text-txt-secondary text-sm font-mono tabular-nums">
-                          {formatHistoricalDuration(r.duration_secs)}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${r.storage_type === 'azure' ? 'bg-blue-500/10 text-blue-400' : 'bg-surface-tertiary text-txt-tertiary'}`}>
-                          {r.storage_type}
-                        </span>
-                      </td>
-                      <td className="text-right">
-                        <button
-                          className="btn-sm-primary py-1"
-                          onClick={() => setSelectedRecording(r)}
-                        >
-                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
-                          </svg>
-                          Play
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Playback Modal */}
-      {selectedRecording && (
-        <HistoricalPlayer 
-          recording={selectedRecording} 
-          onClose={() => setSelectedRecording(null)}
-        />
-      )}
-    </div>
     </div>
   );
 }

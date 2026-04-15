@@ -25,6 +25,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.1',
+    subtitle: 'Credential Renewal & Clipboard Fix',
+    sections: [
+      {
+        title: 'Renew Expired Credentials at Connect Time',
+        description:
+          'When you connect to a session with an expired credential profile, the prompt now shows the expired profile with an "Update & Connect" form. Enter new credentials to renew and connect instantly, or dismiss to enter one-time manual credentials.',
+      },
+      {
+        title: 'Popout Clipboard Fix',
+        description:
+          'Copying text from a remote session in a pop-out window now correctly writes to your local clipboard. Previously the clipboard write was silently denied because it targeted the unfocused main window.',
+      },
+    ],
+  },
+  {
+    version: '0.14.0',
+    subtitle: 'Unified Sessions & RBAC',
+    sections: [
+      {
+        title: 'Unified Sessions Page',
+        description:
+          'New dedicated Sessions page in the sidebar combining live session monitoring and recording history into a single tabbed interface. Replaces the old admin-only Active Sessions panel.',
+      },
+      {
+        title: 'Role-Based Session Access',
+        description:
+          'New "View own sessions" permission lets users see their own live sessions and recordings. Admins with Manage System or Audit Logs see all users\' sessions with kill, observe, and rewind controls.',
+      },
+      {
+        title: 'Admin Sessions Tab Refined',
+        description:
+          'The Admin Settings Sessions tab now focuses purely on analytics — stats, charts, leaderboards, and guacd capacity. Live session management has moved to the dedicated Sessions page.',
+      },
+    ],
+  },
+  {
     version: '0.13.2',
     subtitle: 'Docs, Stability & CI',
     sections: [
@@ -565,8 +602,8 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
   const isWelcome = mode === 'welcome';
   const card = RELEASE_CARDS[cardIndex];
   const totalCards = RELEASE_CARDS.length;
-  const hasPrev = cardIndex < totalCards - 1;
-  const hasNext = cardIndex > 0;
+  const hasPrev = cardIndex > 0;
+  const hasNext = cardIndex < totalCards - 1;
 
   return (
     <div
@@ -669,9 +706,9 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
             <div className="flex items-center gap-3">
               <button
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-txt-secondary transition-colors disabled:opacity-30 disabled:cursor-default hover:enabled:bg-surface-tertiary hover:enabled:text-txt-primary"
-                onClick={() => setCardIndex(i => i + 1)}
+                onClick={() => setCardIndex(i => i - 1)}
                 disabled={!hasPrev}
-                aria-label="Older release"
+                aria-label="Newer release"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
@@ -680,9 +717,9 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
               </span>
               <button
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-txt-secondary transition-colors disabled:opacity-30 disabled:cursor-default hover:enabled:bg-surface-tertiary hover:enabled:text-txt-primary"
-                onClick={() => setCardIndex(i => i - 1)}
+                onClick={() => setCardIndex(i => i + 1)}
                 disabled={!hasNext}
-                aria-label="Newer release"
+                aria-label="Older release"
               >
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>

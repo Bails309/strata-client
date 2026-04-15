@@ -390,11 +390,11 @@ describe('API endpoint functions', () => {
 
   it('createRole sends POST with name', async () => {
     const fn = mockFetch({ id: '1', name: 'editors' });
-    await createRole({ name: 'editors', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
+    await createRole({ name: 'editors', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false, can_view_sessions: false });
     const c = lastCall(fn);
     expect(c.url).toBe('/api/admin/roles');
     expect(c.method).toBe('POST');
-    expect(JSON.parse(c.body!)).toEqual({ name: 'editors', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
+    expect(JSON.parse(c.body!)).toEqual({ name: 'editors', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false, can_view_sessions: false });
   });
 
   // ── Connections ───────────────────────────────────

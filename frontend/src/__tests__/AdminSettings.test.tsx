@@ -129,6 +129,7 @@ const defaultUser: import('../api').MeResponse = {
   can_create_connections: true,
   can_create_connection_folders: true,
   can_create_sharing_profiles: true,
+  can_view_sessions: true,
 };
 
 function renderAdmin() {
@@ -805,8 +806,8 @@ describe('AccessTab', () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getRoles).mockResolvedValue([
-      { id: 'r1', name: 'admin', can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true },
-      { id: 'r2', name: 'user', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false },
+      { id: 'r1', name: 'admin', can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true, can_view_sessions: true },
+      { id: 'r2', name: 'user', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false, can_view_sessions: false },
     ]);
     vi.mocked(getConnections).mockResolvedValue([
       { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: 'RDP server', folder_id: undefined, extra: {} },
@@ -824,7 +825,7 @@ describe('AccessTab', () => {
   });
 
   it('creates a new role', async () => {
-    vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false });
+    vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false, can_view_sessions: false });
     vi.mocked(updateRoleMappings).mockResolvedValue({ status: 'ok' });
     const user = userEvent.setup();
     renderAdmin();
@@ -841,7 +842,7 @@ describe('AccessTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByRole('button', { name: 'Sessions' }));
-    expect(await screen.findByText('Sessions & Recordings')).toBeInTheDocument();
+    expect(await screen.findByText(/last 30 days/i)).toBeInTheDocument();
   });
 
   it('renders connections table', async () => {
@@ -1189,98 +1190,8 @@ describe('AccessTab', () => {
 describe('SessionsTab', () => {
   beforeEach(() => {
     setupDefaults();
-    vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 0, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
-    ]);
   });
   afterEach(() => vi.restoreAllMocks());
-
-  it('renders active sessions', async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('Server A')).toBeInTheDocument();
-    expect(screen.getByText('admin')).toBeInTheDocument();
-  });
-
-  it('shows empty state with no sessions', async () => {
-    vi.mocked(getActiveSessions).mockResolvedValue([]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText(/no active sessions/i)).toBeInTheDocument();
-  });
-
-  it('shows session duration', async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Server A');
-    // Duration should be rendered (format varies by time)
-    const durationEls = screen.getAllByText(/\d+[hms]/);
-    expect(durationEls.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('shows buffer depth', async () => {
-    vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 120, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
-    ]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('2m')).toBeInTheDocument();
-  });
-
-  it('shows buffer with seconds', async () => {
-    vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 45, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
-    ]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('45s')).toBeInTheDocument();
-  });
-
-  it('shows buffer with minutes and seconds', async () => {
-    vi.mocked(getActiveSessions).mockResolvedValue([
-      { session_id: 's1', user_id: 'u1', username: 'admin', connection_id: 'c1', connection_name: 'Server A', protocol: 'rdp', started_at: '2026-01-15T10:00:00Z', bytes_from_guacd: 1024, bytes_to_guacd: 512, buffer_depth_secs: 90, remote_host: '127.0.0.1', client_ip: '10.0.0.1' },
-    ]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('1m 30s')).toBeInTheDocument();
-  });
-
-  it('renders Live and Rewind buttons', async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Server A');
-    expect(screen.getByText('● Live')).toBeInTheDocument();
-    expect(screen.getByText('⏪ Rewind')).toBeInTheDocument();
-  });
-
-  it('disables refresh while loading', async () => {
-    vi.mocked(getActiveSessions).mockReturnValue(new Promise(() => {}));
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await waitFor(() => {
-      const btns = screen.getAllByText('Refreshing...');
-      expect(btns.length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  it('navigates to live view on Live click', async () => {
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Server A');
-    
-    await user.click(screen.getByText('● Live'));
-    // Verify navigation was triggered (Live button uses navigate)
-    expect(screen.getByText('● Live')).toBeInTheDocument();
-  });
 
   it('renders session stat cards with data', async () => {
     vi.mocked(getSessionStats).mockResolvedValue({
@@ -1312,7 +1223,7 @@ describe('SessionsTab', () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Sessions & Recordings');
+    await screen.findByText(/last 30 days/i);
     const dashes = screen.getAllByText('—');
     expect(dashes.length).toBeGreaterThanOrEqual(4);
   });
@@ -1389,59 +1300,6 @@ describe('SessionsTab', () => {
     await user.click(screen.getByText('Sessions'));
     const noDataEls = await screen.findAllByText('No data yet.');
     expect(noDataEls.length).toBe(2);
-  });
-
-  it('switches to Recording History tab', async () => {
-    vi.mocked(getRecordings).mockResolvedValue([]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Sessions & Recordings');
-    await user.click(screen.getByText('Recording History'));
-    expect(await screen.findByText(/no recordings found/i)).toBeInTheDocument();
-  });
-
-  it('renders recording history entries', async () => {
-    vi.mocked(getRecordings).mockResolvedValue([
-      { id: 'r1', session_id: 's1', connection_id: 'c1', connection_name: 'Server A', user_id: 'u1', username: 'admin', started_at: '2026-04-10T10:00:00Z', duration_secs: 3661, storage_path: '/rec/r1', storage_type: 'local' },
-    ]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Sessions & Recordings');
-    await user.click(screen.getByText('Recording History'));
-    expect(await screen.findByText('1h 1m 1s')).toBeInTheDocument();
-    expect(screen.getByText('local')).toBeInTheDocument();
-  });
-
-  it('filters recording history by username', async () => {
-    vi.mocked(getRecordings).mockResolvedValue([
-      { id: 'r1', session_id: 's1', connection_id: 'c1', connection_name: 'Server A', user_id: 'u1', username: 'alice', started_at: '2026-04-10T10:00:00Z', duration_secs: 60, storage_path: '/rec/r1', storage_type: 'local' },
-      { id: 'r2', session_id: 's2', connection_id: 'c1', connection_name: 'Server A', user_id: 'u2', username: 'bob', started_at: '2026-04-10T11:00:00Z', duration_secs: 120, storage_path: '/rec/r2', storage_type: 'local' },
-    ]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Sessions & Recordings');
-    await user.click(screen.getByText('Recording History'));
-    await screen.findByText('alice');
-    await user.type(screen.getByPlaceholderText('Search usernames...'), 'alice');
-    expect(screen.getByText('alice')).toBeInTheDocument();
-    expect(screen.queryByText('bob')).not.toBeInTheDocument();
-  });
-
-  it('shows null duration as dash', async () => {
-    vi.mocked(getRecordings).mockResolvedValue([
-      { id: 'r1', session_id: 's1', connection_id: 'c1', connection_name: 'Server A', user_id: 'u1', username: 'admin', started_at: '2026-04-10T10:00:00Z', duration_secs: null as any, storage_path: '/rec/r1', storage_type: 'local' },
-    ]);
-    const user = userEvent.setup();
-    renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    await screen.findByText('Sessions & Recordings');
-    await user.click(screen.getByText('Recording History'));
-    await screen.findByText('Server A');
-    // null duration shows as —
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -1065,12 +1065,13 @@ pub struct RoleRow {
     pub can_create_connections: bool,
     pub can_create_connection_folders: bool,
     pub can_create_sharing_profiles: bool,
+    pub can_view_sessions: bool,
 }
 
 pub async fn list_roles(State(state): State<SharedState>) -> Result<Json<Vec<RoleRow>>, AppError> {
     let db = require_running(&state).await?;
     let rows: Vec<RoleRow> =
-        sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles FROM roles ORDER BY name")
+        sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions FROM roles ORDER BY name")
             .fetch_all(&db.pool)
             .await?;
     Ok(Json(rows))
@@ -1088,6 +1089,7 @@ pub struct CreateRoleRequest {
     pub can_create_connections: Option<bool>,
     pub can_create_connection_folders: Option<bool>,
     pub can_create_sharing_profiles: Option<bool>,
+    pub can_view_sessions: Option<bool>,
 }
 
 pub async fn create_role(
@@ -1097,9 +1099,9 @@ pub async fn create_role(
 ) -> Result<Json<RoleRow>, AppError> {
     let db = require_running(&state).await?;
     let row: RoleRow = sqlx::query_as(
-        "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
-         RETURNING id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles",
+        "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+         RETURNING id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions",
     )
     .bind(&body.name)
     .bind(body.can_manage_system.unwrap_or(false))
@@ -1111,6 +1113,7 @@ pub async fn create_role(
     .bind(body.can_create_connections.unwrap_or(false))
     .bind(body.can_create_connection_folders.unwrap_or(false))
     .bind(body.can_create_sharing_profiles.unwrap_or(false))
+    .bind(body.can_view_sessions.unwrap_or(false))
     .fetch_one(&db.pool)
     .await?;
     audit::log(
@@ -1135,6 +1138,7 @@ pub struct UpdateRoleRequest {
     pub can_create_connections: Option<bool>,
     pub can_create_connection_folders: Option<bool>,
     pub can_create_sharing_profiles: Option<bool>,
+    pub can_view_sessions: Option<bool>,
 }
 
 pub async fn update_role(
@@ -1218,10 +1222,17 @@ pub async fn update_role(
             .execute(&mut *tx)
             .await?;
     }
+    if let Some(v) = body.can_view_sessions {
+        sqlx::query("UPDATE roles SET can_view_sessions = $1 WHERE id = $2")
+            .bind(v)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
 
     tx.commit().await?;
 
-    let row: RoleRow = sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles FROM roles WHERE id = $1")
+    let row: RoleRow = sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions FROM roles WHERE id = $1")
         .bind(id)
         .fetch_one(&db.pool)
         .await?;

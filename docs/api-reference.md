@@ -609,7 +609,7 @@ These endpoints require authentication (any role).
 
 ### `GET /api/user/me`
 
-Current authenticated user profile.
+Current authenticated user profile, including all role permissions.
 
 **Response** `200 OK`
 ```json
@@ -617,9 +617,78 @@ Current authenticated user profile.
   "id": "uuid",
   "username": "jdoe",
   "role": "user",
-  "sub": "keycloak-subject-id"
+  "can_manage_system": false,
+  "can_manage_users": false,
+  "can_manage_connections": false,
+  "can_view_audit_logs": false,
+  "can_create_users": false,
+  "can_create_user_groups": false,
+  "can_create_connections": false,
+  "can_create_connection_folders": false,
+  "can_create_sharing_profiles": false,
+  "can_view_sessions": true
 }
 ```
+
+### `GET /api/user/sessions`
+
+List the calling user's own active tunnel sessions. Returns only sessions where `user_id` matches the authenticated user.
+
+**Response** `200 OK`
+```json
+[
+  {
+    "session_id": "uuid-1681234567890",
+    "connection_id": "uuid",
+    "connection_name": "Dev Server",
+    "protocol": "rdp",
+    "user_id": "uuid",
+    "username": "jdoe",
+    "started_at": "2026-04-15T10:30:00Z",
+    "buffer_depth_secs": 120,
+    "bytes_from_guacd": 5242880,
+    "bytes_to_guacd": 104857
+  }
+]
+```
+
+### `GET /api/user/recordings`
+
+List the calling user's own historical recordings. Supports optional filtering and pagination.
+
+**Query Parameters**:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `connection_id` | uuid | — | Filter by connection |
+| `limit` | integer | 50 | Maximum results |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "session_id": "uuid",
+    "connection_id": "uuid",
+    "connection_name": "Dev Server",
+    "user_id": "uuid",
+    "username": "jdoe",
+    "started_at": "2026-04-15T10:00:00Z",
+    "duration_secs": 3600,
+    "storage_path": "/recordings/uuid.m4v",
+    "storage_type": "local"
+  }
+]
+```
+
+### `GET /api/user/recordings/:id/stream`
+
+Stream a recording for playback. Only accessible for recordings owned by the authenticated user.
+
+**Path Parameter**: `id` (uuid) — recording ID
+
+**Response**: `200 OK` with binary stream (WebSocket upgrade for Guacamole protocol replay)
 
 ### `GET /api/user/connections`
 
@@ -641,6 +710,35 @@ Connections accessible to the authenticated user. Admin users see **all** connec
   }
 ]
 ```
+
+### `GET /api/user/connections/:id/info`
+
+Pre-connect information for a specific connection. Used by the session client to determine whether to show the credential prompt, and to provide expired profile metadata for in-line renewal.
+
+**Path Parameter**: `id` (UUID) — connection ID
+
+**Response** `200 OK`
+```json
+{
+  "protocol": "rdp",
+  "has_credentials": false,
+  "ignore_cert": true,
+  "watermark": "inherit",
+  "expired_profile": {
+    "id": "uuid",
+    "label": "sa1_prochnickit ICS",
+    "ttl_hours": 12
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `protocol` | string | `rdp`, `vnc`, or `ssh` |
+| `has_credentials` | boolean | `true` if a non-expired vault credential profile is mapped to this user + connection |
+| `ignore_cert` | boolean | Whether the connection's RDP certificate validation is disabled |
+| `watermark` | string | Per-connection watermark setting (`inherit`, `enabled`, `disabled`) |
+| `expired_profile` | object \| null | Present only when `has_credentials` is `false` and an expired profile is mapped. Contains `id`, `label`, and `ttl_hours` for the expired profile. |
 
 ### Favorites
 

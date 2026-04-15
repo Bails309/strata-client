@@ -1,4 +1,4 @@
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,7 @@ pub async fn me(
         "can_create_connections": user.can_create_connections,
         "can_create_connection_folders": user.can_create_connection_folders,
         "can_create_sharing_profiles": user.can_create_sharing_profiles,
+        "can_view_sessions": user.can_view_sessions,
     })))
 }
 
@@ -758,18 +759,47 @@ pub async fn connection_info(
         .unwrap_or(false)
     };
 
+    // If no active credentials, check for an expired profile mapped to this connection
+    let expired_profile: Option<(String, String, i32)> = if !has_vault_creds && has_vault {
+        sqlx::query_as::<_, (String, String, i32)>(
+            "SELECT cp.id::text, cp.label, cp.ttl_hours
+             FROM credential_mappings cm
+             JOIN credential_profiles cp ON cp.id = cm.credential_id
+             WHERE cm.connection_id = $1 AND cp.user_id = $2
+               AND cp.expires_at <= now()
+             LIMIT 1",
+        )
+        .bind(connection_id)
+        .bind(user.id)
+        .fetch_optional(&db.pool)
+        .await
+        .unwrap_or(None)
+    } else {
+        None
+    };
+
     let ignore_cert = if protocol == "rdp" {
         parse_ignore_cert(&extra)
     } else {
         false
     };
 
-    Ok(Json(json!({
+    let mut resp = json!({
         "protocol": protocol,
         "has_credentials": has_vault_creds,
         "ignore_cert": ignore_cert,
         "watermark": watermark,
-    })))
+    });
+
+    if let Some((ep_id, ep_label, ep_ttl)) = expired_profile {
+        resp["expired_profile"] = json!({
+            "id": ep_id,
+            "label": ep_label,
+            "ttl_hours": ep_ttl,
+        });
+    }
+
+    Ok(Json(resp))
 }
 
 // ── Serve a recording file ────────────────────────────────────────────
@@ -858,6 +888,89 @@ pub async fn get_recording(
     Err(AppError::NotFound(format!(
         "Recording not found: {filename}"
     )))
+}
+
+// ── User's own active sessions ────────────────────────────────────────
+
+/// GET /api/user/sessions — list active sessions belonging to the authenticated user only.
+pub async fn my_active_sessions(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::services::session_registry::SessionInfo>>, AppError> {
+    let _db = require_running(&state).await?;
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+    let all = registry.list().await;
+    let mine: Vec<_> = all.into_iter().filter(|s| s.user_id == user.id).collect();
+    Ok(Json(mine))
+}
+
+// ── User's own recordings ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct MyRecordingsQuery {
+    pub connection_id: Option<Uuid>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// GET /api/user/recordings — list recordings owned by the authenticated user.
+pub async fn my_recordings(
+    State(state): State<SharedState>,
+    Extension(auth): Extension<AuthUser>,
+    Query(query): Query<MyRecordingsQuery>,
+) -> Result<Json<Vec<crate::db::Recording>>, AppError> {
+    let db = require_running(&state).await?;
+
+    let recordings = sqlx::query_as::<_, crate::db::Recording>(
+        "SELECT * FROM recordings
+         WHERE user_id = $1
+           AND ($2::uuid IS NULL OR connection_id = $2)
+         ORDER BY started_at DESC
+         LIMIT $3 OFFSET $4",
+    )
+    .bind(auth.id)
+    .bind(query.connection_id)
+    .bind(query.limit.unwrap_or(50))
+    .bind(query.offset.unwrap_or(0))
+    .fetch_all(&db.pool)
+    .await?;
+
+    Ok(Json(recordings))
+}
+
+/// GET /api/user/recordings/:id/stream — stream a recording that belongs to the authenticated user.
+pub async fn my_recording_stream(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    State(state): State<SharedState>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let db = require_running(&state).await?;
+
+    // Fetch recording and verify ownership
+    let recording: crate::db::Recording =
+        sqlx::query_as("SELECT * FROM recordings WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(auth.id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
+
+    Ok(ws
+        .protocols(["guacamole"])
+        .on_upgrade(move |socket| async move {
+            if let Err(e) =
+                crate::routes::admin::recordings::handle_user_recording_stream(
+                    socket, state, recording,
+                )
+                .await
+            {
+                tracing::error!("User recording stream error: {e}");
+            }
+        }))
 }
 
 #[cfg(test)]

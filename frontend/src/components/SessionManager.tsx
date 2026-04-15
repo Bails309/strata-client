@@ -170,8 +170,14 @@ export function SessionManagerProvider({ children }: { children: React.ReactNode
       reader.ontext = (text: string) => { data += text; };
       reader.onend = () => {
         session.remoteClipboard = data;
-        // Write to browser clipboard if permitted
-        navigator.clipboard?.writeText(data).catch(() => {});
+        // Write to browser clipboard if permitted.
+        // When the session is in a pop-out window the main window lacks focus
+        // so navigator.clipboard.writeText() is denied by the browser.  Use
+        // the popup window's clipboard API instead since it has focus.
+        const clipNav = session._popout && !session._popout.window.closed
+          ? session._popout.window.navigator
+          : navigator;
+        clipNav.clipboard?.writeText(data).catch(() => {});
         setSessions((prev) => [...prev]); // trigger re-render
       };
     };

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialProfiles, CredentialProfile } from '../api';
+import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialProfiles, updateCredentialProfile, CredentialProfile, ConnectionInfo } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
@@ -47,6 +47,11 @@ export default function SessionClient() {
   const [connectionWatermark, setConnectionWatermark] = useState<string>('inherit');
   const [vaultProfiles, setVaultProfiles] = useState<CredentialProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
+  const [expiredProfile, setExpiredProfile] = useState<ConnectionInfo['expired_profile']>();
+  const [renewMode, setRenewMode] = useState(false);
+  const [renewForm, setRenewForm] = useState({ username: '', password: '' });
+  const [renewError, setRenewError] = useState('');
+  const [renewLoading, setRenewLoading] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string; credential_profile_id?: string }>({ username: '', password: '' });
 
   const containerFocusedRef = useRef(false);
@@ -118,6 +123,10 @@ export default function SessionClient() {
         setHasDomain(!!connDetail?.domain);
         setIgnoreCert(!!info.ignore_cert);
         setConnectionWatermark(info.watermark || 'inherit');
+        if (info.expired_profile) {
+          setExpiredProfile(info.expired_profile);
+          setRenewMode(true);
+        }
         if (info.has_credentials) {
           setPhase('connected');
         } else if (info.protocol === 'rdp') {
@@ -145,6 +154,30 @@ export default function SessionClient() {
       : { username: credForm.username || '', password: credForm.password || '' };
     setPhase('connected');
   }, [credForm, selectedProfileId]);
+
+  // ── Renew expired profile + connect ──
+  const handleRenewAndConnect = useCallback(async () => {
+    if (!expiredProfile) return;
+    if (!renewForm.username || !renewForm.password) {
+      setRenewError('Username and password are required.');
+      return;
+    }
+    setRenewLoading(true);
+    setRenewError('');
+    try {
+      await updateCredentialProfile(expiredProfile.id, {
+        username: renewForm.username,
+        password: renewForm.password,
+      });
+      // Profile is now renewed — connect using it
+      pendingCredsRef.current = { username: '', password: '', credential_profile_id: expiredProfile.id };
+      setPhase('connected');
+    } catch (err: any) {
+      setRenewError(err?.message || 'Failed to update credentials.');
+    } finally {
+      setRenewLoading(false);
+    }
+  }, [expiredProfile, renewForm]);
 
   // ── Auto-reconnect: attempt to re-establish a dropped session ──
   const attemptReconnect = useCallback((attempt: number): void => {
@@ -795,32 +828,90 @@ export default function SessionClient() {
           <div className="card w-full max-w-[400px] m-auto">
             <h2 className="!mb-1">Connect to {protocol.toUpperCase()}</h2>
             <p className="text-txt-secondary text-sm mb-4">Enter credentials for the remote server.</p>
-            <form onSubmit={(e) => { e.preventDefault(); handlePreConnectSubmit(); }}>
-              {vaultProfiles.length > 0 && (
-                <div className="form-group">
-                  <label>Saved Credential Profile</label>
-                  <Select
-                    value={selectedProfileId}
-                    onChange={(val) => {
-                      setSelectedProfileId(val);
-                      if (val) setCredForm({ username: '', password: '', domain: '' });
-                    }}
-                    options={[
-                      { value: '', label: '— Enter manually —' },
-                      ...vaultProfiles.map((p) => ({ value: p.id, label: p.label })),
-                    ]}
-                  />
+
+            {/* ── Expired profile renewal banner ── */}
+            {expiredProfile && (
+              <div style={{ background: 'var(--color-surface-secondary)', border: '1px solid var(--color-glass-border)', borderRadius: '0.75rem', padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span style={{ color: 'var(--color-error)', fontSize: '0.85rem' }}>●</span>
+                  <span className="text-sm font-medium">{expiredProfile.label}</span>
+                  <span className="text-xs" style={{ color: 'var(--color-error)' }}>(expired)</span>
                 </div>
-              )}
-              {!selectedProfileId && preConnectFields.map((field) => (
-                <div className="form-group" key={field}>
-                  <label>{paramLabels[field] || field}</label>
-                  <input type={field === 'password' ? 'password' : 'text'} value={credForm[field] || ''} onChange={(e) => setCredForm({ ...credForm, [field]: e.target.value })} autoFocus={field === preConnectFields[0]} />
-                </div>
-              ))}
-              <button className="btn-primary w-full" type="submit">Connect</button>
+                {!renewMode ? (
+                  <button
+                    className="text-xs mt-1"
+                    style={{ color: 'var(--color-primary)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => setRenewMode(true)}
+                  >
+                    Update credentials &amp; connect
+                  </button>
+                ) : (
+                  <form onSubmit={(e) => { e.preventDefault(); handleRenewAndConnect(); }} className="mt-2">
+                    <div className="form-group !mb-2">
+                      <label className="text-xs">Username</label>
+                      <input type="text" value={renewForm.username} onChange={(e) => setRenewForm((f) => ({ ...f, username: e.target.value }))} autoFocus />
+                    </div>
+                    <div className="form-group !mb-2">
+                      <label className="text-xs">Password</label>
+                      <input type="password" value={renewForm.password} onChange={(e) => setRenewForm((f) => ({ ...f, password: e.target.value }))} />
+                    </div>
+                    {renewError && <p className="text-xs mb-2" style={{ color: 'var(--color-error)' }}>{renewError}</p>}
+                    <div className="flex gap-2">
+                      <button className="btn-primary flex-1 !text-sm !py-1.5" type="submit" disabled={renewLoading}>
+                        {renewLoading ? 'Updating…' : 'Update & Connect'}
+                      </button>
+                      <button className="btn flex-1 !text-sm !py-1.5" type="button" onClick={() => { setRenewMode(false); setRenewError(''); }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {/* ── Manual / saved profile form ── */}
+            {!renewMode && (
+              <>
+                {expiredProfile && (
+                  <div className="flex items-center gap-2 mb-3">
+                    <div style={{ flex: 1, height: '1px', background: 'var(--color-glass-border)' }} />
+                    <span className="text-xs text-txt-secondary">or enter credentials manually</span>
+                    <div style={{ flex: 1, height: '1px', background: 'var(--color-glass-border)' }} />
+                  </div>
+                )}
+                <form onSubmit={(e) => { e.preventDefault(); handlePreConnectSubmit(); }}>
+                  {vaultProfiles.length > 0 && (
+                    <div className="form-group">
+                      <label>Saved Credential Profile</label>
+                      <Select
+                        value={selectedProfileId}
+                        onChange={(val) => {
+                          setSelectedProfileId(val);
+                          if (val) setCredForm({ username: '', password: '', domain: '' });
+                        }}
+                        options={[
+                          { value: '', label: '— Enter manually —' },
+                          ...vaultProfiles.map((p) => ({ value: p.id, label: p.label })),
+                        ]}
+                      />
+                    </div>
+                  )}
+                  {!selectedProfileId && preConnectFields.map((field) => (
+                    <div className="form-group" key={field}>
+                      <label>{paramLabels[field] || field}</label>
+                      <input type={field === 'password' ? 'password' : 'text'} value={credForm[field] || ''} onChange={(e) => setCredForm({ ...credForm, [field]: e.target.value })} autoFocus={!expiredProfile && field === preConnectFields[0]} />
+                    </div>
+                  ))}
+                  <button className="btn-primary w-full" type="submit">Connect</button>
+                  <button className="btn w-full mt-2" type="button" onClick={() => navigate('/')}>Cancel</button>
+                </form>
+              </>
+            )}
+
+            {/* Cancel button when in renew mode */}
+            {renewMode && (
               <button className="btn w-full mt-2" type="button" onClick={() => navigate('/')}>Cancel</button>
-            </form>
+            )}
           </div>
         </div>
       )}

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.14.1-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.14.7-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -55,6 +55,9 @@
 - **Immutable audit log** — SHA-256 hash-chained, append-only audit trail
 - **Tiled multi-session view** — Open multiple connections side-by-side in a responsive grid with per-tile focus control and keyboard broadcast
 - **Live session NVR** — TiVo-style admin session observation with a 5-minute rewind buffer; jump into any active session and scrub backwards to see what a user did
+- **Live session sharing** — Generate temporary share links (view or control mode) that let external users observe or control your active session in real time via the NVR broadcast channel — no separate RDP connection needed. Links auto-expire after 24 hours and can be revoked instantly
+- **Admin tags** — System-wide tags created by administrators for organizational categorization of connections; visible (read-only) to all users on the Dashboard alongside personal tags
+- **Recording disclaimer / Terms of Service** — Mandatory first-login acceptance modal covering session recording consent, acceptable use, and data protection under UK GDPR. Acceptance is timestamped in the database; declining logs the user out
 - **Unified Sessions Page** — Role-based sessions view combining live session monitoring and recording history; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Unified Session Bar** — Consolidated session controls (Sharing, File Browser, Fullscreen, Pop-out, OSK) into a single, sleek, zero-footprint collapsible right-side dock
 - **Integrated OSK** — Touch toolbar and on-screen keyboard shortcuts integrated directly into the Session Bar dock; no more floating buttons obscuring the remote screen

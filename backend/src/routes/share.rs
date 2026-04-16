@@ -12,8 +12,6 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
-use crate::services::settings;
-use crate::tunnel::{self, HandshakeParams, NvrContext};
 use axum::extract::Extension;
 
 /// Resolve final username/password from credential lookup + owner fallback.
@@ -196,7 +194,7 @@ pub async fn ws_shared_tunnel(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
     Path(share_token): Path<String>,
-    Query(query): Query<SharedTunnelQuery>,
+    Query(_query): Query<SharedTunnelQuery>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
@@ -218,15 +216,12 @@ pub async fn ws_shared_tunnel(
         attempts.push(Instant::now());
     }
 
-    let (db, config, guacd_pool) = {
+    let db = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
         }
-        let db = s.db.clone().ok_or(AppError::SetupRequired)?;
-        let cfg = s.config.clone().ok_or(AppError::SetupRequired)?;
-        let pool = s.guacd_pool.clone();
-        (db, cfg, pool)
+        s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
     // Look up the share and verify it's valid
@@ -241,16 +236,12 @@ pub async fn ws_shared_tunnel(
     .fetch_optional(&db.pool)
     .await?;
 
-    let (share_id, connection_id, owner_user_id, mode) =
+    let (_share_id, connection_id, owner_user_id, mode) =
         share.ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
 
-    // Increment access count
-    sqlx::query("UPDATE connection_shares SET access_count = access_count + 1, last_accessed = now() WHERE id = $1")
-        .bind(share_id)
-        .execute(&db.pool)
-        .await?;
+    let is_control = mode == "control";
 
-    // Extract client IP (X-Forwarded-For > ConnectInfo)
+    // Extract client IP for audit logging
     let client_ip = headers
         .get("x-forwarded-for")
         .and_then(|h| h.to_str().ok())
@@ -258,178 +249,174 @@ pub async fn ws_shared_tunnel(
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| addr.ip().to_string());
 
-    let read_only = mode == "view";
-
-    // Fetch connection details
-    let conn: (String, String, i32, Option<String>, String, serde_json::Value) =
-        sqlx::query_as(
-            "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
-        )
-        .bind(connection_id)
-        .fetch_optional(&db.pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
-
-    let (protocol, hostname, port, domain, _name, extra_json) = conn;
-
-    let extra = crate::tunnel::json_to_string_map(&extra_json);
-
-    // Load the OWNER's credentials (the person who shared).
-    // First try the newer credential_profiles system, then fall back to
-    // the legacy user_credentials table for backwards compatibility.
-    let (cred_username, cred_password) = if let Some(vault_cfg) = &config.vault {
-        // Try credential_profiles + credential_mappings first
-        let profile_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-            "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
-             FROM credential_mappings cm
-             JOIN credential_profiles cp ON cp.id = cm.credential_id
-             WHERE cm.connection_id = $1 AND cp.user_id = $2
-               AND cp.expires_at > now()",
-        )
-        .bind(connection_id)
-        .bind(owner_user_id)
-        .fetch_optional(&db.pool)
-        .await?;
-
-        if let Some((enc_payload, enc_dek, nonce)) = profile_cred {
-            let plaintext =
-                crate::services::vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
-            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-            // Parse combined JSON payload { "u": username, "p": password }
-            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
-                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
-            let u = parsed["u"].as_str().unwrap_or("").to_string();
-            let p = parsed["p"].as_str().unwrap_or("").to_string();
-            (
-                if u.is_empty() { None } else { Some(u) },
-                if p.is_empty() { None } else { Some(p) },
-            )
-        } else {
-            // Fall back to legacy user_credentials table
-            let legacy_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-                "SELECT encrypted_password, encrypted_dek, nonce
-                 FROM user_credentials WHERE user_id = $1 AND connection_id = $2",
-            )
-            .bind(owner_user_id)
-            .bind(connection_id)
-            .fetch_optional(&db.pool)
-            .await?;
-
-            if let Some((enc_pass, enc_dek, nonce)) = legacy_cred {
-                let plaintext =
-                    crate::services::vault::unseal(vault_cfg, &enc_dek, &enc_pass, &nonce).await?;
-                let pwd = String::from_utf8(plaintext).unwrap_or_default();
-                (None, if pwd.is_empty() { None } else { Some(pwd) })
-            } else {
-                (None, None)
-            }
-        }
-    } else {
-        (None, None)
-    };
-
-    // Get the owner username for credential fallback
-    let owner_username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-            .bind(owner_user_id)
-            .fetch_optional(&db.pool)
-            .await?;
-
-    let (final_username, final_password) =
-        resolve_final_credentials(cred_username, cred_password, owner_username.clone());
-
-    let guacd_host: String;
-    let guacd_port: u16;
-    if let Some(ref pool) = guacd_pool {
-        let (h, p) = pool.next();
-        guacd_host = h.to_string();
-        guacd_port = p;
-    } else {
-        guacd_host = config.guacd_host.unwrap_or_else(|| "guacd".into());
-        guacd_port = config.guacd_port.unwrap_or(4822);
-    };
-
-    let security = extra.get("security").cloned().or(Some("any".into()));
-    let ignore_cert = extra
-        .get("ignore-cert")
-        .map(|v| v == "true")
-        .unwrap_or(false);
-
-    let safe_port: u16 = port
-        .try_into()
-        .map_err(|_| AppError::Validation("Invalid port number".into()))?;
-
-    let connection_name = _name.clone();
-
-    let mut handshake = HandshakeParams {
-        protocol: protocol.clone(),
-        hostname,
-        port: safe_port,
-        username: final_username,
-        password: final_password,
-        domain,
-        security,
-        ignore_cert,
-        recording_path: None,
-        recording_name: None,
-        create_recording_path: false,
-        width: query.width.unwrap_or(1920).clamp(64, 7680),
-        height: query.height.unwrap_or(1080).clamp(64, 4320),
-        dpi: query.dpi.unwrap_or(96).clamp(64, 600),
-        extra,
-    };
-
-    // If read-only, add read-only params
-    if read_only {
-        handshake.extra.insert("read-only".into(), "true".into());
-    }
-
-    // Register shared session in NVR for accountability
-    let session_registry = {
+    // Find the owner's active session for this connection
+    let registry = {
         let s = state.read().await;
         s.session_registry.clone()
     };
-    let nvr_session_id = format!(
-        "shared-{}-{}",
-        connection_id,
-        chrono::Utc::now().timestamp_millis()
-    );
-    let nvr_username = format!(
-        "shared:{}",
-        owner_username.unwrap_or_else(|| "unknown".into())
-    );
 
-    // Fetch timezone for the Guacamole handshake
-    let display_timezone = settings::get(&db.pool, "display_timezone")
-        .await?
-        .unwrap_or_else(|| "UTC".to_string());
+    let session = registry
+        .find_by_connection_and_user(connection_id, owner_user_id)
+        .await
+        .ok_or_else(|| {
+            AppError::NotFound(
+                "The owner's session is not currently active. They must be connected for you to view their session.".into(),
+            )
+        })?;
+
+    // Audit log the share access
+    crate::services::audit::log(
+        &db.pool,
+        None,
+        "connection.share_accessed",
+        &serde_json::json!({
+            "connection_id": connection_id.to_string(),
+            "share_token": &share_token,
+            "client_ip": &client_ip,
+        }),
+    )
+    .await?;
+
+    // Subscribe to the owner's session broadcast and get buffered frames
+    let (size_inst, all_frames, mut rx, input_tx) = {
+        let buffer = session.buffer.read().await;
+        let size = buffer.last_size().map(|s| s.to_string());
+        let timed = buffer.frames_with_timing(300); // full 5-minute buffer
+        let rx = session.broadcast_tx.subscribe();
+        let input_tx = session.input_tx.clone();
+        (size, timed, rx, input_tx)
+    };
+
+    let buffer_for_recovery = session.buffer.clone();
 
     Ok(ws
         .protocols(["guacamole"])
-        .on_upgrade(move |socket| async move {
-            let nvr = NvrContext {
-                registry: session_registry,
-                session_id: nvr_session_id,
-                connection_id,
-                connection_name,
-                protocol,
-                user_id: owner_user_id,
-                username: nvr_username,
-                client_ip,
-                started_at: chrono::Utc::now(),
-                db_pool: db.pool.clone(),
-            };
-            if let Err(e) = tunnel::proxy(
-                socket,
-                &guacd_host,
-                guacd_port,
-                handshake,
-                Some(nvr),
-                display_timezone,
-            )
-            .await
-            {
-                tracing::error!("Shared tunnel error: {e}");
+        .on_upgrade(move |mut socket| async move {
+            use axum::extract::ws::Message;
+
+            // Send the last-known size instruction so the display renders
+            // at the correct dimensions
+            if let Some(size_inst) = size_inst {
+                if socket.send(Message::Text(size_inst)).await.is_err() {
+                    return;
+                }
+            }
+
+            // Dump entire buffer instantly (sync-stripped) to rebuild display
+            let mut last_sync_inst: Option<String> = None;
+            for (_delay, ref frame) in &all_frames {
+                let mut stripped = String::with_capacity(frame.len());
+                for inst in frame.split_inclusive(';') {
+                    let trimmed = inst.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if trimmed.starts_with("4.sync,") || trimmed == "4.sync" {
+                        last_sync_inst = Some(inst.to_string());
+                    } else {
+                        stripped.push_str(inst);
+                    }
+                }
+                if !stripped.is_empty() {
+                    if socket.send(Message::Text(stripped)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+
+            // Flush accumulated drawing ops with a single sync
+            if let Some(sync) = last_sync_inst.take() {
+                if socket.send(Message::Text(sync)).await.is_err() {
+                    return;
+                }
+            }
+
+            // Live phase: forward frames from the broadcast channel
+            let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
+            keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_frame_at = std::time::Instant::now();
+
+            loop {
+                tokio::select! {
+                    result = rx.recv() => {
+                        match result {
+                            Ok(frame) => {
+                                last_frame_at = std::time::Instant::now();
+                                if socket.send(Message::Text((*frame).clone())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("Shared viewer lagged {n} frames — rebuilding display");
+
+                                let buf = buffer_for_recovery.read().await;
+                                let rebuild = buf.frames_with_timing(300);
+                                drop(buf);
+
+                                let mut send_ok = true;
+                                for (_, chunk) in &rebuild {
+                                    let mut stripped = String::with_capacity(chunk.len());
+                                    for inst in chunk.split_inclusive(';') {
+                                        let t = inst.trim();
+                                        if !t.is_empty()
+                                            && !t.starts_with("4.sync,")
+                                            && t != "4.sync"
+                                        {
+                                            stripped.push_str(inst);
+                                        }
+                                    }
+                                    if !stripped.is_empty() {
+                                        if socket.send(Message::Text(stripped)).await.is_err() {
+                                            send_ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !send_ok { break; }
+
+                                let ts = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis()
+                                    .to_string();
+                                let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
+                                if socket.send(Message::Text(sync)).await.is_err() {
+                                    break;
+                                }
+                                last_frame_at = std::time::Instant::now();
+                            }
+                            Err(_) => break, // channel closed (owner's session ended)
+                        }
+                    }
+                    msg = socket.recv() => {
+                        match msg {
+                            None => break, // client disconnected
+                            Some(Ok(Message::Text(text))) if is_control => {
+                                // Forward input from control viewer to owner's guacd
+                                if input_tx.send(text).await.is_err() {
+                                    break; // owner's session ended
+                                }
+                            }
+                            _ => {} // discard in view mode or for non-text messages
+                        }
+                    }
+                    _ = keepalive.tick() => {
+                        if socket.send(Message::Text("3.nop;".into())).await.is_err() {
+                            break;
+                        }
+                        if last_frame_at.elapsed() > std::time::Duration::from_secs(5) {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                                .to_string();
+                            let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
+                            if socket.send(Message::Text(sync)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }))
 }

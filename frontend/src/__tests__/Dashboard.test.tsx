@@ -44,7 +44,14 @@ vi.mock('../api', () => ({
   setCredentialMapping: vi.fn(),
   removeCredentialMapping: vi.fn(),
   createTunnelTicket: vi.fn(),
-  getServiceHealth: vi.fn(),
+  getStatus: vi.fn(),
+  getTags: vi.fn(),
+  getConnectionTags: vi.fn(),
+  setConnectionTags: vi.fn(),
+  createTag: vi.fn(),
+  deleteTag: vi.fn(),
+  getAdminTags: vi.fn(),
+  getAdminConnectionTags: vi.fn(),
 }));
 
 vi.mock('../contexts/SettingsContext', () => ({
@@ -68,17 +75,17 @@ vi.mock('../contexts/SettingsContext', () => ({
 
 import Dashboard from '../pages/Dashboard';
 import {
-  getMyConnections, getFavorites, getCredentialProfiles, getServiceHealth,
+  getMyConnections, getFavorites, getCredentialProfiles, getStatus,
   getProfileMappings, toggleFavorite, setCredentialMapping,
   removeCredentialMapping, getConnectionInfo, createTunnelTicket,
+  getTags, getConnectionTags, getAdminTags, getAdminConnectionTags,
 } from '../api';
 
-const baseHealth = {
-  database: { connected: true, mode: 'local', host: 'localhost', latency_ms: 5 },
-  guacd: { reachable: true, host: 'guacd', port: 4822 },
-  schema: { status: 'in_sync', applied_migrations: 28, expected_migrations: 28 },
-  uptime_secs: 3600,
-  environment: 'production',
+const baseStatus = {
+  phase: 'running' as const,
+  sso_enabled: false,
+  local_auth_enabled: true,
+  vault_configured: false,
 };
 
 function renderDashboard() {
@@ -106,10 +113,11 @@ describe('Dashboard', () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
     vi.mocked(getFavorites).mockResolvedValue([]);
     vi.mocked(getCredentialProfiles).mockResolvedValue([]);
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: false, mode: '', address: '' },
-    });
+    vi.mocked(getTags).mockResolvedValue([]);
+    vi.mocked(getConnectionTags).mockResolvedValue({});
+    vi.mocked(getAdminTags).mockResolvedValue([]);
+    vi.mocked(getAdminConnectionTags).mockResolvedValue({});
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus });
   });
 
   afterEach(() => {
@@ -197,10 +205,7 @@ describe('Dashboard', () => {
   });
 
   it('shows vault configured state with profile selector', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: 'http://vault:8200' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: 'prof1', label: 'Admin creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', expired: false, ttl_hours: 12 },
     ]);
@@ -354,10 +359,7 @@ describe('Dashboard', () => {
   });
 
   it('handles profile change for a connection', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: 'prof1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
     ]);
@@ -459,10 +461,7 @@ describe('Dashboard', () => {
   });
 
   it('recent cards show credential status badges', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: 'p1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
     ]);
@@ -494,10 +493,7 @@ describe('Dashboard', () => {
   });
 
   it('shows expired status for expired profile', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: 'p1', label: 'Expired Creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2023-01-01T00:00:00Z', ttl_hours: 12, expired: true },
     ]);
@@ -663,10 +659,7 @@ describe('Dashboard', () => {
   });
 
   it('removes a credential mapping when profile set to empty', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: 'prof1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
     ]);
@@ -702,10 +695,7 @@ describe('Dashboard', () => {
   });
 
   it('shows expired label in profile selector', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       { id: 'p1', label: 'Old Creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2023-01-01T00:00:00Z', ttl_hours: 12, expired: true },
     ]);
@@ -763,10 +753,7 @@ describe('Dashboard', () => {
   });
 
   it('handles profile mapping API failures gracefully', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([{ id: 'p1', label: 'Admin', expired: false } as any]);
     vi.mocked(getProfileMappings).mockRejectedValue(new Error('fail'));
     renderDashboard();
@@ -778,10 +765,7 @@ describe('Dashboard', () => {
   });
 
   it('handles setCredentialMapping failure', async () => {
-    vi.mocked(getServiceHealth).mockResolvedValue({
-      ...baseHealth,
-      vault: { configured: true, mode: 'local', address: '' },
-    });
+    vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([{ id: 'p1', label: 'Admin', expired: false } as any]);
     vi.mocked(getProfileMappings).mockResolvedValue([]);
     vi.mocked(setCredentialMapping).mockRejectedValue(new Error('fail'));

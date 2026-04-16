@@ -75,6 +75,16 @@ pub async fn me(
         s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some()
     };
 
+    // Check whether the user has accepted the terms / disclaimer
+    let terms_row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<i32>)> =
+        sqlx::query_as(
+            "SELECT terms_accepted_at, terms_accepted_version FROM users WHERE id = $1",
+        )
+        .bind(user.id)
+        .fetch_optional(&db.pool)
+        .await?;
+    let (terms_accepted_at, terms_accepted_version) = terms_row.unwrap_or((None, None));
+
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -84,6 +94,8 @@ pub async fn me(
         "client_ip": client_ip,
         "watermark_enabled": watermark_enabled == "true",
         "vault_configured": vault_configured,
+        "terms_accepted_at": terms_accepted_at,
+        "terms_accepted_version": terms_accepted_version,
         "can_manage_system": user.can_manage_system,
         "can_manage_users": user.can_manage_users,
         "can_manage_connections": user.can_manage_connections,
@@ -95,6 +107,22 @@ pub async fn me(
         "can_create_sharing_profiles": user.can_create_sharing_profiles,
         "can_view_sessions": user.can_view_sessions,
     })))
+}
+
+/// Accept the recording disclaimer / terms of service.
+pub async fn accept_terms(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let version = body.get("version").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    sqlx::query("UPDATE users SET terms_accepted_at = NOW(), terms_accepted_version = $2 WHERE id = $1")
+        .bind(user.id)
+        .bind(version)
+        .execute(&db.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ── User's connections ─────────────────────────────────────────────────
@@ -215,6 +243,230 @@ pub async fn toggle_favorite(
         Ok(Json(json!({ "favorited": true })))
     }
 }
+
+// ── User Tags ─────────────────────────────────────────────────────────
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct UserTag {
+    pub id: Uuid,
+    pub name: String,
+    pub color: String,
+}
+
+/// List all tags owned by the current user.
+pub async fn list_tags(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<UserTag>>, AppError> {
+    let db = require_running(&state).await?;
+    let tags: Vec<UserTag> =
+        sqlx::query_as("SELECT id, name, color FROM user_tags WHERE user_id = $1 ORDER BY name")
+            .bind(user.id)
+            .fetch_all(&db.pool)
+            .await?;
+    Ok(Json(tags))
+}
+
+#[derive(Deserialize)]
+pub struct CreateTagRequest {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+/// Create a new tag for the current user.
+pub async fn create_tag(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<CreateTagRequest>,
+) -> Result<Json<UserTag>, AppError> {
+    let db = require_running(&state).await?;
+    let name = body.name.trim().to_string();
+    if name.is_empty() || name.len() > 50 {
+        return Err(AppError::Validation("Tag name must be 1-50 characters".into()));
+    }
+    let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
+    let tag: UserTag = sqlx::query_as(
+        "INSERT INTO user_tags (user_id, name, color) VALUES ($1, $2, $3)
+         RETURNING id, name, color",
+    )
+    .bind(user.id)
+    .bind(&name)
+    .bind(&color)
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Json(tag))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateTagRequest {
+    pub name: Option<String>,
+    pub color: Option<String>,
+}
+
+/// Update an existing tag (name and/or color).
+pub async fn update_tag(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(tag_id): Path<Uuid>,
+    Json(body): Json<UpdateTagRequest>,
+) -> Result<Json<UserTag>, AppError> {
+    let db = require_running(&state).await?;
+    if let Some(ref n) = body.name {
+        let n = n.trim();
+        if n.is_empty() || n.len() > 50 {
+            return Err(AppError::Validation("Tag name must be 1-50 characters".into()));
+        }
+    }
+    let tag: UserTag = sqlx::query_as(
+        "UPDATE user_tags SET
+            name  = COALESCE($3, name),
+            color = COALESCE($4, color)
+         WHERE id = $1 AND user_id = $2
+         RETURNING id, name, color",
+    )
+    .bind(tag_id)
+    .bind(user.id)
+    .bind(body.name.as_deref().map(|s| s.trim()))
+    .bind(body.color.as_deref())
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Json(tag))
+}
+
+/// Delete a tag (cascades to connection_tags).
+pub async fn delete_tag(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(tag_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    sqlx::query("DELETE FROM user_tags WHERE id = $1 AND user_id = $2")
+        .bind(tag_id)
+        .bind(user.id)
+        .execute(&db.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// List all connection→tag mappings for the current user.
+/// Returns { connection_id: [tag_id, ...] }.
+pub async fn list_connection_tags(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        connection_id: Uuid,
+        tag_id: Uuid,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT connection_id, tag_id FROM user_connection_tags WHERE user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for r in rows {
+        map.entry(r.connection_id.to_string())
+            .or_default()
+            .push(r.tag_id.to_string());
+    }
+    Ok(Json(json!(map)))
+}
+
+#[derive(Deserialize)]
+pub struct SetConnectionTagsRequest {
+    pub connection_id: Uuid,
+    pub tag_ids: Vec<Uuid>,
+}
+
+/// Replace all tags on a connection for the current user.
+pub async fn set_connection_tags(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<SetConnectionTagsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Delete existing tags for this connection
+    sqlx::query(
+        "DELETE FROM user_connection_tags WHERE user_id = $1 AND connection_id = $2",
+    )
+    .bind(user.id)
+    .bind(body.connection_id)
+    .execute(&db.pool)
+    .await?;
+
+    // Insert new tags
+    for tag_id in &body.tag_ids {
+        sqlx::query(
+            "INSERT INTO user_connection_tags (user_id, connection_id, tag_id)
+             VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        )
+        .bind(user.id)
+        .bind(body.connection_id)
+        .bind(tag_id)
+        .execute(&db.pool)
+        .await?;
+    }
+
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ── Display settings (public for authenticated users) ─────────────────
+
+/// Return only the display-related settings any user needs (timezone, time/date format).
+pub async fn get_display_settings(
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let keys = ["display_timezone", "display_time_format", "display_date_format"];
+    let mut map = serde_json::Map::new();
+    for key in &keys {
+        if let Some(val) = settings::get(&db.pool, key).await? {
+            map.insert(key.to_string(), serde_json::Value::String(val));
+        }
+    }
+    Ok(Json(serde_json::Value::Object(map)))
+}
+
+// ── Admin tags (read-only for regular users) ──────────────────────────
+
+/// List all admin-managed global tags (visible to every user).
+pub async fn list_admin_tags(
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<UserTag>>, AppError> {
+    let db = require_running(&state).await?;
+    let tags: Vec<UserTag> =
+        sqlx::query_as("SELECT id, name, color FROM admin_tags ORDER BY name")
+            .fetch_all(&db.pool)
+            .await?;
+    Ok(Json(tags))
+}
+
+/// Returns { connection_id: [tag_id, ...] } for admin-assigned tags.
+pub async fn list_admin_connection_tags(
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let rows: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT connection_id, tag_id FROM admin_connection_tags")
+            .fetch_all(&db.pool)
+            .await?;
+
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (conn_id, tag_id) in rows {
+        map.entry(conn_id.to_string())
+            .or_default()
+            .push(tag_id.to_string());
+    }
+    Ok(Json(json!(map)))
+}
+
 // ── Update user credential (envelope encryption) ──────────────────────
 
 #[derive(Deserialize)]

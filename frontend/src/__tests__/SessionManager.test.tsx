@@ -15,7 +15,6 @@ const resizeObserverMock = vi.fn(function() {
 
 // Mock api
 vi.mock('../api', () => ({
-  getMe: vi.fn().mockResolvedValue({ id: '1', username: 'admin', role: 'admin', client_ip: '127.0.0.1', watermark_enabled: false, vault_configured: false, can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true, can_view_sessions: true }),
   createTunnelTicket: vi.fn(),
 }));
 
@@ -400,18 +399,13 @@ describe('SessionManager', () => {
     removeSpy.mockRestore();
   });
 
-  it('fetches sharing permissions on mount', async () => {
-    localStorage.setItem('access_token', 'test-token');
-    const { getMe } = await import('../api');
-    vi.mocked(getMe).mockResolvedValue({ id: '1', username: 'admin', role: 'admin', client_ip: '127.0.0.1', watermark_enabled: false, vault_configured: false, can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true, can_view_sessions: true });
+  it('exposes canShare from prop', async () => {
+    function sharingWrapper({ children }: { children: React.ReactNode }) {
+      return <SessionManagerProvider canShare={true}>{children}</SessionManagerProvider>;
+    }
+    const { result } = renderHook(() => useSessionManager(), { wrapper: sharingWrapper });
 
-    renderHook(() => useSessionManager(), { wrapper });
-
-    await rtlAct(async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    });
-
-    expect(getMe).toHaveBeenCalled();
+    expect(result.current.canShare).toBe(true);
   });
 
   it('scales display on resize', async () => {

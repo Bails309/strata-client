@@ -737,13 +737,16 @@ pub async fn check_auth(
         can_create_connection_folders: bool,
         can_create_sharing_profiles: bool,
         can_view_sessions: bool,
+        terms_accepted_at: Option<chrono::DateTime<chrono::Utc>>,
+        terms_accepted_version: Option<i32>,
     }
 
     let row: Option<UserRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions,
+                u.terms_accepted_at, u.terms_accepted_version
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
@@ -792,6 +795,8 @@ pub async fn check_auth(
             "client_ip": client_ip,
             "watermark_enabled": watermark_enabled == "true",
             "vault_configured": vault_configured,
+            "terms_accepted_at": user.terms_accepted_at,
+            "terms_accepted_version": user.terms_accepted_version,
             "can_manage_system": user.can_manage_system,
             "can_manage_users": user.can_manage_users,
             "can_manage_connections": user.can_manage_connections,

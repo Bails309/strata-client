@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::error::AppError;
-use crate::services::session_registry::SessionRegistry;
+use crate::services::session_registry::{SessionBuffer, SessionRegistry};
 
 /// Convert a serde_json::Value (expected to be an Object) into a flat
 /// HashMap<String, String>.  Strings are kept as-is, booleans and numbers
@@ -439,7 +439,7 @@ async fn handle_guac_handshake(
             )
             .await
         {
-            Some((tx, buffer, kill_rx)) => Some((tx, buffer, ctx.registry.clone(), Some(kill_rx))),
+            Some((tx, buffer, kill_rx, input_rx)) => Some((tx, buffer, ctx.registry.clone(), Some(kill_rx), Some(input_rx))),
             None => {
                 tracing::error!("Session limit reached — rejecting tunnel");
                 return Err(AppError::Internal(
@@ -450,6 +450,10 @@ async fn handle_guac_handshake(
     } else {
         None
     };
+
+    // Shared control input receiver — if present, external viewers can
+    // inject mouse/keyboard instructions into this tunnel's guacd stream.
+    let mut shared_input_rx: Option<tokio::sync::mpsc::Receiver<String>> = None;
 
     // Step 6: Bidirectional proxy loop
     // guacamole-common-js expects each WebSocket message to contain one or
@@ -467,8 +471,9 @@ async fn handle_guac_handshake(
     ping_interval.tick().await; // consume the first immediate tick
     let mut last_pong = tokio::time::Instant::now();
 
-    let (bandwidth, mut kill_rx) = if let Some((_, _, ref registry, ref mut rx_opt)) = nvr_handles {
+    let (bandwidth, mut kill_rx) = if let Some((_, _, ref registry, ref mut rx_opt, ref mut input_opt)) = nvr_handles {
         if let Some(ref ctx) = nvr {
+            shared_input_rx = input_opt.take();
             (registry.get(&ctx.session_id).await, rx_opt.take())
         } else {
             (None, None)
@@ -537,9 +542,9 @@ async fn handle_guac_handshake(
                             pending = remainder;
 
                             // NVR: capture frame into ring buffer + broadcast
-                            if let Some((ref tx, ref buffer, _, _)) = nvr_handles {
+                            if let Some((ref tx, ref buffer, _, _, _)) = nvr_handles {
                                 {
-                                    let mut buf = buffer.write().await;
+                                    let mut buf: tokio::sync::RwLockWriteGuard<'_, SessionBuffer> = buffer.write().await;
                                     buf.push(text.clone());
                                 }
                                 let _ = tx.send(std::sync::Arc::new(text.clone()));
@@ -603,6 +608,22 @@ async fn handle_guac_handshake(
                         break;
                     }
                     _ => {}
+                }
+            }
+            // Shared control input — forward mouse/keyboard from external viewers
+            Some(input) = async {
+                match shared_input_rx {
+                    Some(ref mut rx) => rx.recv().await,
+                    None => {
+                        std::future::pending::<Option<String>>().await
+                    },
+                }
+            } => {
+                if tcp_write.write_all(input.as_bytes()).await.is_err()
+                    || tcp_write.flush().await.is_err()
+                {
+                    tracing::info!("guacd TCP write failed (shared input)");
+                    break;
                 }
             }
             // Periodic keepalive ping

@@ -220,7 +220,7 @@ describe('NvrPlayer', () => {
     renderNvrPlayer();
     await user.click(screen.getByText('Jump to Live'));
     // When offset is 0, connect() sets phase to 'live' directly (no replay)
-    expect(screen.getByText(/LIVE/)).toBeInTheDocument();
+    expect(screen.getByText('● LIVE')).toBeInTheDocument();
   });
 
   it('disconnects previous client on reconnect', async () => {

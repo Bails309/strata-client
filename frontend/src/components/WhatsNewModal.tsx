@@ -25,6 +25,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.7',
+    subtitle: 'Live Session Sharing & Admin Tags',
+    sections: [
+      {
+        title: 'Live Session Sharing',
+        description:
+          'Share links now show your live session in real time. Viewers see exactly what you see — no separate connection to the server. Control mode lets shared viewers send keyboard and mouse input to your session.',
+      },
+      {
+        title: 'Admin Tags',
+        description:
+          'Administrators can create system-wide tags and assign them to connections. Tags are visible to all users on the Dashboard for easy categorization.',
+      },
+      {
+        title: 'Bug Fixes',
+        description:
+          'Fixed share button not appearing in the Session Bar, 403 errors for non-admin users loading settings, tag dropdowns going off-screen, and recording files not being cleaned up when users are deleted.',
+      },
+    ],
+  },
+  {
+    version: '0.14.6',
+    subtitle: 'Terms of Service & NVR Pause',
+    sections: [
+      {
+        title: 'Recording Disclaimer',
+        description:
+          'A mandatory terms-of-service modal is now shown on first login, covering session recording consent, acceptable use, and data protection. Users must scroll through and accept before accessing the application.',
+      },
+      {
+        title: 'NVR Play/Pause',
+        description:
+          'The live session player now has a play/pause button. Pausing freezes the display while the stream stays connected — resume to pick up from the current live point.',
+      },
+    ],
+  },
+  {
     version: '0.14.5',
     subtitle: 'NVR & Popout Fixes',
     sections: [

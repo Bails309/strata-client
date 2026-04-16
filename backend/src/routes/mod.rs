@@ -169,6 +169,18 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/ad-sync-configs/:id/runs",
             get(admin::list_ad_sync_runs),
         )
+        .route(
+            "/api/admin/tags",
+            get(admin::list_admin_tags).post(admin::create_admin_tag),
+        )
+        .route(
+            "/api/admin/tags/:tag_id",
+            put(admin::update_admin_tag).delete(admin::delete_admin_tag),
+        )
+        .route(
+            "/api/admin/connection-tags",
+            get(admin::list_admin_connection_tags).post(admin::set_admin_connection_tags),
+        )
         .route("/api/recordings/:filename", get(user::get_recording))
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -177,6 +189,7 @@ pub fn build_router(state: SharedState) -> Router {
     let user_routes = Router::new()
         .route("/api/auth/password", put(auth::change_password))
         .route("/api/user/me", get(user::me))
+        .route("/api/user/accept-terms", post(user::accept_terms))
         .route("/api/user/connections", get(user::my_connections))
         .route("/api/user/credentials", put(user::update_credential))
         .route(
@@ -209,6 +222,21 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/user/favorites", get(user::list_favorites))
         .route("/api/user/favorites", post(user::toggle_favorite))
+        .route("/api/user/tags", get(user::list_tags))
+        .route("/api/user/tags", post(user::create_tag))
+        .route("/api/user/tags/:tag_id", put(user::update_tag))
+        .route("/api/user/tags/:tag_id", delete(user::delete_tag))
+        .route("/api/user/connection-tags", get(user::list_connection_tags))
+        .route(
+            "/api/user/connection-tags",
+            post(user::set_connection_tags),
+        )
+        .route("/api/user/admin-tags", get(user::list_admin_tags))
+        .route(
+            "/api/user/admin-connection-tags",
+            get(user::list_admin_connection_tags),
+        )
+        .route("/api/user/display-settings", get(user::get_display_settings))
         .route(
             "/api/user/connections/:connection_id/info",
             get(user::connection_info),

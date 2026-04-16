@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { getSettings, updateSettings as apiUpdateSettings } from '../api';
+import { getDisplaySettings, updateSettings as apiUpdateSettings } from '../api';
 import { TimeSettings, formatDateTime as formatUtil } from '../utils/time';
 
 interface SettingsContextType {
@@ -25,7 +25,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return;
     }
     try {
-      const data = await getSettings();
+      const data = await getDisplaySettings();
       setSettings(data);
     } catch (error) {
       console.error('Failed to fetch settings:', error);

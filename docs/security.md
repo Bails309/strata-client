@@ -76,7 +76,7 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/health`, `/api/status`, `/api/setup/*` | None (public) |
 | `/api/auth/login`, `/api/auth/sso/*` | None (public, rate-limited) |
 | `/api/auth/refresh` | None (public, validates `HttpOnly` refresh cookie) |
-| `/api/shared/tunnel/:token` | None (public, share-token validated; mode determines input forwarding) |
+| `/api/shared/tunnel/:token` | None (public, share-token validated; observes owner's live session via NVR broadcast; mode determines input forwarding) |
 | `/api/auth/password` | `require_auth` |
 | `/api/admin/*` | `require_auth` + `require_admin` |
 | `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` |
@@ -324,6 +324,18 @@ Session recording captures are managed by a background sync task:
 - **Azure Blob sync** — When Azure Blob storage is configured, local recordings are uploaded and then deleted locally to prevent disk growth
 - **Write protection** — Files modified within the last 30 seconds are skipped to avoid deleting active recordings
 - **Configurable** — Retention period and storage type (local / Azure Blob) are set via the Admin UI
+
+---
+
+## Recording Disclaimer & Terms of Service
+
+All users must accept a recording disclaimer before accessing the application:
+
+- **First-login gate** — On first login (or when `terms_accepted_at` is `NULL`), a full-screen modal is shown that blocks access to the application until the user accepts
+- **Scroll-to-accept** — The user must scroll to the bottom of the disclaimer before the "I Accept" button is enabled, ensuring the full terms are read
+- **Decline** — Declining logs the user out immediately
+- **Timestamped acceptance** — Acceptance is recorded as a `terms_accepted_at` timestamp on the user record (`034_terms_acceptance.sql` migration). Subsequent logins skip the modal
+- **Content** — The disclaimer covers session recording (screen, keyboard, mouse), explicit consent, acceptable use policy, and data protection under UK GDPR and the Data Protection Act 2018
 
 ---
 

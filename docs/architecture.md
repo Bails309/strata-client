@@ -195,7 +195,7 @@ role_connections ──── many-to-many role ↔ connection
 user_credentials ──── encrypted password + DEK + nonce per user/connection
 credential_profiles ─ saved credential profiles with optional TTL expiry
 user_favorites ────── user ↔ connection favorites (composite PK)
-connection_shares ── temporary share links with mode (view/control)
+connection_shares ── temporary share links with mode (view/control); viewers observe via NVR broadcast
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
 ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert, connection_defaults)
 ad_sync_runs ─────── per-config sync run history with stats
@@ -203,7 +203,7 @@ recordings ─────── session recording metadata with bandwidth metri
 active_sessions ── per-user login session tracking (JTI, IP, user agent, expiry)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `032_connection_watermark.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `037_audit_logs_set_null.sql` for the full DDL.
 
 ## Directory Structure
 

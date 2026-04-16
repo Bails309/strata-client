@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getMyConnections, getConnectionInfo, Connection, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile, createTunnelTicket, getServiceHealth } from '../api';
+import { getMyConnections, getConnectionInfo, Connection, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile, createTunnelTicket, getStatus, getTags, getConnectionTags, setConnectionTags, createTag, deleteTag, UserTag, getAdminTags, getAdminConnectionTags } from '../api';
 import { useSessionManager } from '../components/SessionManager';
 import Select from '../components/Select';
 import { useSettings } from '../contexts/SettingsContext';
@@ -9,6 +9,8 @@ const PAGE_SIZE = 50;
 const FOLDER_VIEW_KEY = 'strata-folder-view';
 const EXPANDED_FOLDERS_KEY = 'strata-expanded-folders';
 const SHOW_FAVORITES_KEY = 'strata-show-favorites';
+const TAG_FILTERS_KEY = 'strata-tag-filters';
+const TAG_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 
 function ProtocolIcon({ protocol }: { protocol: string }) {
   const p = protocol.toLowerCase();
@@ -69,6 +71,16 @@ export default function Dashboard() {
   const [credProfiles, setCredProfiles] = useState<CredentialProfile[]>([]);
   /** Map of connection_id → profile_id currently assigned */
   const [connProfileMap, setConnProfileMap] = useState<Record<string, string>>({});
+  const [tags, setTags] = useState<UserTag[]>([]);
+  const [adminTags, setAdminTags] = useState<UserTag[]>([]);
+  const [connTagMap, setConnTagMap] = useState<Record<string, string[]>>({});
+  const [adminConnTagMap, setAdminConnTagMap] = useState<Record<string, string[]>>({});
+  const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(TAG_FILTERS_KEY);
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
   const { formatDateTime } = useSettings();
   const navigate = useNavigate();
   const { createSession, setTiledSessionIds, setFocusedSessionIds, setActiveSessionId } = useSessionManager();
@@ -103,10 +115,34 @@ export default function Dashboard() {
         localStorage.setItem(FOLDER_VIEW_KEY, 'true');
       }
     }).catch(() => {});
-    getServiceHealth().then((h) => setVaultConfigured(h.vault.configured)).catch(() => {});
+    getStatus().then((s) => setVaultConfigured(s.vault_configured)).catch(() => {});
     getFavorites().then((ids) => setFavorites(new Set(ids))).catch(() => {});
+    getTags().then(setTags).catch(() => {});
+    getConnectionTags().then(setConnTagMap).catch(() => {});
+    getAdminTags().then(setAdminTags).catch(() => {});
+    getAdminConnectionTags().then(setAdminConnTagMap).catch(() => {});
     loadProfiles();
   }, [loadProfiles]);
+
+  // Set of admin tag IDs (for disabling toggles in row UI)
+  const adminTagIds = useMemo(() => new Set(adminTags.map(t => t.id)), [adminTags]);
+
+  // Merge user tags + admin tags
+  const allTags = useMemo(() => {
+    return [...adminTags, ...tags.filter(t => !adminTagIds.has(t.id))];
+  }, [tags, adminTags, adminTagIds]);
+
+  // Merge connection tag maps (union of user + admin assigned tags per connection)
+  const allConnTagMap = useMemo(() => {
+    const merged: Record<string, string[]> = {};
+    const allKeys = new Set([...Object.keys(connTagMap), ...Object.keys(adminConnTagMap)]);
+    for (const connId of allKeys) {
+      const userTids = connTagMap[connId] || [];
+      const adminTids = adminConnTagMap[connId] || [];
+      merged[connId] = [...new Set([...userTids, ...adminTids])];
+    }
+    return merged;
+  }, [connTagMap, adminConnTagMap]);
 
   const filtered = useMemo(() => {
     let list = connections;
@@ -120,8 +156,14 @@ export default function Dashboard() {
     if (typeFilter) {
       list = list.filter(c => c.protocol.toLowerCase() === typeFilter.toLowerCase());
     }
+    if (activeTagFilters.size > 0) {
+      list = list.filter(c => {
+        const cTags = allConnTagMap[c.id] || [];
+        return [...activeTagFilters].some(tid => cTags.includes(tid));
+      });
+    }
     return list;
-  }, [connections, search, typeFilter, showFavorites, favorites]);
+  }, [connections, search, typeFilter, showFavorites, favorites, activeTagFilters, allConnTagMap]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -185,7 +227,7 @@ export default function Dashboard() {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { setPage(1); }, [search, typeFilter, showFavorites]);
+  useEffect(() => { setPage(1); }, [search, typeFilter, showFavorites, activeTagFilters]);
 
   const handleToggleFavorite = useCallback(async (connectionId: string) => {
     const result = await toggleFavorite(connectionId);
@@ -194,6 +236,41 @@ export default function Dashboard() {
       if (result.favorited) next.add(connectionId); else next.delete(connectionId);
       return next;
     });
+  }, []);
+
+  const handleSetConnectionTags = useCallback(async (connectionId: string, tagIds: string[]) => {
+    try {
+      // Only send user-owned tag IDs to the user endpoint; admin tags are read-only
+      const userOnly = tagIds.filter(tid => !adminTagIds.has(tid));
+      await setConnectionTags(connectionId, userOnly);
+      setConnTagMap(prev => ({ ...prev, [connectionId]: userOnly }));
+    } catch { /* ignore */ }
+  }, [adminTagIds]);
+
+  const handleCreateTag = useCallback(async (name: string, color: string): Promise<UserTag> => {
+    const tag = await createTag(name, color);
+    setTags(prev => [...prev, tag]);
+    return tag;
+  }, []);
+
+  const handleDeleteTag = useCallback(async (tagId: string) => {
+    try {
+      await deleteTag(tagId);
+      setTags(prev => prev.filter(t => t.id !== tagId));
+      setConnTagMap(prev => {
+        const next = { ...prev };
+        for (const connId of Object.keys(next)) {
+          next[connId] = next[connId].filter(tid => tid !== tagId);
+        }
+        return next;
+      });
+      setActiveTagFilters(prev => {
+        const next = new Set(prev);
+        next.delete(tagId);
+        localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([...next]));
+        return next;
+      });
+    } catch { /* ignore */ }
   }, []);
 
   const toggleChecked = useCallback((id: string) => {
@@ -468,6 +545,41 @@ export default function Dashboard() {
           Folders
         </button>
 
+        {allTags.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs uppercase text-txt-tertiary font-semibold tracking-wide">Tags</span>
+            {allTags.map(tag => (
+              <button
+                key={tag.id}
+                className="btn-sm inline-flex items-center gap-1 text-xs !py-0.5 !px-2"
+                style={{
+                  borderColor: activeTagFilters.has(tag.id) ? tag.color : undefined,
+                  color: activeTagFilters.has(tag.id) ? tag.color : undefined,
+                  background: activeTagFilters.has(tag.id) ? `${tag.color}15` : undefined,
+                }}
+                onClick={() => {
+                  setActiveTagFilters(prev => {
+                    const next = new Set(prev);
+                    if (next.has(tag.id)) next.delete(tag.id); else next.add(tag.id);
+                    localStorage.setItem(TAG_FILTERS_KEY, JSON.stringify([...next]));
+                    return next;
+                  });
+                }}
+              >
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: tag.color, display: 'inline-block', flexShrink: 0 }} />
+                {tag.name}
+                {!adminTags.some(at => at.id === tag.id) && (
+                  <span
+                    className="ml-0.5 opacity-50 hover:opacity-100"
+                    onClick={(e) => { e.stopPropagation(); handleDeleteTag(tag.id); }}
+                    title="Delete tag"
+                  >×</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
         {checked.size >= 2 && (
           <button className="btn-sm-primary" onClick={openTiled}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -520,6 +632,11 @@ export default function Dashboard() {
                     connProfileMap={connProfileMap}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
+                    tags={allTags}
+                    connTagMap={allConnTagMap}
+                    onSetConnectionTags={handleSetConnectionTags}
+                    onCreateTag={handleCreateTag}
+                    adminTagIds={adminTagIds}
                   />
                 ))}
                 {groupedConnections.ungrouped.length > 0 && (
@@ -539,6 +656,11 @@ export default function Dashboard() {
                     connProfileMap={connProfileMap}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
+                    tags={allTags}
+                    connTagMap={allConnTagMap}
+                    onSetConnectionTags={handleSetConnectionTags}
+                    onCreateTag={handleCreateTag}
+                    adminTagIds={adminTagIds}
                   />
                 )}
               </>
@@ -556,6 +678,11 @@ export default function Dashboard() {
                   assignedProfileId={connProfileMap[conn.id] || ''}
                   onProfileChange={handleProfileChange}
                   onConnect={() => navigate(`/session/${conn.id}`)}
+                  tags={allTags}
+                  connTagIds={allConnTagMap[conn.id] || []}
+                  onSetTags={handleSetConnectionTags}
+                  onCreateTag={handleCreateTag}
+                  adminTagIds={adminTagIds}
                 />
               ))
             )}
@@ -717,7 +844,7 @@ export default function Dashboard() {
 
 // ── Connection Row Component ────────────────────────────────────────
 
-function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFavorite, vaultConfigured, credProfiles, assignedProfileId, onProfileChange, onConnect }: {
+function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFavorite, vaultConfigured, credProfiles, assignedProfileId, onProfileChange, onConnect, tags, connTagIds, onSetTags, onCreateTag, adminTagIds }: {
   conn: Connection;
   checked: boolean;
   onToggleChecked: () => void;
@@ -728,13 +855,34 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
   assignedProfileId: string;
   onProfileChange: (connectionId: string, profileId: string) => void;
   onConnect: () => void;
+  tags: UserTag[];
+  connTagIds: string[];
+  onSetTags: (connectionId: string, tagIds: string[]) => void;
+  onCreateTag: (name: string, color: string) => Promise<UserTag>;
+  adminTagIds: Set<string>;
 }) {
     const { formatDateTime } = useSettings();
+    const [showTagMenu, setShowTagMenu] = useState(false);
+    const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number }>({});
+    const [newTagName, setNewTagName] = useState('');
+    const tagMenuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      if (!showTagMenu) return;
+      const handler = (e: MouseEvent) => {
+        if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) setShowTagMenu(false);
+      };
+      document.addEventListener('mousedown', handler);
+      return () => document.removeEventListener('mousedown', handler);
+    }, [showTagMenu]);
+
     const status: 'active' | 'expired' | 'none' = useMemo(() => {
       const profile = credProfiles.find(p => p.id === assignedProfileId);
       if (!profile) return 'none';
       return profile.expired ? 'expired' : 'active';
     }, [credProfiles, assignedProfileId]);
+
+    const connTags = useMemo(() => tags.filter(t => connTagIds.includes(t.id)), [tags, connTagIds]);
 
     const statusColors = {
       active: { border: 'rgba(34, 197, 94, 0.4)', text: '#22c55e', glow: 'rgba(34, 197, 94, 0.15)' },
@@ -750,6 +898,16 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
         <td>
           <div className="font-medium">{conn.name}</div>
           {conn.description && <div className="text-[0.75rem] text-txt-tertiary mt-0.5">{conn.description}</div>}
+          {connTags.length > 0 && (
+            <div className="flex gap-1 mt-1 flex-wrap">
+              {connTags.map(tag => (
+                <span key={tag.id} className="inline-flex items-center gap-1 text-[0.625rem] px-1.5 rounded-full" style={{ background: `${tag.color}20`, color: tag.color, border: `1px solid ${tag.color}40`, lineHeight: '1.4' }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: tag.color, flexShrink: 0 }} />
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          )}
         </td>
         <td>
           <div className="flex items-center gap-2.5 text-accent-light">
@@ -779,6 +937,82 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
                 <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
               </svg>
             </button>
+            <div ref={tagMenuRef} style={{ position: 'relative' }}>
+              <button
+                className={`btn-sm !px-2 ${connTagIds.length > 0 ? '!border-accent !text-accent' : ''}`}
+                onClick={() => {
+                  if (!showTagMenu && tagMenuRef.current) {
+                    const rect = tagMenuRef.current.getBoundingClientRect();
+                    const dropUp = rect.bottom + 260 > window.innerHeight;
+                    const dropLeft = rect.right - 200 >= 0;
+                    setMenuPos({
+                      ...(dropUp ? { bottom: window.innerHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
+                      ...(dropLeft ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+                    });
+                  }
+                  setShowTagMenu(!showTagMenu);
+                }}
+                title="Manage tags"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>
+                </svg>
+              </button>
+              {showTagMenu && (
+                <div className="card !p-2" style={{ position: 'fixed', zIndex: 30, minWidth: 200, ...menuPos }}>
+                  {tags.length === 0 && <div className="text-xs text-txt-tertiary py-1 px-1">No tags yet</div>}
+                  {tags.map(tag => {
+                    const isAdmin = adminTagIds.has(tag.id);
+                    return (
+                    <label key={tag.id} className={`flex items-center gap-2 py-1 px-1 rounded text-[0.8125rem] ${isAdmin ? 'opacity-60' : 'cursor-pointer'}`} style={{ whiteSpace: 'nowrap' }}>
+                      <input
+                        type="checkbox"
+                        className="checkbox"
+                        checked={connTagIds.includes(tag.id)}
+                        disabled={isAdmin}
+                        onChange={() => {
+                          const next = connTagIds.includes(tag.id)
+                            ? connTagIds.filter(t => t !== tag.id)
+                            : [...connTagIds, tag.id];
+                          onSetTags(conn.id, next);
+                        }}
+                      />
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: tag.color, flexShrink: 0 }} />
+                      {tag.name}
+                      {isAdmin && <span className="text-[0.625rem] text-txt-tertiary ml-1">(global)</span>}
+                    </label>
+                    );
+                  })}
+                  <div className="flex gap-1 mt-1 pt-1" style={{ borderTop: '1px solid var(--color-border)' }}>
+                    <input
+                      type="text"
+                      placeholder="New tag…"
+                      value={newTagName}
+                      onChange={e => setNewTagName(e.target.value)}
+                      onKeyDown={async (e) => {
+                        if (e.key === 'Enter' && newTagName.trim()) {
+                          const tag = await onCreateTag(newTagName.trim(), TAG_COLORS[tags.length % TAG_COLORS.length]);
+                          onSetTags(conn.id, [...connTagIds, tag.id]);
+                          setNewTagName('');
+                        }
+                      }}
+                      className="text-xs !py-1 flex-1"
+                      style={{ minWidth: 0 }}
+                    />
+                    <button
+                      className="btn-sm !px-2 !py-1 text-xs"
+                      onClick={async () => {
+                        if (newTagName.trim()) {
+                          const tag = await onCreateTag(newTagName.trim(), TAG_COLORS[tags.length % TAG_COLORS.length]);
+                          onSetTags(conn.id, [...connTagIds, tag.id]);
+                          setNewTagName('');
+                        }
+                      }}
+                    >+</button>
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               className="btn-connect-glass"
               style={{
@@ -813,7 +1047,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
 
 // ── Connection Folder Rows ───────────────────────────────────────────
 
-function ConnectionFolderRows({ folderId: _fid, folderName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, connProfileMap, onProfileChange, navigate }: {
+function ConnectionFolderRows({ folderId: _fid, folderName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, connProfileMap, onProfileChange, navigate, tags, connTagMap, onSetConnectionTags, onCreateTag, adminTagIds }: {
   folderId: string;
   folderName: string;
   connections: Connection[];
@@ -828,6 +1062,11 @@ function ConnectionFolderRows({ folderId: _fid, folderName, connections, collaps
   connProfileMap: Record<string, string>;
   onProfileChange: (connectionId: string, profileId: string) => void;
   navigate: (path: string) => void;
+  tags: UserTag[];
+  connTagMap: Record<string, string[]>;
+  onSetConnectionTags: (connectionId: string, tagIds: string[]) => void;
+  onCreateTag: (name: string, color: string) => Promise<UserTag>;
+  adminTagIds: Set<string>;
 }) {
   return (
     <>
@@ -861,6 +1100,11 @@ function ConnectionFolderRows({ folderId: _fid, folderName, connections, collaps
           assignedProfileId={connProfileMap[conn.id] || ''}
           onProfileChange={onProfileChange}
           onConnect={() => navigate(`/session/${conn.id}`)}
+          tags={tags}
+          connTagIds={connTagMap[conn.id] || []}
+          onSetTags={onSetConnectionTags}
+          onCreateTag={onCreateTag}
+          adminTagIds={adminTagIds}
         />
       ))}
     </>

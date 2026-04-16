@@ -187,6 +187,9 @@ pub struct ActiveSession {
     pub remote_host: String,
     pub client_ip: String,
     pub kill_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// Channel for shared control viewers to inject input (mouse/keyboard)
+    /// into the owner's guacd TCP stream.
+    pub input_tx: tokio::sync::mpsc::Sender<String>,
 }
 
 // ── Session info (serialisable summary for the admin API) ──────────
@@ -239,6 +242,7 @@ impl SessionRegistry {
         broadcast::Sender<Arc<String>>,
         Arc<RwLock<SessionBuffer>>,
         tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::mpsc::Receiver<String>,
     )> {
         // Use a single write lock for atomic check-and-insert (no TOCTOU)
         let mut sessions = self.sessions.write().await;
@@ -252,6 +256,7 @@ impl SessionRegistry {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let buffer = Arc::new(RwLock::new(SessionBuffer::new()));
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel::<String>(256);
 
         let session = Arc::new(ActiveSession {
             session_id: session_id.clone(),
@@ -268,10 +273,11 @@ impl SessionRegistry {
             remote_host,
             client_ip,
             kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
+            input_tx,
         });
 
         sessions.insert(session_id, session);
-        Some((tx, buffer, kill_rx))
+        Some((tx, buffer, kill_rx, input_rx))
     }
 
     /// Remove a session from the registry (called when the tunnel closes).
@@ -307,6 +313,21 @@ impl SessionRegistry {
     /// Look up a single session by ID.
     pub async fn get(&self, session_id: &str) -> Option<Arc<ActiveSession>> {
         self.sessions.read().await.get(session_id).cloned()
+    }
+
+    /// Find an active session for a given connection owned by a specific user.
+    /// Returns the first match (there should be at most one active session
+    /// per user per connection).
+    pub async fn find_by_connection_and_user(
+        &self,
+        connection_id: Uuid,
+        user_id: Uuid,
+    ) -> Option<Arc<ActiveSession>> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .values()
+            .find(|s| s.connection_id == connection_id && s.user_id == user_id)
+            .cloned()
     }
 
     /// Forcefully terminate a session by triggering its kill signal.

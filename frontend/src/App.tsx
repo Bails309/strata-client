@@ -15,6 +15,7 @@ import Layout from './components/Layout';
 import { SessionManagerProvider } from './components/SessionManager';
 import SessionBar from './components/SessionBar';
 import WhatsNewModal from './components/WhatsNewModal';
+import DisclaimerModal, { TERMS_VERSION } from './components/DisclaimerModal';
 import SessionTimeoutWarning from './components/SessionTimeoutWarning';
 import { checkAuthStatus, MeResponse } from './api';
 import { SettingsProvider } from './contexts/SettingsContext';
@@ -86,13 +87,18 @@ export default function App() {
 
   return (
     <SettingsProvider>
-      <SessionManagerProvider>
+      <SessionManagerProvider canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}>
         {!authenticated ? (
           <Routes>
             <Route path="/login" element={<Login onLogin={handleLogin} />} />
             <Route path="/shared/:shareToken" element={<SharedViewer />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
+        ) : user?.terms_accepted_version !== TERMS_VERSION ? (
+          <DisclaimerModal
+            onAccept={() => setUser(u => u ? { ...u, terms_accepted_at: new Date().toISOString(), terms_accepted_version: TERMS_VERSION } : u)}
+            onDecline={handleLogout}
+          />
         ) : (
           <>
             <Routes>

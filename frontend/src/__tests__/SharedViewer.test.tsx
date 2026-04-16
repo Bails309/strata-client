@@ -244,7 +244,7 @@ describe('SharedViewer', () => {
     act(() => {
       mockClientOnerror?.({ message: 'Forbidden' });
     });
-    expect(rootEl.textContent).toContain('expired or been revoked');
+    expect(rootEl.textContent).toContain('expired');
   });
 
   it('uses wss protocol on https', () => {

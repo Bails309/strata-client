@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.7] — 2026-04-16
+
+### Added
+- **Live Session Sharing (View & Control)**: Share links now observe the owner's live session in real time via the NVR broadcast channel, instead of opening an independent connection. Shared viewers see exactly what the owner sees. Control mode share links forward keyboard and mouse input to the owner's session via an injected mpsc channel.
+- **Public Display Settings Endpoint**: New `GET /api/user/display-settings` endpoint returns only the three display-related settings (timezone, time format, date format) without requiring admin privileges, eliminating 403 errors for non-admin users.
+- **Admin Tags**: Administrators can create system-wide tags and assign them to connections for organizational categorization. Tags are visible (read-only) to all users on the Dashboard alongside their existing personal tags.
+
+### Fixed
+- **Share Link "Connection Failed"**: Share links returned a 500 error because the `connection_shares` table was missing `access_count` and `last_accessed` columns referenced in an UPDATE query. Removed the nonexistent column reference.
+- **Share Link Showing Login Screen**: Shared sessions opened an independent RDP connection (showing the remote server's login screen) instead of viewing the owner's active session. Rewrote the share tunnel to subscribe to the owner's NVR broadcast, showing the same screen the owner sees.
+- **Share Button Missing from Session Bar**: The share button was not visible because `SessionManagerProvider` called `getMe()` in a one-shot `useEffect` that ran before authentication completed and never re-ran. Changed `canShare` to a reactive prop derived from the authenticated user's permissions in `App.tsx`.
+- **403 on Settings Load for Non-Admin Users**: `SettingsContext` called the admin-only `GET /api/admin/settings` endpoint. Switched to the new public `GET /api/user/display-settings` endpoint.
+- **Tag Dropdown Going Off-Screen**: Tag menu used `position: absolute` which was clipped by parent overflow. Changed to `position: fixed` with viewport-calculated coordinates via `getBoundingClientRect()`.
+- **User Deletion Blocked by Audit Logs**: Hard-deleting users failed because `audit_logs.user_id` had no `ON DELETE` clause (defaulting to RESTRICT). Added migration 037 to set `ON DELETE SET NULL`.
+- **Recording Files Orphaned on User Deletion**: Physical recording files (local and Azure Blob) were not deleted during user hard-delete. The cleanup task now purges local files and Azure blobs before cascading the database delete.
+
+## [0.14.6] — 2026-04-16
+
+### Added
+- **Recording Disclaimer / Terms of Service**: First-time users are presented with a full-screen disclaimer modal covering session recording, consent, acceptable use, and data protection. Users must scroll to the bottom and explicitly accept before accessing the application. Declining logs the user out. Acceptance is recorded with a timestamp in the database and is not shown again on subsequent logins.
+- **NVR Play/Pause**: The NVR live session player now has a play/pause toggle button. Pausing freezes the display while the WebSocket stream stays connected, so no data is lost. Resuming picks up from the current live point.
+
 ## [0.14.5] — 2026-04-16
 
 ### Fixed

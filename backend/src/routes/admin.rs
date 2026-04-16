@@ -2061,36 +2061,60 @@ pub async fn observe_session_ws(
     let offset = query.offset.unwrap_or(300); // default: replay full buffer
     let speed = query.speed.unwrap_or(4.0).max(0.0); // default 4× speed
 
-    // Snapshot the buffer and subscribe to live frames
-    let (size_inst, timed_frames, mut rx) = {
+    // Always fetch the full buffer so that short rewinds (e.g. 30s) still
+    // receive the base-state drawing instructions (initial PNG tiles,
+    // terminal background, etc.) that were sent earlier.  The replay is
+    // then split into a fast base-state dump + a paced replay window.
+    let (size_inst, all_frames, mut rx) = {
         let buffer = session.buffer.read().await;
-
         let size = buffer.last_size().map(|s| s.to_string());
-
-        // For "Jump to Live" (offset 0), replay the full buffer so the
-        // observer receives enough drawing instructions to reconstruct
-        // the complete screen state (e.g., the initial PNG tiles that
-        // drew the terminal/desktop).  The replay loop skips pacing
-        // when is_live_only is true, so the dump is near-instant.
-        let effective_offset = if offset == 0 { 300 } else { offset };
-        let timed = buffer.frames_with_timing(effective_offset);
-
+        let timed = buffer.frames_with_timing(300); // full buffer
         let rx = session.broadcast_tx.subscribe();
         (size, timed, rx)
     };
 
-    // Total replay duration in ms (for progress reporting)
-    let total_replay_ms = timed_frames.last().map(|(t, _)| *t).unwrap_or(0);
+    // Total duration of the full buffer in ms
+    let total_buffer_ms = all_frames.last().map(|(t, _)| *t).unwrap_or(0);
+
+    // The paced replay window starts at this offset from the end.
+    // Everything before it is base-state that gets dumped instantly.
+    let is_live_only = offset == 0;
+    let offset_ms = (offset as u64) * 1000;
+    let offset_boundary_ms = total_buffer_ms.saturating_sub(offset_ms);
+
+    // Split frames into base-state dump and paced replay.
+    let split_idx = if is_live_only {
+        all_frames.len() // everything is an instant dump for "jump to live"
+    } else {
+        all_frames
+            .iter()
+            .position(|(t, _)| *t >= offset_boundary_ms)
+            .unwrap_or(all_frames.len())
+    };
+
+    // Duration of only the paced-replay portion (for the frontend progress bar)
+    let paced_duration_ms = if split_idx < all_frames.len() {
+        all_frames.last().map(|(t, _)| *t).unwrap_or(0)
+            - all_frames[split_idx].0
+    } else {
+        0
+    };
+
+    // Clone the buffer Arc so Phase 2 can rebuild the display on lag.
+    let buffer_for_recovery = session.buffer.clone();
 
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |mut socket| async move {
             use axum::extract::ws::Message;
 
-            // Send total replay duration so the frontend can show a progress bar.
-            let total_str = total_replay_ms.to_string();
+            // Send replay metadata so the frontend can render the timeline.
+            // Args: [paced_duration_ms, speed, buffer_depth_ms, offset_secs]
+            let total_str = paced_duration_ms.to_string();
             let speed_str = format!("{speed}");
-            let header = format_guac_inst("nvrheader", &[&total_str, &speed_str]);
+            let depth_str = total_buffer_ms.to_string();
+            let offset_str = offset.to_string();
+            let header = format_guac_inst("nvrheader", &[&total_str, &speed_str, &depth_str, &offset_str]);
             if socket.send(Message::Text(header)).await.is_err() {
                 return;
             }
@@ -2102,64 +2126,89 @@ pub async fn observe_session_ws(
                 }
             }
 
-            // Phase 1: Paced replay of buffered frames
+            // ── Phase 1a: Base-state fast dump ──────────────────────
             //
-            // During replay we suppress `sync` instructions so the
-            // Guacamole client accumulates all drawing ops into a single
-            // frame instead of queuing hundreds of intermediate frames
-            // (which causes a black screen).  A single `sync` is sent
-            // after the loop so the client flushes once.
+            // Send all frames from before the paced-replay window
+            // instantly (no pacing). Sync instructions are stripped at
+            // the instruction level so the Guacamole client accumulates
+            // all drawing ops without flushing intermediate states.
+            // A single sync is sent afterward to flush the display so
+            // the user sees the screen state at the rewind point.
             let mut last_sync_inst: Option<String> = None;
 
-            if !timed_frames.is_empty() {
-                let is_live_only = offset == 0;
+            for i in 0..split_idx {
+                let (_, ref frame) = all_frames[i];
 
-                for i in 0..timed_frames.len() {
-                    let (delay_ms, ref frame) = timed_frames[i];
-
-                    // Pace replay: wait the proportional delay between frames
-                    // (skip pacing for live-only mode where we just need the
-                    // latest state, or when speed is 0)
-                    if !is_live_only && speed > 0.0 && i > 0 {
-                        let prev_ms = timed_frames[i - 1].0;
-                        let gap = delay_ms.saturating_sub(prev_ms);
-                        if gap > 0 {
-                            let adjusted = (gap as f64 / speed) as u64;
-                            // Cap individual sleeps to 500ms to stay responsive
-                            let sleep_ms = adjusted.min(500);
-                            if sleep_ms > 5 {
-                                tokio::time::sleep(std::time::Duration::from_millis(sleep_ms))
-                                    .await;
-                            }
-                        }
-                    }
-
-                    // Send progress marker periodically
-                    if i % 20 == 0 || i == timed_frames.len() - 1 {
-                        let ms_str = delay_ms.to_string();
-                        let progress = format_guac_inst("nvrprogress", &[&ms_str]);
-                        if socket.send(Message::Text(progress)).await.is_err() {
-                            return;
-                        }
-                    }
-
-                    // Skip sync instructions during replay — save the last
-                    // one so we can flush the display in one shot afterwards.
-                    if frame.starts_with("4.sync") {
-                        last_sync_inst = Some(frame.clone());
+                // Strip sync instructions from the chunk (a single frame
+                // can contain multiple Guacamole instructions like
+                // "3.png,...;4.sync,...;3.cursor,...;")
+                let mut stripped = String::with_capacity(frame.len());
+                for inst in frame.split_inclusive(';') {
+                    let trimmed = inst.trim();
+                    if trimmed.is_empty() {
                         continue;
                     }
+                    if trimmed.starts_with("4.sync,") || trimmed == "4.sync" {
+                        last_sync_inst = Some(inst.to_string());
+                    } else {
+                        stripped.push_str(inst);
+                    }
+                }
 
-                    if socket.send(Message::Text(frame.clone())).await.is_err() {
+                if !stripped.is_empty() {
+                    if socket.send(Message::Text(stripped)).await.is_err() {
                         return;
                     }
                 }
             }
 
-            // Flush the display with the last sync instruction so all
-            // accumulated drawing ops render as a single atomic frame.
-            if let Some(sync) = last_sync_inst {
+            // Flush the base state with the last sync so the display
+            // renders all accumulated drawing ops as one atomic frame.
+            if let Some(sync) = last_sync_inst.take() {
                 if socket.send(Message::Text(sync)).await.is_err() {
+                    return;
+                }
+            }
+
+            // ── Phase 1b: Paced replay ──────────────────────────────
+            //
+            // Send the frames within the rewind window with proportional
+            // pacing.  Syncs are sent as-is here because the pacing
+            // gives the client time to render each frame naturally.
+            let paced_origin_ms = if split_idx < all_frames.len() {
+                all_frames[split_idx].0
+            } else {
+                0
+            };
+
+            for i in split_idx..all_frames.len() {
+                let (delay_ms, ref frame) = all_frames[i];
+
+                // Pace replay
+                if speed > 0.0 && i > split_idx {
+                    let prev_ms = all_frames[i - 1].0;
+                    let gap = delay_ms.saturating_sub(prev_ms);
+                    if gap > 0 {
+                        let adjusted = (gap as f64 / speed) as u64;
+                        let sleep_ms = adjusted.min(500);
+                        if sleep_ms > 5 {
+                            tokio::time::sleep(std::time::Duration::from_millis(sleep_ms))
+                                .await;
+                        }
+                    }
+                }
+
+                // Progress marker (relative to the paced portion)
+                if (i - split_idx) % 20 == 0 || i == all_frames.len() - 1 {
+                    let progress_ms = delay_ms.saturating_sub(paced_origin_ms);
+                    let ms_str = progress_ms.to_string();
+                    let progress = format_guac_inst("nvrprogress", &[&ms_str]);
+                    if socket.send(Message::Text(progress)).await.is_err() {
+                        return;
+                    }
+                }
+
+                if socket.send(Message::Text(frame.clone())).await.is_err() {
                     return;
                 }
             }
@@ -2172,20 +2221,76 @@ pub async fn observe_session_ws(
             // draining client-sent messages (e.g. Guacamole tunnel pings)
             // and sending periodic keep-alive nops to prevent client-side
             // tunnel timeouts during idle periods.
+            //
+            // Two additional safeguards:
+            //
+            // a) **Lag recovery** — if the broadcast receiver falls behind
+            //    (e.g. during a burst of drawing instructions) the skipped
+            //    frames may include critical image tiles, leaving the
+            //    observer's display corrupted or black.  On lag we dump the
+            //    current ring buffer with sync-stripping to atomically
+            //    rebuild the full display state.
+            //
+            // b) **Idle sync keepalive** — when the remote session is truly
+            //    idle, guacd sends nothing.  Without any rendering commands
+            //    the browser may optimise away the canvas resources.  A
+            //    periodic `sync` instruction keeps the Guacamole Display
+            //    flushed so the canvases stay alive.
             let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
             keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_frame_at = std::time::Instant::now();
 
             loop {
                 tokio::select! {
                     result = rx.recv() => {
                         match result {
                             Ok(frame) => {
+                                last_frame_at = std::time::Instant::now();
                                 if socket.send(Message::Text((*frame).clone())).await.is_err() {
                                     break;
                                 }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!("NVR observer lagged {n} frames, skipping");
+                                tracing::warn!("NVR observer lagged {n} frames — rebuilding display");
+
+                                // Dump the full buffer with sync-stripping so the
+                                // display rebuilds atomically in one shot.
+                                let buf = buffer_for_recovery.read().await;
+                                let rebuild = buf.frames_with_timing(300);
+                                drop(buf);
+
+                                let mut send_ok = true;
+                                for (_, chunk) in &rebuild {
+                                    let mut stripped = String::with_capacity(chunk.len());
+                                    for inst in chunk.split_inclusive(';') {
+                                        let t = inst.trim();
+                                        if !t.is_empty()
+                                            && !t.starts_with("4.sync,")
+                                            && t != "4.sync"
+                                        {
+                                            stripped.push_str(inst);
+                                        }
+                                    }
+                                    if !stripped.is_empty() {
+                                        if socket.send(Message::Text(stripped)).await.is_err() {
+                                            send_ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !send_ok { break; }
+
+                                // Flush the rebuilt state with one sync
+                                let ts = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis()
+                                    .to_string();
+                                let sync = format_guac_inst("sync", &[&ts]);
+                                if socket.send(Message::Text(sync)).await.is_err() {
+                                    break;
+                                }
+                                last_frame_at = std::time::Instant::now();
                             }
                             Err(_) => break, // channel closed (session ended)
                         }
@@ -2199,9 +2304,25 @@ pub async fn observe_session_ws(
                         // Discard message content — observe is one-way
                     }
                     _ = keepalive.tick() => {
-                        // Guacamole nop instruction keeps the tunnel alive
+                        // nop keeps the WebSocket tunnel alive
                         if socket.send(Message::Text("3.nop;".into())).await.is_err() {
                             break;
+                        }
+                        // During idle periods, send a sync instruction so
+                        // the Guacamole Display flushes its compositor.
+                        // This prevents the browser from reclaiming canvas
+                        // GPU/memory resources for idle canvases (which
+                        // manifests as the view going black).
+                        if last_frame_at.elapsed() > std::time::Duration::from_secs(5) {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                                .to_string();
+                            let sync = format_guac_inst("sync", &[&ts]);
+                            if socket.send(Message::Text(sync)).await.is_err() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -2808,6 +2929,144 @@ pub async fn list_ad_sync_runs(
     .fetch_all(&db.pool)
     .await?;
     Ok(Json(rows))
+}
+
+// ── Admin Tags (global, forced to all users) ──────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AdminTag {
+    pub id: Uuid,
+    pub name: String,
+    pub color: String,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAdminTagReq {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAdminTagReq {
+    pub name: Option<String>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetAdminConnectionTagsReq {
+    pub connection_id: Uuid,
+    pub tag_ids: Vec<Uuid>,
+}
+
+pub async fn list_admin_tags(
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<AdminTag>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows: Vec<AdminTag> =
+        sqlx::query_as("SELECT id, name, color, created_at FROM admin_tags ORDER BY name")
+            .fetch_all(&db.pool)
+            .await?;
+    Ok(Json(rows))
+}
+
+pub async fn create_admin_tag(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateAdminTagReq>,
+) -> Result<Json<AdminTag>, AppError> {
+    let db = require_running(&state).await?;
+    let name = body.name.trim().to_string();
+    if name.is_empty() || name.len() > 50 {
+        return Err(AppError::Validation(
+            "Tag name must be 1-50 characters".into(),
+        ));
+    }
+    let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
+    let tag: AdminTag = sqlx::query_as(
+        "INSERT INTO admin_tags (name, color) VALUES ($1, $2) RETURNING id, name, color, created_at",
+    )
+    .bind(&name)
+    .bind(&color)
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Json(tag))
+}
+
+pub async fn update_admin_tag(
+    State(state): State<SharedState>,
+    Path(tag_id): Path<Uuid>,
+    Json(body): Json<UpdateAdminTagReq>,
+) -> Result<Json<AdminTag>, AppError> {
+    let db = require_running(&state).await?;
+    if let Some(ref n) = body.name {
+        let n = n.trim();
+        if n.is_empty() || n.len() > 50 {
+            return Err(AppError::Validation(
+                "Tag name must be 1-50 characters".into(),
+            ));
+        }
+    }
+    let tag: AdminTag = sqlx::query_as(
+        "UPDATE admin_tags SET name = COALESCE($2, name), color = COALESCE($3, color) WHERE id = $1 RETURNING id, name, color, created_at",
+    )
+    .bind(tag_id)
+    .bind(&body.name)
+    .bind(&body.color)
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Json(tag))
+}
+
+pub async fn delete_admin_tag(
+    State(state): State<SharedState>,
+    Path(tag_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    sqlx::query("DELETE FROM admin_tags WHERE id = $1")
+        .bind(tag_id)
+        .execute(&db.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub async fn list_admin_connection_tags(
+    State(state): State<SharedState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT connection_id, tag_id FROM admin_connection_tags",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (conn_id, tag_id) in rows {
+        map.entry(conn_id.to_string())
+            .or_default()
+            .push(tag_id.to_string());
+    }
+    Ok(Json(json!(map)))
+}
+
+pub async fn set_admin_connection_tags(
+    State(state): State<SharedState>,
+    Json(body): Json<SetAdminConnectionTagsReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let mut tx = db.pool.begin().await?;
+    sqlx::query("DELETE FROM admin_connection_tags WHERE connection_id = $1")
+        .bind(body.connection_id)
+        .execute(&mut *tx)
+        .await?;
+    for tag_id in &body.tag_ids {
+        sqlx::query("INSERT INTO admin_connection_tags (connection_id, tag_id) VALUES ($1, $2)")
+            .bind(body.connection_id)
+            .bind(tag_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[cfg(test)]
@@ -4416,8 +4675,8 @@ mod tests {
     #[test]
     fn guac_inst_multiple_args() {
         assert_eq!(
-            format_guac_inst("nvrheader", &["30000", "4"]),
-            "9.nvrheader,5.30000,1.4;"
+            format_guac_inst("nvrheader", &["30000", "4", "300000", "60"]),
+            "9.nvrheader,5.30000,1.4,6.300000,2.60;"
         );
     }
 

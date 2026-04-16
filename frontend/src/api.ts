@@ -197,6 +197,8 @@ export interface MeResponse {
   client_ip: string;
   watermark_enabled: boolean;
   vault_configured: boolean;
+  terms_accepted_at?: string | null;
+  terms_accepted_version?: number | null;
   can_manage_system: boolean;
   can_manage_users: boolean;
   can_manage_connections: boolean;
@@ -210,6 +212,11 @@ export interface MeResponse {
 }
 
 export const getMe = () => request<MeResponse>('/user/me');
+export const acceptTerms = (version: number) =>
+  request<{ ok: boolean }>('/user/accept-terms', {
+    method: 'POST',
+    body: JSON.stringify({ version }),
+  });
 
 /** Auth probe that always returns 200 (never 401) — used for initial page-load
  *  auth checks so the browser console stays clean. Returns the full user
@@ -236,6 +243,8 @@ export async function checkAuthStatus(): Promise<AuthCheckResponse> {
 // ── Settings ────────────────────────────────────────────────────────
 
 export const getSettings = () => request<Record<string, string>>('/admin/settings');
+
+export const getDisplaySettings = () => request<Record<string, string>>('/user/display-settings');
 
 export const updateSettings = (settings: Array<{ key: string; value: string }>) =>
   request<{ status: string }>('/admin/settings', { method: 'PUT', body: JSON.stringify({ settings }) });
@@ -690,6 +699,76 @@ export const toggleFavorite = (connectionId: string) =>
   request<{ favorited: boolean }>('/user/favorites', {
     method: 'POST',
     body: JSON.stringify({ connection_id: connectionId }),
+  });
+
+// ── User Tags ───────────────────────────────────────────────────────
+
+export interface UserTag {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export const getTags = () => request<UserTag[]>('/user/tags');
+
+export const createTag = (name: string, color?: string) =>
+  request<UserTag>('/user/tags', {
+    method: 'POST',
+    body: JSON.stringify({ name, color }),
+  });
+
+export const updateTag = (tagId: string, data: { name?: string; color?: string }) =>
+  request<UserTag>(`/user/tags/${tagId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const deleteTag = (tagId: string) =>
+  request<{ ok: boolean }>(`/user/tags/${tagId}`, { method: 'DELETE' });
+
+/** Returns { [connection_id]: tag_id[] } */
+export const getConnectionTags = () =>
+  request<Record<string, string[]>>('/user/connection-tags');
+
+export const setConnectionTags = (connectionId: string, tagIds: string[]) =>
+  request<{ ok: boolean }>('/user/connection-tags', {
+    method: 'POST',
+    body: JSON.stringify({ connection_id: connectionId, tag_ids: tagIds }),
+  });
+
+/** Read-only access to admin-managed global tags (for dashboard display). */
+export const getAdminTags = () => request<UserTag[]>('/user/admin-tags');
+
+/** Read-only admin connection-tag mappings: { connection_id: tag_id[] }. */
+export const getAdminConnectionTags = () =>
+  request<Record<string, string[]>>('/user/admin-connection-tags');
+
+// ── Admin Tag Management ────────────────────────────────────────────
+
+export const getAdminTagsAdmin = () => request<UserTag[]>('/admin/tags');
+
+export const createAdminTag = (name: string, color?: string) =>
+  request<UserTag>('/admin/tags', {
+    method: 'POST',
+    body: JSON.stringify({ name, color }),
+  });
+
+export const updateAdminTag = (tagId: string, data: { name?: string; color?: string }) =>
+  request<UserTag>(`/admin/tags/${tagId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+
+export const deleteAdminTag = (tagId: string) =>
+  request<{ ok: boolean }>(`/admin/tags/${tagId}`, { method: 'DELETE' });
+
+export const getAdminConnectionTagsAdmin = () =>
+  request<Record<string, string[]>>('/admin/connection-tags');
+
+export const setAdminConnectionTags = (connectionId: string, tagIds: string[]) =>
+  request<{ ok: boolean }>('/admin/connection-tags', {
+    method: 'POST',
+    body: JSON.stringify({ connection_id: connectionId, tag_ids: tagIds }),
   });
 
 // ── Active Sessions / NVR ───────────────────────────────────────────

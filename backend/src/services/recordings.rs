@@ -299,6 +299,35 @@ pub async fn download_stream_from_azure(
 
 // ── Background sync task ───────────────────────────────────────────────
 
+/// Delete a blob from Azure Blob Storage.
+pub async fn delete_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<()> {
+    let url = cfg.blob_url(blob)?;
+    let date = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+    let x_headers = format!("x-ms-date:{date}\nx-ms-version:2023-11-03");
+    let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
+    let auth = cfg.sign("DELETE", 0, "", &x_headers, &resource)?;
+
+    let client = reqwest::Client::builder().https_only(true).build()?;
+    let resp = client
+        .delete(url)
+        .header("Authorization", auth)
+        .header("x-ms-date", &date)
+        .header("x-ms-version", "2023-11-03")
+        .send()
+        .await?;
+
+    // 202 Accepted = success, 404 = already gone (both fine)
+    if !resp.status().is_success() && resp.status().as_u16() != 404 {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Azure Blob delete failed ({status}): {body}");
+    }
+
+    Ok(())
+}
+
 pub fn spawn_sync_task(state: crate::services::app_state::SharedState) {
     tokio::spawn(async move {
         let mut synced: HashSet<String> = HashSet::new();

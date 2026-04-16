@@ -617,6 +617,7 @@ Current authenticated user profile, including all role permissions.
   "id": "uuid",
   "username": "jdoe",
   "role": "user",
+  "terms_accepted_at": "2026-04-16T09:00:00Z",
   "can_manage_system": false,
   "can_manage_users": false,
   "can_manage_connections": false,
@@ -627,6 +628,28 @@ Current authenticated user profile, including all role permissions.
   "can_create_connection_folders": false,
   "can_create_sharing_profiles": false,
   "can_view_sessions": true
+}
+```
+
+### `POST /api/user/accept-terms`
+
+Accept the recording disclaimer / terms of service. Sets `terms_accepted_at` to the current timestamp for the authenticated user. Must be called before the frontend will allow access to the application.
+
+**Response** `200 OK`
+```json
+{ "ok": true }
+```
+
+### `GET /api/user/display-settings`
+
+Returns the three display-related settings (timezone, time format, date format) without requiring admin privileges. Used by the frontend `SettingsContext` to format timestamps for all users.
+
+**Response** `200 OK`
+```json
+{
+  "display_timezone": "Europe/London",
+  "display_time_format": "24h",
+  "display_date_format": "DD/MM/YYYY"
 }
 ```
 
@@ -869,11 +892,13 @@ Public WebSocket tunnel for shared sessions. No authentication required.
 
 **Path Parameter**: `share_token` (string) — a valid, non-expired, non-revoked share token.
 
-The backend looks up the share token, resolves the parent connection and its mode:
-- **View mode** — opens a read-only tunnel to guacd (`read-only=true`). The shared viewer can see the session but keyboard and mouse input are not forwarded.
-- **Control mode** — opens a full tunnel to guacd. The shared viewer can send keyboard and mouse input.
+The backend looks up the share token, finds the owner's **active session** in the in-memory session registry, and subscribes the shared viewer to the owner's NVR broadcast channel:
+- **View mode** — the shared viewer receives the owner's live display frames (read-only). Mouse and keyboard input from the viewer is discarded.
+- **Control mode** — the shared viewer receives live display frames and can send keyboard and mouse input, which is injected into the owner's guacd TCP stream via an mpsc channel.
 
-Returns `404` if the token is invalid, expired, or revoked.
+The shared viewer first receives a replay of the session's 5-minute ring buffer (with sync-stripping for atomic display rebuild), then transitions to live frame streaming.
+
+Returns `404` if the token is invalid, expired, revoked, or if the owner is not currently connected.
 
 ---
 
@@ -905,7 +930,7 @@ Generate a temporary share link for a connection the user has access to.
 }
 ```
 
-The share link provides access according to the specified mode and expires when the owning user disconnects or the link is explicitly revoked. Control mode share URLs include `?mode=control` for frontend detection.
+The share link provides access according to the specified mode. The owner must be actively connected for the link to work — shared viewers observe the owner's live session via the NVR broadcast, not an independent connection. Links expire after 24 hours or when explicitly revoked. Control mode share URLs include `?mode=control` for frontend detection.
 
 ### `DELETE /api/user/shares/:share_id`
 
@@ -959,6 +984,7 @@ All errors follow this format:
 | `credential.updated` | User saves encrypted credential |
 | `tunnel.connected` | User opens a remote session |
 | `connection.shared` | User generates a connection share link (includes mode) |
+| `connection.share_accessed` | External viewer opens a share link (includes client IP) |
 | `share.revoked` | User revokes a connection share link |
 | `ad_sync.config_created` | AD sync source config created |
 | `ad_sync.config_updated` | AD sync source config updated |

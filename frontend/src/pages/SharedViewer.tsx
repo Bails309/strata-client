@@ -154,7 +154,8 @@ export default function SharedViewer() {
             <div style={{ fontSize: '2rem', marginBottom: 8 }}>⚠</div>
             <div style={{ color: '#f87171', marginBottom: 16 }}>{error}</div>
             <p style={{ fontSize: '0.8rem', color: '#999' }}>
-              This share link may have expired or been revoked by the owner.
+              This share link may have expired, been revoked by the owner,
+              or the owner may not be actively connected.
             </p>
           </div>
         </div>

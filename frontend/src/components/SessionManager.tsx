@@ -1,6 +1,5 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
 import Guacamole from 'guacamole-common-js';
-import { getMe } from '../api';
 
 export interface GuacSession {
   id: string;                      // connection UUID
@@ -71,24 +70,15 @@ export function useSessionManager() {
   return ctx;
 }
 
-export function SessionManagerProvider({ children }: { children: React.ReactNode }) {
+export function SessionManagerProvider({ children, canShare = false }: { children: React.ReactNode; canShare?: boolean }) {
   const [sessions, setSessions] = useState<GuacSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [tiledSessionIds, setTiledSessionIds] = useState<string[]>([]);
   const [focusedSessionIds, setFocusedSessionIds] = useState<string[]>([]);
   const [sessionBarCollapsed, setSessionBarCollapsed] = useState(false);
-  const [canShare, setCanShare] = useState(false);
   const sessionsRef = useRef<GuacSession[]>([]);
  
   const barWidth = 0; // Floating overlay doesn't reserve space
-
-  // Fetch sharing permission from the user's own profile
-  useEffect(() => {
-    if (!localStorage.getItem('access_token')) return;
-    getMe().then((me: any) => {
-      setCanShare(me.can_manage_system || me.can_create_sharing_profiles);
-    }).catch(() => {});
-  }, []);
 
   // Keep ref in sync
   sessionsRef.current = sessions;

@@ -42,6 +42,8 @@ const adminUser: import('../api').MeResponse = {
   client_ip: '10.0.0.1',
   watermark_enabled: false,
   vault_configured: true,
+  terms_accepted_at: '2024-01-01T00:00:00Z',
+  terms_accepted_version: 1,
   can_manage_system: true,
   can_manage_users: true,
   can_manage_connections: true,

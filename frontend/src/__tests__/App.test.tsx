@@ -68,7 +68,7 @@ function mockFetch(
   }) as unknown as typeof fetch;
 }
 
-const authedUser = { authenticated: true, user: { id: '1', username: 'admin', role: 'admin' } };
+const authedUser = { authenticated: true, user: { id: '1', username: 'admin', role: 'admin', terms_accepted_at: '2024-01-01T00:00:00Z', terms_accepted_version: 1 } };
 
 function renderApp(initialRoute = '/') {
   return render(

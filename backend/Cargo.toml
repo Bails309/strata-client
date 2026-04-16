@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "0.14.7"
+version = "0.14.8"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"

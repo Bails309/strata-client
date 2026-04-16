@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.8] — 2026-04-16
+
+### Fixed
+- **Remote Display Resize Breaking Session View**: When the remote desktop's resolution changed (e.g., maximising a window inside an RDP session), the Guacamole display was not rescaled to fit the browser container, resulting in an unreadable, incorrectly-scaled display. Added a `display.onresize` handler in both the main session view and pop-out windows so the display is automatically rescaled whenever the remote resolution changes.
+
 ## [0.14.7] — 2026-04-16
 
 ### Added

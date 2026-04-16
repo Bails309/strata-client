@@ -533,6 +533,16 @@ export default function SessionClient() {
       client.sendSize(cw, ch);
     }
 
+    // Rescale when the remote display resolution changes (e.g. maximising
+    // a window inside the remote desktop triggers a server-side resize).
+    const prevOnResize = display.onresize;
+    display.onresize = (width: number, height: number) => {
+      if (prevOnResize) prevOnResize(width, height);
+      // Use requestAnimationFrame so the display element has updated its
+      // intrinsic size before we read getWidth()/getHeight().
+      requestAnimationFrame(() => handleResize());
+    };
+
     const observer = new ResizeObserver(() => {
       handleResize();
     });
@@ -545,6 +555,8 @@ export default function SessionClient() {
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', handleResize);
+      // Restore previous handler (if any) to avoid leaking our closure.
+      display.onresize = prevOnResize ?? null;
     };
   }, [currentSession]);
 

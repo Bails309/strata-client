@@ -232,6 +232,13 @@ export function usePopOut(
       sess.client.sendSize(cw, ch);
     }
 
+    // Rescale when the remote display resolution changes (e.g. maximising
+    // a window inside the remote desktop).
+    const prevOnResize = display.onresize;
+    display.onresize = (_w: number, _h: number) => {
+      requestAnimationFrame(() => handleResize());
+    };
+
     popup.addEventListener('resize', handleResize);
     requestAnimationFrame(() => handleResize());
 
@@ -253,6 +260,9 @@ export function usePopOut(
       popup.removeEventListener('resize', handleResize);
       popup.removeEventListener('pagehide', onUnload);
       popup.removeEventListener('focus', pushClipboardPopup);
+      // Restore previous display.onresize so the main-window effect can
+      // re-register its own handler without leftover popup closures.
+      display.onresize = prevOnResize ?? null;
       try {
         popup.document.removeEventListener('keydown', trapKeyDown, true);
         popup.document.removeEventListener('paste', handlePastePopup);

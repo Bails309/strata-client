@@ -25,6 +25,17 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.8',
+    subtitle: 'Display Resize Fix',
+    sections: [
+      {
+        title: 'Remote Display Resize Fix',
+        description:
+          'Fixed an issue where maximising a window inside a remote desktop session (e.g. RDP) caused the display to become unreadable. The session view now automatically rescales when the remote resolution changes, both in the main window and in pop-out windows.',
+      },
+    ],
+  },
+  {
     version: '0.14.7',
     subtitle: 'Live Session Sharing & Admin Tags',
     sections: [

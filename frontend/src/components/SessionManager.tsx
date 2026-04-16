@@ -24,12 +24,21 @@ export interface GuacSession {
   isPoppedOut?: boolean;
   popOut?: () => void;
   popIn?: () => void;
+  /** Whether multi-monitor mode is active */
+  isMultiMonitor?: boolean;
+  enableMultiMonitor?: () => void;
+  disableMultiMonitor?: () => void;
   /** Internal pop-out window refs — persists across SessionClient mount/unmount */
   _popout?: {
     window: Window;
     keyboard: Guacamole.Keyboard;
     mouse: Guacamole.Mouse;
     touch: Guacamole.Mouse.Touchscreen;
+    cleanup: () => void;
+  };
+  /** Internal multi-monitor state — persists across SessionClient mount/unmount */
+  _multiMonitor?: {
+    windows: Window[];
     cleanup: () => void;
   };
 }
@@ -102,6 +111,14 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
     }
     session._popout = undefined;
     session.isPoppedOut = false;
+  }, []);
+
+  /** Tear down a session's multi-monitor windows, if any. */
+  const cleanupMultiMonitor = useCallback((session: GuacSession) => {
+    if (!session._multiMonitor) return;
+    session._multiMonitor.cleanup();
+    session._multiMonitor = undefined;
+    session.isMultiMonitor = false;
   }, []);
 
   const getSession = useCallback((connectionId: string) => {
@@ -334,6 +351,7 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
       const session = prev.find((s) => s.id === id);
       if (session) {
         cleanupPopout(session);
+        cleanupMultiMonitor(session);
         session._cleanupPaste?.();
         session.keyboard.onkeydown = null;
         session.keyboard.onkeyup = null;
@@ -352,7 +370,7 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
       }
       return current;
     });
-  }, [cleanupPopout]);
+  }, [cleanupPopout, cleanupMultiMonitor]);
 
   // Warn before closing the browser tab when sessions are active
   useEffect(() => {

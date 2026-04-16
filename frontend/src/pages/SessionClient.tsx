@@ -6,6 +6,7 @@ import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialPro
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
+import { useMultiMonitor } from '../components/useMultiMonitor';
 import SessionWatermark from '../components/SessionWatermark';
 import Select from '../components/Select';
 import { createWinKeyProxy } from '../utils/winKeyProxy';
@@ -74,6 +75,7 @@ export default function SessionClient() {
   ) || sessions.find((s) => s.connectionId === connectionId);
 
   const { isPoppedOut, popOut, returnDisplay } = usePopOut(currentSession, containerRef);
+  const { isMultiMonitor, canMultiMonitor, enableMultiMonitor, disableMultiMonitor, getLayout } = useMultiMonitor(currentSession, containerRef);
 
   // Keep errorRef in sync with the error state.
   errorRef.current = error;
@@ -527,10 +529,22 @@ export default function SessionClient() {
 
       const dw = display.getWidth();
       const dh = display.getHeight();
-      if (dw > 0 && dh > 0) {
+      if (dw <= 0 || dh <= 0) return;
+
+      // In multi-monitor mode, scale so the primary monitor's slice fills the container.
+      // The display element is wider than the container (aggregate resolution) so
+      // overflow:hidden on the container clips to just the primary region.
+      const layout = getLayout();
+      if (layout) {
+        const primaryW = layout.primary.width;
+        const primaryH = layout.primary.height;
+        const scale = Math.min(cw / primaryW, ch / primaryH);
+        display.scale(scale);
+        // Don't sendSize — the aggregate resolution is already set
+      } else {
         display.scale(Math.min(cw / dw, ch / dh));
+        client.sendSize(cw, ch);
       }
-      client.sendSize(cw, ch);
     }
 
     // Rescale when the remote display resolution changes (e.g. maximising
@@ -558,7 +572,7 @@ export default function SessionClient() {
       // Restore previous handler (if any) to avoid leaking our closure.
       display.onresize = prevOnResize ?? null;
     };
-  }, [currentSession]);
+  }, [currentSession, isMultiMonitor, getLayout]);
 
   // Keyboard management — focus-scoped with capture-phase key trap
   useEffect(() => {
@@ -754,6 +768,15 @@ export default function SessionClient() {
         }
       }, [currentSession, isPoppedOut, popOut, returnDisplay]) as any}
 
+      {/* Registration of multi-monitor actions with SessionManager */}
+      {useEffect(() => {
+        if (currentSession) {
+          currentSession.isMultiMonitor = isMultiMonitor;
+          currentSession.enableMultiMonitor = canMultiMonitor && !isPoppedOut ? enableMultiMonitor : undefined;
+          currentSession.disableMultiMonitor = isMultiMonitor ? disableMultiMonitor : undefined;
+        }
+      }, [currentSession, isMultiMonitor, canMultiMonitor, isPoppedOut, enableMultiMonitor, disableMultiMonitor]) as any}
+
       {/* Touch controls and watermark */}
       {currentSession && <SessionWatermark connectionWatermark={connectionWatermark} />}
 
@@ -768,6 +791,18 @@ export default function SessionClient() {
             </p>
             <button className="btn-primary" onClick={returnDisplay}>Return to Main Window</button>
           </div>
+        </div>
+      )}
+
+      {/* Multi-monitor controls */}
+      {isMultiMonitor && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10">
+          <button
+            className="btn text-xs px-3 py-1.5 bg-black/70 hover:bg-black/90 text-white border-white/20 backdrop-blur"
+            onClick={disableMultiMonitor}
+          >
+            Exit Multi-Monitor
+          </button>
         </div>
       )}
 

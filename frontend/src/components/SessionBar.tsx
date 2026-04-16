@@ -283,6 +283,19 @@ export default function SessionBar() {
                 </button>
               )}
 
+              {/* Multi-Monitor */}
+              {(activeSession.enableMultiMonitor || activeSession.disableMultiMonitor) && (
+                <button
+                  className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${activeSession.isMultiMonitor ? 'bg-accent/20 border-accent/40 text-accent-light' : 'bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20'}`}
+                  onClick={() => activeSession.isMultiMonitor ? activeSession.disableMultiMonitor?.() : activeSession.enableMultiMonitor?.()}
+                  title={activeSession.isMultiMonitor ? 'Exit multi-monitor' : 'Multi-monitor'}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="1" y="3" width="9" height="7" rx="1" /><rect x="14" y="3" width="9" height="7" rx="1" /><line x1="7" y1="17" x2="17" y2="17" /><line x1="12" y1="10" x2="12" y2="17" />
+                  </svg>
+                </button>
+              )}
+
               {/* Keyboard */}
               <button
                 className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${keyboardOpen ? 'bg-accent/20 border-accent/40 text-accent-light' : 'bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20'}`}

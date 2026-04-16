@@ -61,6 +61,8 @@ declare module 'guacamole-common-js' {
       class VisibleLayer {
         width: number;
         height: number;
+        /** The underlying HTML canvas element for this layer. */
+        canvas: HTMLCanvasElement;
       }
     }
 
@@ -120,6 +122,7 @@ declare module 'guacamole-common-js' {
 
     namespace Mouse {
       class State {
+        constructor(x: number, y: number, left: boolean, middle: boolean, right: boolean, up: boolean, down: boolean);
         x: number;
         y: number;
         left: boolean;

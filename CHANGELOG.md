@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.9] — 2026-04-16
+
+### Added
+- **Browser-Based Multi-Monitor for RDP**: Span a remote desktop session across multiple physical monitors using the Window Management API (Chromium 100+). When enabled, the session resolution is dynamically expanded to cover all detected screens and each secondary monitor receives its own browser window showing the correct slice of the remote desktop via `requestAnimationFrame` canvas blitting. Mouse input in secondary windows is offset-translated so coordinates map correctly to the aggregate remote resolution. Keyboard input (including the Windows key proxy) is forwarded from all windows. A new multi-monitor toggle button appears in the Session Bar alongside the existing Pop-out button. Gracefully no-ops on browsers without `getScreenDetails()` support.
+
 ## [0.14.8] — 2026-04-16
 
 ### Fixed

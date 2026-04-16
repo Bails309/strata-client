@@ -25,6 +25,17 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.14.9',
+    subtitle: 'Multi-Monitor Support',
+    sections: [
+      {
+        title: 'Browser-Based Multi-Monitor',
+        description:
+          'Span your remote desktop across multiple physical monitors. Enable multi-monitor mode from the Session Bar and each secondary screen gets its own browser window showing the correct slice of the remote desktop. Mouse and keyboard input works seamlessly across all windows. Requires Chromium 100+ with the Window Management API.',
+      },
+    ],
+  },
+  {
     version: '0.14.8',
     subtitle: 'Display Resize Fix',
     sections: [

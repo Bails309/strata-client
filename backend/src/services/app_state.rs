@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::db::Database;
+use crate::services::file_store::FileStore;
 use crate::services::guacd_pool::GuacdPool;
 use crate::services::session_registry::SessionRegistry;
 
@@ -19,6 +20,7 @@ pub struct AppState {
     pub db: Option<Database>,
     pub session_registry: SessionRegistry,
     pub guacd_pool: Option<GuacdPool>,
+    pub file_store: FileStore,
     pub started_at: Instant,
 }
 
@@ -67,6 +69,7 @@ mod tests {
             db: None,
             session_registry: SessionRegistry::new(),
             guacd_pool: None,
+            file_store: FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
             started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);

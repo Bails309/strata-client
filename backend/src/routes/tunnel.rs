@@ -491,9 +491,9 @@ pub async fn ws_tunnel(
         .unwrap_or_else(|| addr.ip().to_string());
 
     // Build NVR context for session recording into the in-memory ring buffer
-    let session_registry = {
+    let (session_registry, file_store) = {
         let s = state.read().await;
-        s.session_registry.clone()
+        (s.session_registry.clone(), s.file_store.clone())
     };
     let nvr_session_id = format!(
         "{}-{}",
@@ -558,6 +558,7 @@ pub async fn ws_tunnel(
                 client_ip,
                 started_at,
                 db_pool: audit_pool.clone(),
+                file_store,
             };
             if let Err(e) = tunnel::proxy(
                 socket,

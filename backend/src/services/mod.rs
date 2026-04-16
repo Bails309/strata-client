@@ -2,6 +2,7 @@ pub mod ad_sync;
 pub mod app_state;
 pub mod audit;
 pub mod auth;
+pub mod file_store;
 pub mod guacd_pool;
 pub mod kerberos;
 pub mod middleware;

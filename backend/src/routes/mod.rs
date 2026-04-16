@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod files;
 pub mod health;
 pub mod setup;
 pub mod share;
@@ -34,7 +35,8 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/shared/tunnel/:share_token",
             get(share::ws_shared_tunnel),
-        );
+        )
+        .route("/api/files/:token", get(files::download));
 
     // ── Admin routes (auth + admin role) ─────────────────────────────
     let admin = Router::new()
@@ -257,8 +259,9 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/sessions/:id/observe",
             get(user::my_observe_session),
-        )
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        )        .route("/api/files/upload", post(files::upload))
+        .route("/api/files/session/:session_id", get(files::list_session_files))
+        .route("/api/files/delete/:token", delete(files::delete_file))        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public
         .merge(admin)

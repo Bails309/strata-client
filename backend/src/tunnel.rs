@@ -5,6 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::error::AppError;
+use crate::services::file_store::FileStore;
 use crate::services::session_registry::{SessionBuffer, SessionRegistry};
 
 /// Convert a serde_json::Value (expected to be an Object) into a flat
@@ -41,6 +42,7 @@ pub struct NvrContext {
     pub client_ip: String,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub db_pool: sqlx::Pool<sqlx::Postgres>,
+    pub file_store: FileStore,
 }
 
 /// Parameters injected into the guacd Guacamole protocol handshake.
@@ -667,6 +669,12 @@ async fn handle_guac_handshake(
 
         ctx.registry.unregister(&ctx.session_id).await;
         tracing::info!("NVR session {} unregistered", ctx.session_id);
+
+        // Clean up any quick-share files associated with this connection
+        let cleaned = ctx.file_store.cleanup_session(&ctx.connection_id.to_string()).await;
+        if cleaned > 0 {
+            tracing::info!("Cleaned up {} quick-share file(s) for connection {}", cleaned, ctx.connection_id);
+        }
 
         // Update recording duration + bandwidth
         let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;

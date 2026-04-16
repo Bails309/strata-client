@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useSessionManager, GuacSession } from './SessionManager';
 import { createShareLink } from '../api';
 import FileBrowser from './FileBrowser';
+import QuickShare from './QuickShare';
 
 export default function SessionBar() {
   const { 
@@ -45,6 +46,7 @@ export default function SessionBar() {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
+  const [quickShareOpen, setQuickShareOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -243,6 +245,19 @@ export default function SessionBar() {
                   </svg>
                 </button>
               )}
+
+              {/* Quick Share */}
+              <button
+                className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${quickShareOpen ? 'bg-accent/20 border-accent/40 text-accent-light' : 'bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20'}`}
+                onClick={() => setQuickShareOpen(!quickShareOpen)}
+                title="Quick Share – upload files for download in remote session"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              </button>
 
               {/* Fullscreen */}
               <button
@@ -450,6 +465,16 @@ export default function SessionBar() {
           />
         </div>
       </div>
+    )}
+
+    {/* Quick Share Overlay (Full Height, next to the bar) */}
+    {quickShareOpen && activeSession && (
+      <QuickShare
+        connectionId={activeSession.connectionId}
+        onClose={() => setQuickShareOpen(false)}
+        sidebarWidth={220}
+        sessionBarCollapsed={sessionBarCollapsed}
+      />
     )}
     </>
   );

@@ -963,3 +963,62 @@ export interface SessionStats {
 }
 
 export const getSessionStats = () => request<SessionStats>('/admin/session-stats');
+
+// ── Quick Share (temporary file CDN) ────────────────────────────────
+
+export interface QuickShareFile {
+  token: string;
+  filename: string;
+  size: number;
+  content_type: string;
+  download_url: string;
+  created_at?: string;
+}
+
+export async function uploadQuickShareFile(
+  sessionId: string,
+  file: File,
+): Promise<QuickShareFile> {
+  const token = localStorage.getItem('access_token');
+  const form = new FormData();
+  form.append('session_id', sessionId);
+  form.append('file', file);
+
+  const res = await fetch(`${API_BASE}/files/upload`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: 'include',
+    body: form,
+  });
+
+  if (res.status === 401 && token) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      const newToken = localStorage.getItem('access_token');
+      const retry = await fetch(`${API_BASE}/files/upload`, {
+        method: 'POST',
+        headers: newToken ? { Authorization: `Bearer ${newToken}` } : {},
+        credentials: 'include',
+        body: form,
+      });
+      if (!retry.ok) {
+        const body = await retry.json().catch(() => ({}));
+        throw new ApiError(retry.status, body.error || retry.statusText);
+      }
+      return retry.json();
+    }
+    throw new ApiError(401, 'Session expired');
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, body.error || res.statusText);
+  }
+  return res.json();
+}
+
+export const listQuickShareFiles = (sessionId: string) =>
+  request<QuickShareFile[]>(`/files/session/${sessionId}`);
+
+export const deleteQuickShareFile = (token: string) =>
+  request<void>(`/files/delete/${token}`, { method: 'DELETE' });

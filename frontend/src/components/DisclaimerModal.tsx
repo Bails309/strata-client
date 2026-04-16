@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { acceptTerms } from '../api';
 
 /**
@@ -15,13 +15,32 @@ interface Props {
 export default function DisclaimerModal({ onAccept, onDecline }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [scrolledToBottom, setScrolledToBottom] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    // Consider "at bottom" when within 20px of the end
+  const checkIfAtBottom = useCallback((el: HTMLElement) => {
+    // Content fits without scrolling, or user scrolled near the end
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 20) {
       setScrolledToBottom(true);
     }
+  }, []);
+
+  // On mount (and resize), check whether content is short enough to not scroll
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    checkIfAtBottom(el);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => {
+        if (el) checkIfAtBottom(el);
+      });
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+  }, [checkIfAtBottom]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    checkIfAtBottom(e.currentTarget);
   };
 
   const handleAccept = async () => {
@@ -54,6 +73,7 @@ export default function DisclaimerModal({ onAccept, onDecline }: Props) {
 
         {/* Scrollable content */}
         <div
+          ref={contentRef}
           className="px-6 py-4 overflow-y-auto flex-1 text-sm text-txt-secondary space-y-5"
           onScroll={handleScroll}
         >

@@ -173,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
         db: Some(db),
         session_registry: services::session_registry::SessionRegistry::new(),
         guacd_pool: Some(guacd_pool),
+        file_store: services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
         started_at: std::time::Instant::now(),
     }));
 

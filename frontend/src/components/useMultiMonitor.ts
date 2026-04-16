@@ -146,6 +146,7 @@ export function useMultiMonitor(
     () => !!session?._multiMonitor,
   );
   const [canMultiMonitor, setCanMultiMonitor] = useState(false);
+  const [screenCount, setScreenCount] = useState(0);
 
   const secondaryWindowsRef = useRef<SecondaryWindow[]>([]);
   const rafIdRef = useRef<number>(0);
@@ -158,10 +159,6 @@ export function useMultiMonitor(
   }, [session]);
 
   // Feature-detect Window Management API and pre-request permission.
-  // Caching the layout means enableMultiMonitor can be fully synchronous
-  // (no await), which keeps the user-gesture context alive so the browser
-  // allows opening multiple popups.
-  //
   // We also listen for `screenschange` on the live ScreenDetails object
   // so that the cache stays current when monitors are plugged in/out.
   useEffect(() => {
@@ -172,16 +169,19 @@ export function useMultiMonitor(
       if (!liveScreenDetails) return;
       const screens = mapScreenDetails(liveScreenDetails);
       cachedScreenDetails = buildLayout(screens);
+      setScreenCount(screens.length);
     }
 
-    // Pre-request permission (shows prompt once, browser remembers)
+    // Pre-request permission (shows prompt once, browser remembers).
+    // This may fail silently if the permission hasn't been granted yet
+    // (no user gesture). That's fine — enableMultiMonitor will request
+    // it from the click handler (user gesture) as a fallback.
     (async () => {
       try {
         liveScreenDetails = await (window as any).getScreenDetails();
         refreshCache();
-        // Re-read the live object whenever monitors change
         liveScreenDetails.addEventListener('screenschange', refreshCache);
-      } catch { /* permission denied — canMultiMonitor stays true but enable will no-op */ }
+      } catch { /* permission denied or no user gesture — will retry on click */ }
     })();
 
     return () => {
@@ -192,32 +192,39 @@ export function useMultiMonitor(
   }, []);
 
   // ── Enable multi-monitor ──────────────────────────────────────────────
-  // This is intentionally synchronous (no await) so that all window.open()
-  // calls happen within the user-gesture context and aren't popup-blocked.
-  const enableMultiMonitor = useCallback(() => {
+  // This function calls getScreenDetails() within the user-gesture context
+  // of the button click.  This is critical because Chrome only allows
+  // multiple window.open() calls from a single gesture when the
+  // `window-management` permission is activated FROM that gesture.
+  // When the permission is already granted, getScreenDetails() resolves
+  // near-instantly (~1 ms) and Chrome preserves the user activation.
+  const enableMultiMonitor = useCallback(async () => {
     if (!session || !containerRef.current || isMultiMonitor) return;
     if (session.isPoppedOut) return;
 
-    // Use cached layout (pre-requested on mount). If not yet available,
-    // fall back to a one-shot async request — the first click may only
-    // open 1 popup (browser popup blocker) but subsequent clicks work.
-    let layout = cachedScreenDetails;
-    if (!layout) {
-      // Async fallback — triggers permission prompt, next click uses cache
-      (async () => {
-        try {
-          liveScreenDetails = await (window as any).getScreenDetails();
-          const screens = mapScreenDetails(liveScreenDetails);
-          cachedScreenDetails = buildLayout(screens);
-          liveScreenDetails.addEventListener('screenschange', () => {
-            if (liveScreenDetails) {
-              cachedScreenDetails = buildLayout(mapScreenDetails(liveScreenDetails));
-            }
-          });
-        } catch { /* ignore */ }
-      })();
+    // Always call getScreenDetails() in the click handler so Chrome
+    // associates the window-management permission with this user gesture.
+    // This is what allows multiple window.open() calls below.
+    try {
+      const details = await (window as any).getScreenDetails();
+      liveScreenDetails = details;
+      const screens = mapScreenDetails(details);
+      cachedScreenDetails = buildLayout(screens);
+      setScreenCount(screens.length);
+
+      // Keep the cache fresh if monitors change later
+      details.addEventListener('screenschange', () => {
+        if (liveScreenDetails === details) {
+          cachedScreenDetails = buildLayout(mapScreenDetails(details));
+        }
+      });
+    } catch {
+      // Permission denied — cannot do multi-monitor
       return;
     }
+
+    const layout_raw = cachedScreenDetails;
+    if (!layout_raw) return;
 
     const sess = session;
     const client = sess.client;
@@ -231,13 +238,13 @@ export function useMultiMonitor(
     // (often larger than the browser viewport) causes heavy down-scaling.
     const cw = containerRef.current!.clientWidth;
     const ch = containerRef.current!.clientHeight;
-    const origPrimary = layout.primary;
-    const adjustedScreens: ScreenInfo[] = layout.screens.map((s) =>
+    const origPrimary = layout_raw.primary;
+    const adjustedScreens: ScreenInfo[] = layout_raw.screens.map((s) =>
       s === origPrimary ? { ...s, width: cw, height: ch } : s,
     );
     const adjustedLayout = buildLayout(adjustedScreens);
     if (!adjustedLayout) return;
-    layout = adjustedLayout;
+    const layout = adjustedLayout;
 
     // Save original size for restoration
     originalSizeRef.current = {
@@ -287,6 +294,15 @@ export function useMultiMonitor(
     }
 
     if (popups.length === 0) return; // All popups blocked
+
+    // Warn if some popups were blocked
+    if (popups.length < secondaryTiles.length) {
+      console.warn(
+        `[MultiMon] Only ${popups.length} of ${secondaryTiles.length} popups opened. ` +
+        `${secondaryTiles.length - popups.length} blocked by browser. ` +
+        `Allow popups for this site in browser settings, then try again.`
+      );
+    }
 
     // ── Request aggregate resolution from guacd ──
     client.sendSize(layout.aggregateWidth, layout.aggregateHeight);
@@ -505,6 +521,8 @@ export function useMultiMonitor(
   return {
     isMultiMonitor,
     canMultiMonitor,
+    /** Number of screens detected by the Window Management API */
+    screenCount,
     enableMultiMonitor,
     disableMultiMonitor,
     /** Returns the current monitor layout (null if not active) */

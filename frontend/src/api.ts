@@ -66,7 +66,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
         const body = await retryRes.json().catch(() => ({}));
         throw new ApiError(retryRes.status, body.error || retryRes.statusText);
       }
-      return retryRes.json();
+      const retryText = await retryRes.text();
+      return (retryText ? JSON.parse(retryText) : undefined) as T;
     }
     // Refresh failed — clear local state and redirect to login
     localStorage.removeItem('access_token');
@@ -80,7 +81,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new ApiError(res.status, body.error || res.statusText);
   }
 
-  return res.json();
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 export class ApiError extends Error {

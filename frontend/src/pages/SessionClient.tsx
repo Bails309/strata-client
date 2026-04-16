@@ -75,7 +75,7 @@ export default function SessionClient() {
   ) || sessions.find((s) => s.connectionId === connectionId);
 
   const { isPoppedOut, popOut, returnDisplay } = usePopOut(currentSession, containerRef);
-  const { isMultiMonitor, canMultiMonitor, enableMultiMonitor, disableMultiMonitor, getLayout, updatePrimarySize } = useMultiMonitor(currentSession, containerRef);
+  const { isMultiMonitor, canMultiMonitor, screenCount, enableMultiMonitor, disableMultiMonitor, getLayout, updatePrimarySize } = useMultiMonitor(currentSession, containerRef);
 
   // Keep errorRef in sync with the error state.
   errorRef.current = error;
@@ -790,10 +790,11 @@ export default function SessionClient() {
       {useEffect(() => {
         if (currentSession) {
           currentSession.isMultiMonitor = isMultiMonitor;
+          currentSession.screenCount = screenCount;
           currentSession.enableMultiMonitor = canMultiMonitor && !isPoppedOut ? enableMultiMonitor : undefined;
           currentSession.disableMultiMonitor = isMultiMonitor ? disableMultiMonitor : undefined;
         }
-      }, [currentSession, isMultiMonitor, canMultiMonitor, isPoppedOut, enableMultiMonitor, disableMultiMonitor]) as any}
+      }, [currentSession, isMultiMonitor, canMultiMonitor, isPoppedOut, enableMultiMonitor, disableMultiMonitor, screenCount]) as any}
 
       {/* Touch controls and watermark */}
       {currentSession && <SessionWatermark connectionWatermark={connectionWatermark} />}

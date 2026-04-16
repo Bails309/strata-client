@@ -75,7 +75,7 @@ export default function SessionClient() {
   ) || sessions.find((s) => s.connectionId === connectionId);
 
   const { isPoppedOut, popOut, returnDisplay } = usePopOut(currentSession, containerRef);
-  const { isMultiMonitor, canMultiMonitor, enableMultiMonitor, disableMultiMonitor, getLayout } = useMultiMonitor(currentSession, containerRef);
+  const { isMultiMonitor, canMultiMonitor, enableMultiMonitor, disableMultiMonitor, getLayout, updatePrimarySize } = useMultiMonitor(currentSession, containerRef);
 
   // Keep errorRef in sync with the error state.
   errorRef.current = error;
@@ -538,15 +538,22 @@ export default function SessionClient() {
       // and Guacamole.Mouse coordinates naturally include the aggregate offset.
       const layout = getLayout();
       if (layout) {
-        const primaryW = layout.primary.width;
-        const primaryH = layout.primary.height;
+        // Recalculate aggregate layout with new container dimensions.
+        // This sends a new sendSize() if the container width/height changed
+        // (e.g. sidebar collapse), so the remote desktop fills the space.
+        updatePrimarySize(cw, ch);
+
+        // Re-read the layout after the update
+        const updatedLayout = getLayout();
+        const primaryW = updatedLayout ? updatedLayout.primary.width : layout.primary.width;
+        const primaryH = updatedLayout ? updatedLayout.primary.height : layout.primary.height;
+        const primaryTile = updatedLayout ? updatedLayout.primaryTile : layout.primaryTile;
         const scale = Math.min(cw / primaryW, ch / primaryH);
         display.scale(scale);
         // Update display offset to match current scale
         const displayEl = display.getElement();
-        displayEl.style.marginLeft = `-${layout.primaryTile.sliceX * scale}px`;
-        displayEl.style.marginTop = `-${layout.primaryTile.sliceY * scale}px`;
-        // Don't sendSize — the aggregate resolution is already set
+        displayEl.style.marginLeft = `-${primaryTile.sliceX * scale}px`;
+        displayEl.style.marginTop = `-${primaryTile.sliceY * scale}px`;
       } else {
         // Reset any leftover offset from multi-monitor mode
         const displayEl = display.getElement();

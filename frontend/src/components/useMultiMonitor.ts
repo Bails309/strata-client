@@ -471,6 +471,30 @@ export function useMultiMonitor(
   // Expose the layout for the main window clipping logic
   const getLayout = useCallback(() => layoutRef.current, []);
 
+  // Recalculate layout when the container resizes (e.g. sidebar collapse).
+  // Updates the primary tile dimensions to match the new container size,
+  // recomputes the aggregate, and sends the new size to the server.
+  const updatePrimarySize = useCallback((newW: number, newH: number) => {
+    const layout = layoutRef.current;
+    if (!layout || !session) return;
+
+    const oldPW = layout.primary.width;
+    const oldPH = layout.primary.height;
+    // Skip if the primary dimensions haven't changed meaningfully (< 2px)
+    if (Math.abs(newW - oldPW) < 2 && Math.abs(newH - oldPH) < 2) return;
+
+    const origPrimary = layout.primary;
+    const adjusted = buildLayout(
+      layout.screens.map((s) =>
+        s === origPrimary ? { ...s, width: newW, height: newH } : s,
+      ),
+    );
+    if (!adjusted) return;
+
+    layoutRef.current = adjusted;
+    session.client.sendSize(adjusted.aggregateWidth, adjusted.aggregateHeight);
+  }, [session]);
+
   return {
     isMultiMonitor,
     canMultiMonitor,
@@ -478,5 +502,7 @@ export function useMultiMonitor(
     disableMultiMonitor,
     /** Returns the current monitor layout (null if not active) */
     getLayout,
+    /** Recalculate layout when the primary container resizes */
+    updatePrimarySize,
   };
 }

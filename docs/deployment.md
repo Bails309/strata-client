@@ -559,6 +559,33 @@ Docker health checks are configured for `guacd` (TCP 4822), `postgres-local` (`p
 
 ---
 
+## Browser Requirements
+
+Strata Client works in any modern browser (Chrome, Edge, Firefox, Safari). Some features require specific browser capabilities:
+
+### Multi-Monitor
+
+| Requirement | Details |
+|---|---|
+| **Browser** | Chromium 100+ (Chrome, Edge, Brave, Opera). Firefox and Safari do not support the Window Management API. |
+| **Permission** | The browser prompts for "Window Management" permission on first use. Grant it to allow screen detection. |
+| **Popups** | When using **3 or more screens**, Chrome's popup blocker may block the additional windows on the first attempt. Click the blocked-popup icon in the address bar and select "Always allow pop-ups from this site", then retry. This is a one-time setting per origin. |
+| **Brave / Privacy browsers** | Supported — screen dimensions automatically fall back to `window.screen` values when the Window Management API returns zeroed coordinates. |
+| **Screen detection** | The multi-monitor button tooltip shows the number of detected screens in real time (e.g. "Multi-monitor (3 screens detected)"). Plugging in or removing a monitor updates the count automatically via the `screenschange` event. |
+
+### Quick Share
+
+| Requirement | Details |
+|---|---|
+| **File size** | Up to 500 MB per file, 20 files per session. Both the nginx reverse proxy and Axum backend enforce this limit. |
+| **Upload timeout** | Large uploads have up to 300 seconds (5 minutes) before the nginx proxy times out the request body transfer. |
+
+### Clipboard
+
+Clipboard synchronisation requires the [Clipboard API](https://developer.mozilla.org/en-US/docs/Web/API/Clipboard_API), supported in all modern browsers. HTTPS (or localhost) is required for clipboard read access in most browsers.
+
+---
+
 ## User Guide
 
 ### Connecting to a Single Session

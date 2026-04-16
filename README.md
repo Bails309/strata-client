@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.15.2-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.15.3-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -59,7 +59,7 @@
 - **Admin tags** — System-wide tags created by administrators for organizational categorization of connections; visible (read-only) to all users on the Dashboard alongside personal tags
 - **Recording disclaimer / Terms of Service** — Mandatory first-login acceptance modal covering session recording consent, acceptable use, and data protection under UK GDPR. Acceptance is timestamped in the database; declining logs the user out
 - **Quick Share (Temporary File CDN)** — Upload files from the Session Bar and get a random download URL to paste into the remote session's browser. Files are session-scoped and automatically deleted on disconnect. Supports drag-and-drop, up to 20 files per session (500 MB each), and one-click copy-to-clipboard URLs
-- **Browser-based multi-monitor** — Span an RDP session across multiple physical monitors using the Window Management API (Chromium 100+). Secondary screens each get their own browser window with offset-translated mouse/keyboard input and `requestAnimationFrame` canvas blitting from the aggregate remote resolution. Compatible with Brave and other privacy-focused browsers via automatic dimension fallback. Secondary windows dynamically resize their canvas when the window is resized, and support any number of monitors
+- **Browser-based multi-monitor** — Span an RDP session across multiple physical monitors using the Window Management API (Chromium 100+). Secondary screens each get their own browser window with offset-translated mouse/keyboard input and `requestAnimationFrame` canvas blitting from the aggregate remote resolution. Compatible with Brave and other privacy-focused browsers via automatic dimension fallback. Secondary windows dynamically resize their canvas when the window is resized. Supports any number of monitors with live screen count detection in the toolbar tooltip. Chrome users must allow popups for the site (one-time prompt) when using 3+ screens
 - **Unified Sessions Page** — Role-based sessions view combining live session monitoring and recording history; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Unified Session Bar** — Consolidated session controls (Sharing, File Browser, Fullscreen, Pop-out, OSK) into a single, sleek, zero-footprint collapsible right-side dock
 - **Integrated OSK** — Touch toolbar and on-screen keyboard shortcuts integrated directly into the Session Bar dock; no more floating buttons obscuring the remote screen

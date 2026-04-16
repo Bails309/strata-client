@@ -5,14 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.15.2] — 2026-04-16
+## [0.15.3] — 2026-04-16
 
 ### Added
 - **Quick Share (Temporary File CDN)**: Upload files from the Session Bar and get a random, unguessable download URL to paste into the remote session's browser. Files are stored in-memory + disk on the backend, scoped to the active session, and automatically deleted when the tunnel disconnects. Supports drag-and-drop, multiple files (up to 20 per session, 500 MB each), copy-to-clipboard URLs, and per-file delete. No authentication required on the download endpoint — the random token is the capability.
+- **Multi-Monitor Screen Count**: The multi-monitor button tooltip now shows the number of detected screens (e.g. "Multi-monitor (3 screens detected)"), updating live when monitors are plugged in or out.
 
 ### Fixed
-- **Quick Share Upload Size Limit (413)**: Uploading files larger than 10 MB to Quick Share returned HTTP 413 (Content Too Large) because nginx's `client_max_body_size` was set to `10M`. Increased the limit to `500M` to match the backend's per-file cap, and raised `client_body_timeout` from 10 s to 300 s so large uploads don't time out mid-transfer.
-- **Multi-Monitor 3+ Screens**: Connecting three or more monitors only opened one popup window. The `getScreenDetails()` API returns a **live** `ScreenDetails` object, but the code read it once on mount and cached the snapshot. If the third monitor wasn't detected at that instant — or screens changed later — the cache was stale. The hook now stores the live `ScreenDetails` object, listens for the `screenschange` event, and refreshes the screen layout whenever monitors are plugged in or out.
+- **Quick Share Upload Size Limit — Nginx (413)**: Uploading files larger than 10 MB to Quick Share returned HTTP 413 (Content Too Large) because nginx's `client_max_body_size` was set to `10M`. Increased the limit to `500M` to match the backend's per-file cap, and raised `client_body_timeout` from 10 s to 300 s so large uploads don't time out mid-transfer.
+- **Quick Share Upload Size Limit — Axum (413)**: Even after the nginx fix, uploads over 2 MB still failed because Axum's default multipart body limit is 2 MB. Added an explicit `DefaultBodyLimit::max(500 MB)` layer on the upload route to match the backend's per-file cap.
+- **Quick Share Delete "Unexpected end of JSON input"**: Deleting a Quick Share file threw a client-side JSON parse error because the backend returns an empty 200 response. The `request()` helper now reads the response as text first and only parses JSON when the body is non-empty.
+- **Multi-Monitor 3+ Screens — Live Screen Detection**: Connecting three or more monitors only opened one popup window. The `getScreenDetails()` API returns a **live** `ScreenDetails` object, but the code read it once on mount and cached the snapshot. If the third monitor wasn't detected at that instant — or screens changed later — the cache was stale. The hook now stores the live `ScreenDetails` object, listens for the `screenschange` event, and refreshes the screen layout whenever monitors are plugged in or out.
+- **Multi-Monitor 3+ Screens — Popup Blocker**: Even with live screen detection, the second and subsequent popups were blocked by Chrome's popup blocker. Chrome only allows multiple `window.open()` calls within a single user gesture if `getScreenDetails()` is called during that gesture to signal multi-screen intent. The hook now calls `await getScreenDetails()` inside the click handler, which extends Chrome's user activation through the await and permits all secondary window opens.
 - **Disclaimer Modal Scroll-to-Accept on Tall Screens**: The "I Accept" button on the Session Recording Disclaimer was permanently disabled on screens tall enough to display the full terms without scrolling, because the scroll event never fired. The modal now checks on mount whether the content fits without overflow and enables the button immediately when it does. A `ResizeObserver` re-checks on viewport changes.
 
 ## [0.15.0] — 2026-04-16

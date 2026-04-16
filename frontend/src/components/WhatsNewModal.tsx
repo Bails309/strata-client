@@ -25,8 +25,8 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
-    version: '0.15.2',
-    subtitle: 'Quick Share & Bug Fixes',
+    version: '0.15.3',
+    subtitle: 'Quick Share, Multi-Monitor Fixes & Polish',
     sections: [
       {
         title: 'Quick Share',
@@ -34,14 +34,24 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           'Upload files from the Session Bar and get a random download URL to paste into the remote session\'s browser. Files are session-scoped and automatically deleted when the tunnel disconnects. Supports drag-and-drop, up to 20 files per session (500 MB each), and one-click copy-to-clipboard URLs.',
       },
       {
-        title: 'Multi-Monitor 3+ Screens Fix',
+        title: 'Multi-Monitor Screen Count',
         description:
-          'Connecting three or more monitors now correctly opens a popup for each secondary screen. The hook listens for the screenschange event so hot-plugged monitors are detected automatically.',
+          'The multi-monitor button tooltip now shows the number of detected screens (e.g. "Multi-monitor (3 screens detected)"), updating live when monitors are plugged in or out.',
+      },
+      {
+        title: 'Multi-Monitor Popup Blocker Fix',
+        description:
+          'Opening three or more monitors no longer triggers Chrome\'s popup blocker. The hook now calls getScreenDetails() inside the click handler, extending Chrome\'s user activation so all secondary windows open successfully.',
       },
       {
         title: 'Quick Share Upload Fix',
         description:
-          'Large file uploads (over 10 MB) no longer fail with a 413 error. The nginx reverse proxy body size limit now matches the backend\'s 500 MB cap.',
+          'Large file uploads (over 10 MB) no longer fail with a 413 error. Both the nginx reverse proxy body size limit and the Axum multipart body limit now match the backend\'s 500 MB cap.',
+      },
+      {
+        title: 'Quick Share Delete Fix',
+        description:
+          'Deleting a Quick Share file no longer throws a "Unexpected end of JSON input" error. The API client now handles empty response bodies correctly.',
       },
       {
         title: 'Disclaimer Scroll Fix',

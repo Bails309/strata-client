@@ -20,8 +20,9 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         if s.phase != BootPhase::Running {
             return Ok(());
         }
-        let db = s.db.clone()
-            .ok_or_else(|| anyhow::anyhow!("DB not found"))?;
+        let db =
+            s.db.clone()
+                .ok_or_else(|| anyhow::anyhow!("DB not found"))?;
         let vault = s.config.as_ref().and_then(|c| c.vault.clone());
         (db, vault)
     };
@@ -39,7 +40,10 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     .await?;
 
     if !doomed_recordings.is_empty() {
-        let azure_cfg = recordings::get_azure_config(&db.pool, vault.as_ref()).await.ok().flatten();
+        let azure_cfg = recordings::get_azure_config(&db.pool, vault.as_ref())
+            .await
+            .ok()
+            .flatten();
         let recordings_dir = "/var/lib/guacamole/recordings";
 
         for (storage_path, storage_type) in &doomed_recordings {
@@ -61,7 +65,10 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
             }
         }
 
-        tracing::info!("Purged {} recording file(s) for users pending hard-delete", doomed_recordings.len());
+        tracing::info!(
+            "Purged {} recording file(s) for users pending hard-delete",
+            doomed_recordings.len()
+        );
     }
 
     // ── Hard-delete the users (CASCADE removes DB rows for recordings, tags, etc.) ──

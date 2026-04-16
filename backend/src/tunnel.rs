@@ -439,7 +439,13 @@ async fn handle_guac_handshake(
             )
             .await
         {
-            Some((tx, buffer, kill_rx, input_rx)) => Some((tx, buffer, ctx.registry.clone(), Some(kill_rx), Some(input_rx))),
+            Some((tx, buffer, kill_rx, input_rx)) => Some((
+                tx,
+                buffer,
+                ctx.registry.clone(),
+                Some(kill_rx),
+                Some(input_rx),
+            )),
             None => {
                 tracing::error!("Session limit reached — rejecting tunnel");
                 return Err(AppError::Internal(
@@ -471,16 +477,17 @@ async fn handle_guac_handshake(
     ping_interval.tick().await; // consume the first immediate tick
     let mut last_pong = tokio::time::Instant::now();
 
-    let (bandwidth, mut kill_rx) = if let Some((_, _, ref registry, ref mut rx_opt, ref mut input_opt)) = nvr_handles {
-        if let Some(ref ctx) = nvr {
-            shared_input_rx = input_opt.take();
-            (registry.get(&ctx.session_id).await, rx_opt.take())
+    let (bandwidth, mut kill_rx) =
+        if let Some((_, _, ref registry, ref mut rx_opt, ref mut input_opt)) = nvr_handles {
+            if let Some(ref ctx) = nvr {
+                shared_input_rx = input_opt.take();
+                (registry.get(&ctx.session_id).await, rx_opt.take())
+            } else {
+                (None, None)
+            }
         } else {
             (None, None)
-        }
-    } else {
-        (None, None)
-    };
+        };
 
     loop {
         tokio::select! {

@@ -227,16 +227,16 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/user/tags/:tag_id", put(user::update_tag))
         .route("/api/user/tags/:tag_id", delete(user::delete_tag))
         .route("/api/user/connection-tags", get(user::list_connection_tags))
-        .route(
-            "/api/user/connection-tags",
-            post(user::set_connection_tags),
-        )
+        .route("/api/user/connection-tags", post(user::set_connection_tags))
         .route("/api/user/admin-tags", get(user::list_admin_tags))
         .route(
             "/api/user/admin-connection-tags",
             get(user::list_admin_connection_tags),
         )
-        .route("/api/user/display-settings", get(user::get_display_settings))
+        .route(
+            "/api/user/display-settings",
+            get(user::get_display_settings),
+        )
         .route(
             "/api/user/connections/:connection_id/info",
             get(user::connection_info),

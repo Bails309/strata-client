@@ -341,7 +341,8 @@ pub async fn stream_recording(
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |socket| async move {
-            if let Err(e) = handle_recording_stream(socket, state, recording, seek_ms, speed).await {
+            if let Err(e) = handle_recording_stream(socket, state, recording, seek_ms, speed).await
+            {
                 tracing::error!("Recording stream error: {e}");
             }
         }))
@@ -460,7 +461,7 @@ async fn handle_recording_stream(
 
     let mut parser = GuacamoleParser::new();
     let mut first_guac_ts: Option<u64> = None; // never changes — for absolute progress
-    let mut base_guac_ts: Option<u64> = None;  // reset on speed change — for pacing
+    let mut base_guac_ts: Option<u64> = None; // reset on speed change — for pacing
     let mut base_real_ts: Option<std::time::Instant> = None;
     let mut last_progress_sent = std::time::Instant::now();
 
@@ -518,8 +519,7 @@ async fn handle_recording_stream(
 
                                 if !seeking {
                                     // ── Drain pending messages (incl. speed) ──
-                                    let (p, s) =
-                                        drain_incoming(&mut socket, paused, speed).await;
+                                    let (p, s) = drain_incoming(&mut socket, paused, speed).await;
                                     paused = p;
                                     if s != speed {
                                         speed = s;
@@ -560,12 +560,10 @@ async fn handle_recording_stream(
                                     }
 
                                     // ── Speed-adjusted pacing ──
-                                    let guac_elapsed = ts.saturating_sub(
-                                        base_guac_ts.unwrap_or(b_ts),
-                                    );
-                                    let wall_elapsed = std::time::Instant::now().duration_since(
-                                        base_real_ts.unwrap_or(b_real),
-                                    );
+                                    let guac_elapsed =
+                                        ts.saturating_sub(base_guac_ts.unwrap_or(b_ts));
+                                    let wall_elapsed = std::time::Instant::now()
+                                        .duration_since(base_real_ts.unwrap_or(b_real));
                                     let real_ms =
                                         wall_elapsed.saturating_sub(pause_offset).as_millis()
                                             as u64;
@@ -644,9 +642,7 @@ async fn handle_recording_stream(
                                             "nvrprogress",
                                             &[&abs_elapsed.to_string()],
                                         );
-                                        socket
-                                            .send(axum::extract::ws::Message::Text(prog))
-                                            .await?;
+                                        socket.send(axum::extract::ws::Message::Text(prog)).await?;
                                         last_progress_sent = std::time::Instant::now();
                                     }
                                 }
@@ -695,7 +691,10 @@ fn parse_nvrspeed(msg: &str) -> Option<f64> {
     let rest = rest.strip_suffix(';')?;
     let dot = rest.find('.')?;
     let value = &rest[dot + 1..];
-    value.parse::<f64>().ok().filter(|&v| v >= 0.25 && v <= 16.0)
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|&v| v >= 0.25 && v <= 16.0)
 }
 
 /// Query parameters for recording stream endpoints.

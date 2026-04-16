@@ -2057,7 +2057,6 @@ pub async fn observe_session_ws(
     session: std::sync::Arc<crate::services::session_registry::ActiveSession>,
     query: ObserveQuery,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-
     let offset = query.offset.unwrap_or(300); // default: replay full buffer
     let speed = query.speed.unwrap_or(4.0).max(0.0); // default 4× speed
 
@@ -2094,8 +2093,7 @@ pub async fn observe_session_ws(
 
     // Duration of only the paced-replay portion (for the frontend progress bar)
     let paced_duration_ms = if split_idx < all_frames.len() {
-        all_frames.last().map(|(t, _)| *t).unwrap_or(0)
-            - all_frames[split_idx].0
+        all_frames.last().map(|(t, _)| *t).unwrap_or(0) - all_frames[split_idx].0
     } else {
         0
     };
@@ -3033,11 +3031,10 @@ pub async fn list_admin_connection_tags(
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT connection_id, tag_id FROM admin_connection_tags",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let rows: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("SELECT connection_id, tag_id FROM admin_connection_tags")
+            .fetch_all(&db.pool)
+            .await?;
 
     let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for (conn_id, tag_id) in rows {

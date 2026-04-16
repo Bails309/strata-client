@@ -77,12 +77,10 @@ pub async fn me(
 
     // Check whether the user has accepted the terms / disclaimer
     let terms_row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<i32>)> =
-        sqlx::query_as(
-            "SELECT terms_accepted_at, terms_accepted_version FROM users WHERE id = $1",
-        )
-        .bind(user.id)
-        .fetch_optional(&db.pool)
-        .await?;
+        sqlx::query_as("SELECT terms_accepted_at, terms_accepted_version FROM users WHERE id = $1")
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await?;
     let (terms_accepted_at, terms_accepted_version) = terms_row.unwrap_or((None, None));
 
     Ok(Json(json!({
@@ -117,11 +115,13 @@ pub async fn accept_terms(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
     let version = body.get("version").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-    sqlx::query("UPDATE users SET terms_accepted_at = NOW(), terms_accepted_version = $2 WHERE id = $1")
-        .bind(user.id)
-        .bind(version)
-        .execute(&db.pool)
-        .await?;
+    sqlx::query(
+        "UPDATE users SET terms_accepted_at = NOW(), terms_accepted_version = $2 WHERE id = $1",
+    )
+    .bind(user.id)
+    .bind(version)
+    .execute(&db.pool)
+    .await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -282,7 +282,9 @@ pub async fn create_tag(
     let db = require_running(&state).await?;
     let name = body.name.trim().to_string();
     if name.is_empty() || name.len() > 50 {
-        return Err(AppError::Validation("Tag name must be 1-50 characters".into()));
+        return Err(AppError::Validation(
+            "Tag name must be 1-50 characters".into(),
+        ));
     }
     let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
     let tag: UserTag = sqlx::query_as(
@@ -314,7 +316,9 @@ pub async fn update_tag(
     if let Some(ref n) = body.name {
         let n = n.trim();
         if n.is_empty() || n.len() > 50 {
-            return Err(AppError::Validation("Tag name must be 1-50 characters".into()));
+            return Err(AppError::Validation(
+                "Tag name must be 1-50 characters".into(),
+            ));
         }
     }
     let tag: UserTag = sqlx::query_as(
@@ -362,12 +366,11 @@ pub async fn list_connection_tags(
         tag_id: Uuid,
     }
 
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT connection_id, tag_id FROM user_connection_tags WHERE user_id = $1",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows: Vec<Row> =
+        sqlx::query_as("SELECT connection_id, tag_id FROM user_connection_tags WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_all(&db.pool)
+            .await?;
 
     let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for r in rows {
@@ -393,13 +396,11 @@ pub async fn set_connection_tags(
     let db = require_running(&state).await?;
 
     // Delete existing tags for this connection
-    sqlx::query(
-        "DELETE FROM user_connection_tags WHERE user_id = $1 AND connection_id = $2",
-    )
-    .bind(user.id)
-    .bind(body.connection_id)
-    .execute(&db.pool)
-    .await?;
+    sqlx::query("DELETE FROM user_connection_tags WHERE user_id = $1 AND connection_id = $2")
+        .bind(user.id)
+        .bind(body.connection_id)
+        .execute(&db.pool)
+        .await?;
 
     // Insert new tags
     for tag_id in &body.tag_ids {
@@ -424,7 +425,11 @@ pub async fn get_display_settings(
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let keys = ["display_timezone", "display_time_format", "display_date_format"];
+    let keys = [
+        "display_timezone",
+        "display_time_format",
+        "display_date_format",
+    ];
     let mut map = serde_json::Map::new();
     for key in &keys {
         if let Some(val) = settings::get(&db.pool, key).await? {
@@ -441,10 +446,9 @@ pub async fn list_admin_tags(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<UserTag>>, AppError> {
     let db = require_running(&state).await?;
-    let tags: Vec<UserTag> =
-        sqlx::query_as("SELECT id, name, color FROM admin_tags ORDER BY name")
-            .fetch_all(&db.pool)
-            .await?;
+    let tags: Vec<UserTag> = sqlx::query_as("SELECT id, name, color FROM admin_tags ORDER BY name")
+        .fetch_all(&db.pool)
+        .await?;
     Ok(Json(tags))
 }
 
@@ -1245,11 +1249,10 @@ pub async fn my_recording_stream(
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |socket| async move {
-            if let Err(e) =
-                crate::routes::admin::recordings::handle_user_recording_stream(
-                    socket, state, recording, seek_ms, speed,
-                )
-                .await
+            if let Err(e) = crate::routes::admin::recordings::handle_user_recording_stream(
+                socket, state, recording, seek_ms, speed,
+            )
+            .await
             {
                 tracing::error!("User recording stream error: {e}");
             }

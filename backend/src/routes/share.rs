@@ -19,6 +19,7 @@ use axum::extract::Extension;
 /// If both credential username and password are present, use them both.
 /// If only password is found (no stored username), fall back to the
 /// owner's username from the users table.  Otherwise return (None, None).
+#[cfg(test)]
 fn resolve_final_credentials(
     cred_username: Option<String>,
     cred_password: Option<String>,
@@ -184,11 +185,7 @@ pub async fn revoke_share(
 // ── Join a shared connection (public, no auth required) ──────────────
 
 #[derive(Deserialize, Default)]
-pub struct SharedTunnelQuery {
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub dpi: Option<u32>,
-}
+pub struct SharedTunnelQuery {}
 
 pub async fn ws_shared_tunnel(
     ws: WebSocketUpgrade,

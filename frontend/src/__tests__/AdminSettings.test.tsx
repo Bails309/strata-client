@@ -50,6 +50,13 @@ vi.mock('../api', () => ({
   getAdSyncRuns: vi.fn(),
   getSessionStats: vi.fn(),
   getRecordings: vi.fn(),
+  getAdminTagsAdmin: vi.fn(),
+  createAdminTag: vi.fn(),
+  updateAdminTag: vi.fn(),
+  deleteAdminTag: vi.fn(),
+  getAdminConnectionTagsAdmin: vi.fn(),
+  setAdminConnectionTags: vi.fn(),
+  getDisplaySettings: vi.fn(),
 }));
 
 vi.mock('../contexts/SettingsContext', () => ({
@@ -82,6 +89,7 @@ import {
   triggerAdSync, testAdSyncConnection, getAdSyncRuns,
   updateAuthMethods, updateSettings, updateRoleMappings, getSessionStats, getRecordings,
   updateUser,
+  getAdminTagsAdmin, createAdminTag, deleteAdminTag, getAdminConnectionTagsAdmin,
 } from '../api';
 
 const healthOk = {
@@ -1937,5 +1945,185 @@ describe('ConnectionForm protocol sections', () => {
     const cancelButtons = screen.getAllByText('Cancel');
     await user.click(cancelButtons[cancelButtons.length - 1]);
     expect(screen.queryByPlaceholderText('My Server')).not.toBeInTheDocument();
+  });
+});
+
+describe('DisplayTab', () => {
+  beforeEach(() => {
+    setupDefaults();
+    vi.mocked(getSettings).mockResolvedValue({
+      display_timezone: 'America/New_York',
+      display_date_format: 'MM/DD/YYYY',
+      display_time_format: 'hh:mm:ss A',
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders Display Preferences heading', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Display'));
+    expect(await screen.findByText('Display Preferences')).toBeInTheDocument();
+  });
+
+  it('shows timezone label', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Display'));
+    expect(await screen.findByText('Display Timezone')).toBeInTheDocument();
+  });
+
+  it('shows date and time format labels', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Display'));
+    await screen.findByText('Display Preferences');
+    expect(screen.getByText('Date Format')).toBeInTheDocument();
+    expect(screen.getByText('Time Format')).toBeInTheDocument();
+  });
+
+  it('shows preview section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Display'));
+    expect(await screen.findByText('Preview')).toBeInTheDocument();
+  });
+
+  it('shows save button', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Display'));
+    expect(await screen.findByText('Save Display Settings')).toBeInTheDocument();
+  });
+
+  it('saves display settings', async () => {
+    vi.mocked(updateSettings).mockResolvedValue(undefined as any);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Display'));
+    await screen.findByText('Save Display Settings');
+    await user.click(screen.getByText('Save Display Settings'));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+  });
+});
+
+describe('TagsTab', () => {
+  beforeEach(() => {
+    setupDefaults();
+    vi.mocked(getConnections).mockResolvedValue([
+      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389 },
+    ] as any);
+    vi.mocked(getAdminTagsAdmin).mockResolvedValue([
+      { id: 't1', name: 'Production', color: '#ef4444' },
+    ] as any);
+    vi.mocked(getAdminConnectionTagsAdmin).mockResolvedValue({ c1: ['t1'] });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders Global Tags heading', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    expect(await screen.findByText('Global Tags')).toBeInTheDocument();
+  });
+
+  it('shows existing tags', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    expect(await screen.findByText('Production')).toBeInTheDocument();
+  });
+
+  it('shows Create Tag button', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    expect(await screen.findByText('Create Tag')).toBeInTheDocument();
+  });
+
+  it('creates a new tag', async () => {
+    vi.mocked(createAdminTag).mockResolvedValue({ id: 't2', name: 'Staging', color: '#3b82f6' } as any);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    await screen.findByText('Production');
+    const input = screen.getByPlaceholderText(/Production/);
+    await user.type(input, 'Staging');
+    await user.click(screen.getByText('Create Tag'));
+    await waitFor(() => expect(createAdminTag).toHaveBeenCalledWith('Staging', expect.any(String)));
+  });
+
+  it('shows empty state when no tags', async () => {
+    vi.mocked(getAdminTagsAdmin).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    expect(await screen.findByText('No global tags created yet.')).toBeInTheDocument();
+  });
+
+  it('deletes a tag', async () => {
+    vi.mocked(deleteAdminTag).mockResolvedValue(undefined as any);
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    await screen.findByText('Production');
+    await user.click(screen.getByText('Delete'));
+    await waitFor(() => expect(deleteAdminTag).toHaveBeenCalledWith('t1'));
+  });
+
+  it('shows error on load failure', async () => {
+    vi.mocked(getAdminTagsAdmin).mockRejectedValue(new Error('fail'));
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    expect(await screen.findByText('Failed to load tags')).toBeInTheDocument();
+  });
+
+  it('shows connection count for a tag', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    expect(await screen.findByText('1 connection')).toBeInTheDocument();
+  });
+
+  it('shows Edit and Assign buttons', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    await screen.findByText('Production');
+    expect(screen.getByText('Edit')).toBeInTheDocument();
+    expect(screen.getByText('Assign')).toBeInTheDocument();
+  });
+
+  it('opens edit mode for a tag', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    await screen.findByText('Production');
+    await user.click(screen.getByText('Edit'));
+    // Should show Save and Cancel buttons in edit mode
+    expect(screen.getByText('Save')).toBeInTheDocument();
+    expect(screen.getByText('Cancel')).toBeInTheDocument();
+  });
+
+  it('cancels edit mode', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    await screen.findByText('Production');
+    await user.click(screen.getByText('Edit'));
+    await user.click(screen.getByText('Cancel'));
+    // Back to normal mode
+    expect(screen.getByText('Edit')).toBeInTheDocument();
+  });
+
+  it('shows Assign panel when clicking Assign', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Tags'));
+    await screen.findByText('Production');
+    await user.click(screen.getByText('Assign'));
+    // Should show the connection assignment panel with Server A
+    expect(await screen.findByText('Server A')).toBeInTheDocument();
   });
 });

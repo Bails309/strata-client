@@ -694,7 +694,7 @@ fn parse_nvrspeed(msg: &str) -> Option<f64> {
     value
         .parse::<f64>()
         .ok()
-        .filter(|&v| v >= 0.25 && v <= 16.0)
+        .filter(|&v| (0.25..=16.0).contains(&v))
 }
 
 /// Query parameters for recording stream endpoints.

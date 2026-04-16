@@ -2078,7 +2078,7 @@ pub async fn observe_session_ws(
     // The paced replay window starts at this offset from the end.
     // Everything before it is base-state that gets dumped instantly.
     let is_live_only = offset == 0;
-    let offset_ms = (offset as u64) * 1000;
+    let offset_ms = offset * 1000;
     let offset_boundary_ms = total_buffer_ms.saturating_sub(offset_ms);
 
     // Split frames into base-state dump and paced replay.
@@ -2134,8 +2134,7 @@ pub async fn observe_session_ws(
             // the user sees the screen state at the rewind point.
             let mut last_sync_inst: Option<String> = None;
 
-            for i in 0..split_idx {
-                let (_, ref frame) = all_frames[i];
+            for (_, frame) in all_frames.iter().take(split_idx) {
 
                 // Strip sync instructions from the chunk (a single frame
                 // can contain multiple Guacamole instructions like
@@ -2153,10 +2152,10 @@ pub async fn observe_session_ws(
                     }
                 }
 
-                if !stripped.is_empty() {
-                    if socket.send(Message::Text(stripped)).await.is_err() {
-                        return;
-                    }
+                if !stripped.is_empty()
+                    && socket.send(Message::Text(stripped)).await.is_err()
+                {
+                    return;
                 }
             }
 
@@ -2269,11 +2268,11 @@ pub async fn observe_session_ws(
                                             stripped.push_str(inst);
                                         }
                                     }
-                                    if !stripped.is_empty() {
-                                        if socket.send(Message::Text(stripped)).await.is_err() {
-                                            send_ok = false;
-                                            break;
-                                        }
+                                    if !stripped.is_empty()
+                                        && socket.send(Message::Text(stripped)).await.is_err()
+                                    {
+                                        send_ok = false;
+                                        break;
                                     }
                                 }
                                 if !send_ok { break; }
@@ -3321,6 +3320,7 @@ mod tests {
             can_create_connections: false,
             can_create_connection_folders: false,
             can_create_sharing_profiles: false,
+            can_view_sessions: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "admin");
@@ -4040,6 +4040,7 @@ mod tests {
             can_create_connections: true,
             can_create_connection_folders: true,
             can_create_sharing_profiles: true,
+            can_view_sessions: true,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["can_manage_system"], true);

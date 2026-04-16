@@ -314,10 +314,10 @@ pub async fn ws_shared_tunnel(
                         stripped.push_str(inst);
                     }
                 }
-                if !stripped.is_empty() {
-                    if socket.send(Message::Text(stripped)).await.is_err() {
-                        return;
-                    }
+                if !stripped.is_empty()
+                    && socket.send(Message::Text(stripped)).await.is_err()
+                {
+                    return;
                 }
             }
 
@@ -362,11 +362,11 @@ pub async fn ws_shared_tunnel(
                                             stripped.push_str(inst);
                                         }
                                     }
-                                    if !stripped.is_empty() {
-                                        if socket.send(Message::Text(stripped)).await.is_err() {
-                                            send_ok = false;
-                                            break;
-                                        }
+                                    if !stripped.is_empty()
+                                        && socket.send(Message::Text(stripped)).await.is_err()
+                                    {
+                                        send_ok = false;
+                                        break;
                                     }
                                 }
                                 if !send_ok { break; }
@@ -471,27 +471,20 @@ mod tests {
     // ── SharedTunnelQuery deserialization ───────────────────────────
     #[test]
     fn shared_tunnel_query_defaults() {
-        let q: SharedTunnelQuery = serde_json::from_str("{}").unwrap();
-        assert!(q.width.is_none());
-        assert!(q.height.is_none());
-        assert!(q.dpi.is_none());
+        let _q: SharedTunnelQuery = serde_json::from_str("{}").unwrap();
+        // After NVR rewrite the struct has no fields; just verify it deserializes.
     }
 
     #[test]
-    fn shared_tunnel_query_with_values() {
-        let q: SharedTunnelQuery =
+    fn shared_tunnel_query_with_extra_fields_ignored() {
+        // Extra fields are silently ignored by serde default
+        let _q: SharedTunnelQuery =
             serde_json::from_str(r#"{"width":1920,"height":1080,"dpi":144}"#).unwrap();
-        assert_eq!(q.width.unwrap(), 1920);
-        assert_eq!(q.height.unwrap(), 1080);
-        assert_eq!(q.dpi.unwrap(), 144);
     }
 
     #[test]
     fn shared_tunnel_query_partial() {
-        let q: SharedTunnelQuery = serde_json::from_str(r#"{"width":2560}"#).unwrap();
-        assert_eq!(q.width.unwrap(), 2560);
-        assert!(q.height.is_none());
-        assert!(q.dpi.is_none());
+        let _q: SharedTunnelQuery = serde_json::from_str(r#"{"width":2560}"#).unwrap();
     }
 
     #[test]
@@ -547,20 +540,14 @@ mod tests {
 
     #[test]
     fn shared_tunnel_query_all_zeros() {
-        let q: SharedTunnelQuery =
+        let _q: SharedTunnelQuery =
             serde_json::from_str(r#"{"width":0,"height":0,"dpi":0}"#).unwrap();
-        assert_eq!(q.width.unwrap(), 0);
-        assert_eq!(q.height.unwrap(), 0);
-        assert_eq!(q.dpi.unwrap(), 0);
     }
 
     #[test]
     fn shared_tunnel_query_large_values() {
-        let q: SharedTunnelQuery =
+        let _q: SharedTunnelQuery =
             serde_json::from_str(r#"{"width":7680,"height":4320,"dpi":600}"#).unwrap();
-        assert_eq!(q.width.unwrap(), 7680);
-        assert_eq!(q.height.unwrap(), 4320);
-        assert_eq!(q.dpi.unwrap(), 600);
     }
 
     // ── ShareLinkResponse field access ─────────────────────────────

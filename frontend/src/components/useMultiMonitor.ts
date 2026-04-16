@@ -68,6 +68,9 @@ interface SecondaryWindow {
 /** Cached screen details — requested once on permission grant. */
 let cachedScreenDetails: MonitorLayout | null = null;
 
+/** Live ScreenDetails object — fires `screenschange` when monitors change. */
+let liveScreenDetails: any = null;
+
 /**
  * Map raw ScreenDetailed objects to ScreenInfo, falling back to
  * `window.screen` dimensions for any screen that reports 0 width/height.
@@ -131,15 +134,6 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
   const aggregateWidth = cursorX;
   const aggregateHeight = Math.max(...screens.map((s) => s.height));
 
-  console.log('[MultiMon] buildLayout:', {
-    positionsAvailable,
-    screenCount: screens.length,
-    screens: screens.map(s => ({ left: s.left, top: s.top, w: s.width, h: s.height, primary: s.isPrimary })),
-    tiles: tiles.map(t => ({ sliceX: t.sliceX, sliceY: t.sliceY, w: t.screen.width, h: t.screen.height, primary: t.screen.isPrimary })),
-    aggregateWidth,
-    aggregateHeight,
-  });
-
   return { screens, tiles, primary, primaryTile: primaryTile!, aggregateWidth, aggregateHeight };
 }
 
@@ -167,18 +161,34 @@ export function useMultiMonitor(
   // Caching the layout means enableMultiMonitor can be fully synchronous
   // (no await), which keeps the user-gesture context alive so the browser
   // allows opening multiple popups.
+  //
+  // We also listen for `screenschange` on the live ScreenDetails object
+  // so that the cache stays current when monitors are plugged in/out.
   useEffect(() => {
     if (!('getScreenDetails' in window)) return;
     setCanMultiMonitor(true);
 
+    function refreshCache() {
+      if (!liveScreenDetails) return;
+      const screens = mapScreenDetails(liveScreenDetails);
+      cachedScreenDetails = buildLayout(screens);
+    }
+
     // Pre-request permission (shows prompt once, browser remembers)
     (async () => {
       try {
-        const details = await (window as any).getScreenDetails();
-        const screens = mapScreenDetails(details);
-        cachedScreenDetails = buildLayout(screens);
+        liveScreenDetails = await (window as any).getScreenDetails();
+        refreshCache();
+        // Re-read the live object whenever monitors change
+        liveScreenDetails.addEventListener('screenschange', refreshCache);
       } catch { /* permission denied — canMultiMonitor stays true but enable will no-op */ }
     })();
+
+    return () => {
+      if (liveScreenDetails) {
+        liveScreenDetails.removeEventListener('screenschange', refreshCache);
+      }
+    };
   }, []);
 
   // ── Enable multi-monitor ──────────────────────────────────────────────
@@ -196,9 +206,14 @@ export function useMultiMonitor(
       // Async fallback — triggers permission prompt, next click uses cache
       (async () => {
         try {
-          const details = await (window as any).getScreenDetails();
-          const screens = mapScreenDetails(details);
+          liveScreenDetails = await (window as any).getScreenDetails();
+          const screens = mapScreenDetails(liveScreenDetails);
           cachedScreenDetails = buildLayout(screens);
+          liveScreenDetails.addEventListener('screenschange', () => {
+            if (liveScreenDetails) {
+              cachedScreenDetails = buildLayout(mapScreenDetails(liveScreenDetails));
+            }
+          });
         } catch { /* ignore */ }
       })();
       return;
@@ -264,14 +279,16 @@ export function useMultiMonitor(
 
       const idx = layout.tiles.indexOf(tile) + 1;
       const popup = window.open('about:blank', `strata-multimon-${sess.id}-${idx}`, features);
-      if (!popup) continue;
+      if (!popup) {
+        console.warn(`[MultiMon] Popup ${idx} blocked by browser. Try allowing popups for this site.`);
+        continue;
+      }
       popups.push({ popup, tile });
     }
 
     if (popups.length === 0) return; // All popups blocked
 
     // ── Request aggregate resolution from guacd ──
-    console.log('[MultiMon] sendSize:', layout.aggregateWidth, 'x', layout.aggregateHeight);
     client.sendSize(layout.aggregateWidth, layout.aggregateHeight);
 
     // ── Offset the display element so the primary region is visible ──
@@ -366,8 +383,6 @@ export function useMultiMonitor(
         }
       }, 500);
 
-      console.log(`[MultiMon] Secondary window ${idx}: sourceX=${sourceX}, sourceY=${sourceY}, sliceW=${screen.width}, sliceH=${screen.height}`);
-
       secondaryWindowsRef.current.push({
         win: popup,
         canvas,
@@ -387,16 +402,8 @@ export function useMultiMonitor(
     // so it always returns the current canvas even after a resize.
     const defaultLayer = display.getDefaultLayer();
 
-    let frameCount = 0;
     function renderLoop() {
       const srcCanvas = defaultLayer.getCanvas();
-      if (frameCount % 120 === 0) {
-        console.log(`[MultiMon] Frame ${frameCount}: srcCanvas=${srcCanvas.width}x${srcCanvas.height}, layer=${defaultLayer.width}x${defaultLayer.height}`);
-        for (const sw of secondaryWindowsRef.current) {
-          console.log(`  -> secondary: sourceX=${sw.sourceX}, sourceY=${sw.sourceY}, sliceW=${sw.sliceW}, sliceH=${sw.sliceH}, dstCanvas=${sw.canvas.width}x${sw.canvas.height}`);
-        }
-      }
-      frameCount++;
       for (const sw of secondaryWindowsRef.current) {
         if (sw.win.closed) continue;
         try {

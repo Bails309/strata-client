@@ -80,6 +80,7 @@ The central orchestrator. Responsibilities:
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
+- **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each
 - **Audit** — SHA-256 hash-chained append-only log
 
 ### 3. Frontend SPA
@@ -103,7 +104,7 @@ The frontend nginx container serves as the primary gateway for all external traf
 Pages:
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, and group view toggle (flat list or collapsible group headers)
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Keyboard, etc.) into a sleek right-side overlay, pop-out windows that persist across navigation, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with dynamic secondary window scaling and Brave/privacy-browser compatibility, expired credential renewal at connect time, and automatic redirect to the next active session when one ends.
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, pop-out windows that persist across navigation, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with live `screenschange` detection for hot-plugged monitors, dynamic secondary window scaling, and Brave/privacy-browser compatibility, Quick Share panel with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends.
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
@@ -227,6 +228,7 @@ strata-client/
 │       │   ├── setup.rs   First-boot initialisation
 │       │   ├── tunnel.rs  WebSocket tunnel upgrade
 │       │   ├── share.rs    Connection sharing (view/control modes)
+│       │   ├── files.rs   Quick Share temp file CDN (upload/download/list/delete)
 │       │   ├── tunnel.rs  WebSocket tunnel upgrade
 │       │   └── user.rs    User-facing endpoints
 │       └── services/      Business logic
@@ -240,6 +242,7 @@ strata-client/
 │           ├── recordings.rs  Recording config
 │           ├── session_registry.rs  NVR ring buffer + live session tracking
 │           ├── settings.rs    system_settings CRUD
+│           ├── file_store.rs  Session-scoped temporary file storage
 │           ├── vault.rs       Envelope encryption
 │           └── vault_provisioning.rs  Bundled Vault lifecycle
 ├── frontend/              React SPA + nginx gateway
@@ -253,7 +256,7 @@ strata-client/
 │   └── src/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
-│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, SessionTimeoutWarning, ThemeProvider, WhatsNewModal)
+│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, QuickShare, SessionTimeoutWarning, ThemeProvider, WhatsNewModal)
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Login, SetupWizard, SharedViewer)
 ├── guacd/                 Custom guacd build
 │   └── Dockerfile

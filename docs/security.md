@@ -77,10 +77,12 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/auth/login`, `/api/auth/sso/*` | None (public, rate-limited) |
 | `/api/auth/refresh` | None (public, validates `HttpOnly` refresh cookie) |
 | `/api/shared/tunnel/:token` | None (public, share-token validated; observes owner's live session via NVR broadcast; mode determines input forwarding) |
+| `/api/files/:token` (GET) | None (public, capability-based — the random UUID token is the authorization) |
 | `/api/auth/password` | `require_auth` |
 | `/api/admin/*` | `require_auth` + `require_admin` |
 | `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
+| `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` (delete = owner-only) |
 | `/api/user/sessions` | `require_auth` (filtered to own sessions) |
 | `/api/user/recordings` | `require_auth` (filtered to own recordings) |
 
@@ -347,6 +349,20 @@ The NVR feature maintains an in-memory ring buffer of Guacamole protocol frames 
 - **No persistence** — the buffer is held in process memory only. It is discarded when the session ends or the backend restarts. Sensitive content (e.g., screen images of a user's session) is never written to disk by the NVR feature.
 - **Admin-only** — the observe endpoint (`/api/admin/sessions/:id/observe`) is protected by `require_auth` + `require_admin` middleware. Non-admin users cannot list or observe sessions.
 - **Read-only** — admin observers receive display output only. Keyboard and mouse input from the observer is not forwarded to the target session.
+
+---
+
+## Quick Share (Temporary File CDN)
+
+Quick Share provides session-scoped temporary file hosting so users can transfer files into a remote desktop via a download URL.
+
+- **Capability-based access** — each uploaded file receives a cryptographically random UUID token. The download endpoint (`GET /api/files/:token`) is intentionally **unauthenticated**; the unguessable token is the sole authorization credential. This allows the remote desktop (which has no Strata session) to download the file.
+- **Session-scoped lifecycle** — files are bound to the active tunnel session. When the tunnel disconnects, all files for that session are automatically deleted from disk and memory. There is no persistent file storage.
+- **Upload authentication** — the upload (`POST /api/files/upload`), list (`GET /api/files/session/:session_id`), and delete (`DELETE /api/files/:token`) endpoints require a valid `Authorization: Bearer` token.
+- **Owner-only deletion** — only the user who uploaded a file can delete it. The backend compares `user.id` against the stored `user_id` on the file metadata.
+- **Size limits** — 500 MB per file, 20 files per session. The nginx reverse proxy `client_max_body_size` is set to `500M` to match.
+- **No directory traversal** — filenames are stored as metadata only; files are written to disk under their UUID token, preventing any path traversal attack.
+- **In-memory index** — file metadata is held in an `Arc<RwLock<HashMap>>` keyed by token. No database tables are involved, limiting the blast radius of any exploit to the current process lifetime.
 
 ---
 

@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.15.2',
+    subtitle: 'Quick Share & Bug Fixes',
+    sections: [
+      {
+        title: 'Quick Share',
+        description:
+          'Upload files from the Session Bar and get a random download URL to paste into the remote session\'s browser. Files are session-scoped and automatically deleted when the tunnel disconnects. Supports drag-and-drop, up to 20 files per session (500 MB each), and one-click copy-to-clipboard URLs.',
+      },
+      {
+        title: 'Multi-Monitor 3+ Screens Fix',
+        description:
+          'Connecting three or more monitors now correctly opens a popup for each secondary screen. The hook listens for the screenschange event so hot-plugged monitors are detected automatically.',
+      },
+      {
+        title: 'Quick Share Upload Fix',
+        description:
+          'Large file uploads (over 10 MB) no longer fail with a 413 error. The nginx reverse proxy body size limit now matches the backend\'s 500 MB cap.',
+      },
+      {
+        title: 'Disclaimer Scroll Fix',
+        description:
+          'The "I Accept" button on the Session Recording Disclaimer is no longer permanently disabled on screens tall enough to display the full content without scrolling.',
+      },
+    ],
+  },
+  {
     version: '0.15.0',
     subtitle: 'Multi-Monitor Improvements',
     sections: [

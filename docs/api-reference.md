@@ -945,6 +945,78 @@ Revoke a previously created share link.
 
 ---
 
+## Quick Share (Temporary File CDN)
+
+Session-scoped temporary file hosting. Upload a file and get a random, unguessable download URL to paste into the remote session's browser. Files are automatically deleted when the tunnel disconnects.
+
+**Limits:** 20 files per session, 500 MB per file.
+
+### `POST /api/files/upload`
+
+Upload a file via multipart form data. Requires authentication.
+
+**Content-Type**: `multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `session_id` | text | Yes | Active session ID to associate the file with |
+| `file` | file | Yes | Binary file payload |
+
+**Response** `200 OK`
+```json
+{
+  "token": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "filename": "report.pdf",
+  "size": 1048576,
+  "content_type": "application/pdf",
+  "download_url": "/api/files/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+### `GET /api/files/:token`
+
+Download a file. **This endpoint is intentionally unauthenticated** — the random UUID token serves as a capability. This allows the remote desktop (which has no Strata auth) to fetch the file.
+
+**Path Parameter**: `token` (UUID)
+
+**Response** `200 OK` — binary file with `Content-Disposition: attachment` header.
+
+**Response** `404 Not Found` — file not found or expired.
+
+### `GET /api/files/session/:session_id`
+
+List all files for a session. Requires authentication.
+
+**Path Parameter**: `session_id` (string)
+
+**Response** `200 OK`
+```json
+[
+  {
+    "token": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "filename": "report.pdf",
+    "size": 1048576,
+    "content_type": "application/pdf",
+    "download_url": "/api/files/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "created_at": "2026-04-16T12:00:00Z"
+  }
+]
+```
+
+### `DELETE /api/files/:token`
+
+Delete a file. Requires authentication and ownership (only the uploader can delete).
+
+**Path Parameter**: `token` (UUID)
+
+**Response** `200 OK`
+
+**Response** `403 Forbidden` — not the file owner.
+
+**Response** `404 Not Found` — file not found.
+
+---
+
 ## Error Responses
 
 All errors follow this format:

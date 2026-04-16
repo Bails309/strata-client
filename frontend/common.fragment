@@ -17,12 +17,12 @@ add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 server_tokens off;
 
-# Request size limits
-client_max_body_size 10M;
+# Request size limits (500 MB for Quick Share uploads)
+client_max_body_size 500M;
 client_body_buffer_size 128k;
 
 # Timeouts to prevent Slowloris
-client_body_timeout 10s;
+client_body_timeout 300s;
 client_header_timeout 10s;
 keepalive_timeout 15s;
 send_timeout 10s;

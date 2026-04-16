@@ -88,39 +88,51 @@ function mapScreenDetails(details: any): ScreenInfo[] {
 }
 
 /**
- * Build the aggregate layout by placing screens in a row: primary first,
- * then secondaries left-to-right by their physical position.
+ * Build the aggregate layout by placing screens in a horizontal row.
  *
- * This is independent of the physical `availLeft/availTop` values — which
- * Brave and other privacy-focused browsers may zero out — so the canvas
- * slice offsets are always correct.
+ * When physical positions are available (Chrome, Edge, etc.) screens are
+ * sorted by their `left` coordinate so the remote desktop layout matches
+ * the user's physical monitor arrangement — e.g. if the secondary is
+ * physically to the LEFT of the primary, it gets a lower sliceX.
+ *
+ * When all positions are zeroed (Brave / fingerprinting) we fall back to
+ * placing the primary first then secondaries cumulatively.
  */
 function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
   if (screens.length < 2) return null;
 
   const primary = screens.find((s) => s.isPrimary) || screens[0];
-  const secondaries = screens.filter((s) => s !== primary);
 
-  // Sort secondaries by physical left position (stable even if all report 0)
-  secondaries.sort((a, b) => a.left - b.left || a.top - b.top);
+  // Detect fingerprinted positions: every screen reports left=0, top=0.
+  const positionsAvailable = !screens.every((s) => s.left === 0 && s.top === 0);
 
-  // Place primary at x=0, then secondaries left-to-right after it
+  let ordered: ScreenInfo[];
+  if (positionsAvailable) {
+    // Real positions: sort all screens by physical x coordinate so the
+    // remote desktop left-to-right order matches the physical layout.
+    ordered = [...screens].sort((a, b) => a.left - b.left || a.top - b.top);
+  } else {
+    // Fingerprinted: primary first, then secondaries.
+    const secondaries = screens.filter((s) => s !== primary);
+    ordered = [primary, ...secondaries];
+  }
+
   const tiles: ScreenTile[] = [];
   let cursorX = 0;
+  let primaryTile: ScreenTile | null = null;
 
-  const primaryTile: ScreenTile = { screen: primary, sliceX: cursorX, sliceY: 0 };
-  tiles.push(primaryTile);
-  cursorX += primary.width;
-
-  for (const sec of secondaries) {
-    tiles.push({ screen: sec, sliceX: cursorX, sliceY: 0 });
-    cursorX += sec.width;
+  for (const screen of ordered) {
+    const tile: ScreenTile = { screen, sliceX: cursorX, sliceY: 0 };
+    tiles.push(tile);
+    if (screen === primary) primaryTile = tile;
+    cursorX += screen.width;
   }
 
   const aggregateWidth = cursorX;
   const aggregateHeight = Math.max(...screens.map((s) => s.height));
 
   console.log('[MultiMon] buildLayout:', {
+    positionsAvailable,
     screenCount: screens.length,
     screens: screens.map(s => ({ left: s.left, top: s.top, w: s.width, h: s.height, primary: s.isPrimary })),
     tiles: tiles.map(t => ({ sliceX: t.sliceX, sliceY: t.sliceY, w: t.screen.width, h: t.screen.height, primary: t.screen.isPrimary })),
@@ -128,7 +140,7 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
     aggregateHeight,
   });
 
-  return { screens, tiles, primary, primaryTile, aggregateWidth, aggregateHeight };
+  return { screens, tiles, primary, primaryTile: primaryTile!, aggregateWidth, aggregateHeight };
 }
 
 export function useMultiMonitor(
@@ -312,12 +324,20 @@ export function useMultiMonitor(
       popup.addEventListener('resize', syncCanvasSize);
 
       // ── Mouse input with coordinate offset ──
+      // Guacamole.Mouse reports CSS pixel coordinates relative to the
+      // canvas element.  When the canvas is CSS-scaled (width/height:100%)
+      // the CSS size may differ from the remote pixel slice dimensions,
+      // so we scale before adding the tile offset.
+      const sliceW = screen.width;
+      const sliceH = screen.height;
       const mouse = new Guacamole.Mouse(canvas);
       mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
         const st = e.state;
+        const cssW = canvas.clientWidth || sliceW;
+        const cssH = canvas.clientHeight || sliceH;
         const remoteState = new Guacamole.Mouse.State(
-          st.x + sourceX,
-          st.y + sourceY,
+          Math.round(st.x * sliceW / cssW) + sourceX,
+          Math.round(st.y * sliceH / cssH) + sourceY,
           st.left, st.middle, st.right, st.up, st.down,
         );
         client.sendMouseState(remoteState, false);

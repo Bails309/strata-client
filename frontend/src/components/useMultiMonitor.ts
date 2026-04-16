@@ -8,17 +8,22 @@ import { createWinKeyProxy } from '../utils/winKeyProxy';
  *
  * When enabled, the Guacamole session is resized to span the aggregate
  * bounding box of all detected screens.  The main window clips to the
- * primary monitor's region while secondary browser windows each render
- * their slice of the remote desktop via requestAnimationFrame + drawImage.
+ * primary monitor's region (via negative marginLeft on the display element)
+ * while secondary browser windows each render their slice of the remote
+ * desktop via requestAnimationFrame + drawImage from the display element.
  *
  * Input (mouse / keyboard) in secondary windows is offset-translated so
  * that coordinates map correctly to the aggregate remote resolution.
+ * The main window mouse works automatically — the display element offset
+ * means getBoundingClientRect() shifts, so Guacamole.Mouse coordinates
+ * naturally include the primary region offset.
  *
  * Requires the Window Management API (Chromium 100+, `getScreenDetails()`).
  * Gracefully degrades to a no-op on unsupported browsers.
  */
 
 interface ScreenInfo {
+  /** Physical screen position — used for window.open() placement only */
   left: number;
   top: number;
   width: number;
@@ -26,13 +31,22 @@ interface ScreenInfo {
   isPrimary: boolean;
 }
 
+/** Computed tile in the aggregate virtual display */
+interface ScreenTile {
+  screen: ScreenInfo;
+  /** X offset into the aggregate remote desktop (in remote pixels) */
+  sliceX: number;
+  /** Y offset into the aggregate remote desktop (in remote pixels) */
+  sliceY: number;
+}
+
 interface MonitorLayout {
   screens: ScreenInfo[];
+  tiles: ScreenTile[];
   primary: ScreenInfo;
+  primaryTile: ScreenTile;
   aggregateWidth: number;
   aggregateHeight: number;
-  originX: number;
-  originY: number;
 }
 
 interface SecondaryWindow {
@@ -49,6 +63,72 @@ interface SecondaryWindow {
   sliceH: number;
   keyboard: Guacamole.Keyboard;
   mouse: Guacamole.Mouse;
+}
+
+/** Cached screen details — requested once on permission grant. */
+let cachedScreenDetails: MonitorLayout | null = null;
+
+/**
+ * Map raw ScreenDetailed objects to ScreenInfo, falling back to
+ * `window.screen` dimensions for any screen that reports 0 width/height.
+ * This handles Brave (and similar) browsers that zero out `availWidth` /
+ * `availHeight` in the `getScreenDetails()` API for fingerprinting
+ * protection.
+ */
+function mapScreenDetails(details: any): ScreenInfo[] {
+  const fallbackW = window.screen.availWidth;
+  const fallbackH = window.screen.availHeight;
+  return details.screens.map((s: any) => ({
+    left: s.availLeft ?? 0,
+    top: s.availTop ?? 0,
+    width: (s.availWidth > 0 ? s.availWidth : fallbackW),
+    height: (s.availHeight > 0 ? s.availHeight : fallbackH),
+    isPrimary: !!s.isPrimary,
+  }));
+}
+
+/**
+ * Build the aggregate layout by placing screens in a row: primary first,
+ * then secondaries left-to-right by their physical position.
+ *
+ * This is independent of the physical `availLeft/availTop` values — which
+ * Brave and other privacy-focused browsers may zero out — so the canvas
+ * slice offsets are always correct.
+ */
+function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
+  if (screens.length < 2) return null;
+
+  const primary = screens.find((s) => s.isPrimary) || screens[0];
+  const secondaries = screens.filter((s) => s !== primary);
+
+  // Sort secondaries by physical left position (stable even if all report 0)
+  secondaries.sort((a, b) => a.left - b.left || a.top - b.top);
+
+  // Place primary at x=0, then secondaries left-to-right after it
+  const tiles: ScreenTile[] = [];
+  let cursorX = 0;
+
+  const primaryTile: ScreenTile = { screen: primary, sliceX: cursorX, sliceY: 0 };
+  tiles.push(primaryTile);
+  cursorX += primary.width;
+
+  for (const sec of secondaries) {
+    tiles.push({ screen: sec, sliceX: cursorX, sliceY: 0 });
+    cursorX += sec.width;
+  }
+
+  const aggregateWidth = cursorX;
+  const aggregateHeight = Math.max(...screens.map((s) => s.height));
+
+  console.log('[MultiMon] buildLayout:', {
+    screenCount: screens.length,
+    screens: screens.map(s => ({ left: s.left, top: s.top, w: s.width, h: s.height, primary: s.isPrimary })),
+    tiles: tiles.map(t => ({ sliceX: t.sliceX, sliceY: t.sliceY, w: t.screen.width, h: t.screen.height, primary: t.screen.isPrimary })),
+    aggregateWidth,
+    aggregateHeight,
+  });
+
+  return { screens, tiles, primary, primaryTile, aggregateWidth, aggregateHeight };
 }
 
 export function useMultiMonitor(
@@ -71,64 +151,97 @@ export function useMultiMonitor(
     setIsMultiMonitor(!!session?._multiMonitor);
   }, [session]);
 
-  // Feature-detect Window Management API
+  // Feature-detect Window Management API and pre-request permission.
+  // Caching the layout means enableMultiMonitor can be fully synchronous
+  // (no await), which keeps the user-gesture context alive so the browser
+  // allows opening multiple popups.
   useEffect(() => {
-    setCanMultiMonitor('getScreenDetails' in window);
+    if (!('getScreenDetails' in window)) return;
+    setCanMultiMonitor(true);
+
+    // Pre-request permission (shows prompt once, browser remembers)
+    (async () => {
+      try {
+        const details = await (window as any).getScreenDetails();
+        const screens = mapScreenDetails(details);
+        cachedScreenDetails = buildLayout(screens);
+      } catch { /* permission denied — canMultiMonitor stays true but enable will no-op */ }
+    })();
   }, []);
 
   // ── Enable multi-monitor ──────────────────────────────────────────────
-  const enableMultiMonitor = useCallback(async () => {
+  // This is intentionally synchronous (no await) so that all window.open()
+  // calls happen within the user-gesture context and aren't popup-blocked.
+  const enableMultiMonitor = useCallback(() => {
     if (!session || !containerRef.current || isMultiMonitor) return;
-    // Don't combine with pop-out
     if (session.isPoppedOut) return;
+
+    // Use cached layout (pre-requested on mount). If not yet available,
+    // fall back to a one-shot async request — the first click may only
+    // open 1 popup (browser popup blocker) but subsequent clicks work.
+    let layout = cachedScreenDetails;
+    if (!layout) {
+      // Async fallback — triggers permission prompt, next click uses cache
+      (async () => {
+        try {
+          const details = await (window as any).getScreenDetails();
+          const screens = mapScreenDetails(details);
+          cachedScreenDetails = buildLayout(screens);
+        } catch { /* ignore */ }
+      })();
+      return;
+    }
 
     const sess = session;
     const client = sess.client;
     const display = client.getDisplay();
+    const displayEl = sess.displayEl;
 
-    // 1. Detect screens
-    let layout: MonitorLayout;
-    try {
-      const details = await (window as any).getScreenDetails();
-      const screens: ScreenInfo[] = details.screens.map((s: any) => ({
-        left: s.availLeft,
-        top: s.availTop,
-        width: s.availWidth,
-        height: s.availHeight,
-        isPrimary: s.isPrimary,
-      }));
+    // Override the primary screen dimensions with the actual container size.
+    // In single-monitor mode, sendSize(containerW, containerH) makes the
+    // remote match the viewport at 1:1 scale. We preserve that behaviour
+    // for the primary slice — otherwise the physical screen resolution
+    // (often larger than the browser viewport) causes heavy down-scaling.
+    const cw = containerRef.current!.clientWidth;
+    const ch = containerRef.current!.clientHeight;
+    const origPrimary = layout.primary;
+    const adjustedScreens: ScreenInfo[] = layout.screens.map((s) =>
+      s === origPrimary ? { ...s, width: cw, height: ch } : s,
+    );
+    const adjustedLayout = buildLayout(adjustedScreens);
+    if (!adjustedLayout) return;
+    layout = adjustedLayout;
 
-      if (screens.length < 2) return; // Only one screen
-
-      const primary = screens.find((s) => s.isPrimary) || screens[0];
-      const originX = Math.min(...screens.map((s) => s.left));
-      const originY = Math.min(...screens.map((s) => s.top));
-      const aggregateWidth = Math.max(...screens.map((s) => s.left + s.width)) - originX;
-      const aggregateHeight = Math.max(...screens.map((s) => s.top + s.height)) - originY;
-
-      layout = { screens, primary, aggregateWidth, aggregateHeight, originX, originY };
-    } catch {
-      return; // Permission denied or API unavailable
-    }
-
-    // 2. Save original size for restoration
+    // Save original size for restoration
     originalSizeRef.current = {
       width: display.getWidth(),
       height: display.getHeight(),
     };
     layoutRef.current = layout;
 
-    // 3. Request aggregate resolution from guacd
-    client.sendSize(layout.aggregateWidth, layout.aggregateHeight);
+    // ── Open ALL secondary windows synchronously (user-gesture context) ──
+    // Use the tile layout (computed cumulative offsets) for canvas slicing,
+    // but use the physical screen positions for window.open() placement.
+    const secondaryTiles = layout.tiles.filter((t) => t !== layout.primaryTile);
+    const popups: { popup: Window; tile: ScreenTile }[] = [];
 
-    // 4. Open secondary windows and set up canvas slicing + input
-    const defaultLayer = display.getDefaultLayer();
-    const secondaryScreens = layout.screens.filter((s) => s !== layout.primary);
+    // Detect fingerprinted positions: if ALL non-primary screens report
+    // left=0 and top=0, Brave (or similar) has zeroed them out. In that
+    // case, estimate placement from cumulative tile offsets.
+    const nonPrimary = layout.screens.filter((s) => s !== layout.primary);
+    const positionsFingerprinted = nonPrimary.length > 0 &&
+      nonPrimary.every((s) => s.left === 0 && s.top === 0);
 
-    for (const screen of secondaryScreens) {
+    for (const tile of secondaryTiles) {
+      const screen = tile.screen;
+      // Use physical position if available, otherwise tile offset.
+      // tile.sliceX is the cumulative width of preceding screens, which
+      // equals the physical x-coordinate for standard horizontal layouts.
+      const popupLeft = positionsFingerprinted ? tile.sliceX : screen.left;
+      const popupTop = positionsFingerprinted ? tile.sliceY : screen.top;
       const features = [
-        `left=${screen.left}`,
-        `top=${screen.top}`,
+        `left=${popupLeft}`,
+        `top=${popupTop}`,
         `width=${screen.width}`,
         `height=${screen.height}`,
         'menubar=no',
@@ -137,29 +250,66 @@ export function useMultiMonitor(
         'status=no',
       ].join(',');
 
-      const idx = layout.screens.indexOf(screen) + 1;
+      const idx = layout.tiles.indexOf(tile) + 1;
       const popup = window.open('about:blank', `strata-multimon-${sess.id}-${idx}`, features);
       if (!popup) continue;
+      popups.push({ popup, tile });
+    }
 
+    if (popups.length === 0) return; // All popups blocked
+
+    // ── Request aggregate resolution from guacd ──
+    console.log('[MultiMon] sendSize:', layout.aggregateWidth, 'x', layout.aggregateHeight);
+    client.sendSize(layout.aggregateWidth, layout.aggregateHeight);
+
+    // ── Offset the display element so the primary region is visible ──
+    // The container has overflow:hidden so only primaryW x primaryH is shown.
+    // The primary tile is always at sliceX=0 (placed first in buildLayout),
+    // so no marginLeft offset is needed. If the layout changes in future
+    // to support arbitrary primary placement, the margin would be:
+    //   marginLeft = -(primaryTile.sliceX * scale)
+    const scale = display.getWidth() > 0
+      ? Math.min(containerRef.current!.clientWidth / layout.primary.width,
+                  containerRef.current!.clientHeight / layout.primary.height)
+      : 1;
+    displayEl.style.marginLeft = `-${layout.primaryTile.sliceX * scale}px`;
+    displayEl.style.marginTop = `-${layout.primaryTile.sliceY * scale}px`;
+
+    // ── Configure each secondary window ──
+    for (const { popup, tile } of popups) {
+      const screen = tile.screen;
+      const sourceX = tile.sliceX;
+      const sourceY = tile.sliceY;
+      const idx = layout.tiles.indexOf(tile) + 1;
       popup.document.title = `${sess.name} — Monitor ${idx}`;
       const body = popup.document.body;
       body.style.margin = '0';
       body.style.padding = '0';
       body.style.overflow = 'hidden';
       body.style.background = '#000';
-      body.style.cursor = 'none';
 
       const canvas = popup.document.createElement('canvas');
       canvas.width = screen.width;
       canvas.height = screen.height;
       canvas.style.display = 'block';
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
       body.appendChild(canvas);
 
       const ctx = canvas.getContext('2d')!;
 
-      // Source coordinates: this screen's offset relative to the aggregate origin
-      const sourceX = screen.left - layout.originX;
-      const sourceY = screen.top - layout.originY;
+      // Resize the canvas backing store when the popup window is resized.
+      // The slice coordinates (remote pixels) stay the same — only the
+      // local canvas resolution changes so the image fills the window.
+      function syncCanvasSize() {
+        const w = popup.innerWidth;
+        const h = popup.innerHeight;
+        if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+      }
+      popup.addEventListener('resize', syncCanvasSize);
 
       // ── Mouse input with coordinate offset ──
       const mouse = new Guacamole.Mouse(canvas);
@@ -189,10 +339,14 @@ export function useMultiMonitor(
       }, true);
 
       // Handle secondary window close → teardown all multi-monitor
-      popup.addEventListener('pagehide', () => {
-        // Use setTimeout to avoid recursive state-change during event
-        setTimeout(() => disableMultiMonitor(), 0);
-      });
+      const pollId = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(pollId);
+          disableMultiMonitor();
+        }
+      }, 500);
+
+      console.log(`[MultiMon] Secondary window ${idx}: sourceX=${sourceX}, sourceY=${sourceY}, sliceW=${screen.width}, sliceH=${screen.height}`);
 
       secondaryWindowsRef.current.push({
         win: popup,
@@ -207,16 +361,29 @@ export function useMultiMonitor(
       });
     }
 
-    // 5. Start the render loop — copies slices from the default layer canvas
+    // ── Render loop ──
+    // Read from the default layer's canvas via getCanvas() each frame.
+    // getCanvas() is a closure over the Layer's private canvas variable,
+    // so it always returns the current canvas even after a resize.
+    const defaultLayer = display.getDefaultLayer();
+
+    let frameCount = 0;
     function renderLoop() {
-      const srcCanvas = defaultLayer.canvas;
+      const srcCanvas = defaultLayer.getCanvas();
+      if (frameCount % 120 === 0) {
+        console.log(`[MultiMon] Frame ${frameCount}: srcCanvas=${srcCanvas.width}x${srcCanvas.height}, layer=${defaultLayer.width}x${defaultLayer.height}`);
+        for (const sw of secondaryWindowsRef.current) {
+          console.log(`  -> secondary: sourceX=${sw.sourceX}, sourceY=${sw.sourceY}, sliceW=${sw.sliceW}, sliceH=${sw.sliceH}, dstCanvas=${sw.canvas.width}x${sw.canvas.height}`);
+        }
+      }
+      frameCount++;
       for (const sw of secondaryWindowsRef.current) {
         if (sw.win.closed) continue;
         try {
           sw.ctx.drawImage(
             srcCanvas,
             sw.sourceX, sw.sourceY, sw.sliceW, sw.sliceH,
-            0, 0, sw.sliceW, sw.sliceH,
+            0, 0, sw.canvas.width, sw.canvas.height,
           );
         } catch {
           // Canvas tainted or window closed — skip this frame
@@ -226,7 +393,7 @@ export function useMultiMonitor(
     }
     rafIdRef.current = requestAnimationFrame(renderLoop);
 
-    // 6. Store state on the session object (survives unmount/remount)
+    // ── Store state (survives unmount/remount) ──
     const cleanup = () => {
       if (rafIdRef.current) {
         cancelAnimationFrame(rafIdRef.current);
@@ -244,6 +411,9 @@ export function useMultiMonitor(
         }
       }
       secondaryWindowsRef.current = [];
+      // Reset display element offset
+      displayEl.style.marginLeft = '';
+      displayEl.style.marginTop = '';
     };
 
     sess._multiMonitor = {
@@ -259,7 +429,7 @@ export function useMultiMonitor(
   const disableMultiMonitor = useCallback(() => {
     if (!session) return;
 
-    // Tear down secondary windows
+    // Tear down secondary windows and reset display offset
     if (session._multiMonitor) {
       session._multiMonitor.cleanup();
       session._multiMonitor = undefined;

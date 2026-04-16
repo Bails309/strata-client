@@ -25,6 +25,22 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.15.0',
+    subtitle: 'Multi-Monitor Improvements',
+    sections: [
+      {
+        title: 'Brave & Privacy Browser Compatibility',
+        description:
+          'Multi-monitor mode now works in Brave and other privacy-focused browsers that zero out screen dimensions from the Window Management API. Screen sizes automatically fall back to window.screen values and popup placement uses computed tile offsets.',
+      },
+      {
+        title: 'Dynamic Secondary Window Scaling',
+        description:
+          'Secondary monitor windows now dynamically resize their canvas when the window is resized, stretching the remote desktop slice to fill the available space. The primary monitor preserves 1:1 scale matching the browser viewport.',
+      },
+    ],
+  },
+  {
     version: '0.14.9',
     subtitle: 'Multi-Monitor Support',
     sections: [

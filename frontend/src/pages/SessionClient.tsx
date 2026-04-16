@@ -534,14 +534,24 @@ export default function SessionClient() {
       // In multi-monitor mode, scale so the primary monitor's slice fills the container.
       // The display element is wider than the container (aggregate resolution) so
       // overflow:hidden on the container clips to just the primary region.
+      // The negative margin offset on displayEl ensures the primary region is visible
+      // and Guacamole.Mouse coordinates naturally include the aggregate offset.
       const layout = getLayout();
       if (layout) {
         const primaryW = layout.primary.width;
         const primaryH = layout.primary.height;
         const scale = Math.min(cw / primaryW, ch / primaryH);
         display.scale(scale);
+        // Update display offset to match current scale
+        const displayEl = display.getElement();
+        displayEl.style.marginLeft = `-${layout.primaryTile.sliceX * scale}px`;
+        displayEl.style.marginTop = `-${layout.primaryTile.sliceY * scale}px`;
         // Don't sendSize — the aggregate resolution is already set
       } else {
+        // Reset any leftover offset from multi-monitor mode
+        const displayEl = display.getElement();
+        displayEl.style.marginLeft = '';
+        displayEl.style.marginTop = '';
         display.scale(Math.min(cw / dw, ch / dh));
         client.sendSize(cw, ch);
       }
@@ -552,6 +562,7 @@ export default function SessionClient() {
     const prevOnResize = display.onresize;
     display.onresize = (width: number, height: number) => {
       if (prevOnResize) prevOnResize(width, height);
+      console.log('[MultiMon] display.onresize:', width, 'x', height);
       // Use requestAnimationFrame so the display element has updated its
       // intrinsic size before we read getWidth()/getHeight().
       requestAnimationFrame(() => handleResize());

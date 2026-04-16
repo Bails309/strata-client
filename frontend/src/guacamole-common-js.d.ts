@@ -61,8 +61,10 @@ declare module 'guacamole-common-js' {
       class VisibleLayer {
         width: number;
         height: number;
-        /** The underlying HTML canvas element for this layer. */
-        canvas: HTMLCanvasElement;
+        /** Returns the underlying HTML canvas element for this layer. */
+        getCanvas(): HTMLCanvasElement;
+        /** Returns the container element for this layer (div wrapping the canvas). */
+        getElement(): HTMLElement;
       }
     }
 

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] — 2026-04-16
+
+### Improved
+- **Multi-Monitor Brave / Fingerprinting Compatibility**: The Window Management API `getScreenDetails()` returns zeroed screen dimensions and positions in Brave and other privacy-focused browsers. Multi-monitor mode now falls back to `window.screen` dimensions for any screen reporting zero width/height, and computes popup placement from cumulative tile offsets instead of relying on physical screen coordinates.
+- **Multi-Monitor Primary Resolution**: The primary monitor slice now uses the actual browser container dimensions instead of the physical screen resolution, preserving 1:1 scale identical to single-monitor mode.
+- **Secondary Window Dynamic Resize**: Secondary monitor windows now adapt their canvas backing store when resized, stretching the remote desktop slice to fill the window.
+- **Secondary Window Cursor Visibility**: The OS cursor is now visible in secondary monitor windows, instead of being hidden with `cursor: none`.
+
 ## [0.14.9] — 2026-04-16
 
 ### Added

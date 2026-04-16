@@ -49,8 +49,7 @@ For large deployments, consider:
 |---|---|---|---|
 | `guacd` | High | 200–500 MB | Heaviest consumer — FreeRDP + H.264 encoding per session |
 | `backend` | Low | 100–200 MB | Async Rust — very efficient; NVR buffers add ~50 MB per active session |
-| `frontend` | Minimal | 30 MB | Static file serving via nginx |
-| `caddy` | Minimal | 30 MB | Reverse proxy + TLS termination |
+| `frontend` | Minimal | 30 MB | Static file serving + reverse proxy via nginx |
 | `postgres-local` | Low–Medium | 200–500 MB | Depends on audit log volume |
 | `vault` | Minimal | 50 MB | Transit encrypt/decrypt only |
 
@@ -65,7 +64,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL, Vault, and Caddy containers handle all storage, encryption, and routing — no external dependencies required.
+Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL and Vault containers handle all storage and encryption — no external dependencies required.
 
 > **Note:** If `localhost` doesn't work, use `127.0.0.1` explicitly. WSL can bind to IPv6 `::1:80` on some systems, intercepting requests before they reach Docker.
 
@@ -79,8 +78,8 @@ Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL, V
 Edit `.env` or set environment variables:
 
 ```bash
-HTTP_PORT=80             # Caddy HTTP listener (host mapping)
-HTTPS_PORT=443           # Caddy HTTPS listener (host mapping)
+HTTP_PORT=80             # Nginx HTTP listener (host mapping)
+HTTPS_PORT=443           # Nginx HTTPS listener (host mapping)
 RUST_LOG=info            # Log level: trace, debug, info, warn, error
 ```
 
@@ -94,18 +93,18 @@ docker compose up -d --build
 
 For production deployment on an Ubuntu VM, see the detailed [Ubuntu VM Deployment Guide](docs/ubuntu-vm-deployment.md).
 
-### 3. Setup Wizard
+### 3. TLS / Reverse Proxy
 
-All traffic flows through Caddy. No backend or frontend ports are exposed directly — Caddy is the single entry point.
+All traffic flows through the nginx reverse proxy built into the `frontend` container. No backend ports are exposed directly — nginx is the single entry point.
 
 ```
-Browser → Caddy (:80/:443) → backend:8080 (/api/*)
-                            → frontend:80  (everything else)
+Browser → nginx (:80/:443) → backend:8080 (/api/*)
+                            → static files   (everything else)
 ```
 
 #### HTTP Mode (Default)
 
-With no additional configuration, Caddy serves plain HTTP on port 80:
+With no additional configuration, nginx serves plain HTTP on port 80:
 
 ```bash
 docker compose up -d
@@ -120,31 +119,39 @@ No certificates are needed. This is suitable for:
 
 #### HTTPS Mode (Production)
 
-To enable automatic Let's Encrypt HTTPS, set `STRATA_DOMAIN` to your public domain:
-
-**Step 1 — DNS:** Point your domain's A record to your server's public IP.
+To enable HTTPS, place your TLS certificate and key in the `certs/` directory:
 
 ```bash
-STRATA_DOMAIN=strata.example.com
-STRATA_ALLOWED_ORIGINS=https://strata.example.com
+certs/
+├── cert.pem      # TLS certificate (or fullchain)
+└── key.pem       # Private key
 ```
 
-**Step 3 — Start:**
+The `frontend` container's entrypoint (`ssl-init.sh`) automatically detects these files on startup:
+- **Certificates found** → nginx activates the HTTPS configuration (`https_enabled.conf`): TLS on port 443, HTTP→HTTPS redirect on port 80, HTTP/2, Mozilla Intermediate cipher suite, HSTS headers
+- **Certificates missing** → nginx falls back to HTTP-only (`http_only.conf`)
+
+No environment variable or manual config change is needed — just mount the certs and restart:
 
 ```bash
-docker compose up -d
+docker compose up -d --build frontend
 ```
 
-Caddy will automatically:
-- Obtain a TLS certificate from Let's Encrypt
-- Redirect HTTP → HTTPS
-- Enable HTTP/2 and HTTP/3 (QUIC)
-- Add HSTS headers (`Strict-Transport-Security`)
-- Auto-renew the certificate before expiry
+**Using Let's Encrypt / Certbot:**
 
-**Step 4 — Firewall:** Ensure ports 80 and 443 are open. Caddy needs port 80 for ACME HTTP-01 challenges even when serving HTTPS.
+```bash
+# Obtain certificates (run on the host)
+certbot certonly --standalone -d strata.example.com
 
-Certificate data is persisted in the `caddy-data` Docker volume.
+# Symlink or copy into the certs/ directory
+cp /etc/letsencrypt/live/strata.example.com/fullchain.pem ./certs/cert.pem
+cp /etc/letsencrypt/live/strata.example.com/privkey.pem ./certs/key.pem
+
+# Restart frontend to pick up the certs
+docker compose restart frontend
+```
+
+Set up a cron job or systemd timer to auto-renew and restart the frontend container.
 
 #### Custom Ports
 
@@ -155,28 +162,24 @@ HTTP_PORT=8080
 HTTPS_PORT=8443
 ```
 
-> **Note:** Let's Encrypt HTTP-01 challenges require port 80. If `HTTP_PORT` is not 80, use the DNS-01 challenge method instead (requires Caddy DNS plugin — see the [Caddy docs](https://caddyserver.com/docs/automatic-https#dns-challenge)).
-
-#### Configuration Files
+#### Nginx Configuration Files
 
 | File | Purpose |
 |---|---|
-| `Caddyfile` | Routing rules, timeouts, compression, security headers |
-| `docker-compose.yml` | Caddy service definition, port mappings, volumes |
-| `.env` | `STRATA_DOMAIN`, `STRATA_ALLOWED_ORIGINS`, `HTTP_PORT`, `HTTPS_PORT` |
+| `frontend/common.fragment` | Shared routing rules, timeouts, compression, security headers |
+| `frontend/http_only.conf` | HTTP-only server block (port 80) |
+| `frontend/https_enabled.conf` | HTTPS server block (port 443) + HTTP→HTTPS redirect |
+| `frontend/ssl-init.sh` | Entrypoint script that auto-selects HTTP or HTTPS based on cert presence |
+| `docker-compose.yml` | Frontend service definition, port mappings, cert volume |
 
-The [Caddyfile](../Caddyfile) uses `{$STRATA_DOMAIN:http://localhost}` as the site address:
-- When `STRATA_DOMAIN` is **unset or empty** → defaults to `http://localhost` (plain HTTP)
-- When `STRATA_DOMAIN` is a **domain name** → Caddy provisions a certificate and serves HTTPS
-
-Key performance settings in the Caddyfile:
-- `read_timeout 3600s` / `write_timeout 3600s` — keeps WebSocket tunnels alive for long RDP/SSH sessions
-- `flush_interval -1` — streams tunnel frames immediately with zero buffering
-- `encode gzip zstd` — compresses static assets and API responses
+Key performance settings in `common.fragment`:
+- `proxy_read_timeout 3600s` / `proxy_send_timeout 3600s` — keeps WebSocket tunnels alive for long RDP/SSH sessions
+- `proxy_buffering off` — streams tunnel frames immediately with zero buffering
+- `gzip on` — compresses static assets and API responses
 
 #### Using an External Reverse Proxy Instead
 
-If you must use a different reverse proxy (e.g., Traefik, HAProxy, or nginx), you can modify `docker-compose.yml` to expose the backend and frontend ports directly and remove the Caddy service. Key requirements for your proxy:
+If you must use a different reverse proxy (e.g., Traefik, HAProxy, Caddy, or a cloud load balancer), you can modify `docker-compose.yml` to expose the backend and frontend ports directly. Key requirements for your proxy:
 
 - Route `/api/*` to `backend:8080` with WebSocket upgrade support
 - Route everything else to `frontend:80`
@@ -403,11 +406,57 @@ Use a managed PostgreSQL service (e.g., AWS RDS, Azure Database for PostgreSQL, 
 
 ### guacd Scaling
 
-For environments with many concurrent sessions, deploy additional guacd sidecar instances:
+For environments with many concurrent sessions, deploy additional guacd sidecar instances. Each guacd instance handles approximately 10–15 concurrent RDP sessions with H.264 encoding.
+
+#### Adding a Second guacd Instance
+
+The default `docker-compose.yml` includes a pre-configured `guacd-2` service behind the `scale` profile:
 
 ```bash
-# Using the built-in scale profile
+# Enable the scale profile and set the sidecar address
 GUACD_INSTANCES=guacd-2:4822 docker compose --profile scale up -d
+```
+
+The backend discovers `guacd-2` via the `GUACD_INSTANCES` environment variable and distributes new connections across both `guacd` (the default) and `guacd-2` using a round-robin `GuacdPool`.
+
+#### Adding 3 or More guacd Instances
+
+To scale beyond 2 instances, duplicate the `guacd-2` service block in `docker-compose.yml` for each additional sidecar:
+
+```yaml
+  # ── Additional guacd sidecar (copy this block for guacd-4, guacd-5, etc.)
+  guacd-3:
+    build:
+      context: ./guacd
+      dockerfile: Dockerfile
+    image: strata/custom-guacd:latest
+    restart: unless-stopped
+    profiles:
+      - scale
+    networks:
+      - guac-internal
+    volumes:
+      - guac-recordings:/var/lib/guacamole/recordings
+      - guac-drive:/var/lib/guacamole/drive
+      - krb5-config:/etc/krb5
+    environment:
+      - KRB5_CONFIG=/etc/krb5/krb5.conf
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+```
+
+Then list all sidecar hostnames in `GUACD_INSTANCES` (comma-separated):
+
+```bash
+# .env
+GUACD_INSTANCES=guacd-2:4822,guacd-3:4822
 ```
 
 Or configure via `config.toml`:
@@ -416,9 +465,31 @@ Or configure via `config.toml`:
 guacd_instances = ["guacd-2:4822", "guacd-3:4822"]
 ```
 
-The backend distributes new tunnel connections across all instances using a round-robin `GuacdPool`. Each guacd instance independently connects to target hosts, so they can be placed in different network segments if needed.
+Start everything:
 
-To add more instances, duplicate the `guacd-2` service block in `docker-compose.yml` and add the new hostname to `GUACD_INSTANCES`.
+```bash
+docker compose --profile scale up -d
+```
+
+#### Capacity Planning
+
+| Concurrent sessions | guacd instances | Estimated CPU cores |
+|---|---|---|
+| Up to 15 | 1 (default) | 2 |
+| 15–30 | 2 | 4 |
+| 30–45 | 3 | 6 |
+| 45–60 | 4 | 8 |
+
+> **Note:** Each concurrent RDP session with H.264 GFX uses approximately 1 CPU core at peak. SSH and VNC sessions are significantly lighter (~0.1 cores each). Adjust instance count based on your protocol mix.
+
+#### How It Works
+
+- The primary `guacd` service (always running) handles connections by default
+- Sidecar instances listed in `GUACD_INSTANCES` are added to the round-robin pool
+- New tunnel connections are distributed evenly across all healthy instances
+- Each guacd instance independently connects to target hosts, so they can be placed in different network segments if needed
+- All instances share the same `guac-recordings`, `guac-drive`, and `krb5-config` volumes
+- If a sidecar is unreachable, the backend skips it and routes to the next available instance
 
 ### Vault
 

@@ -65,9 +65,6 @@ interface SecondaryWindow {
   mouse: Guacamole.Mouse;
 }
 
-/** Cached screen details — requested once on permission grant. */
-let cachedScreenDetails: MonitorLayout | null = null;
-
 /** Live ScreenDetails object — fires `screenschange` when monitors change. */
 let liveScreenDetails: any = null;
 
@@ -168,7 +165,6 @@ export function useMultiMonitor(
     function refreshCache() {
       if (!liveScreenDetails) return;
       const screens = mapScreenDetails(liveScreenDetails);
-      cachedScreenDetails = buildLayout(screens);
       setScreenCount(screens.length);
     }
 
@@ -192,58 +188,64 @@ export function useMultiMonitor(
   }, []);
 
   // ── Enable multi-monitor ──────────────────────────────────────────────
-  // MUST be fully synchronous so that every window.open() call happens
-  // within the original user-gesture context.  Chrome's popup blocker
-  // only allows multiple popups when ALL opens are in the same synchronous
-  // call stack as the click handler — any `await` kills user activation.
+  // Chrome allows multiple window.open() calls from a single user gesture
+  // ONLY when getScreenDetails() is called within that same gesture.
+  // This is by design — getScreenDetails() signals multi-screen intent
+  // and Chrome preserves user activation through its await.
   //
-  // The cached layout is populated by the useEffect above (which calls
-  // getScreenDetails() on mount + listens for screenschange).  If the
-  // cache is empty (permission not yet granted), we fire-and-forget an
-  // async request so the NEXT click will have the cache ready.
-  const enableMultiMonitor = useCallback(() => {
+  // The flow is: click → await getScreenDetails() → window.open() × N.
+  // All window.open() calls must happen immediately after the await with
+  // minimal work in between.  Layout computation uses pre-cached data.
+  const enableMultiMonitor = useCallback(async () => {
     if (!session || !containerRef.current || isMultiMonitor) return;
     if (session.isPoppedOut) return;
 
-    // Use the cached layout (pre-populated by useEffect on mount).
-    // This keeps the entire enable path synchronous → user gesture alive.
-    let layout = cachedScreenDetails;
-    if (!layout) {
-      // Cache not ready — trigger permission prompt asynchronously.
-      // The user will need to click the button again once granted.
-      (async () => {
-        try {
-          liveScreenDetails = await (window as any).getScreenDetails();
-          const screens = mapScreenDetails(liveScreenDetails);
-          cachedScreenDetails = buildLayout(screens);
-          setScreenCount(screens.length);
-          liveScreenDetails.addEventListener('screenschange', () => {
-            if (liveScreenDetails) {
-              const s = mapScreenDetails(liveScreenDetails);
-              cachedScreenDetails = buildLayout(s);
-              setScreenCount(s.length);
-            }
-          });
-        } catch { /* permission denied */ }
-      })();
+    // ── Step 1: Call getScreenDetails() in the click handler ──
+    // This is the critical call that tells Chrome to allow multiple popups.
+    // When the permission is already granted, it resolves in ~1ms and
+    // Chrome preserves user activation through the await.
+    let details: any;
+    try {
+      details = await (window as any).getScreenDetails();
+    } catch {
+      // Permission denied — cannot do multi-monitor
       return;
     }
 
+    // Update the cache from the fresh details
+    liveScreenDetails = details;
+    const screens = mapScreenDetails(details);
+    const freshLayout = buildLayout(screens);
+    if (!freshLayout) return;
+    setScreenCount(screens.length);
+
+    // Attach screenschange listener (idempotent — listener is a no-op if already attached)
+    details.addEventListener('screenschange', () => {
+      if (liveScreenDetails === details) {
+        const s = mapScreenDetails(details);
+        setScreenCount(s.length);
+      }
+    });
+
+    // ── Step 2: Compute adjusted layout and open popups IMMEDIATELY ──
+    // Minimize work between getScreenDetails() resolution and window.open()
+    // to keep within Chrome's user activation window.
     const sess = session;
     const client = sess.client;
     const display = client.getDisplay();
     const displayEl = sess.displayEl;
+    const container = containerRef.current!;
 
-    // Override the primary screen dimensions with the actual container size.
-    const cw = containerRef.current!.clientWidth;
-    const ch = containerRef.current!.clientHeight;
-    const origPrimary = layout.primary;
-    const adjustedScreens: ScreenInfo[] = layout.screens.map((s) =>
+    // Override primary screen dimensions with actual container size.
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    const origPrimary = freshLayout.primary;
+    const adjustedScreens: ScreenInfo[] = freshLayout.screens.map((s) =>
       s === origPrimary ? { ...s, width: cw, height: ch } : s,
     );
     const adjustedLayout = buildLayout(adjustedScreens);
     if (!adjustedLayout) return;
-    layout = adjustedLayout;
+    const layout = adjustedLayout;
 
     // Save original size for restoration
     originalSizeRef.current = {
@@ -252,14 +254,9 @@ export function useMultiMonitor(
     };
     layoutRef.current = layout;
 
-    // ── Open ALL secondary windows synchronously (user-gesture context) ──
-    // Use the tile layout (computed cumulative offsets) for canvas slicing,
-    // but use the physical screen positions for window.open() placement.
+    // ── Open ALL secondary windows (user activation extended by getScreenDetails) ──
     const secondaryTiles = layout.tiles.filter((t) => t !== layout.primaryTile);
     const popups: { popup: Window; tile: ScreenTile }[] = [];
-
-    console.warn(`[MultiMon] Layout: ${layout.screens.length} screens, ${layout.tiles.length} tiles, ${secondaryTiles.length} secondary tiles to open`);
-    console.warn(`[MultiMon] Screens:`, layout.screens.map(s => `${s.width}x${s.height}@${s.left},${s.top} primary=${s.isPrimary}`));
 
     // Detect fingerprinted positions: if ALL non-primary screens report
     // left=0 and top=0, Brave (or similar) has zeroed them out. In that

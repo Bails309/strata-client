@@ -28,7 +28,7 @@ export interface GuacSession {
   isMultiMonitor?: boolean;
   /** Number of screens detected by the Window Management API */
   screenCount?: number;
-  enableMultiMonitor?: () => void;
+  enableMultiMonitor?: () => void | Promise<void>;
   disableMultiMonitor?: () => void;
   /** Internal pop-out window refs — persists across SessionClient mount/unmount */
   _popout?: {

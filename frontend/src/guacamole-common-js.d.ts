@@ -54,6 +54,8 @@ declare module 'guacamole-common-js' {
       getHeight(): number;
       scale(amount: number): void;
       getDefaultLayer(): Display.VisibleLayer;
+      /** Returns a canvas containing the entire display with all layers composited. */
+      flatten(): HTMLCanvasElement;
       onresize: ((width: number, height: number) => void) | null;
     }
 

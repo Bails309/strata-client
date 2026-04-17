@@ -579,7 +579,6 @@ export default function SessionClient() {
     const prevOnResize = display.onresize;
     display.onresize = (width: number, height: number) => {
       if (prevOnResize) prevOnResize(width, height);
-      console.log('[MultiMon] display.onresize:', width, 'x', height);
       // Use requestAnimationFrame so the display element has updated its
       // intrinsic size before we read getWidth()/getHeight().
       requestAnimationFrame(() => handleResize());

@@ -12,6 +12,7 @@ vi.mock('guacamole-common-js', () => {
     getDefaultLayer: () => ({
       getCanvas: () => document.createElement('canvas'),
     }),
+    flatten: () => document.createElement('canvas'),
     onresize: null as any,
   };
   const mockClient = {

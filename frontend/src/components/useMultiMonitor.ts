@@ -154,7 +154,7 @@ export function useMultiMonitor(
   const [screenCount, setScreenCount] = useState(0);
 
   const secondaryWindowsRef = useRef<SecondaryWindow[]>([]);
-  const rafIdRef = useRef<number>(0);
+  const intervalIdRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const originalSizeRef = useRef<{ width: number; height: number } | null>(null);
   const layoutRef = useRef<MonitorLayout | null>(null);
 
@@ -418,34 +418,41 @@ export function useMultiMonitor(
     }
 
     // ── Render loop ──
-    // Read from the default layer's canvas via getCanvas() each frame.
-    // getCanvas() is a closure over the Layer's private canvas variable,
-    // so it always returns the current canvas even after a resize.
-    const defaultLayer = display.getDefaultLayer();
-
+    // Use display.flatten() to composite ALL layers (default + cursor + overlays)
+    // into a single canvas each frame.  Use setInterval instead of
+    // requestAnimationFrame because rAF is throttled/paused when the main
+    // window loses focus to a popup — which happens immediately when the user
+    // interacts with a secondary monitor window.
     function renderLoop() {
-      const srcCanvas = defaultLayer.getCanvas();
-      for (const sw of secondaryWindowsRef.current) {
-        if (sw.win.closed) continue;
-        try {
-          sw.ctx.drawImage(
-            srcCanvas,
-            sw.sourceX, sw.sourceY, sw.sliceW, sw.sliceH,
-            0, 0, sw.canvas.width, sw.canvas.height,
-          );
-        } catch {
-          // Canvas tainted or window closed — skip this frame
+      try {
+        const dw = display.getWidth();
+        const dh = display.getHeight();
+        if (dw <= 0 || dh <= 0) return;
+
+        const srcCanvas = display.flatten();
+        for (const sw of secondaryWindowsRef.current) {
+          if (sw.win.closed) continue;
+          try {
+            sw.ctx.drawImage(
+              srcCanvas,
+              sw.sourceX, sw.sourceY, sw.sliceW, sw.sliceH,
+              0, 0, sw.canvas.width, sw.canvas.height,
+            );
+          } catch {
+            // Canvas tainted or window closed — skip this frame
+          }
         }
+      } catch {
+        // Display not ready yet — skip this tick
       }
-      rafIdRef.current = requestAnimationFrame(renderLoop);
     }
-    rafIdRef.current = requestAnimationFrame(renderLoop);
+    intervalIdRef.current = setInterval(renderLoop, 33); // ~30 fps
 
     // ── Store state (survives unmount/remount) ──
     const cleanup = () => {
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = 0;
+      if (intervalIdRef.current) {
+        clearInterval(intervalIdRef.current);
+        intervalIdRef.current = null;
       }
       for (const sw of secondaryWindowsRef.current) {
         sw.keyboard.onkeydown = null;

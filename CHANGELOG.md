@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] — 2026-04-17
+
+### Improved
+- **Multi-Monitor Rendering Fix**: Secondary monitor windows now render correctly using the default layer's canvas reference (`getCanvas()`) instead of `display.flatten()`, which allocated a new full-resolution canvas every frame (~600 MB/s of GC pressure at 30 fps) and caused black screens by starving the Guacamole rendering pipeline.
+- **Multi-Monitor Render Loop**: Replaced `requestAnimationFrame` with `setInterval` (33 ms / ~30 fps) for the secondary window render loop. `requestAnimationFrame` is throttled or paused entirely by the browser when the main window loses focus to a popup, which happens immediately when the user interacts with a secondary monitor window.
+- **Multi-Monitor Cursor Sync**: The remote cursor (arrow, resize handle, text beam, etc.) is now visible on all secondary monitors. A `MutationObserver` watches the Guacamole display element's CSS `cursor` property and mirrors it to every secondary canvas in real time.
+- **Multi-Monitor Horizontal Layout**: All monitors are now placed in a flat horizontal row (sorted left-to-right by physical position) regardless of vertical offsets. Because guacd sends a single aggregate resolution to the remote desktop, the remote OS places the taskbar at the very bottom of the aggregate. Using vertical offsets from mixed arrangements (e.g. a portrait monitor offset lower) would push the aggregate height beyond the landscape monitors' visible area, making the taskbar unreachable.
+- **Multi-Monitor Primary Height Cap**: The aggregate remote resolution height is capped to the primary monitor's height. This ensures the taskbar remains visible within the primary monitor's slice. Taller secondary monitors (e.g. portrait) display the primary-height region of the remote desktop with black fill below.
+- **Multi-Monitor Auto-Maximize**: Secondary popup windows now call `moveTo()` + `resizeTo()` after opening to fill their target screen, and attempt `requestFullscreen()` for a chrome-free view.
+- **Pop-out Screen-Change Detection**: Single pop-out windows now detect when dragged to a different screen via polling `screenX`/`screenY`/`devicePixelRatio` (250 ms interval, 300 ms debounce). After the position settles, the display is re-scaled and `sendSize()` is called with the new window dimensions.
+- **Pop-out Resize Handler**: The pop-out window's `display.onresize` callback now uses `setTimeout` instead of `requestAnimationFrame` to avoid being throttled when the popup has focus and the main window is backgrounded.
+
+### Multi-Monitor Usage Notes
+Multi-monitor mode works by sending a single aggregate resolution to the remote desktop via guacd. The remote OS (Windows/Linux) sees this as one large display, not separate monitors. This has important implications:
+
+- **Best supported**: All landscape monitors arranged left-to-right in a horizontal row. Each monitor gets its own browser window showing its slice of the remote desktop.
+- **Portrait monitors**: A portrait monitor's slice width is narrower but the height is capped to the primary monitor's height. The extra vertical space shows black — the remote desktop doesn't extend into it.
+- **Monitors above/below**: Vertical monitor arrangements are flattened into a horizontal row. A monitor physically above or below the primary will appear as a slice to the right. You would need to scroll/move the mouse rightward through the aggregate desktop to reach the content shown on that monitor.
+- **Taskbar visibility**: The remote taskbar always appears at the bottom of the aggregate resolution, which is capped to the primary monitor's height. This keeps it visible on same-height landscape monitors.
+
 ## [0.16.0] — 2026-04-17
 
 ### Security

@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.16.1',
+    subtitle: 'Multi-Monitor Rendering, Cursor Sync & Layout Improvements',
+    sections: [
+      {
+        title: 'Multi-Monitor Rendering Fix',
+        description:
+          'Secondary monitors now render correctly using the default layer canvas instead of display.flatten(), which allocated a new full-resolution canvas every frame and caused black screens from GC pressure.',
+      },
+      {
+        title: 'Cursor Visible on All Monitors',
+        description:
+          'The remote cursor (arrow, resize handle, text beam, etc.) is now mirrored to all secondary monitor windows in real time via a MutationObserver on the Guacamole display element.',
+      },
+      {
+        title: 'Horizontal Layout Only',
+        description:
+          'All monitors are placed in a flat left-to-right horizontal row regardless of their physical vertical position. The best supported configuration is all landscape monitors side by side. Monitors above or below the primary appear as slices to the right — scroll/move rightward to reach them.',
+      },
+      {
+        title: 'Popup Auto-Maximize & Screen Detection',
+        description:
+          'Secondary popup windows now auto-maximize to fill their target screen. Pop-out windows detect when dragged to a different monitor and re-scale automatically.',
+      },
+    ],
+  },
+  {
     version: '0.16.0',
     subtitle: 'Security Hardening, Granular RBAC & Multi-Monitor 2D Layout',
     sections: [

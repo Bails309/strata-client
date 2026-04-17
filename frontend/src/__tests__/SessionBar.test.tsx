@@ -7,6 +7,10 @@ import * as api from '../api';
 
 vi.mock('../api', () => ({
   createShareLink: vi.fn(),
+  getTags: vi.fn().mockResolvedValue([]),
+  getDisplayTags: vi.fn().mockResolvedValue({}),
+  setDisplayTag: vi.fn().mockResolvedValue({ ok: true }),
+  removeDisplayTag: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock('../components/SessionManager', () => ({
@@ -613,6 +617,116 @@ describe('SessionBar', () => {
     
     // Should NOT have toggled collapsed state because it was a drag
     expect(content).toHaveClass('hidden');
+  });
+
+  // ── Display Tag Tests ─────────────────────────────────────────────
+
+  it('shows tag picker button on each session thumbnail', async () => {
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+    expect(screen.getByTitle('Set display tag')).toBeInTheDocument();
+  });
+
+  it('opens tag picker dropdown when tag button clicked', async () => {
+    vi.mocked(api.getTags).mockResolvedValue([
+      { id: 't1', name: 'Production', color: '#ef4444' },
+      { id: 't2', name: 'Staging', color: '#3b82f6' },
+    ]);
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await waitFor(() => {
+      expect(api.getTags).toHaveBeenCalled();
+    });
+
+    await userEvent.click(screen.getByTitle('Set display tag'));
+    expect(screen.getByText('Display Tag')).toBeInTheDocument();
+    expect(screen.getByText('None')).toBeInTheDocument();
+    expect(screen.getByText('Production')).toBeInTheDocument();
+    expect(screen.getByText('Staging')).toBeInTheDocument();
+  });
+
+  it('shows display tag badge when a tag is assigned', async () => {
+    vi.mocked(api.getDisplayTags).mockResolvedValue({
+      'conn-s1': { id: 't1', name: 'Production', color: '#ef4444' },
+    });
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await waitFor(() => {
+      expect(screen.getByText('Production')).toBeInTheDocument();
+    });
+    // Tag picker button should show the tag info
+    expect(screen.getByTitle('Display tag: Production — click to change')).toBeInTheDocument();
+  });
+
+  it('calls setDisplayTag when a tag is selected from picker', async () => {
+    vi.mocked(api.getTags).mockResolvedValue([
+      { id: 't1', name: 'Production', color: '#ef4444' },
+    ]);
+    vi.mocked(api.getDisplayTags).mockResolvedValue({});
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await waitFor(() => {
+      expect(api.getTags).toHaveBeenCalled();
+    });
+
+    await userEvent.click(screen.getByTitle('Set display tag'));
+    await userEvent.click(screen.getByText('Production'));
+
+    expect(api.setDisplayTag).toHaveBeenCalledWith('conn-s1', 't1');
+  });
+
+  it('calls removeDisplayTag when None is selected', async () => {
+    vi.mocked(api.getTags).mockResolvedValue([
+      { id: 't1', name: 'Production', color: '#ef4444' },
+    ]);
+    vi.mocked(api.getDisplayTags).mockResolvedValue({
+      'conn-s1': { id: 't1', name: 'Production', color: '#ef4444' },
+    });
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await waitFor(() => {
+      expect(screen.getByText('Production')).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByTitle('Display tag: Production — click to change'));
+    await userEvent.click(screen.getByText('None'));
+
+    expect(api.removeDisplayTag).toHaveBeenCalledWith('conn-s1');
+  });
+
+  it('shows "No tags created yet" when user has no tags', async () => {
+    vi.mocked(api.getTags).mockResolvedValue([]);
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await userEvent.click(screen.getByTitle('Set display tag'));
+    expect(screen.getByText('No tags created yet')).toBeInTheDocument();
+  });
+
+  it('closes tag picker when clicking outside', async () => {
+    vi.mocked(api.getTags).mockResolvedValue([
+      { id: 't1', name: 'Prod', color: '#ef4444' },
+    ]);
+    vi.mocked(api.getDisplayTags).mockResolvedValue({});
+    const sessions = [makeMockSession('s1', 'Server A')];
+    renderSessionBar('/', false, sessions);
+
+    await waitFor(() => {
+      expect(api.getTags).toHaveBeenCalled();
+    });
+
+    await userEvent.click(screen.getByTitle('Set display tag'));
+    expect(screen.getByText('Display Tag')).toBeInTheDocument();
+
+    // Click outside the picker
+    await userEvent.click(document.body);
+    await waitFor(() => {
+      expect(screen.queryByText('Display Tag')).not.toBeInTheDocument();
+    });
   });
 
 });

@@ -25,6 +25,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.16.3',
+    subtitle: 'Display Tags for Active Sessions',
+    sections: [
+      {
+        title: 'Pin a Tag to Session Thumbnails',
+        description:
+          'You can now assign a single display tag to each connection, visible as a colored badge on session thumbnails in the Active Sessions sidebar. Click the tag icon on any thumbnail to choose from your existing tags, or select "None" to clear it. Display tags are optional and per-user — each user can pick a different tag for the same connection.',
+      },
+      {
+        title: 'Tag Picker Dropdown',
+        description:
+          'A compact dropdown on each session thumbnail shows all your tags with their color swatches. Select a tag to pin it, or choose "None" to remove the badge. The picker closes automatically when you click outside it.',
+      },
+      {
+        title: 'Persistent & Synced',
+        description:
+          'Display tag assignments are saved to the server and persist across sessions and devices. The assignment is per-user per-connection — your display tags won\'t affect other users.',
+      },
+    ],
+  },
+  {
     version: '0.16.2',
     subtitle: 'Command Palette, Keyboard Shortcuts & Quick Share Visibility',
     sections: [

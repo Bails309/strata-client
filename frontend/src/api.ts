@@ -739,6 +739,23 @@ export const setConnectionTags = (connectionId: string, tagIds: string[]) =>
     body: JSON.stringify({ connection_id: connectionId, tag_ids: tagIds }),
   });
 
+// ── Display Tags (pinned tag per connection for session sidebar) ────
+
+/** Returns { connection_id: { id, name, color } } */
+export const getDisplayTags = () =>
+  request<Record<string, UserTag>>('/user/display-tags');
+
+export const setDisplayTag = (connectionId: string, tagId: string) =>
+  request<{ ok: boolean }>('/user/display-tags', {
+    method: 'POST',
+    body: JSON.stringify({ connection_id: connectionId, tag_id: tagId }),
+  });
+
+export const removeDisplayTag = (connectionId: string) =>
+  request<{ ok: boolean }>(`/user/display-tags/${connectionId}`, {
+    method: 'DELETE',
+  });
+
 /** Read-only access to admin-managed global tags (for dashboard display). */
 export const getAdminTags = () => request<UserTag[]>('/user/admin-tags');
 

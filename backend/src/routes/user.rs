@@ -439,6 +439,103 @@ pub async fn set_connection_tags(
     Ok(Json(json!({ "ok": true })))
 }
 
+// ── Display Tags (pinned tag per connection for session sidebar) ───────
+
+/// Return all display-tag mappings for the current user.
+/// Response: { connection_id: { id, name, color } }
+pub async fn list_display_tags(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        connection_id: Uuid,
+        id: Uuid,
+        name: String,
+        color: String,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT d.connection_id, t.id, t.name, t.color
+         FROM user_connection_display_tags d
+         JOIN user_tags t ON t.id = d.tag_id
+         WHERE d.user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut map = serde_json::Map::new();
+    for r in rows {
+        map.insert(
+            r.connection_id.to_string(),
+            json!({ "id": r.id, "name": r.name, "color": r.color }),
+        );
+    }
+    Ok(Json(serde_json::Value::Object(map)))
+}
+
+#[derive(Deserialize)]
+pub struct SetDisplayTagRequest {
+    pub connection_id: Uuid,
+    pub tag_id: Uuid,
+}
+
+/// Set or replace the display tag for a connection (one per connection per user).
+pub async fn set_display_tag(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<SetDisplayTagRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Verify the tag belongs to the user
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM user_tags WHERE id = $1 AND user_id = $2)",
+    )
+    .bind(body.tag_id)
+    .bind(user.id)
+    .fetch_one(&db.pool)
+    .await?;
+
+    if !exists {
+        return Err(AppError::NotFound("Tag not found".into()));
+    }
+
+    sqlx::query(
+        "INSERT INTO user_connection_display_tags (user_id, connection_id, tag_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, connection_id)
+         DO UPDATE SET tag_id = $3",
+    )
+    .bind(user.id)
+    .bind(body.connection_id)
+    .bind(body.tag_id)
+    .execute(&db.pool)
+    .await?;
+
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Remove the display tag for a connection.
+pub async fn remove_display_tag(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(connection_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    sqlx::query(
+        "DELETE FROM user_connection_display_tags WHERE user_id = $1 AND connection_id = $2",
+    )
+    .bind(user.id)
+    .bind(connection_id)
+    .execute(&db.pool)
+    .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 // ── Display settings (public for authenticated users) ─────────────────
 
 /// Return only the display-related settings any user needs (timezone, time/date format).

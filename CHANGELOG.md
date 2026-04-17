@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] — 2026-04-17
+
+### Added
+- **Display Tags for Active Sessions**: Users can now pin a single tag per connection to display as a colored badge on session thumbnails in the Active Sessions sidebar. A tag picker dropdown (accessible via a tag icon on each thumbnail) lets users choose from their existing tags or clear the selection. The display tag is persisted per-user per-connection and synced with the backend. This is fully optional — connections without a display tag show no badge.
+- **Display Tags API**: Three new endpoints manage display tag assignments:
+  - `GET /api/user/display-tags` — returns all display tag mappings as `{ connection_id: { id, name, color } }`
+  - `POST /api/user/display-tags` — sets or replaces the display tag for a connection (one per connection per user)
+  - `DELETE /api/user/display-tags/:connection_id` — removes the display tag for a connection
+- **Display Tags Migration**: New `user_connection_display_tags` table (`040_display_tags.sql`) with a composite primary key on `(user_id, connection_id)` ensuring at most one display tag per connection per user. Foreign keys cascade to `users`, `connections`, and `user_tags`.
+
 ## [0.16.2] — 2026-04-17
 
 ### Added

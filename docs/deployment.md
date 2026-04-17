@@ -725,6 +725,20 @@ This eliminates the need for proxy shortcuts like Right Ctrl or Ctrl+Alt+\`. Key
 
 > **Note:** Keyboard Lock does not work over HTTP. In that case, use the Right Ctrl and Ctrl+Alt+\` proxy shortcuts described above.
 
+### Display Tags
+
+Users can optionally pin a single tag per connection to show as a colored badge on session thumbnails in the Active Sessions sidebar.
+
+| Feature | Details |
+|---|---|
+| **Assign** | Click the tag icon (top-left of any session thumbnail) to open the tag picker |
+| **Choose** | Select from your existing user tags — each shown with its color swatch |
+| **Clear** | Select "None" to remove the display tag from that connection |
+| **Per-user** | Each user's display tag choices are independent — your assignments don't affect other users |
+| **Persistent** | Display tags are stored on the server and persist across sessions and devices |
+
+Display tags use your existing user tags (created from the Dashboard tag manager). If you haven't created any tags yet, the picker will show "No tags created yet."
+
 ---
 
 ## Troubleshooting

@@ -1285,3 +1285,58 @@ Update a Kerberos realm. Triggers `krb5.conf` regeneration.
 #### `DELETE /api/admin/kerberos-realms/:id`
 
 Delete a Kerberos realm. Triggers `krb5.conf` regeneration.
+
+---
+
+### Display Tags
+
+Users can pin a single tag per connection to display on session thumbnails in the Active Sessions sidebar.
+
+#### `GET /api/user/display-tags`
+
+Returns all display tag assignments for the current user.
+
+**Response**
+```json
+{
+  "conn-uuid-1": { "id": "tag-uuid", "name": "Production", "color": "#ef4444" },
+  "conn-uuid-2": { "id": "tag-uuid", "name": "Staging", "color": "#3b82f6" }
+}
+```
+
+Each key is a connection ID. The value contains the pinned tag's `id`, `name`, and `color`. Connections without a display tag are omitted.
+
+#### `POST /api/user/display-tags`
+
+Set or replace the display tag for a connection. Only one tag can be pinned per connection per user.
+
+**Request Body**
+```json
+{
+  "connection_id": "uuid",
+  "tag_id": "uuid"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `connection_id` | string (UUID) | The connection to assign the display tag to |
+| `tag_id` | string (UUID) | The user tag to pin. Must belong to the current user |
+
+**Response**
+```json
+{ "ok": true }
+```
+
+Returns `404` if the tag does not exist or does not belong to the user.
+
+#### `DELETE /api/user/display-tags/:connection_id`
+
+Remove the display tag for a connection.
+
+**Response**
+```json
+{ "ok": true }
+```
+
+Returns success even if no display tag was set (idempotent).

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useSessionManager, GuacSession } from './SessionManager';
-import { createShareLink } from '../api';
+import { createShareLink, getTags, getDisplayTags, setDisplayTag, removeDisplayTag, UserTag } from '../api';
 import FileBrowser from './FileBrowser';
 import QuickShare from './QuickShare';
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from '../utils/keyboardLock';
@@ -58,6 +58,10 @@ export default function SessionBar() {
   const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<{ startY: number; startOffset: number } | null>(null);
 
+  // Display tag state
+  const [userTags, setUserTags] = useState<UserTag[]>([]);
+  const [displayTagMap, setDisplayTagMap] = useState<Record<string, UserTag>>({});
+
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
   // Reset toggle-tab position to center when session count changes
@@ -100,6 +104,31 @@ export default function SessionBar() {
     const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handler);
     return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  // Load user tags and display-tag map
+  useEffect(() => {
+    getTags().then(setUserTags).catch(() => {});
+    getDisplayTags().then(setDisplayTagMap).catch(() => {});
+  }, []);
+
+  const handleSetDisplayTag = useCallback(async (connectionId: string, tagId: string) => {
+    try {
+      await setDisplayTag(connectionId, tagId);
+      const tag = userTags.find(t => t.id === tagId);
+      if (tag) setDisplayTagMap(prev => ({ ...prev, [connectionId]: tag }));
+    } catch { /* ignore */ }
+  }, [userTags]);
+
+  const handleRemoveDisplayTag = useCallback(async (connectionId: string) => {
+    try {
+      await removeDisplayTag(connectionId);
+      setDisplayTagMap(prev => {
+        const next = { ...prev };
+        delete next[connectionId];
+        return next;
+      });
+    } catch { /* ignore */ }
   }, []);
 
   // Close share popover on outside click
@@ -457,6 +486,10 @@ export default function SessionBar() {
                 sessionBarCollapsed={sessionBarCollapsed}
                 onClose={(e) => handleClose(e, session)}
                 onReconnect={(e) => handleReconnect(e, session)}
+                displayTag={displayTagMap[session.connectionId]}
+                userTags={userTags}
+                onSetDisplayTag={handleSetDisplayTag}
+                onRemoveDisplayTag={handleRemoveDisplayTag}
               />
             ))}
           </div>
@@ -505,6 +538,7 @@ export default function SessionBar() {
 
 function SessionThumbnail({
   session, isActive, onSwitch, onClose, onReconnect, sessionBarCollapsed,
+  displayTag, userTags, onSetDisplayTag, onRemoveDisplayTag,
 }: {
   session: GuacSession;
   isActive: boolean;
@@ -512,9 +546,15 @@ function SessionThumbnail({
   onClose: (e: React.MouseEvent) => void;
   onReconnect: (e: React.MouseEvent) => void;
   sessionBarCollapsed: boolean;
+  displayTag?: UserTag;
+  userTags: UserTag[];
+  onSetDisplayTag: (connectionId: string, tagId: string) => void;
+  onRemoveDisplayTag: (connectionId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const tagPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function capture() {
@@ -548,6 +588,18 @@ function SessionThumbnail({
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [session.id, session.displayEl]);
 
+  // Close tag picker on outside click
+  useEffect(() => {
+    if (!tagPickerOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (tagPickerRef.current && !tagPickerRef.current.contains(e.target as Node)) {
+        setTagPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [tagPickerOpen]);
+
   return (
     <div
       className={`session-thumb ${isActive ? 'session-thumb-active' : ''} ${session.error ? 'session-thumb-error' : ''}`}
@@ -562,11 +614,67 @@ function SessionThumbnail({
       />
       {!sessionBarCollapsed && (
         <>
+          {/* Tag Picker Button */}
+          <button
+            className="absolute top-1 left-1 w-[22px] h-[22px] flex items-center justify-center rounded border-0 text-white cursor-pointer opacity-60 p-0 transition-all duration-150 hover:opacity-100 hover:scale-110"
+            style={{ background: displayTag ? displayTag.color : 'rgba(255,255,255,0.15)', zIndex: 10 }}
+            onClick={(e) => { e.stopPropagation(); setTagPickerOpen(!tagPickerOpen); }}
+            title={displayTag ? `Display tag: ${displayTag.name} — click to change` : 'Set display tag'}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z" />
+              <line x1="7" y1="7" x2="7.01" y2="7" />
+            </svg>
+          </button>
+
+          {/* Tag Picker Dropdown */}
+          {tagPickerOpen && (
+            <div
+              ref={tagPickerRef}
+              className="absolute top-7 left-1 z-30 w-40 max-h-48 overflow-y-auto rounded-lg border border-white/10 bg-surface shadow-xl animate-in fade-in slide-in-from-top-1 duration-150"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-1.5">
+                <div className="text-[0.55rem] font-bold text-txt-tertiary uppercase tracking-widest px-2 py-1">Display Tag</div>
+                {/* None option */}
+                <button
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[0.65rem] transition-colors ${!displayTag ? 'bg-white/10 text-txt-primary' : 'text-txt-secondary hover:bg-white/5'}`}
+                  onClick={() => { onRemoveDisplayTag(session.connectionId); setTagPickerOpen(false); }}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0" />
+                  <span>None</span>
+                </button>
+                {userTags.map(tag => (
+                  <button
+                    key={tag.id}
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[0.65rem] transition-colors ${displayTag?.id === tag.id ? 'bg-white/10 text-txt-primary' : 'text-txt-secondary hover:bg-white/5'}`}
+                    onClick={() => { onSetDisplayTag(session.connectionId, tag.id); setTagPickerOpen(false); }}
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: tag.color }} />
+                    <span className="truncate">{tag.name}</span>
+                  </button>
+                ))}
+                {userTags.length === 0 && (
+                  <div className="px-2 py-2 text-[0.55rem] text-txt-tertiary">No tags created yet</div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Label Overlay */}
           <div className="absolute bottom-0 left-0 right-0 p-2 pt-6 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none flex items-center gap-2 min-w-0 z-10">
             <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent/30 text-accent-light shrink-0 border border-white/10 backdrop-blur-sm">
               {session.protocol.toUpperCase()}
             </span>
+            {displayTag && (
+              <span
+                className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded shrink-0 border border-white/10 backdrop-blur-sm truncate max-w-[60px]"
+                style={{ background: `${displayTag.color}40`, color: displayTag.color }}
+                title={displayTag.name}
+              >
+                {displayTag.name}
+              </span>
+            )}
             <span className="text-[0.75rem] font-bold text-white whitespace-nowrap overflow-hidden text-ellipsis min-w-0 drop-shadow-md">
               {session.name}
             </span>

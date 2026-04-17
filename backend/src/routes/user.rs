@@ -492,13 +492,12 @@ pub async fn set_display_tag(
     let db = require_running(&state).await?;
 
     // Verify the tag belongs to the user
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM user_tags WHERE id = $1 AND user_id = $2)",
-    )
-    .bind(body.tag_id)
-    .bind(user.id)
-    .fetch_one(&db.pool)
-    .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_tags WHERE id = $1 AND user_id = $2)")
+            .bind(body.tag_id)
+            .bind(user.id)
+            .fetch_one(&db.pool)
+            .await?;
 
     if !exists {
         return Err(AppError::NotFound("Tag not found".into()));

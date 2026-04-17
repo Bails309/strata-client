@@ -106,11 +106,13 @@ export default function SessionBar() {
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
 
-  // Load user tags and display-tag map
+  // Load user tags and display-tag map whenever sessions change
   useEffect(() => {
-    getTags().then(setUserTags).catch(() => {});
-    getDisplayTags().then(setDisplayTagMap).catch(() => {});
-  }, []);
+    if (sessions.length > 0) {
+      getTags().then(setUserTags).catch(() => {});
+      getDisplayTags().then(setDisplayTagMap).catch(() => {});
+    }
+  }, [sessions.length]);
 
   const handleSetDisplayTag = useCallback(async (connectionId: string, tagId: string) => {
     try {
@@ -129,6 +131,11 @@ export default function SessionBar() {
         return next;
       });
     } catch { /* ignore */ }
+  }, []);
+
+  // Refresh tags list (called when any tag picker is opened)
+  const refreshTags = useCallback(() => {
+    getTags().then(setUserTags).catch(() => {});
   }, []);
 
   // Close share popover on outside click
@@ -490,6 +497,7 @@ export default function SessionBar() {
                 userTags={userTags}
                 onSetDisplayTag={handleSetDisplayTag}
                 onRemoveDisplayTag={handleRemoveDisplayTag}
+                onTagPickerOpen={refreshTags}
               />
             ))}
           </div>
@@ -538,7 +546,7 @@ export default function SessionBar() {
 
 function SessionThumbnail({
   session, isActive, onSwitch, onClose, onReconnect, sessionBarCollapsed,
-  displayTag, userTags, onSetDisplayTag, onRemoveDisplayTag,
+  displayTag, userTags, onSetDisplayTag, onRemoveDisplayTag, onTagPickerOpen,
 }: {
   session: GuacSession;
   isActive: boolean;
@@ -550,6 +558,7 @@ function SessionThumbnail({
   userTags: UserTag[];
   onSetDisplayTag: (connectionId: string, tagId: string) => void;
   onRemoveDisplayTag: (connectionId: string) => void;
+  onTagPickerOpen: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
@@ -618,7 +627,7 @@ function SessionThumbnail({
           <button
             className="absolute top-1 left-1 w-[22px] h-[22px] flex items-center justify-center rounded border-0 text-white cursor-pointer opacity-60 p-0 transition-all duration-150 hover:opacity-100 hover:scale-110"
             style={{ background: displayTag ? displayTag.color : 'rgba(255,255,255,0.15)', zIndex: 10 }}
-            onClick={(e) => { e.stopPropagation(); setTagPickerOpen(!tagPickerOpen); }}
+            onClick={(e) => { e.stopPropagation(); if (!tagPickerOpen) onTagPickerOpen(); setTagPickerOpen(!tagPickerOpen); }}
             title={displayTag ? `Display tag: ${displayTag.name} — click to change` : 'Set display tag'}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

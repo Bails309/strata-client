@@ -511,6 +511,16 @@ export default function SessionClient() {
   // Re-attach when switching back to an existing session
   useEffect(() => {
     if (!currentSession || !containerRef.current || phase !== 'connected') return;
+    // In multi-monitor mode, ensure the display element is in the container
+    // but don't override the scale (multi-monitor manages its own scaling).
+    if (currentSession._multiMonitor) {
+      const el = currentSession.displayEl;
+      if (el.parentElement !== containerRef.current) {
+        containerRef.current.innerHTML = '';
+        containerRef.current.appendChild(el);
+      }
+      return;
+    }
     attachSession(currentSession, containerRef.current);
   }, [activeSessionId, currentSession, phase]);
 
@@ -1008,6 +1018,8 @@ export default function SessionClient() {
 function attachSession(session: GuacSession, container: HTMLElement) {
   // Don't steal the display element from an open popup window
   if (session._popout && !session._popout.window.closed) return;
+  // Don't interfere with multi-monitor scaling — it manages its own scale
+  if (session._multiMonitor) return;
 
   const display = session.client.getDisplay();
   const el = session.displayEl;

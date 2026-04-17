@@ -1,4 +1,4 @@
-use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -13,24 +13,6 @@ use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use axum::extract::Extension;
-
-/// Resolve final username/password from credential lookup + owner fallback.
-///
-/// If both credential username and password are present, use them both.
-/// If only password is found (no stored username), fall back to the
-/// owner's username from the users table.  Otherwise return (None, None).
-#[cfg(test)]
-fn resolve_final_credentials(
-    cred_username: Option<String>,
-    cred_password: Option<String>,
-    owner_username: Option<String>,
-) -> (Option<String>, Option<String>) {
-    match (cred_username, cred_password) {
-        (Some(u), Some(p)) => (Some(u), Some(p)),
-        (None, Some(p)) => (owner_username, Some(p)),
-        _ => (None, None),
-    }
-}
 
 /// Rate limiter for shared tunnel connections (per share_token).
 static SHARE_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
@@ -85,8 +67,8 @@ pub async fn create_share(
     }
 
     // Verify user has access to this connection
-    let has_access: bool = if user.role == "admin" {
-        // Admins can share any connection
+    let has_access: bool = if user.can_access_all_connections() {
+        // Users with connection management permissions can share any connection
         sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)",
         )
@@ -184,20 +166,16 @@ pub async fn revoke_share(
 
 // ── Join a shared connection (public, no auth required) ──────────────
 
-#[derive(Deserialize, Default)]
-pub struct SharedTunnelQuery {}
-
 pub async fn ws_shared_tunnel(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
     Path(share_token): Path<String>,
-    Query(_query): Query<SharedTunnelQuery>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     // Rate limit shared tunnel connections
     {
-        let mut map = SHARE_RATE_LIMIT.lock().unwrap();
+        let mut map = SHARE_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         // Prune entire map if too large to prevent OOM
         if map.len() > MAX_SHARE_RATE_ENTRIES {
             map.clear();
@@ -238,12 +216,8 @@ pub async fn ws_shared_tunnel(
 
     let is_control = mode == "control";
 
-    // Extract client IP for audit logging
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
+    // Extract client IP using the shared helper with ConnectInfo fallback
+    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
         .unwrap_or_else(|| addr.ip().to_string());
 
     // Find the owner's active session for this connection
@@ -469,23 +443,7 @@ mod tests {
     }
 
     // ── SharedTunnelQuery deserialization ───────────────────────────
-    #[test]
-    fn shared_tunnel_query_defaults() {
-        let _q: SharedTunnelQuery = serde_json::from_str("{}").unwrap();
-        // After NVR rewrite the struct has no fields; just verify it deserializes.
-    }
-
-    #[test]
-    fn shared_tunnel_query_with_extra_fields_ignored() {
-        // Extra fields are silently ignored by serde default
-        let _q: SharedTunnelQuery =
-            serde_json::from_str(r#"{"width":1920,"height":1080,"dpi":144}"#).unwrap();
-    }
-
-    #[test]
-    fn shared_tunnel_query_partial() {
-        let _q: SharedTunnelQuery = serde_json::from_str(r#"{"width":2560}"#).unwrap();
-    }
+    // (Removed: SharedTunnelQuery was dead code with no fields)
 
     #[test]
     fn share_link_response_control_mode() {
@@ -537,18 +495,7 @@ mod tests {
     }
 
     // ── SharedTunnelQuery edge cases ───────────────────────────────
-
-    #[test]
-    fn shared_tunnel_query_all_zeros() {
-        let _q: SharedTunnelQuery =
-            serde_json::from_str(r#"{"width":0,"height":0,"dpi":0}"#).unwrap();
-    }
-
-    #[test]
-    fn shared_tunnel_query_large_values() {
-        let _q: SharedTunnelQuery =
-            serde_json::from_str(r#"{"width":7680,"height":4320,"dpi":600}"#).unwrap();
-    }
+    // (Removed: SharedTunnelQuery was dead code with no fields)
 
     // ── ShareLinkResponse field access ─────────────────────────────
 
@@ -565,50 +512,5 @@ mod tests {
     }
 
     // ── resolve_final_credentials ──────────────────────────────────
-
-    #[test]
-    fn resolve_creds_both_present() {
-        let (u, p) = resolve_final_credentials(
-            Some("admin".into()),
-            Some("pass".into()),
-            Some("owner".into()),
-        );
-        assert_eq!(u.as_deref(), Some("admin"));
-        assert_eq!(p.as_deref(), Some("pass"));
-    }
-
-    #[test]
-    fn resolve_creds_username_none_falls_back_to_owner() {
-        let (u, p) = resolve_final_credentials(None, Some("pass".into()), Some("owner".into()));
-        assert_eq!(u.as_deref(), Some("owner"));
-        assert_eq!(p.as_deref(), Some("pass"));
-    }
-
-    #[test]
-    fn resolve_creds_username_none_owner_none() {
-        let (u, p) = resolve_final_credentials(None, Some("pass".into()), None);
-        assert!(u.is_none());
-        assert_eq!(p.as_deref(), Some("pass"));
-    }
-
-    #[test]
-    fn resolve_creds_both_none() {
-        let (u, p) = resolve_final_credentials(None, None, Some("owner".into()));
-        assert!(u.is_none());
-        assert!(p.is_none());
-    }
-
-    #[test]
-    fn resolve_creds_password_none() {
-        let (u, p) = resolve_final_credentials(Some("admin".into()), None, Some("owner".into()));
-        assert!(u.is_none());
-        assert!(p.is_none());
-    }
-
-    #[test]
-    fn resolve_creds_all_none() {
-        let (u, p) = resolve_final_credentials(None, None, None);
-        assert!(u.is_none());
-        assert!(p.is_none());
-    }
+    // (Removed: was a #[cfg(test)] duplicate of tunnel.rs resolve_credentials)
 }

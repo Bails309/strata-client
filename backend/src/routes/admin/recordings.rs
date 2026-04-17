@@ -3,7 +3,7 @@
 
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::{Extension, Json};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
@@ -107,7 +107,10 @@ struct PeakHourRow {
 /// GET /api/admin/session-stats – aggregate session statistics for the dashboard.
 pub async fn session_stats(
     State(state): State<SharedState>,
+    Extension(user): Extension<crate::services::middleware::AuthUser>,
 ) -> Result<Json<SessionStats>, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
+
     let (db, active_now) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(AppError::SetupRequired)?;
@@ -115,111 +118,86 @@ pub async fn session_stats(
         (db, active)
     };
 
-    let cutoff = "NOW() - INTERVAL '30 days'";
-
-    let (total_sessions,): (i64,) = sqlx::query_as(&format!(
-        "SELECT COUNT(*) FROM recordings WHERE started_at >= {cutoff}"
-    ))
-    .fetch_one(&db.pool)
-    .await?;
-
-    let (total_hours,): (f64,) = sqlx::query_as(&format!(
-        "SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM recordings WHERE started_at >= {cutoff}"
-    ))
-    .fetch_one(&db.pool)
-    .await?;
-
-    let (unique_users,): (i64,) = sqlx::query_as(&format!(
-        "SELECT COUNT(DISTINCT user_id) FROM recordings WHERE started_at >= {cutoff}"
-    ))
-    .fetch_one(&db.pool)
-    .await?;
-
-    // Average duration (minutes)
-    let (avg_duration_mins,): (f64,) = sqlx::query_as(&format!(
-        "SELECT COALESCE(AVG(duration_secs::float) / 60.0, 0.0) FROM recordings WHERE started_at >= {cutoff} AND duration_secs IS NOT NULL"
-    ))
-    .fetch_one(&db.pool)
-    .await?;
-
-    // Median duration (minutes)
-    let (median_duration_mins,): (f64,) = sqlx::query_as(&format!(
-        "SELECT COALESCE((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_secs))::float / 60.0, 0.0) FROM recordings WHERE started_at >= {cutoff} AND duration_secs IS NOT NULL"
-    ))
-    .fetch_one(&db.pool)
-    .await?;
-
-    // Total bandwidth
-    let (total_bandwidth_bytes,): (i64,) = sqlx::query_as(&format!(
-        "SELECT COALESCE(SUM(COALESCE(bytes_from_guacd, 0) + COALESCE(bytes_to_guacd, 0)), 0)::bigint FROM recordings WHERE started_at >= {cutoff}"
-    ))
+    // Combine scalar aggregates into a single query using a CTE
+    let (total_sessions, total_hours, unique_users, avg_duration_mins, median_duration_mins, total_bandwidth_bytes): (i64, f64, i64, f64, f64, i64) = sqlx::query_as(
+        "WITH cutoff_data AS (
+            SELECT * FROM recordings WHERE started_at >= NOW() - INTERVAL '30 days'
+        )
+        SELECT
+            (SELECT COUNT(*) FROM cutoff_data),
+            (SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM cutoff_data),
+            (SELECT COUNT(DISTINCT user_id) FROM cutoff_data),
+            (SELECT COALESCE(AVG(duration_secs::float) / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
+            (SELECT COALESCE((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_secs))::float / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
+            (SELECT COALESCE(SUM(COALESCE(bytes_from_guacd, 0) + COALESCE(bytes_to_guacd, 0)), 0)::bigint FROM cutoff_data)"
+    )
     .fetch_one(&db.pool)
     .await?;
 
     // Daily trend (last 30 days)
-    let daily_trend: Vec<DailyTrendRow> = sqlx::query_as(&format!(
+    let daily_trend: Vec<DailyTrendRow> = sqlx::query_as(
         "SELECT started_at::date AS date,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS hours,
                 COUNT(DISTINCT user_id) AS unique_users
          FROM recordings
-         WHERE started_at >= {cutoff}
+         WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY started_at::date
          ORDER BY date"
-    ))
+    )
     .fetch_all(&db.pool)
     .await?;
 
     // Protocol distribution
-    let protocol_distribution: Vec<ProtocolDistributionRow> = sqlx::query_as(&format!(
+    let protocol_distribution: Vec<ProtocolDistributionRow> = sqlx::query_as(
         "SELECT COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'unknown') AS protocol,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
          FROM recordings r
-         WHERE started_at >= {cutoff}
+         WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY protocol
          ORDER BY sessions DESC"
-    ))
+    )
     .fetch_all(&db.pool)
     .await?;
 
     // Peak hours (0-23)
-    let peak_hours: Vec<PeakHourRow> = sqlx::query_as(&format!(
+    let peak_hours: Vec<PeakHourRow> = sqlx::query_as(
         "SELECT EXTRACT(HOUR FROM started_at)::float AS hour,
                 COUNT(*) AS sessions
          FROM recordings
-         WHERE started_at >= {cutoff}
+         WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY hour
          ORDER BY hour"
-    ))
+    )
     .fetch_all(&db.pool)
     .await?;
 
-    let top_connections: Vec<TopConnectionRow> = sqlx::query_as(&format!(
+    let top_connections: Vec<TopConnectionRow> = sqlx::query_as(
         "SELECT connection_name AS name,
                 COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'rdp') AS protocol,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
          FROM recordings r
-         WHERE started_at >= {cutoff}
+         WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY connection_id, connection_name
          ORDER BY sessions DESC
          LIMIT 10"
-    ))
+    )
     .fetch_all(&db.pool)
     .await?;
 
-    let top_users: Vec<TopUserRow> = sqlx::query_as(&format!(
+    let top_users: Vec<TopUserRow> = sqlx::query_as(
         "SELECT username,
                 COUNT(*) AS sessions,
                 COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours,
                 MAX(started_at) AS last_session
          FROM recordings
-         WHERE started_at >= {cutoff}
+         WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY user_id, username
          ORDER BY sessions DESC
          LIMIT 10"
-    ))
+    )
     .fetch_all(&db.pool)
     .await?;
 

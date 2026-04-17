@@ -266,6 +266,7 @@ pub async fn update_settings(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<SettingsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Block restricted keys — must use dedicated endpoints
@@ -411,6 +412,7 @@ pub async fn update_sso(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<SsoUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Validate issuer URL uses HTTPS
@@ -461,6 +463,7 @@ pub async fn update_auth_methods(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<AuthMethodsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Ensure at least one method is enabled
@@ -533,6 +536,7 @@ pub async fn update_vault(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<VaultUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let _db = require_running(&state).await?;
 
     use crate::config::{VaultConfig, VaultMode};
@@ -684,6 +688,7 @@ pub async fn update_kerberos(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<KerberosUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Validate hostname-like values to prevent injection
@@ -770,6 +775,7 @@ pub async fn create_kerberos_realm(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateKerberosRealmRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Validate hostname-like values
@@ -839,6 +845,7 @@ pub async fn update_kerberos_realm(
     Path(realm_id): Path<Uuid>,
     Json(body): Json<UpdateKerberosRealmRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Validate hostname-like values (parity with create)
@@ -848,17 +855,7 @@ pub async fn update_kerberos_realm(
         body.admin_server.as_deref(),
     )?;
 
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kerberos_realms WHERE id = $1)")
-            .bind(realm_id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap_or(false);
-    if !exists {
-        return Err(AppError::NotFound("Kerberos realm not found".into()));
-    }
-
-    // Use a transaction so unset-others + field updates are atomic
+    // Use a transaction so unset-others + field update are atomic
     let mut tx = db.pool.begin().await?;
 
     // If marking as default, unset other defaults
@@ -871,55 +868,31 @@ pub async fn update_kerberos_realm(
         .await?;
     }
 
-    if let Some(ref realm) = body.realm {
-        sqlx::query("UPDATE kerberos_realms SET realm = $1, updated_at = now() WHERE id = $2")
-            .bind(realm)
-            .bind(realm_id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(ref kdc) = body.kdc_servers {
-        sqlx::query(
-            "UPDATE kerberos_realms SET kdc_servers = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(kdc.join(","))
-        .bind(realm_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref admin) = body.admin_server {
-        sqlx::query(
-            "UPDATE kerberos_realms SET admin_server = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(admin)
-        .bind(realm_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref tl) = body.ticket_lifetime {
-        sqlx::query(
-            "UPDATE kerberos_realms SET ticket_lifetime = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(tl)
-        .bind(realm_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref rl) = body.renew_lifetime {
-        sqlx::query(
-            "UPDATE kerberos_realms SET renew_lifetime = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(rl)
-        .bind(realm_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(d) = body.is_default {
-        sqlx::query("UPDATE kerberos_realms SET is_default = $1, updated_at = now() WHERE id = $2")
-            .bind(d)
-            .bind(realm_id)
-            .execute(&mut *tx)
-            .await?;
+    // Single UPDATE with COALESCE for each optional field
+    let kdc_csv = body.kdc_servers.as_ref().map(|v| v.join(","));
+    let result = sqlx::query(
+        "UPDATE kerberos_realms SET
+            realm = COALESCE($2, realm),
+            kdc_servers = COALESCE($3, kdc_servers),
+            admin_server = COALESCE($4, admin_server),
+            ticket_lifetime = COALESCE($5, ticket_lifetime),
+            renew_lifetime = COALESCE($6, renew_lifetime),
+            is_default = COALESCE($7, is_default),
+            updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(realm_id)
+    .bind(body.realm.as_deref())
+    .bind(kdc_csv.as_deref())
+    .bind(body.admin_server.as_deref())
+    .bind(body.ticket_lifetime.as_deref())
+    .bind(body.renew_lifetime.as_deref())
+    .bind(body.is_default)
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Kerberos realm not found".into()));
     }
 
     tx.commit().await?;
@@ -940,6 +913,7 @@ pub async fn delete_kerberos_realm(
     Extension(user): Extension<AuthUser>,
     Path(realm_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     let deleted = sqlx::query("DELETE FROM kerberos_realms WHERE id = $1")
@@ -981,8 +955,12 @@ async fn regenerate_krb5_conf(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), A
 
     let configs = realm_rows_to_configs(&rows);
 
-    kerberos::write_krb5_conf_multi(&configs, "/etc/krb5/krb5.conf")
-        .map_err(|e| AppError::Internal(format!("krb5.conf write failed: {e}")))?;
+    tokio::task::spawn_blocking(move || {
+        kerberos::write_krb5_conf_multi(&configs, "/etc/krb5/krb5.conf")
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("krb5.conf task failed: {e}")))?
+    .map_err(|e| AppError::Internal(format!("krb5.conf write failed: {e}")))?;
 
     Ok(())
 }
@@ -1004,6 +982,7 @@ pub async fn update_recordings(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<RecordingsUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     settings::set(
         &db.pool,
@@ -1097,6 +1076,7 @@ pub async fn create_role(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateRoleRequest>,
 ) -> Result<Json<RoleRow>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let row: RoleRow = sqlx::query_as(
         "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions) 
@@ -1147,95 +1127,43 @@ pub async fn update_role(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateRoleRequest>,
 ) -> Result<Json<RoleRow>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
-    let mut tx = db.pool.begin().await?;
-
-    if let Some(ref name) = body.name {
-        sqlx::query("UPDATE roles SET name = $1 WHERE id = $2")
-            .bind(name)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    if let Some(v) = body.can_manage_system {
-        sqlx::query("UPDATE roles SET can_manage_system = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_manage_users {
-        sqlx::query("UPDATE roles SET can_manage_users = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_manage_connections {
-        sqlx::query("UPDATE roles SET can_manage_connections = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_view_audit_logs {
-        sqlx::query("UPDATE roles SET can_view_audit_logs = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_create_users {
-        sqlx::query("UPDATE roles SET can_create_users = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_create_user_groups {
-        sqlx::query("UPDATE roles SET can_create_user_groups = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_create_connections {
-        sqlx::query("UPDATE roles SET can_create_connections = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_create_connection_folders {
-        sqlx::query("UPDATE roles SET can_create_connection_folders = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_create_sharing_profiles {
-        sqlx::query("UPDATE roles SET can_create_sharing_profiles = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.can_view_sessions {
-        sqlx::query("UPDATE roles SET can_view_sessions = $1 WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    tx.commit().await?;
-
-    let row: RoleRow = sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions FROM roles WHERE id = $1")
-        .bind(id)
-        .fetch_one(&db.pool)
-        .await?;
+    // Single UPDATE with COALESCE for each optional field
+    let row: RoleRow = sqlx::query_as(
+        "UPDATE roles SET
+            name = COALESCE($2, name),
+            can_manage_system = COALESCE($3, can_manage_system),
+            can_manage_users = COALESCE($4, can_manage_users),
+            can_manage_connections = COALESCE($5, can_manage_connections),
+            can_view_audit_logs = COALESCE($6, can_view_audit_logs),
+            can_create_users = COALESCE($7, can_create_users),
+            can_create_user_groups = COALESCE($8, can_create_user_groups),
+            can_create_connections = COALESCE($9, can_create_connections),
+            can_create_connection_folders = COALESCE($10, can_create_connection_folders),
+            can_create_sharing_profiles = COALESCE($11, can_create_sharing_profiles),
+            can_view_sessions = COALESCE($12, can_view_sessions)
+         WHERE id = $1
+         RETURNING id, name, can_manage_system, can_manage_users, can_manage_connections,
+                   can_view_audit_logs, can_create_users, can_create_user_groups,
+                   can_create_connections, can_create_connection_folders,
+                   can_create_sharing_profiles, can_view_sessions",
+    )
+    .bind(id)
+    .bind(body.name.as_deref())
+    .bind(body.can_manage_system)
+    .bind(body.can_manage_users)
+    .bind(body.can_manage_connections)
+    .bind(body.can_view_audit_logs)
+    .bind(body.can_create_users)
+    .bind(body.can_create_user_groups)
+    .bind(body.can_create_connections)
+    .bind(body.can_create_connection_folders)
+    .bind(body.can_create_sharing_profiles)
+    .bind(body.can_view_sessions)
+    .fetch_one(&db.pool)
+    .await?;
 
     audit::log(
         &db.pool,
@@ -1253,6 +1181,7 @@ pub async fn delete_role(
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Protect system roles
@@ -1350,6 +1279,7 @@ pub async fn create_connection(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionRow>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let port = body.port.unwrap_or(3389);
     let extra = normalize_extra(&body.extra);
@@ -1385,6 +1315,7 @@ pub async fn update_connection(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<CreateConnectionRequest>,
 ) -> Result<Json<ConnectionRow>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let port = body.port.unwrap_or(3389);
     let extra = normalize_extra(&body.extra);
@@ -1421,6 +1352,7 @@ pub async fn delete_connection(
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let result = sqlx::query(
         "UPDATE connections SET soft_deleted_at = now() WHERE id = $1 AND soft_deleted_at IS NULL",
@@ -1485,6 +1417,7 @@ pub async fn update_role_mappings(
     axum::extract::Path(role_id): axum::extract::Path<Uuid>,
     Json(body): Json<RoleMappingUpdate>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Replace all mappings for this role
@@ -1564,8 +1497,10 @@ pub struct UserListQuery {
 
 pub async fn list_users(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Query(query): axum::extract::Query<UserListQuery>,
 ) -> Result<Json<Vec<UserRow>>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
     let include_deleted = query.include_deleted.unwrap_or(false);
 
@@ -1596,6 +1531,7 @@ pub async fn restore_user(
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
     let result =
         sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL")
@@ -1623,6 +1559,7 @@ pub async fn delete_user(
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
     let result =
         sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
@@ -1651,6 +1588,7 @@ pub async fn update_user(
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Verify the target role exists
@@ -1689,6 +1627,7 @@ pub async fn create_user(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Normalize email and username to lowercase for case-insensitive matching
@@ -1773,6 +1712,7 @@ pub async fn reset_user_password(
     Extension(admin): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_user_management_permission(&admin)?;
     let db = require_running(&state).await?;
 
     // Verify user exists and is a local account
@@ -1846,8 +1786,10 @@ pub struct AuditLogQuery {
 
 pub async fn list_audit_logs(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Query(query): axum::extract::Query<AuditLogQuery>,
 ) -> Result<Json<Vec<AuditLogRow>>, AppError> {
+    crate::services::middleware::check_audit_permission(&user)?;
     let db = require_running(&state).await?;
     let (per_page, offset) = paginate(query.page, query.per_page, 200);
 
@@ -1897,6 +1839,7 @@ pub async fn create_connection_folder(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateFolderRequest>,
 ) -> Result<Json<ConnectionFolderRow>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let row: ConnectionFolderRow = sqlx::query_as(
         "INSERT INTO connection_folders (name, parent_id) VALUES ($1, $2) RETURNING id, name, parent_id",
@@ -1944,6 +1887,7 @@ pub async fn delete_connection_folder(
     Extension(user): Extension<AuthUser>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let result = sqlx::query("DELETE FROM connection_folders WHERE id = $1")
         .bind(id)
@@ -1977,7 +1921,9 @@ pub fn format_guac_inst(opcode: &str, args: &[&str]) -> String {
 
 pub async fn list_active_sessions(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<crate::services::session_registry::SessionInfo>>, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
     let _db = require_running(&state).await?;
     let registry = {
         let s = state.read().await;
@@ -1996,6 +1942,7 @@ pub async fn kill_sessions(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<KillSessionsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
     let db = require_running(&state).await?;
     let registry = {
         let s = state.read().await;
@@ -2034,9 +1981,11 @@ pub struct ObserveQuery {
 pub async fn observe_session(
     ws: axum::extract::WebSocketUpgrade,
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     axum::extract::Path(session_id): axum::extract::Path<String>,
     axum::extract::Query(query): axum::extract::Query<ObserveQuery>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    crate::services::middleware::check_session_permission(&user)?;
     let _db = require_running(&state).await?;
     let registry = {
         let s = state.read().await;
@@ -2385,7 +2334,9 @@ use crate::services::ad_sync::{AdSyncConfig, AdSyncRun};
 
 pub async fn list_ad_sync_configs(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<AdSyncConfig>>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let mut rows: Vec<AdSyncConfig> =
         sqlx::query_as("SELECT * FROM ad_sync_configs ORDER BY label")
@@ -2432,6 +2383,7 @@ pub async fn create_ad_sync_config(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Validate LDAP URL uses a safe scheme
@@ -2544,6 +2496,7 @@ pub async fn update_ad_sync_config(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Verify exists
@@ -2768,6 +2721,7 @@ pub async fn delete_ad_sync_config(
     Extension(user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let result = sqlx::query("DELETE FROM ad_sync_configs WHERE id = $1")
         .bind(id)
@@ -2799,8 +2753,10 @@ pub async fn delete_ad_sync_config(
 
 pub async fn trigger_ad_sync(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let mut config: AdSyncConfig = sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
         .bind(id)
@@ -2831,8 +2787,10 @@ pub async fn trigger_ad_sync(
 
 pub async fn test_ad_sync_connection(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateAdSyncConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
     // Resolve password: if it's a mask, fetch from DB. Then unseal.
@@ -2916,8 +2874,10 @@ pub async fn test_ad_sync_connection(
 
 pub async fn list_ad_sync_runs(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(config_id): Path<Uuid>,
 ) -> Result<Json<Vec<AdSyncRun>>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let rows: Vec<AdSyncRun> = sqlx::query_as(
         "SELECT * FROM ad_sync_runs WHERE config_id = $1 ORDER BY started_at DESC LIMIT 50",
@@ -2969,8 +2929,10 @@ pub async fn list_admin_tags(
 
 pub async fn create_admin_tag(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateAdminTagReq>,
 ) -> Result<Json<AdminTag>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let name = body.name.trim().to_string();
     if name.is_empty() || name.len() > 50 {
@@ -2979,6 +2941,9 @@ pub async fn create_admin_tag(
         ));
     }
     let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
+    if !crate::routes::user::is_valid_hex_color(&color) {
+        return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+    }
     let tag: AdminTag = sqlx::query_as(
         "INSERT INTO admin_tags (name, color) VALUES ($1, $2) RETURNING id, name, color, created_at",
     )
@@ -2991,9 +2956,11 @@ pub async fn create_admin_tag(
 
 pub async fn update_admin_tag(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Path(tag_id): Path<Uuid>,
     Json(body): Json<UpdateAdminTagReq>,
 ) -> Result<Json<AdminTag>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     if let Some(ref n) = body.name {
         let n = n.trim();
@@ -3001,6 +2968,11 @@ pub async fn update_admin_tag(
             return Err(AppError::Validation(
                 "Tag name must be 1-50 characters".into(),
             ));
+        }
+    }
+    if let Some(ref c) = body.color {
+        if !crate::routes::user::is_valid_hex_color(c) {
+            return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
         }
     }
     let tag: AdminTag = sqlx::query_as(
@@ -3046,20 +3018,26 @@ pub async fn list_admin_connection_tags(
 
 pub async fn set_admin_connection_tags(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
     Json(body): Json<SetAdminConnectionTagsReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
     let mut tx = db.pool.begin().await?;
     sqlx::query("DELETE FROM admin_connection_tags WHERE connection_id = $1")
         .bind(body.connection_id)
         .execute(&mut *tx)
         .await?;
-    for tag_id in &body.tag_ids {
-        sqlx::query("INSERT INTO admin_connection_tags (connection_id, tag_id) VALUES ($1, $2)")
-            .bind(body.connection_id)
-            .bind(tag_id)
-            .execute(&mut *tx)
-            .await?;
+    if !body.tag_ids.is_empty() {
+        sqlx::query(
+            "INSERT INTO admin_connection_tags (connection_id, tag_id)
+             SELECT $1, unnest($2::uuid[])
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(body.connection_id)
+        .bind(&body.tag_ids)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
@@ -3484,7 +3462,7 @@ mod tests {
             guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
-            )),
+            )).await,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -3503,7 +3481,7 @@ mod tests {
             guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
-            )),
+            )).await,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

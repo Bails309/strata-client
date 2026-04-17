@@ -409,7 +409,7 @@ mod tests {
             guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
-            )),
+            )).await,
             started_at: std::time::Instant::now(),
         }));
         std::env::remove_var("STRATA_ALLOWED_ORIGINS");

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.15.3-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.16.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -49,7 +49,7 @@
 - **Active Directory LDAP sync** — Automatic computer account import from AD via LDAP/LDAPS with scheduled background sync, soft-delete lifecycle, multiple search bases per source, filter presets, gMSA/MSA exclusion, and configurable connection defaults (RDP performance flags, session recording settings)
 - **AD auth methods** — Simple bind (DN + password) or Kerberos keytab (`kinit` + GSSAPI) per AD source; custom CA certificate upload for internal LDAPS
 - **Connection parameter tooltips** — Hover tooltips on all connection settings sourced from the official [Apache Guacamole documentation](https://guacamole.apache.org/doc/gug/configuring-guacamole.html)
-- **Granular RBAC** — 10-permission role system: administer system, audit logs, view sessions, create users, create roles, create connections, create connection folders, and sharing connections — with `can_manage_system` as a super-admin override
+- **Granular RBAC** — 10-permission role system: administer system, audit logs, view sessions, create users, create roles, create connections, create connection folders, and sharing connections — with `can_manage_system` as a super-admin override. All admin API endpoints enforce granular permission checks, so limited-privilege admin roles are restricted to only the endpoints their permissions allow
 - **Credential profiles** — Saved per-user credential profiles with optional TTL expiry, profile selector on the Dashboard, and in-line renewal when credentials expire at connect time
 - **Session recording** — Toggleable Guacamole-native session capture with configurable retention
 - **Immutable audit log** — SHA-256 hash-chained, append-only audit trail
@@ -59,7 +59,7 @@
 - **Admin tags** — System-wide tags created by administrators for organizational categorization of connections; visible (read-only) to all users on the Dashboard alongside personal tags
 - **Recording disclaimer / Terms of Service** — Mandatory first-login acceptance modal covering session recording consent, acceptable use, and data protection under UK GDPR. Acceptance is timestamped in the database; declining logs the user out
 - **Quick Share (Temporary File CDN)** — Upload files from the Session Bar and get a random download URL to paste into the remote session's browser. Files are session-scoped and automatically deleted on disconnect. Supports drag-and-drop, up to 20 files per session (500 MB each), and one-click copy-to-clipboard URLs
-- **Browser-based multi-monitor** — Span an RDP session across multiple physical monitors using the Window Management API (Chromium 100+). Secondary screens each get their own browser window with offset-translated mouse/keyboard input and `requestAnimationFrame` canvas blitting from the aggregate remote resolution. Compatible with Brave and other privacy-focused browsers via automatic dimension fallback. Secondary windows dynamically resize their canvas when the window is resized. Supports any number of monitors with live screen count detection in the toolbar tooltip. Chrome users must allow popups for the site (one-time prompt) when using 3+ screens
+- **Browser-based multi-monitor** — Span an RDP session across multiple physical monitors using the Window Management API (Chromium 100+). Secondary screens each get their own browser window with offset-translated mouse/keyboard input and `requestAnimationFrame` canvas blitting from the aggregate remote resolution. Uses physical screen coordinates for true 2D layouts (stacked, L-shaped, grid arrangements). Compatible with Brave and other privacy-focused browsers via automatic dimension fallback. Secondary windows dynamically resize their canvas when the window is resized. Supports any number of monitors with live screen count detection in the toolbar tooltip. Chrome users must allow popups for the site (one-time prompt) when using 3+ screens
 - **Unified Sessions Page** — Role-based sessions view combining live session monitoring and recording history; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Unified Session Bar** — Consolidated session controls (Sharing, File Browser, Fullscreen, Pop-out, OSK) into a single, sleek, zero-footprint collapsible right-side dock
 - **Integrated OSK** — Touch toolbar and on-screen keyboard shortcuts integrated directly into the Session Bar dock; no more floating buttons obscuring the remote screen

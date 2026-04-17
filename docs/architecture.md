@@ -189,7 +189,7 @@ Browser                    Backend                   guacd              Target
 ```
 system_settings ──── key/value config store
 users ──────────────── OIDC subject, username, role FK
-roles ──────────────── admin, user (extensible)
+roles ──────────────── granular permissions (can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_view_sessions, etc.)
 connections ──────── target host, protocol, port, domain, description, group FK, ad_source FK
 connection_groups ── folder hierarchy with parent_id self-reference
 role_connections ──── many-to-many role ↔ connection

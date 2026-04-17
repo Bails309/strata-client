@@ -46,24 +46,33 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
             .flatten();
         let recordings_dir = "/var/lib/guacamole/recordings";
 
+        // Parallelise file deletions using concurrent futures
+        let mut delete_futures = Vec::with_capacity(doomed_recordings.len());
         for (storage_path, storage_type) in &doomed_recordings {
-            match storage_type.as_str() {
-                "local" => {
-                    let path = format!("{recordings_dir}/{storage_path}");
-                    if let Err(e) = tokio::fs::remove_file(&path).await {
-                        tracing::warn!("Failed to delete local recording {storage_path}: {e}");
-                    }
-                }
-                "azure" | "azure_blob" => {
-                    if let Some(ref cfg) = azure_cfg {
-                        if let Err(e) = recordings::delete_from_azure(cfg, storage_path).await {
-                            tracing::warn!("Failed to delete Azure recording {storage_path}: {e}");
+            let path = storage_path.clone();
+            let stype = storage_type.clone();
+            let cfg = azure_cfg.clone();
+            let rdir = recordings_dir.to_string();
+            delete_futures.push(async move {
+                match stype.as_str() {
+                    "local" => {
+                        let full_path = format!("{rdir}/{path}");
+                        if let Err(e) = tokio::fs::remove_file(&full_path).await {
+                            tracing::warn!("Failed to delete local recording {path}: {e}");
                         }
                     }
+                    "azure" | "azure_blob" => {
+                        if let Some(ref cfg) = cfg {
+                            if let Err(e) = recordings::delete_from_azure(cfg, &path).await {
+                                tracing::warn!("Failed to delete Azure recording {path}: {e}");
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
+            });
         }
+        futures_util::future::join_all(delete_futures).await;
 
         tracing::info!(
             "Purged {} recording file(s) for users pending hard-delete",

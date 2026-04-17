@@ -22,7 +22,7 @@ static CACHE: LazyLock<Mutex<HashMap<String, CacheEntry>>> =
 pub async fn get(pool: &Pool<Postgres>, key: &str) -> anyhow::Result<Option<String>> {
     // Check cache first
     {
-        let cache = CACHE.lock().unwrap();
+        let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = cache.get(key) {
             if entry.fetched_at.elapsed() < CACHE_TTL {
                 return Ok(entry.value.clone());
@@ -39,7 +39,11 @@ pub async fn get(pool: &Pool<Postgres>, key: &str) -> anyhow::Result<Option<Stri
 
     // Update cache
     {
-        let mut cache = CACHE.lock().unwrap();
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        // Prune stale entries if the cache grows too large
+        if cache.len() > 500 {
+            cache.retain(|_, v| v.fetched_at.elapsed() < CACHE_TTL);
+        }
         cache.insert(
             key.to_string(),
             CacheEntry {
@@ -66,7 +70,7 @@ pub async fn set(pool: &Pool<Postgres>, key: &str, value: &str) -> anyhow::Resul
 
     // Invalidate cache for this key
     {
-        let mut cache = CACHE.lock().unwrap();
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         cache.remove(key);
     }
 
@@ -82,7 +86,7 @@ pub async fn get_all(pool: &Pool<Postgres>) -> anyhow::Result<Vec<(String, Strin
 
     // Populate cache with fresh values
     {
-        let mut cache = CACHE.lock().unwrap();
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         for (k, v) in &rows {
             cache.insert(

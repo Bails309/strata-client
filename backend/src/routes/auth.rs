@@ -28,6 +28,8 @@ static IP_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> 
 static SSO_STATE_STORE: std::sync::LazyLock<Mutex<HashMap<String, Instant>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 const SSO_STATE_TTL_SECS: u64 = 300; // 5 minutes
+/// Hard cap on SSO state entries to prevent OOM from unauthenticated floods.
+const MAX_SSO_STATE_ENTRIES: usize = 10_000;
 
 /// Cached OIDC discovery document with TTL.
 struct CachedDiscovery {
@@ -44,7 +46,7 @@ async fn fetch_oidc_discovery(
 ) -> Result<crate::services::auth::OidcDiscovery, AppError> {
     // Check cache
     {
-        let cache = OIDC_DISCOVERY_CACHE.lock().unwrap();
+        let cache = OIDC_DISCOVERY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = cache.get(issuer_url) {
             if entry.fetched_at.elapsed().as_secs() < OIDC_DISCOVERY_TTL_SECS {
                 return Ok(entry.discovery.clone());
@@ -81,7 +83,7 @@ async fn fetch_oidc_discovery(
 
     // Update cache
     {
-        let mut cache = OIDC_DISCOVERY_CACHE.lock().unwrap();
+        let mut cache = OIDC_DISCOVERY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         cache.insert(
             issuer_url.to_string(),
             CachedDiscovery {
@@ -166,24 +168,44 @@ pub fn check_rate_limit(
     attempts.len() >= max_attempts
 }
 
-/// Extract the client IP from X-Forwarded-For (rightmost non-private entry)
+/// Extract the client IP from X-Forwarded-For (rightmost non-empty entry)
 /// or fall back to "unknown".
-fn extract_client_ip(headers: &HeaderMap) -> String {
+///
+/// This is `pub(crate)` so other route modules (files, tunnel, share) can
+/// reuse the same extraction logic instead of duplicating it.
+/// Use `try_extract_client_ip` when a ConnectInfo fallback is preferred.
+pub(crate) fn extract_client_ip(headers: &HeaderMap) -> String {
+    try_extract_client_ip(headers).unwrap_or_else(|| "unknown".into())
+}
+
+/// Extract the client IP from X-Forwarded-For (rightmost non-empty entry).
+/// Returns `None` when no valid header is present — callers should fall back
+/// to `ConnectInfo` or "unknown".
+pub(crate) fn try_extract_client_ip(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| {
-            // Use rightmost entry — the one added by our trusted proxy (Caddy)
             v.rsplit(',')
                 .map(|s| s.trim())
                 .find(|s| !s.is_empty())
                 .map(|s| s.to_string())
         })
-        .unwrap_or_else(|| "unknown".into())
 }
 
-/// Helper to get the base URL for redirect URIs, respecting proxy headers.
+/// Helper to get the base URL for redirect URIs.
+///
+/// Uses `BASE_URL` env var if set, otherwise derives from proxy headers.
+/// The `Host` header is validated against `ALLOWED_HOSTS` to prevent
+/// SSO redirect hijacking via a spoofed Host header.
 fn get_base_url(headers: &HeaderMap) -> String {
+    // Prefer an explicit BASE_URL env var when available (most secure)
+    if let Ok(base) = std::env::var("BASE_URL") {
+        if !base.is_empty() {
+            return base.trim_end_matches('/').to_string();
+        }
+    }
+
     let protocol = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
@@ -194,12 +216,17 @@ fn get_base_url(headers: &HeaderMap) -> String {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost");
 
-    if host.contains(':') {
-        format!("{}://{}", protocol, host)
-    } else {
-        // If no port and default protocol, keep it clean
-        format!("{}://{}", protocol, host)
+    // Validate the Host header against an allowlist when configured
+    if let Ok(allowed) = std::env::var("ALLOWED_HOSTS") {
+        let allowed_hosts: Vec<&str> = allowed.split(',').map(|s| s.trim()).collect();
+        let host_without_port = host.split(':').next().unwrap_or(host);
+        if !allowed_hosts.iter().any(|&h| h.eq_ignore_ascii_case(host_without_port)) {
+            tracing::warn!(host = host, "Host header not in ALLOWED_HOSTS — using localhost");
+            return format!("{}://localhost", protocol);
+        }
     }
+
+    format!("{}://{}", protocol, host)
 }
 
 #[derive(sqlx::FromRow)]
@@ -249,7 +276,7 @@ pub async fn login(
 
     // ── Per-IP rate limiting ──
     {
-        let mut map = IP_RATE_LIMIT.lock().unwrap();
+        let mut map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         if check_rate_limit(
             &mut map,
             &client_ip,
@@ -265,7 +292,7 @@ pub async fn login(
 
     // ── Per-username rate limiting ──
     {
-        let mut map = RATE_LIMIT.lock().unwrap();
+        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         if check_rate_limit(
             &mut map,
             &body.username,
@@ -285,6 +312,19 @@ pub async fn login(
             .ok_or(AppError::Internal("Database not available".into()))?
     };
 
+    /// Pre-computed Argon2 hash of a dummy password used to make the
+    /// user-not-found path take the same time as the wrong-password path,
+    /// preventing timing-based username enumeration.
+    static DUMMY_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        use argon2::PasswordHasher;
+        let salt = argon2::password_hash::SaltString::from_b64("c29tZXNhbHRzb21lc2FsdA")
+            .expect("valid static salt");
+        argon2::Argon2::default()
+            .hash_password(b"dummy-password-for-timing-equalisation", &salt)
+            .expect("argon2 hash")
+            .to_string()
+    });
+
     let row: Option<UserAuthRow> = sqlx::query_as(
         "SELECT u.id, u.username, u.password_hash, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
@@ -298,11 +338,33 @@ pub async fn login(
     .await
     .map_err(AppError::Database)?;
 
-    let user = row.ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
+    let user = row.ok_or_else(|| {
+        // Perform a dummy Argon2 verification so the response time is
+        // indistinguishable from the wrong-password path.
+        use argon2::{Argon2, PasswordHash, PasswordVerifier};
+        if let Ok(parsed) = PasswordHash::new(&DUMMY_HASH) {
+            let _ = Argon2::default().verify_password(body.password.as_bytes(), &parsed);
+        }
 
+        // Record failed attempt even when user is not found, to make
+        // rate-limit behaviour identical for existing vs non-existing users.
+        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(body.username.clone())
+            .or_default()
+            .push(Instant::now());
+        drop(map);
+        let mut ip_map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        ip_map
+            .entry(client_ip.clone())
+            .or_default()
+            .push(Instant::now());
+        AppError::Auth("Invalid username or password".into())
+    })?;
+
+    // Use generic error message regardless of auth_type to prevent account type enumeration
     let hash = user
         .password_hash
-        .ok_or_else(|| AppError::Auth("This account does not support local login".into()))?;
+        .ok_or_else(|| AppError::Auth("Invalid username or password".into()))?;
 
     // Verify password with Argon2
     use argon2::{Argon2, PasswordHash, PasswordVerifier};
@@ -312,12 +374,12 @@ pub async fn login(
         .verify_password(body.password.as_bytes(), &parsed_hash)
         .map_err(|_| {
             // Record failed attempt for both username and IP
-            let mut map = RATE_LIMIT.lock().unwrap();
+            let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
             map.entry(body.username.clone())
                 .or_default()
                 .push(Instant::now());
             drop(map);
-            let mut ip_map = IP_RATE_LIMIT.lock().unwrap();
+            let mut ip_map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
             ip_map
                 .entry(client_ip.clone())
                 .or_default()
@@ -327,7 +389,7 @@ pub async fn login(
 
     // Successful login — clear rate limit for this user
     {
-        let mut map = RATE_LIMIT.lock().unwrap();
+        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&body.username);
     }
 
@@ -347,7 +409,6 @@ pub async fn login(
         REFRESH_TOKEN_TTL,
     )?;
 
-    let client_ip = extract_client_ip(&headers);
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -405,7 +466,7 @@ pub async fn login(
                     "can_create_sharing_profiles": user.can_create_sharing_profiles,
                 }
             }))
-            .unwrap(),
+            .map_err(|e| AppError::Internal(format!("JSON serialization error: {e}")))?,
         ))
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
@@ -476,7 +537,10 @@ fn create_local_jwt(
 }
 
 /// POST /api/auth/logout – revoke the current token and refresh token.
-pub async fn logout(headers: HeaderMap) -> Result<axum::response::Response, AppError> {
+pub async fn logout(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, AppError> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -515,6 +579,15 @@ pub async fn logout(headers: HeaderMap) -> Result<axum::response::Response, AppE
 
     crate::services::token_revocation::revoke(token, exp);
 
+    // Persist to DB (best-effort) so revocations survive restarts
+    let db_pool = {
+        let s = state.read().await;
+        s.db.as_ref().map(|d| d.pool.clone())
+    };
+    if let Some(pool) = &db_pool {
+        crate::services::token_revocation::persist_revocation(pool, token, exp).await;
+    }
+
     // Also revoke the refresh token if present in cookies
     if let Some(refresh_token) = extract_cookie(&headers, "refresh_token") {
         let refresh_exp = std::time::SystemTime::now()
@@ -523,6 +596,9 @@ pub async fn logout(headers: HeaderMap) -> Result<axum::response::Response, AppE
             .as_secs()
             + REFRESH_TOKEN_TTL as u64;
         crate::services::token_revocation::revoke(refresh_token, refresh_exp);
+        if let Some(pool) = &db_pool {
+            crate::services::token_revocation::persist_revocation(pool, refresh_token, refresh_exp).await;
+        }
     }
 
     // Clear the refresh token cookie
@@ -534,7 +610,8 @@ pub async fn logout(headers: HeaderMap) -> Result<axum::response::Response, AppE
             "refresh_token=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age=0",
         )
         .body(axum::body::Body::from(
-            serde_json::to_string(&json!({ "status": "logged_out" })).unwrap(),
+            serde_json::to_string(&json!({ "status": "logged_out" }))
+                .map_err(|e| AppError::Internal(format!("JSON serialization error: {e}")))?,
         ))
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
@@ -614,7 +691,12 @@ pub async fn change_password(
             .as_secs()
             + 86400;
         crate::services::token_revocation::revoke(token, exp);
+        crate::services::token_revocation::persist_revocation(&db.pool, token, exp).await;
     }
+    let _ = sqlx::query("DELETE FROM active_sessions WHERE user_id = $1")
+        .bind(user.id)
+        .execute(&db.pool)
+        .await;
 
     audit::log(
         &db.pool,
@@ -830,8 +912,6 @@ pub async fn refresh(
     #[derive(serde::Deserialize)]
     struct RefreshClaims {
         sub: String,
-        username: String,
-        role: String,
         token_type: String,
     }
 
@@ -868,22 +948,26 @@ pub async fn refresh(
         .parse()
         .map_err(|_| AppError::Auth("Invalid token subject".into()))?;
 
-    let exists: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL")
-            .bind(user_id)
-            .fetch_optional(&db.pool)
-            .await
-            .map_err(AppError::Database)?;
+    // Re-read username and role from the database to pick up any changes
+    // since the refresh token was issued (e.g. role change, rename).
+    let user_row: Option<(String, String)> = sqlx::query_as(
+        "SELECT u.username, r.name AS role_name
+         FROM users u JOIN roles r ON r.id = u.role_id
+         WHERE u.id = $1 AND u.deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(AppError::Database)?;
 
-    if exists.is_none() {
-        return Err(AppError::Auth("User no longer exists".into()));
-    }
+    let (username, role) = user_row
+        .ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
 
-    // Issue a new access token
+    // Issue a new access token with the latest username/role
     let (access_token, _jti) = create_local_jwt(
         user_id,
-        &claims.username,
-        &claims.role,
+        &username,
+        &role,
         "access",
         ACCESS_TOKEN_TTL,
     )?;
@@ -936,10 +1020,15 @@ pub async fn sso_login(
 
     let state = Uuid::new_v4().to_string();
     {
-        let mut store = SSO_STATE_STORE.lock().unwrap();
+        let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
         // Prune expired entries
         let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
         store.retain(|_, created| *created > cutoff);
+        // Hard cap to prevent OOM from unauthenticated floods
+        if store.len() >= MAX_SSO_STATE_ENTRIES {
+            tracing::warn!("SSO state store at capacity ({MAX_SSO_STATE_ENTRIES}) — rejecting");
+            return Err(AppError::Auth("Too many pending SSO requests. Please try again later.".into()));
+        }
         store.insert(state.clone(), Instant::now());
     }
 
@@ -957,7 +1046,7 @@ pub async fn sso_login(
 #[derive(Deserialize)]
 pub struct SsoCallbackParams {
     pub code: String,
-    pub state: Option<String>,
+    pub state: String,
 }
 
 /// GET /api/auth/sso/callback – handle the OIDC callback.
@@ -967,12 +1056,12 @@ pub async fn sso_callback(
     Query(params): Query<SsoCallbackParams>,
 ) -> Result<axum::response::Response, AppError> {
     // Validate CSRF state parameter
-    let state_value = params.state.as_deref().unwrap_or_default();
+    let state_value = &params.state;
     {
-        let mut store = SSO_STATE_STORE.lock().unwrap();
+        let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
         store.retain(|_, created| *created > cutoff);
-        match store.remove(state_value) {
+        match store.remove(state_value.as_str()) {
             Some(_) => {} // valid — consumed
             None => {
                 return Err(AppError::Auth(
@@ -1328,34 +1417,53 @@ mod tests {
         assert_eq!(get_base_url(&headers), "http://myhost.com");
     }
 
+    /// Create a minimal SharedState with no DB for unit tests.
+    fn test_state() -> SharedState {
+        use crate::services::app_state::{AppState, BootPhase};
+        use crate::services::file_store::FileStore;
+        use crate::services::session_registry::SessionRegistry;
+        std::sync::Arc::new(tokio::sync::RwLock::new(AppState {
+            phase: BootPhase::Running,
+            config: None,
+            db: None,
+            session_registry: SessionRegistry::new(),
+            guacd_pool: None,
+            file_store: FileStore::new(std::env::temp_dir().join("strata-test-logout")).await,
+            started_at: std::time::Instant::now(),
+        }))
+    }
+
     #[tokio::test]
     async fn logout_missing_auth_header() {
+        let state = test_state();
         let headers = HeaderMap::new();
-        let result = logout(headers).await;
+        let result = logout(State(state), headers).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn logout_invalid_auth_header() {
+        let state = test_state();
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,
             "Basic dXNlcjpwYXNz".parse().unwrap(),
         );
-        let result = logout(headers).await;
+        let result = logout(State(state), headers).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn logout_with_bearer_token() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
+        let state = test_state();
         let mut headers = HeaderMap::new();
         // Use a fake JWT-like token (won't decode but that's OK - it goes to the else branch)
         headers.insert(
             axum::http::header::AUTHORIZATION,
             "Bearer some.fake.token".parse().unwrap(),
         );
-        let result = logout(headers).await;
+        let result = logout(State(state), headers).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);
@@ -1364,6 +1472,7 @@ mod tests {
     #[tokio::test]
     async fn logout_with_valid_local_jwt() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
+        let state = test_state();
         let uid = Uuid::new_v4();
         let (token, _jti) =
             create_local_jwt(uid, "test_user", "admin", "access", ACCESS_TOKEN_TTL).unwrap();
@@ -1372,7 +1481,7 @@ mod tests {
             axum::http::header::AUTHORIZATION,
             format!("Bearer {}", token).parse().unwrap(),
         );
-        let result = logout(headers).await;
+        let result = logout(State(state), headers).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status(), 200);

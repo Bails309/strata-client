@@ -38,7 +38,7 @@ impl GuacdPool {
 
     /// Pick the next guacd instance (round-robin).
     pub fn next(&self) -> (&str, u16) {
-        let idx = self.counter.fetch_add(1, Ordering::Relaxed) % self.instances.len();
+        let idx = self.counter.fetch_add(1, Ordering::Relaxed).wrapping_rem(self.instances.len());
         let (ref host, port) = self.instances[idx];
         (host, port)
     }

@@ -134,14 +134,14 @@ pub async fn create_tunnel_ticket(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
-    // Admins bypass this check
-    if user.role != "admin" {
+    // Users with can_manage_connections or can_manage_system bypass role-based access check
+    if !user.can_access_all_connections() {
         let has_access: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM role_connections rc
                 JOIN users u ON u.role_id = rc.role_id
                 WHERE u.id = $1 AND rc.connection_id = $2
-                UNION
+            ) OR EXISTS(
                 SELECT 1 FROM role_folders rf
                 JOIN connections c ON c.folder_id = rf.folder_id
                 JOIN users u ON u.role_id = rf.role_id
@@ -186,7 +186,7 @@ pub async fn ws_tunnel(
 ) -> Result<impl IntoResponse, AppError> {
     // ── Per-user tunnel rate limiting ──
     {
-        let mut map = TUNNEL_RATE_LIMIT.lock().unwrap();
+        let mut map = TUNNEL_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         if map.len() > MAX_TUNNEL_RATE_ENTRIES {
             let cutoff = Instant::now() - std::time::Duration::from_secs(TUNNEL_WINDOW_SECS);
             map.retain(|_, attempts| {
@@ -221,14 +221,14 @@ pub async fn ws_tunnel(
     };
 
     // Verify the user has access to this connection via their role
-    // Admins bypass this check
-    if user.role != "admin" {
+    // Users with connection management permissions bypass role-based access check
+    if !user.can_access_all_connections() {
         let has_access: bool = sqlx::query_scalar(
             "SELECT EXISTS(
                 SELECT 1 FROM role_connections rc
                 JOIN users u ON u.role_id = rc.role_id
                 WHERE u.id = $1 AND rc.connection_id = $2
-                UNION
+            ) OR EXISTS(
                 SELECT 1 FROM role_folders rf
                 JOIN connections c ON c.folder_id = rf.folder_id
                 JOIN users u ON u.role_id = rf.role_id
@@ -321,6 +321,13 @@ pub async fn ws_tunnel(
     // Priority: Vault profile > ticket > query-string fallback
     // Consume the one-time ticket (if provided) to extract credentials
     let ticket_creds = query.ticket.as_deref().and_then(tunnel_tickets::consume);
+
+    // Verify the ticket belongs to the authenticated user (prevent cross-user credential leakage)
+    if let Some(ref tc) = ticket_creds {
+        if tc.user_id != user.id {
+            return Err(AppError::Auth("Tunnel ticket does not belong to the authenticated user".into()));
+        }
+    }
 
     // If the ticket carries a one-off credential_profile_id, decrypt those
     // vault credentials directly (no permanent mapping required).
@@ -482,12 +489,8 @@ pub async fn ws_tunnel(
     .execute(&db.pool)
     .await?;
 
-    // Extract client IP (X-Forwarded-For > ConnectInfo)
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
+    // Extract client IP using the shared helper with ConnectInfo fallback
+    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
         .unwrap_or_else(|| addr.ip().to_string());
 
     // Build NVR context for session recording into the in-memory ring buffer
@@ -545,7 +548,7 @@ pub async fn ws_tunnel(
     let audit_pool = db.pool.clone();
     Ok(ws
         .protocols(["guacamole"])
-        .max_message_size(64 * 1024 * 1024)
+        .max_message_size(1 * 1024 * 1024)
         .on_upgrade(move |socket| async move {
             let nvr = NvrContext {
                 registry: session_registry,

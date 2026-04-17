@@ -25,6 +25,42 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.16.0',
+    subtitle: 'Security Hardening, Granular RBAC & Multi-Monitor 2D Layout',
+    sections: [
+      {
+        title: 'Granular Permission Enforcement',
+        description:
+          'All admin API endpoints now enforce fine-grained permission checks (manage system, manage users, manage connections, view audit logs, view sessions) instead of a blanket admin role check. Limited-privilege admin users can no longer access endpoints beyond their assigned permissions.',
+      },
+      {
+        title: 'Multi-Monitor 2D Layout',
+        description:
+          'Multi-monitor mode now uses physical screen coordinates to build a true 2D layout, correctly handling stacked, L-shaped, grid, and mixed-resolution monitor arrangements. Previously all screens were forced into a horizontal row regardless of physical placement.',
+      },
+      {
+        title: 'Credential Security',
+        description:
+          'Tunnel tickets now zeroize username and password from memory on drop. The refresh token endpoint re-reads the user\'s role from the database so role demotions take effect immediately. Tag color values are validated as hex codes on both user and admin endpoints.',
+      },
+      {
+        title: 'Non-blocking File I/O',
+        description:
+          'The session file store now uses fully async I/O (tokio::fs) and releases its lock before performing disk operations, eliminating async runtime blocking during file uploads, downloads, and cleanup.',
+      },
+      {
+        title: 'Database Optimizations',
+        description:
+          'Bulk tag assignment uses a single INSERT ... SELECT unnest() instead of N+1 individual inserts. Role and Kerberos realm updates use a single COALESCE query. Session stats use a single CTE query instead of six separate queries. New indexes on soft-deleted users and connection access.',
+      },
+      {
+        title: 'Bug Fixes',
+        description:
+          'Custom roles with connection management permissions are no longer incorrectly blocked. Deleting or updating a nonexistent tag now returns a proper 404. Two theoretical JSON serialization panics in the auth module have been replaced with proper error handling.',
+      },
+    ],
+  },
+  {
     version: '0.15.3',
     subtitle: 'Quick Share, Multi-Monitor Fixes & Polish',
     sections: [

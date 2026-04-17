@@ -78,6 +78,9 @@ async fn main() -> anyhow::Result<()> {
     db.migrate().await?;
     tracing::info!("Database connected and migrations applied");
 
+    // ── Load revoked tokens from the database to survive restarts ──
+    services::token_revocation::load_from_db(&db.pool).await;
+
     // ── Ensure default admin account exists ──
     ensure_default_admin(&db).await?;
 
@@ -166,6 +169,9 @@ async fn main() -> anyhow::Result<()> {
     cfg.save(&config_path)
         .map_err(|e| anyhow::anyhow!("Failed to save config: {e}"))?;
 
+    // Clone the pool before `db` is moved into state (needed by background tasks)
+    let db_pool = db.pool.clone();
+
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
         phase: BootPhase::Running,
@@ -175,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
         guacd_pool: Some(guacd_pool),
         file_store: services::file_store::FileStore::new(std::path::PathBuf::from(
             "/tmp/strata-files",
-        )),
+        )).await,
         started_at: std::time::Instant::now(),
     }));
 
@@ -188,6 +194,20 @@ async fn main() -> anyhow::Result<()> {
     // ── Spawn User cleanup background task ──
     services::user_cleanup::spawn_cleanup_task(state.clone());
 
+    // ── Spawn active_sessions cleanup background task ──
+    {
+        let cleanup_pool = db_pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // every 5 min
+            loop {
+                interval.tick().await;
+                let _ = sqlx::query("DELETE FROM active_sessions WHERE expires_at < now()")
+                    .execute(&cleanup_pool)
+                    .await;
+            }
+        });
+    }
+
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
 
@@ -197,9 +217,37 @@ async fn main() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
 
     Ok(())
+}
+
+/// Listen for SIGTERM/SIGINT and return when received, enabling graceful shutdown.
+async fn shutdown_signal() {
+    use tokio::signal;
+
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => { tracing::info!("Received Ctrl+C, starting graceful shutdown"); }
+        _ = terminate => { tracing::info!("Received SIGTERM, starting graceful shutdown"); }
+    }
 }
 
 /// Resolve Vault config from env vars, falling back to persisted config.
@@ -272,7 +320,22 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
         use base64::Engine;
         let mut buf = [0u8; 12];
         rand::RngCore::fill_bytes(&mut rand::rng(), &mut buf);
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+        let generated = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
+        // Only log the generated password if explicitly opted-in (avoid leaking to log aggregators)
+        if std::env::var("STRATA_SHOW_ADMIN_PASSWORD").ok().as_deref() == Some("true") {
+            tracing::warn!("Generated default admin password: {generated}");
+        } else {
+            tracing::warn!(
+                "A default admin password was generated. Set STRATA_SHOW_ADMIN_PASSWORD=true \
+                 to display it in logs, or set DEFAULT_ADMIN_PASSWORD to control it."
+            );
+            // Write to a transient file readable only by the current user
+            let pw_path = std::path::PathBuf::from("/tmp/.strata-admin-password");
+            if std::fs::write(&pw_path, &generated).is_ok() {
+                tracing::warn!("Default admin password written to {}", pw_path.display());
+            }
+        }
+        generated
     });
 
     // Hash the password with Argon2

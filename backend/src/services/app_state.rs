@@ -69,7 +69,7 @@ mod tests {
             db: None,
             session_registry: SessionRegistry::new(),
             guacd_pool: None,
-            file_store: FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
+            file_store: FileStore::new(std::path::PathBuf::from("/tmp/strata-files")).await,
             started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);

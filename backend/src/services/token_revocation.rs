@@ -1,6 +1,9 @@
-//! In-memory JWT token revocation list.
+//! In-memory JWT token revocation list with database-backed persistence.
 //! Tokens are stored as SHA-256 hashes with their expiry time.
 //! Expired entries are pruned periodically to prevent unbounded growth.
+//!
+//! On startup, previously-revoked tokens are reloaded from the
+//! `revoked_tokens` database table so that revocations survive restarts.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -35,7 +38,7 @@ fn token_hash(token: &str) -> String {
 /// Revoke a token. `exp` is the token's expiry as a Unix timestamp.
 pub fn revoke(token: &str, exp: u64) {
     let hash = token_hash(token);
-    let mut map = REVOKED_TOKENS.lock().unwrap();
+    let mut map = REVOKED_TOKENS.lock().unwrap_or_else(|e| e.into_inner());
 
     // Prune expired entries if the map is getting large
     if map.len() > MAX_ENTRIES / 2 {
@@ -61,10 +64,67 @@ pub fn revoke(token: &str, exp: u64) {
     map.insert(hash, RevokedEntry { expires_at: exp });
 }
 
+/// Persist a revocation to the database (best-effort, non-blocking).
+/// Call this after `revoke()` to survive restarts.
+pub async fn persist_revocation(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    token: &str,
+    exp: u64,
+) {
+    let hash = token_hash(token);
+    let expires_at = match chrono::DateTime::from_timestamp(exp as i64, 0) {
+        Some(dt) => dt,
+        None => {
+            tracing::warn!(exp, "persist_revocation: invalid timestamp, using +24h fallback");
+            chrono::Utc::now() + chrono::Duration::hours(24)
+        }
+    };
+    let _ = sqlx::query(
+        "INSERT INTO revoked_tokens (token_hash, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(&hash)
+    .bind(expires_at)
+    .execute(pool)
+    .await;
+}
+
+/// Load revoked tokens from the database into the in-memory cache.
+/// Called once at startup to restore revocations across restarts.
+pub async fn load_from_db(pool: &sqlx::Pool<sqlx::Postgres>) {
+    let now_ts = now_secs() as i64;
+    let now_dt = chrono::DateTime::from_timestamp(now_ts, 0);
+    let rows: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT token_hash, expires_at FROM revoked_tokens WHERE expires_at > $1",
+    )
+    .bind(now_dt)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if !rows.is_empty() {
+        let mut map = REVOKED_TOKENS.lock().unwrap_or_else(|e| e.into_inner());
+        for (hash, expires_at) in rows {
+            map.insert(
+                hash,
+                RevokedEntry {
+                    expires_at: expires_at.timestamp() as u64,
+                },
+            );
+        }
+        tracing::info!("Loaded {} revoked token(s) from database", map.len());
+    }
+
+    // Prune expired rows from DB (best-effort cleanup)
+    let _ = sqlx::query("DELETE FROM revoked_tokens WHERE expires_at <= $1")
+        .bind(now_dt)
+        .execute(pool)
+        .await;
+}
+
 /// Check if a token has been revoked.
 pub fn is_revoked(token: &str) -> bool {
     let hash = token_hash(token);
-    let map = REVOKED_TOKENS.lock().unwrap();
+    let map = REVOKED_TOKENS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = map.get(&hash) {
         // Only consider it revoked if it hasn't naturally expired yet
         entry.expires_at > now_secs()

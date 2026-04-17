@@ -12,10 +12,11 @@ pub fn compute_chain_hash(previous_hash: &str, action_type: &str, details: &str)
 }
 
 /// Append an immutable, hash-chained audit log entry.
-/// Uses `SELECT … FOR UPDATE` on the most recent row to serialise inserts
-/// within a transaction, preventing concurrent requests from reading the
-/// same previous_hash and forking the chain.  This is more granular than
-/// a global advisory lock and allows better throughput under concurrency.
+///
+/// Uses a PostgreSQL advisory lock to serialise inserts, preventing
+/// concurrent requests from reading the same previous_hash and forking
+/// the chain.  This handles the empty-table case correctly (FOR UPDATE
+/// on zero rows is a no-op and provides no serialisation).
 pub async fn log(
     pool: &Pool<Postgres>,
     user_id: Option<Uuid>,
@@ -24,8 +25,15 @@ pub async fn log(
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
 
+    // Advisory lock serialises all audit inserts (key chosen to avoid collisions)
+    const AUDIT_LOCK_KEY: i64 = 0x5354_4155_4449_5400; // "STRAUDIT"
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(AUDIT_LOCK_KEY)
+        .execute(&mut *tx)
+        .await?;
+
     let previous_hash: String = sqlx::query_scalar(
-        "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1 FOR UPDATE",
+        "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1",
     )
     .fetch_optional(&mut *tx)
     .await?

@@ -58,8 +58,8 @@ pub const MAX_FILES_PER_SESSION: usize = 20;
 
 impl FileStore {
     /// Create a new file store.  `root` is created if it does not exist.
-    pub fn new(root: PathBuf) -> Self {
-        std::fs::create_dir_all(&root).ok();
+    pub async fn new(root: PathBuf) -> Self {
+        tokio::fs::create_dir_all(&root).await.ok();
         Self {
             inner: Arc::new(RwLock::new(FileStoreInner {
                 files: HashMap::new(),
@@ -69,20 +69,21 @@ impl FileStore {
         }
     }
 
-    /// Store a file and return its metadata (including the random token).
-    pub async fn store(
+    /// Store a file from an already-written temp path and return its metadata.
+    /// The file at `temp_path` is moved (renamed) into the store directory.
+    pub async fn store_from_path(
         &self,
         session_id: &str,
         user_id: Uuid,
         filename: &str,
         content_type: &str,
-        data: &[u8],
+        temp_path: &std::path::Path,
+        size: u64,
     ) -> Result<StoredFile, FileStoreError> {
-        if data.len() as u64 > MAX_FILE_SIZE {
+        if size > MAX_FILE_SIZE {
             return Err(FileStoreError::TooLarge);
         }
 
-        // Sanitise the filename — strip path separators.
         let safe_name = Path::new(filename)
             .file_name()
             .and_then(|n| n.to_str())
@@ -91,19 +92,26 @@ impl FileStore {
 
         let token = Uuid::new_v4().to_string();
 
-        let mut inner = self.inner.write().await;
+        let inner = self.inner.write().await;
 
-        // Enforce per-session limit.
         let count = inner.sessions.get(session_id).map(|v| v.len()).unwrap_or(0);
         if count >= MAX_FILES_PER_SESSION {
             return Err(FileStoreError::TooManyFiles);
         }
 
-        // Write to disk in a subdirectory named after the token.
         let dir = inner.root.join(&token);
-        std::fs::create_dir_all(&dir).map_err(FileStoreError::Io)?;
         let file_path = dir.join(&safe_name);
-        std::fs::write(&file_path, data).map_err(FileStoreError::Io)?;
+
+        // Release the lock before doing I/O, then re-acquire to update index.
+        drop(inner);
+        tokio::fs::create_dir_all(&dir).await.map_err(FileStoreError::Io)?;
+
+        // Move (rename) the temp file into the store; fall back to copy+delete
+        // if rename fails (e.g. cross-filesystem).
+        if tokio::fs::rename(temp_path, &file_path).await.is_err() {
+            tokio::fs::copy(temp_path, &file_path).await.map_err(FileStoreError::Io)?;
+            let _ = tokio::fs::remove_file(temp_path).await;
+        }
 
         let meta = StoredFile {
             token: token.clone(),
@@ -111,11 +119,12 @@ impl FileStore {
             user_id,
             filename: safe_name,
             content_type: content_type.to_string(),
-            size: data.len() as u64,
+            size,
             path: file_path,
             created_at: chrono::Utc::now(),
         };
 
+        let mut inner = self.inner.write().await;
         inner.files.insert(token.clone(), meta.clone());
         inner
             .sessions
@@ -157,9 +166,10 @@ impl FileStore {
                     inner.sessions.remove(&meta.session_id);
                 }
             }
-            // Remove from disk.
-            let dir = meta.path.parent().unwrap_or(Path::new(""));
-            std::fs::remove_dir_all(dir).ok();
+            // Remove from disk (release lock first).
+            let dir = meta.path.parent().unwrap_or(Path::new("")).to_path_buf();
+            drop(inner);
+            tokio::fs::remove_dir_all(&dir).await.ok();
             true
         } else {
             false
@@ -172,11 +182,16 @@ impl FileStore {
         let mut inner = self.inner.write().await;
         if let Some(tokens) = inner.sessions.remove(session_id) {
             let count = tokens.len();
+            let mut dirs_to_remove = Vec::new();
             for token in tokens {
                 if let Some(meta) = inner.files.remove(&token) {
-                    let dir = meta.path.parent().unwrap_or(Path::new(""));
-                    std::fs::remove_dir_all(dir).ok();
+                    let dir = meta.path.parent().unwrap_or(Path::new("")).to_path_buf();
+                    dirs_to_remove.push(dir);
                 }
+            }
+            drop(inner);
+            for dir in dirs_to_remove {
+                tokio::fs::remove_dir_all(&dir).await.ok();
             }
             count
         } else {

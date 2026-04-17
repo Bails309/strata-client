@@ -670,16 +670,16 @@ async fn handle_guac_handshake(
         ctx.registry.unregister(&ctx.session_id).await;
         tracing::info!("NVR session {} unregistered", ctx.session_id);
 
-        // Clean up any quick-share files associated with this connection
+        // Clean up any quick-share files associated with this session
         let cleaned = ctx
             .file_store
-            .cleanup_session(&ctx.connection_id.to_string())
+            .cleanup_session(&ctx.session_id)
             .await;
         if cleaned > 0 {
             tracing::info!(
-                "Cleaned up {} quick-share file(s) for connection {}",
+                "Cleaned up {} quick-share file(s) for session {}",
                 cleaned,
-                ctx.connection_id
+                ctx.session_id
             );
         }
 

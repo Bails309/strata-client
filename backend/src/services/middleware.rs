@@ -62,7 +62,54 @@ impl AuthUser {
             || self.can_create_connections
             || self.can_create_connection_folders
             || self.can_create_sharing_profiles
+            || self.can_view_sessions
     }
+
+    /// Returns `true` if the user can manage connections via any relevant permission.
+    pub fn can_access_all_connections(&self) -> bool {
+        self.can_manage_system || self.can_manage_connections
+    }
+}
+
+// ── Per-endpoint permission checks ──────────────────────────────────
+// These are called at the start of admin handlers to enforce granular RBAC.
+// `can_manage_system` always implies access (super-admin).
+
+pub fn check_system_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
+    if !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+pub fn check_user_management_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
+    if !user.can_manage_users && !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+pub fn check_connection_management_permission(
+    user: &AuthUser,
+) -> Result<(), crate::error::AppError> {
+    if !user.can_manage_connections && !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+pub fn check_audit_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
+    if !user.can_view_audit_logs && !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+pub fn check_session_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
+    if !user.can_view_sessions && !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
 }
 
 /// Extract a `token=` value from a query string, handling the `?undefined`

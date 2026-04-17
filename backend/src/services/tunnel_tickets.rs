@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 /// A one-time-use tunnel ticket that carries connection parameters
 /// so that credentials never appear in WebSocket URLs.
@@ -19,6 +20,17 @@ pub struct TunnelTicket {
     pub created_at: Instant,
 }
 
+impl Drop for TunnelTicket {
+    fn drop(&mut self) {
+        if let Some(ref mut u) = self.username {
+            u.zeroize();
+        }
+        if let Some(ref mut p) = self.password {
+            p.zeroize();
+        }
+    }
+}
+
 static TICKETS: LazyLock<Mutex<HashMap<String, TunnelTicket>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -27,7 +39,7 @@ const TICKET_TTL_SECS: u64 = 30;
 /// Create a ticket and return its opaque ID.
 pub fn create(ticket: TunnelTicket) -> String {
     let id = Uuid::new_v4().to_string();
-    let mut map = TICKETS.lock().unwrap();
+    let mut map = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
     // Opportunistic purge of expired tickets
     map.retain(|_, t| t.created_at.elapsed().as_secs() < TICKET_TTL_SECS * 2);
     map.insert(id.clone(), ticket);
@@ -36,7 +48,7 @@ pub fn create(ticket: TunnelTicket) -> String {
 
 /// Consume a ticket by its ID (one-time use). Returns `None` if not found or expired.
 pub fn consume(id: &str) -> Option<TunnelTicket> {
-    let mut map = TICKETS.lock().unwrap();
+    let mut map = TICKETS.lock().unwrap_or_else(|e| e.into_inner());
     let ticket = map.remove(id)?;
     if ticket.created_at.elapsed().as_secs() > TICKET_TTL_SECS {
         return None; // expired

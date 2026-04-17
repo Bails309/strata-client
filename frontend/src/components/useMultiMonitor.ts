@@ -88,15 +88,15 @@ function mapScreenDetails(details: any): ScreenInfo[] {
 }
 
 /**
- * Build the aggregate layout by placing screens in a horizontal row.
+ * Build the aggregate layout from detected screens.
  *
- * When physical positions are available (Chrome, Edge, etc.) screens are
- * sorted by their `left` coordinate so the remote desktop layout matches
- * the user's physical monitor arrangement — e.g. if the secondary is
- * physically to the LEFT of the primary, it gets a lower sliceX.
+ * When physical positions are available (Chrome, Edge, etc.) the screens'
+ * real `left` / `top` coordinates are used directly, normalized so the
+ * top-left-most pixel is (0, 0).  This correctly handles arbitrary 2-D
+ * arrangements (stacked, L-shaped, mixed resolutions, etc.).
  *
  * When all positions are zeroed (Brave / fingerprinting) we fall back to
- * placing the primary first then secondaries cumulatively.
+ * placing the primary first then secondaries in a horizontal row.
  */
 function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
   if (screens.length < 2) return null;
@@ -106,30 +106,38 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
   // Detect fingerprinted positions: every screen reports left=0, top=0.
   const positionsAvailable = !screens.every((s) => s.left === 0 && s.top === 0);
 
-  let ordered: ScreenInfo[];
-  if (positionsAvailable) {
-    // Real positions: sort all screens by physical x coordinate so the
-    // remote desktop left-to-right order matches the physical layout.
-    ordered = [...screens].sort((a, b) => a.left - b.left || a.top - b.top);
-  } else {
-    // Fingerprinted: primary first, then secondaries.
-    const secondaries = screens.filter((s) => s !== primary);
-    ordered = [primary, ...secondaries];
-  }
-
   const tiles: ScreenTile[] = [];
-  let cursorX = 0;
   let primaryTile: ScreenTile | null = null;
 
-  for (const screen of ordered) {
-    const tile: ScreenTile = { screen, sliceX: cursorX, sliceY: 0 };
-    tiles.push(tile);
-    if (screen === primary) primaryTile = tile;
-    cursorX += screen.width;
+  if (positionsAvailable) {
+    // ── Real positions: mirror the physical monitor arrangement ──
+    const minLeft = Math.min(...screens.map((s) => s.left));
+    const minTop  = Math.min(...screens.map((s) => s.top));
+
+    for (const screen of screens) {
+      const tile: ScreenTile = {
+        screen,
+        sliceX: screen.left - minLeft,
+        sliceY: screen.top  - minTop,
+      };
+      tiles.push(tile);
+      if (screen === primary) primaryTile = tile;
+    }
+  } else {
+    // ── Fingerprinted: horizontal row, primary first ──
+    const secondaries = screens.filter((s) => s !== primary);
+    const ordered = [primary, ...secondaries];
+    let cursorX = 0;
+    for (const screen of ordered) {
+      const tile: ScreenTile = { screen, sliceX: cursorX, sliceY: 0 };
+      tiles.push(tile);
+      if (screen === primary) primaryTile = tile;
+      cursorX += screen.width;
+    }
   }
 
-  const aggregateWidth = cursorX;
-  const aggregateHeight = Math.max(...screens.map((s) => s.height));
+  const aggregateWidth  = Math.max(...tiles.map((t) => t.sliceX + t.screen.width));
+  const aggregateHeight = Math.max(...tiles.map((t) => t.sliceY + t.screen.height));
 
   return { screens, tiles, primary, primaryTile: primaryTile!, aggregateWidth, aggregateHeight };
 }
@@ -268,8 +276,6 @@ export function useMultiMonitor(
     for (const tile of secondaryTiles) {
       const screen = tile.screen;
       // Use physical position if available, otherwise tile offset.
-      // tile.sliceX is the cumulative width of preceding screens, which
-      // equals the physical x-coordinate for standard horizontal layouts.
       const popupLeft = positionsFingerprinted ? tile.sliceX : screen.left;
       const popupTop = positionsFingerprinted ? tile.sliceY : screen.top;
       const features = [
@@ -306,16 +312,16 @@ export function useMultiMonitor(
     // ── Request aggregate resolution from guacd ──
     client.sendSize(layout.aggregateWidth, layout.aggregateHeight);
 
-    // ── Offset the display element so the primary region is visible ──
+    // ── Scale the display and offset so the primary region is visible ──
     // The container has overflow:hidden so only primaryW x primaryH is shown.
-    // The primary tile is always at sliceX=0 (placed first in buildLayout),
-    // so no marginLeft offset is needed. If the layout changes in future
-    // to support arbitrary primary placement, the margin would be:
-    //   marginLeft = -(primaryTile.sliceX * scale)
-    const scale = display.getWidth() > 0
-      ? Math.min(containerRef.current!.clientWidth / layout.primary.width,
-                  containerRef.current!.clientHeight / layout.primary.height)
-      : 1;
+    // We must set display.scale() explicitly so the primary slice fills the
+    // container, rather than relying solely on the resize handler (which may
+    // fire asynchronously after the server responds).
+    const scale = Math.min(
+      containerRef.current!.clientWidth / layout.primary.width,
+      containerRef.current!.clientHeight / layout.primary.height,
+    );
+    display.scale(scale);
     displayEl.style.marginLeft = `-${layout.primaryTile.sliceX * scale}px`;
     displayEl.style.marginTop = `-${layout.primaryTile.sliceY * scale}px`;
 

@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-04-17
+
+### Security
+- **Granular Permission Enforcement**: All ~30 admin API endpoints now enforce granular permission checks (`can_manage_system`, `can_manage_users`, `can_manage_connections`, `can_view_audit_logs`, `can_view_sessions`) instead of relying solely on `require_admin` middleware. A `can_manage_system` flag acts as a super-admin bypass. This prevents users with limited admin roles from accessing endpoints beyond their permissions.
+- **Tunnel Ticket User Validation**: After consuming a one-time tunnel ticket, the backend now verifies that the authenticated user matches the ticket's `user_id`, preventing ticket theft if a token is intercepted.
+- **Credential Zeroization on Drop**: `TunnelTicket` now implements `Drop` with `zeroize` to scrub username and password fields from memory when the ticket goes out of scope, closing a window where credentials could linger after tunnel establishment.
+- **Refresh Token Re-reads Role from DB**: The `/api/auth/refresh` endpoint now queries the database for the user's current role instead of copying stale claims from the old JWT. Role changes (e.g. demotion) are now effective immediately on the next token refresh.
+- **Admin Tag Color Validation**: The `create_admin_tag` and `update_admin_tag` endpoints now validate that color values are valid hex codes (`#rgb` or `#rrggbb`), preventing storage of arbitrary strings.
+- **User Tag Color Validation**: The `create_tag` and `update_tag` user endpoints now enforce the same hex color validation.
+- **Accept Terms Version Bounds**: The `accept_terms` endpoint now rejects version numbers outside the 1–1000 range.
+- **Connection Share Expiry Constraint**: Migration 038 adds a `NOT NULL` constraint to `connection_shares.expires_at`, ensuring all share links have an expiry. Existing NULL rows are backfilled with a 24-hour default.
+
+### Improved
+- **Multi-Monitor 2D Layout**: Multi-monitor mode now uses physical screen coordinates directly from the Window Management API to build a true 2D aggregate layout, correctly handling stacked, L-shaped, and mixed-resolution monitor arrangements. Previously all screens were forced into a horizontal row regardless of physical placement.
+- **Multi-Monitor Display Scaling**: The primary monitor now explicitly sets `display.scale()` immediately after requesting the aggregate resolution, rather than relying on an asynchronous resize handler. This eliminates the brief flash of incorrect scaling when entering multi-monitor mode.
+- **Multi-Monitor Re-attach Guard**: `attachSession()` no longer overrides multi-monitor scaling when React re-renders trigger a session re-attach (e.g. clipboard sync, sidebar toggle). Multi-monitor sessions manage their own display scale independently.
+- **Non-blocking File Store I/O**: All `std::fs` calls in the session file store have been replaced with `tokio::fs` equivalents. The `RwLock` is now released before performing disk I/O and re-acquired afterward, eliminating async runtime blocking during file uploads, downloads, and cleanup.
+- **Non-blocking Kerberos Config Write**: The `write_krb5_conf_multi` call in `regenerate_krb5_conf` is now wrapped in `tokio::task::spawn_blocking`, preventing the synchronous file write from blocking the async runtime.
+- **Settings Cache Pruning**: The in-memory settings cache now prunes stale entries when the cache exceeds 500 items, preventing unbounded memory growth from unique key lookups.
+- **Session Stats Single-Query CTE**: The recordings session stats endpoint now executes a single CTE-based query instead of six separate aggregate queries, reducing database round-trips.
+- **Session Stats Static SQL**: All `format!`-interpolated SQL in session stats has been replaced with static string literals using `NOW() - INTERVAL '30 days'`, eliminating potential injection vectors.
+- **Update Role Single COALESCE Query**: The `update_role` endpoint now uses a single `UPDATE ... SET col = COALESCE($n, col)` query instead of up to 11 individual UPDATE statements per field.
+- **Update Kerberos Realm Single Query**: The `update_kerberos_realm` endpoint now uses a single COALESCE-based UPDATE instead of up to 7 individual field updates.
+- **Set Connection Tags Bulk Insert**: Both `set_connection_tags` (user) and `set_admin_connection_tags` (admin) now use `INSERT ... SELECT unnest($1::uuid[])` for bulk tag assignment instead of N+1 individual inserts.
+- **Set Connection Tags Transaction**: The user `set_connection_tags` endpoint now wraps the delete+insert in a database transaction to prevent inconsistent state on partial failure.
+- **Credential Profile Consolidation**: The `update_credential_profile` endpoint now uses at most two conditional UPDATE queries (with COALESCE) instead of three separate paths, reducing code duplication and database round-trips.
+- **IP Extraction Consolidation**: All inline X-Forwarded-For header extraction (tunnel, share, user endpoints) now uses a shared `extract_client_ip` / `try_extract_client_ip` helper from the auth module.
+
+### Fixed
+- **Role-Based Access Replaces String Comparison**: All `user.role == "admin"` / `user.role != "admin"` string checks in tunnel, share, and user routes have been replaced with permission-based methods (`can_access_all_connections()`, `can_manage_system`, etc.), fixing a class of bugs where custom roles with connection management permissions were incorrectly blocked.
+- **Delete Tag Returns 404**: The `delete_tag` endpoint now checks `rows_affected()` and returns a proper 404 instead of a silent 200 when the tag doesn't exist.
+- **Update Tag Returns 404**: The `update_tag` endpoint now uses `fetch_optional` + `ok_or_else` instead of `fetch_one`, returning a 404 instead of a 500 when the tag doesn't exist.
+- **JSON Serialization Panic**: Two `.unwrap()` calls on `serde_json::to_string` in the auth module have been replaced with proper error propagation, preventing a theoretical panic on serialization failure.
+
+### Database
+- **Migration 038**: Adds `idx_users_deleted_at` (partial index on soft-deleted users), `idx_user_connection_access_conn_user` (composite index for connection access checks), and `NOT NULL` constraint on `connection_shares.expires_at`.
+
 ## [0.15.3] — 2026-04-16
 
 ### Added

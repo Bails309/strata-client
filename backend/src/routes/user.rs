@@ -16,6 +16,14 @@ pub fn resolve_ttl(user_pref: Option<i32>, admin_max: i64) -> i32 {
     (user_pref.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32
 }
 
+/// Validate a hex color string (e.g. "#ff00aa" or "#abc").
+pub fn is_valid_hex_color(s: &str) -> bool {
+    let s = s.as_bytes();
+    matches!(s.len(), 4 | 7)
+        && s[0] == b'#'
+        && s[1..].iter().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Parse the `ignore-cert` field from a connection's `extra` JSON.
 /// Returns `true` when the field is a boolean `true` or the string `"true"`.
 pub fn parse_ignore_cert(extra: &Option<serde_json::Value>) -> bool {
@@ -54,17 +62,7 @@ pub async fn me(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            // Use rightmost entry — the one added by our trusted proxy (Caddy)
-            v.rsplit(',')
-                .map(|s| s.trim())
-                .find(|s| !s.is_empty())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_default();
+    let client_ip = crate::routes::auth::extract_client_ip(&headers);
     let watermark_enabled = settings::get(&db.pool, "watermark_enabled")
         .await
         .unwrap_or(None)
@@ -115,6 +113,9 @@ pub async fn accept_terms(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
     let version = body.get("version").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    if version < 1 || version > 1000 {
+        return Err(AppError::Validation("Invalid terms version".into()));
+    }
     sqlx::query(
         "UPDATE users SET terms_accepted_at = NOW(), terms_accepted_version = $2 WHERE id = $1",
     )
@@ -147,8 +148,8 @@ pub async fn my_connections(
 ) -> Result<Json<Vec<UserConnectionRow>>, AppError> {
     let db = require_running(&state).await?;
 
-    let rows: Vec<UserConnectionRow> = if user.role == "admin" {
-        // Admins see all connections regardless of role assignment.
+    let rows: Vec<UserConnectionRow> = if user.can_access_all_connections() {
+        // Users with connection management permissions see all connections.
         // History is fetched from user_connection_access (per-user). Note: migration 026
         // seeded this table from global data; subsequent connections update this per-user.
         sqlx::query_as(
@@ -287,6 +288,9 @@ pub async fn create_tag(
         ));
     }
     let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
+    if !is_valid_hex_color(&color) {
+        return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+    }
     let tag: UserTag = sqlx::query_as(
         "INSERT INTO user_tags (user_id, name, color) VALUES ($1, $2, $3)
          RETURNING id, name, color",
@@ -321,6 +325,11 @@ pub async fn update_tag(
             ));
         }
     }
+    if let Some(ref c) = body.color {
+        if !is_valid_hex_color(c) {
+            return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+        }
+    }
     let tag: UserTag = sqlx::query_as(
         "UPDATE user_tags SET
             name  = COALESCE($3, name),
@@ -332,8 +341,9 @@ pub async fn update_tag(
     .bind(user.id)
     .bind(body.name.as_deref().map(|s| s.trim()))
     .bind(body.color.as_deref())
-    .fetch_one(&db.pool)
-    .await?;
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Tag not found".into()))?;
     Ok(Json(tag))
 }
 
@@ -344,11 +354,14 @@ pub async fn delete_tag(
     Path(tag_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    sqlx::query("DELETE FROM user_tags WHERE id = $1 AND user_id = $2")
+    let result = sqlx::query("DELETE FROM user_tags WHERE id = $1 AND user_id = $2")
         .bind(tag_id)
         .bind(user.id)
         .execute(&db.pool)
         .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Tag not found".into()));
+    }
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -395,25 +408,31 @@ pub async fn set_connection_tags(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
+    // Wrap delete + insert in a transaction for atomicity
+    let mut tx = db.pool.begin().await?;
+
     // Delete existing tags for this connection
     sqlx::query("DELETE FROM user_connection_tags WHERE user_id = $1 AND connection_id = $2")
         .bind(user.id)
         .bind(body.connection_id)
-        .execute(&db.pool)
+        .execute(&mut *tx)
         .await?;
 
-    // Insert new tags
-    for tag_id in &body.tag_ids {
+    // Bulk-insert new tags using unnest to avoid N+1 inserts
+    if !body.tag_ids.is_empty() {
         sqlx::query(
             "INSERT INTO user_connection_tags (user_id, connection_id, tag_id)
-             VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+             SELECT $1, $2, unnest($3::uuid[])
+             ON CONFLICT DO NOTHING",
         )
         .bind(user.id)
         .bind(body.connection_id)
-        .bind(tag_id)
-        .execute(&db.pool)
+        .bind(&body.tag_ids)
+        .execute(&mut *tx)
         .await?;
     }
+
+    tx.commit().await?;
 
     Ok(Json(json!({ "ok": true })))
 }
@@ -719,7 +738,8 @@ pub async fn update_credential_profile(
         sqlx::query(
             "UPDATE credential_profiles
              SET encrypted_username = $1, encrypted_password = $2, encrypted_dek = $3, nonce = $4,
-                 ttl_hours = $5, updated_at = now(), expires_at = now() + make_interval(hours => $5)
+                 ttl_hours = $5, updated_at = now(), expires_at = now() + make_interval(hours => $5),
+                 label = COALESCE($7, label)
              WHERE id = $6",
         )
         .bind(&[] as &[u8])
@@ -728,21 +748,11 @@ pub async fn update_credential_profile(
         .bind(&sealed.nonce)
         .bind(ttl_hours)
         .bind(profile_id)
+        .bind(body.label.as_deref())
         .execute(&db.pool)
         .await?;
-    }
-
-    // Update label if provided
-    if let Some(ref label) = body.label {
-        sqlx::query("UPDATE credential_profiles SET label = $1, updated_at = now() WHERE id = $2")
-            .bind(label)
-            .bind(profile_id)
-            .execute(&db.pool)
-            .await?;
-    }
-
-    // Update TTL if provided (without credential change) — recalculates expires_at from now
-    if body.ttl_hours.is_some() && body.username.is_none() && body.password.is_none() {
+    } else {
+        // No credential change — update label and/or TTL in a single query
         let admin_max: i64 = crate::services::settings::get(&db.pool, "credential_ttl_hours")
             .await
             .ok()
@@ -750,14 +760,23 @@ pub async fn update_credential_profile(
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(12)
             .clamp(1, 12);
-        let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
-        sqlx::query(
-            "UPDATE credential_profiles SET ttl_hours = $1, expires_at = now() + make_interval(hours => $1), updated_at = now() WHERE id = $2",
-        )
-        .bind(ttl_hours)
-        .bind(profile_id)
-        .execute(&db.pool)
-        .await?;
+        let ttl_hours = body.ttl_hours.map(|h| resolve_ttl(Some(h), admin_max));
+
+        if body.label.is_some() || ttl_hours.is_some() {
+            sqlx::query(
+                "UPDATE credential_profiles SET
+                    label = COALESCE($2, label),
+                    ttl_hours = COALESCE($3, ttl_hours),
+                    expires_at = CASE WHEN $3 IS NOT NULL THEN now() + make_interval(hours => $3) ELSE expires_at END,
+                    updated_at = now()
+                 WHERE id = $1",
+            )
+            .bind(profile_id)
+            .bind(body.label.as_deref())
+            .bind(ttl_hours)
+            .execute(&db.pool)
+            .await?;
+        }
     }
 
     crate::services::audit::log(
@@ -896,8 +915,8 @@ pub async fn set_credential_mapping(
         return Err(AppError::NotFound("Credential profile not found".into()));
     }
 
-    // Verify user has access to this connection via their role (or is admin)
-    let has_access: bool = if user.role == "admin" {
+    // Verify user has access to this connection via their role (or has connection management permissions)
+    let has_access: bool = if user.can_access_all_connections() {
         sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)",
         )
@@ -1567,7 +1586,7 @@ mod tests {
                 guacd_pool: None,
                 file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                     "/tmp/strata-files",
-                )),
+                )).await,
                 started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;
@@ -1587,7 +1606,7 @@ mod tests {
                 guacd_pool: None,
                 file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                     "/tmp/strata-files",
-                )),
+                )).await,
                 started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;

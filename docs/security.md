@@ -79,16 +79,30 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/shared/tunnel/:token` | None (public, share-token validated; observes owner's live session via NVR broadcast; mode determines input forwarding) |
 | `/api/files/:token` (GET) | None (public, capability-based — the random UUID token is the authorization) |
 | `/api/auth/password` | `require_auth` |
-| `/api/admin/*` | `require_auth` + `require_admin` |
-| `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` |
+| `/api/admin/*` | `require_auth` + `require_admin` + granular permission checks |
+| `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` + `can_manage_users` |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
 | `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` (delete = owner-only) |
 | `/api/user/sessions` | `require_auth` (filtered to own sessions) |
 | `/api/user/recordings` | `require_auth` (filtered to own recordings) |
 
-**Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user's role grants them access to the target connection, including mappings via connection folders (`role_folders`).
+**Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user matches the ticket's `user_id` and that their role grants access to the target connection, including mappings via connection folders (`role_folders`).
 
-**Admin connection visibility:** Admin users (`role == "admin"`) see all connections via `GET /api/user/connections` regardless of `role_connections` mapping. Non-admin users see only connections explicitly assigned to their role.
+**Admin connection visibility:** Users with `can_manage_system` or `can_manage_connections` permissions see all connections via `GET /api/user/connections`. Other users see only connections explicitly assigned to their role.
+
+### Granular Admin Permissions
+
+All admin API endpoints enforce fine-grained permission checks beyond the `require_admin` middleware:
+
+| Permission | Endpoints Protected |
+|---|---|
+| `can_manage_system` | System settings, Vault config, SSO/OIDC config, global toggles. Also acts as super-admin bypass for all other permissions. |
+| `can_manage_users` | User CRUD, role assignment, password resets, user tags |
+| `can_manage_connections` | Connection CRUD, connection folders, sharing profiles, admin tags, AD sync config, Kerberos realms |
+| `can_view_audit_logs` | Audit log listing and export |
+| `can_view_sessions` | Active session listing, session observation (NVR), session kill, recording stats |
+
+Endpoints that do not match a specific permission category (e.g. role CRUD) require `can_manage_system`.
 
 ---
 
@@ -151,7 +165,7 @@ This design allows users to use vault-stored credentials for ad-hoc connections 
 
 ### Memory Zeroization
 
-All sensitive material (DEKs, plaintext passwords) uses the `zeroize` crate to overwrite memory before deallocation, preventing data leaks through memory reuse.
+All sensitive material (DEKs, plaintext passwords, tunnel ticket credentials) uses the `zeroize` crate to overwrite memory before deallocation, preventing data leaks through memory reuse. The `TunnelTicket` struct implements `Drop` with `zeroize` to automatically scrub username and password fields when the ticket goes out of scope.
 
 ---
 

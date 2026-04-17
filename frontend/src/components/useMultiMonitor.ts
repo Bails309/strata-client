@@ -90,13 +90,21 @@ function mapScreenDetails(details: any): ScreenInfo[] {
 /**
  * Build the aggregate layout from detected screens.
  *
- * When physical positions are available (Chrome, Edge, etc.) the screens'
- * real `left` / `top` coordinates are used directly, normalized so the
- * top-left-most pixel is (0, 0).  This correctly handles arbitrary 2-D
- * arrangements (stacked, L-shaped, mixed resolutions, etc.).
+ * All monitors are placed in a flat horizontal row at sliceY=0, ordered
+ * by their physical left coordinate (primary first when positions are
+ * unavailable).  Vertical offsets are intentionally ignored because
+ * guacd sends a single flat resolution to the RDP/VNC server — the
+ * remote OS treats it as ONE display.  Vertical offsets are ignored and
+ * all monitors are placed in a flat horizontal row at sliceY=0.
  *
- * When all positions are zeroed (Brave / fingerprinting) we fall back to
- * placing the primary first then secondaries in a horizontal row.
+ * The aggregate height is capped to the **primary** monitor's height.
+ * Because the remote OS sees a single display, it places the taskbar at
+ * the very bottom of the aggregate.  If we used max(all heights) —
+ * e.g. 1920 from a portrait monitor — the taskbar would be at y≈1890,
+ * invisible on any 1080-high landscape monitors.  By capping to the
+ * primary height the taskbar stays visible on the primary monitor (and
+ * any same-height monitors).  Taller secondary monitors (portrait) show
+ * the primary-height region of the remote desktop with black below.
  */
 function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
   if (screens.length < 2) return null;
@@ -109,35 +117,30 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
   const tiles: ScreenTile[] = [];
   let primaryTile: ScreenTile | null = null;
 
+  // Order screens: when physical positions are available, sort by
+  // horizontal position (left) so the spatial left→right ordering
+  // is preserved.  Otherwise, primary first then secondaries.
+  let ordered: ScreenInfo[];
   if (positionsAvailable) {
-    // ── Real positions: mirror the physical monitor arrangement ──
-    const minLeft = Math.min(...screens.map((s) => s.left));
-    const minTop  = Math.min(...screens.map((s) => s.top));
-
-    for (const screen of screens) {
-      const tile: ScreenTile = {
-        screen,
-        sliceX: screen.left - minLeft,
-        sliceY: screen.top  - minTop,
-      };
-      tiles.push(tile);
-      if (screen === primary) primaryTile = tile;
-    }
+    ordered = [...screens].sort((a, b) => a.left - b.left);
   } else {
-    // ── Fingerprinted: horizontal row, primary first ──
     const secondaries = screens.filter((s) => s !== primary);
-    const ordered = [primary, ...secondaries];
-    let cursorX = 0;
-    for (const screen of ordered) {
-      const tile: ScreenTile = { screen, sliceX: cursorX, sliceY: 0 };
-      tiles.push(tile);
-      if (screen === primary) primaryTile = tile;
-      cursorX += screen.width;
-    }
+    ordered = [primary, ...secondaries];
   }
 
-  const aggregateWidth  = Math.max(...tiles.map((t) => t.sliceX + t.screen.width));
-  const aggregateHeight = Math.max(...tiles.map((t) => t.sliceY + t.screen.height));
+  // Place all monitors in a horizontal row at sliceY = 0.
+  let cursorX = 0;
+  for (const screen of ordered) {
+    const tile: ScreenTile = { screen, sliceX: cursorX, sliceY: 0 };
+    tiles.push(tile);
+    if (screen === primary) primaryTile = tile;
+    cursorX += screen.width;
+  }
+
+  // Cap aggregate height to the primary monitor's height so the remote
+  // taskbar sits within the primary slice's visible area.
+  const aggregateWidth  = cursorX;
+  const aggregateHeight = primary.height;
 
   return { screens, tiles, primary, primaryTile: primaryTile!, aggregateWidth, aggregateHeight };
 }
@@ -338,9 +341,27 @@ export function useMultiMonitor(
       body.style.overflow = 'hidden';
       body.style.background = '#000';
 
+      // Maximize the popup to fill the target screen.  window.open()
+      // dimensions include browser chrome, so the inner area is smaller.
+      // moveTo + resizeTo after a tick corrects placement, and we also
+      // try the Fullscreen API for a truly chrome-free view.
+      const popupLeft = positionsFingerprinted ? tile.sliceX : screen.left;
+      const popupTop = positionsFingerprinted ? tile.sliceY : screen.top;
+      try {
+        popup.moveTo(popupLeft, popupTop);
+        popup.resizeTo(screen.width, screen.height);
+      } catch { /* cross-origin or restricted */ }
+
+      // Try fullscreen (removes title bar + address bar entirely).
+      // This can fail if the user-activation has expired — that's fine,
+      // the popup still covers most of the screen.
+      try {
+        popup.document.documentElement.requestFullscreen().catch(() => {});
+      } catch { /* Fullscreen API unavailable */ }
+
       const canvas = popup.document.createElement('canvas');
-      canvas.width = screen.width;
-      canvas.height = screen.height;
+      canvas.width = popup.innerWidth || screen.width;
+      canvas.height = popup.innerHeight || screen.height;
       canvas.style.display = 'block';
       canvas.style.width = '100%';
       canvas.style.height = '100%';
@@ -361,21 +382,30 @@ export function useMultiMonitor(
       }
       popup.addEventListener('resize', syncCanvasSize);
 
+      // Sync canvas on fullscreen change (entering/exiting fullscreen resizes the window)
+      popup.document.addEventListener('fullscreenchange', syncCanvasSize);
+
       // ── Mouse input with coordinate offset ──
       // Guacamole.Mouse reports CSS pixel coordinates relative to the
       // canvas element.  When the canvas is CSS-scaled (width/height:100%)
       // the CSS size may differ from the remote pixel slice dimensions,
       // so we scale before adding the tile offset.
+      // sliceH is capped to the aggregate height so portrait monitors
+      // don't read/send coordinates beyond the remote framebuffer.
       const sliceW = screen.width;
-      const sliceH = screen.height;
+      const sliceH = Math.min(screen.height, layout.aggregateHeight);
       const mouse = new Guacamole.Mouse(canvas);
       mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
         const st = e.state;
         const cssW = canvas.clientWidth || sliceW;
         const cssH = canvas.clientHeight || sliceH;
+        const remoteY = Math.min(
+          Math.round(st.y * sliceH / cssH) + sourceY,
+          layout.aggregateHeight - 1,
+        );
         const remoteState = new Guacamole.Mouse.State(
           Math.round(st.x * sliceW / cssW) + sourceX,
-          Math.round(st.y * sliceH / cssH) + sourceY,
+          remoteY,
           st.left, st.middle, st.right, st.up, st.down,
         );
         client.sendMouseState(remoteState, false);
@@ -411,7 +441,7 @@ export function useMultiMonitor(
         sourceX,
         sourceY,
         sliceW: screen.width,
-        sliceH: screen.height,
+        sliceH: Math.min(screen.height, layout.aggregateHeight),
         keyboard,
         mouse,
       });

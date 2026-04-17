@@ -234,13 +234,43 @@ export function usePopOut(
 
     // Rescale when the remote display resolution changes (e.g. maximising
     // a window inside the remote desktop).
+    // Use setTimeout instead of requestAnimationFrame because rAF is
+    // throttled/paused on the main window when the popup has focus.
     const prevOnResize = display.onresize;
     display.onresize = (_w: number, _h: number) => {
-      requestAnimationFrame(() => handleResize());
+      setTimeout(() => handleResize(), 0);
     };
 
     popup.addEventListener('resize', handleResize);
     requestAnimationFrame(() => handleResize());
+
+    // ── Detect when the popup is moved to a different screen ──
+    // The browser doesn't fire 'resize' when a window is dragged to
+    // another screen without changing size.  We poll screenX/screenY
+    // and the popup's devicePixelRatio to detect the move and then
+    // maximize + re-scale to fill the new screen.
+    let lastScreenX = popup.screenX;
+    let lastScreenY = popup.screenY;
+    let lastDpr = popup.devicePixelRatio;
+    const screenPollId = setInterval(() => {
+      if (popup.closed) { clearInterval(screenPollId); return; }
+      const sx = popup.screenX;
+      const sy = popup.screenY;
+      const dpr = popup.devicePixelRatio;
+      if (sx !== lastScreenX || sy !== lastScreenY || dpr !== lastDpr) {
+        lastScreenX = sx;
+        lastScreenY = sy;
+        lastDpr = dpr;
+        // Debounce: the user may still be dragging.  Wait 300ms for
+        // the position to settle before resizing.
+        setTimeout(() => {
+          if (popup.closed) return;
+          if (popup.screenX === sx && popup.screenY === sy) {
+            handleResize();
+          }
+        }, 300);
+      }
+    }, 250);
 
     // ── Handle popup close (user closes the popup window) ──
     // Use a ref-style callback so returnDisplay always uses the latest session state
@@ -257,6 +287,7 @@ export function usePopOut(
 
     const cleanup = () => {
       clearInterval(pollId);
+      clearInterval(screenPollId);
       popup.removeEventListener('resize', handleResize);
       popup.removeEventListener('pagehide', onUnload);
       popup.removeEventListener('focus', pushClipboardPopup);

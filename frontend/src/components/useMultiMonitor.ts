@@ -448,38 +448,61 @@ export function useMultiMonitor(
     }
 
     // ── Render loop ──
-    // Use display.flatten() to composite ALL layers (default + cursor + overlays)
-    // into a single canvas each frame.  Use setInterval instead of
-    // requestAnimationFrame because rAF is throttled/paused when the main
-    // window loses focus to a popup — which happens immediately when the user
-    // interacts with a secondary monitor window.
-    function renderLoop() {
-      try {
-        const dw = display.getWidth();
-        const dh = display.getHeight();
-        if (dw <= 0 || dh <= 0) return;
+    // Read from the default layer's canvas each frame.  Use setInterval
+    // instead of requestAnimationFrame because rAF is throttled/paused
+    // when the main window loses focus to a popup — which happens
+    // immediately when the user interacts with a secondary monitor window.
+    //
+    // We use getCanvas() on the default layer rather than display.flatten()
+    // because flatten() allocates a brand-new canvas every call.  At 30fps
+    // with a 4920x1080 aggregate that's ~600MB/s of allocations, starving
+    // the main thread and preventing Guacamole from rendering (black screens).
+    // getCanvas() returns a reference to the existing backing canvas — zero
+    // allocation.
+    const defaultLayer = display.getDefaultLayer();
 
-        const srcCanvas = display.flatten();
-        for (const sw of secondaryWindowsRef.current) {
-          if (sw.win.closed) continue;
-          try {
-            sw.ctx.drawImage(
-              srcCanvas,
-              sw.sourceX, sw.sourceY, sw.sliceW, sw.sliceH,
-              0, 0, sw.canvas.width, sw.canvas.height,
-            );
-          } catch {
-            // Canvas tainted or window closed — skip this frame
-          }
+    function renderLoop() {
+      const srcCanvas = defaultLayer.getCanvas();
+      if (!srcCanvas || srcCanvas.width <= 0 || srcCanvas.height <= 0) return;
+      for (const sw of secondaryWindowsRef.current) {
+        if (sw.win.closed) continue;
+        try {
+          sw.ctx.drawImage(
+            srcCanvas,
+            sw.sourceX, sw.sourceY, sw.sliceW, sw.sliceH,
+            0, 0, sw.canvas.width, sw.canvas.height,
+          );
+        } catch {
+          // Canvas tainted or window closed — skip this frame
         }
-      } catch {
-        // Display not ready yet — skip this tick
       }
     }
     intervalIdRef.current = setInterval(renderLoop, 33); // ~30 fps
 
+    // ── Cursor sync ──
+    // Guacamole renders the remote cursor as a CSS `cursor` property on
+    // the display element (a data URL with hotspot coordinates).  This
+    // doesn't automatically apply to the secondary canvas elements.
+    // Use a MutationObserver to watch for style changes on the display
+    // element and mirror the cursor CSS to every secondary canvas.
+    const displayElement = display.getElement();
+    function syncCursor() {
+      const cursor = displayElement.style.cursor;
+      for (const sw of secondaryWindowsRef.current) {
+        if (!sw.win.closed) {
+          sw.canvas.style.cursor = cursor;
+        }
+      }
+    }
+    // Initial sync
+    syncCursor();
+    // Watch for style attribute changes (Guacamole updates cursor via style.cursor)
+    const cursorObserver = new MutationObserver(syncCursor);
+    cursorObserver.observe(displayElement, { attributes: true, attributeFilter: ['style'] });
+
     // ── Store state (survives unmount/remount) ──
     const cleanup = () => {
+      cursorObserver.disconnect();
       if (intervalIdRef.current) {
         clearInterval(intervalIdRef.current);
         intervalIdRef.current = null;

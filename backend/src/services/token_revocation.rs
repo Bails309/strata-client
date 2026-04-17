@@ -66,16 +66,15 @@ pub fn revoke(token: &str, exp: u64) {
 
 /// Persist a revocation to the database (best-effort, non-blocking).
 /// Call this after `revoke()` to survive restarts.
-pub async fn persist_revocation(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    token: &str,
-    exp: u64,
-) {
+pub async fn persist_revocation(pool: &sqlx::Pool<sqlx::Postgres>, token: &str, exp: u64) {
     let hash = token_hash(token);
     let expires_at = match chrono::DateTime::from_timestamp(exp as i64, 0) {
         Some(dt) => dt,
         None => {
-            tracing::warn!(exp, "persist_revocation: invalid timestamp, using +24h fallback");
+            tracing::warn!(
+                exp,
+                "persist_revocation: invalid timestamp, using +24h fallback"
+            );
             chrono::Utc::now() + chrono::Duration::hours(24)
         }
     };
@@ -93,13 +92,12 @@ pub async fn persist_revocation(
 pub async fn load_from_db(pool: &sqlx::Pool<sqlx::Postgres>) {
     let now_ts = now_secs() as i64;
     let now_dt = chrono::DateTime::from_timestamp(now_ts, 0);
-    let rows: Vec<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT token_hash, expires_at FROM revoked_tokens WHERE expires_at > $1",
-    )
-    .bind(now_dt)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let rows: Vec<(String, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as("SELECT token_hash, expires_at FROM revoked_tokens WHERE expires_at > $1")
+            .bind(now_dt)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
 
     if !rows.is_empty() {
         let mut map = REVOKED_TOKENS.lock().unwrap_or_else(|e| e.into_inner());

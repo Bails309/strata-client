@@ -108,21 +108,18 @@ pub async fn upload(
                 // to avoid loading large uploads entirely into memory.
                 use futures_util::TryStreamExt;
                 use tokio::io::AsyncWriteExt;
-                let temp_path = std::env::temp_dir().join(format!("strata-upload-{}", uuid::Uuid::new_v4()));
+                let temp_path =
+                    std::env::temp_dir().join(format!("strata-upload-{}", uuid::Uuid::new_v4()));
                 let mut temp_file = tokio::fs::File::create(&temp_path)
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to create temp file: {e}")))?;
                 let mut written: u64 = 0;
                 let mut stream = field;
-                while let Some(chunk) = stream
-                    .try_next()
-                    .await
-                    .map_err(|e| {
-                        // Clean up temp file on read error
-                        let _ = std::fs::remove_file(&temp_path);
-                        AppError::Validation(format!("Failed to read file: {e}"))
-                    })?
-                {
+                while let Some(chunk) = stream.try_next().await.map_err(|e| {
+                    // Clean up temp file on read error
+                    let _ = std::fs::remove_file(&temp_path);
+                    AppError::Validation(format!("Failed to read file: {e}"))
+                })? {
                     written += chunk.len() as u64;
                     if written > crate::services::file_store::MAX_FILE_SIZE {
                         let _ = std::fs::remove_file(&temp_path);
@@ -152,7 +149,14 @@ pub async fn upload(
         file_data.ok_or_else(|| AppError::Validation("Missing file field".into()))?;
 
     let meta = file_store
-        .store_from_path(&session_id, user.id, &filename, &content_type, &temp_path, size)
+        .store_from_path(
+            &session_id,
+            user.id,
+            &filename,
+            &content_type,
+            &temp_path,
+            size,
+        )
         .await
         .map_err(|e| {
             let _ = std::fs::remove_file(&temp_path);
@@ -200,7 +204,9 @@ pub async fn download(
         }
     };
     {
-        let mut map = DOWNLOAD_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = DOWNLOAD_RATE_LIMIT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if map.len() > MAX_DOWNLOAD_RATE_ENTRIES {
             let cutoff = Instant::now() - std::time::Duration::from_secs(DOWNLOAD_WINDOW_SECS);
             map.retain(|_, attempts| {

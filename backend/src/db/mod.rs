@@ -90,26 +90,23 @@ impl Database {
             let version = migration.version;
             let new_checksum = &migration.checksum;
 
-            let row: Option<(Vec<u8>,)> = sqlx::query_as(
-                "SELECT checksum FROM _sqlx_migrations WHERE version = $1",
-            )
-            .bind(version)
-            .fetch_optional(&mut *conn)
-            .await
-            .unwrap_or(None);
+            let row: Option<(Vec<u8>,)> =
+                sqlx::query_as("SELECT checksum FROM _sqlx_migrations WHERE version = $1")
+                    .bind(version)
+                    .fetch_optional(&mut *conn)
+                    .await
+                    .unwrap_or(None);
 
             if let Some((old_checksum,)) = row {
                 if old_checksum != new_checksum.as_ref() {
                     tracing::warn!(
                         "Migration {version} checksum mismatch — repairing stored checksum"
                     );
-                    sqlx::query(
-                        "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2",
-                    )
-                    .bind(new_checksum.as_ref())
-                    .bind(version)
-                    .execute(&mut *conn)
-                    .await?;
+                    sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
+                        .bind(new_checksum.as_ref())
+                        .bind(version)
+                        .execute(&mut *conn)
+                        .await?;
                 }
             }
         }

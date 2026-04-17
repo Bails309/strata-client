@@ -104,12 +104,16 @@ impl FileStore {
 
         // Release the lock before doing I/O, then re-acquire to update index.
         drop(inner);
-        tokio::fs::create_dir_all(&dir).await.map_err(FileStoreError::Io)?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(FileStoreError::Io)?;
 
         // Move (rename) the temp file into the store; fall back to copy+delete
         // if rename fails (e.g. cross-filesystem).
         if tokio::fs::rename(temp_path, &file_path).await.is_err() {
-            tokio::fs::copy(temp_path, &file_path).await.map_err(FileStoreError::Io)?;
+            tokio::fs::copy(temp_path, &file_path)
+                .await
+                .map_err(FileStoreError::Io)?;
             let _ = tokio::fs::remove_file(temp_path).await;
         }
 

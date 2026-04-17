@@ -2942,7 +2942,9 @@ pub async fn create_admin_tag(
     }
     let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
     if !crate::routes::user::is_valid_hex_color(&color) {
-        return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+        return Err(AppError::Validation(
+            "Color must be a valid hex color (e.g. #ff00aa)".into(),
+        ));
     }
     let tag: AdminTag = sqlx::query_as(
         "INSERT INTO admin_tags (name, color) VALUES ($1, $2) RETURNING id, name, color, created_at",
@@ -2972,7 +2974,9 @@ pub async fn update_admin_tag(
     }
     if let Some(ref c) = body.color {
         if !crate::routes::user::is_valid_hex_color(c) {
-            return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+            return Err(AppError::Validation(
+                "Color must be a valid hex color (e.g. #ff00aa)".into(),
+            ));
         }
     }
     let tag: AdminTag = sqlx::query_as(
@@ -3462,7 +3466,8 @@ mod tests {
             guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
-            )).await,
+            ))
+            .await,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -3481,7 +3486,8 @@ mod tests {
             guacd_pool: None,
             file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                 "/tmp/strata-files",
-            )).await,
+            ))
+            .await,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

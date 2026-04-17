@@ -46,7 +46,9 @@ async fn fetch_oidc_discovery(
 ) -> Result<crate::services::auth::OidcDiscovery, AppError> {
     // Check cache
     {
-        let cache = OIDC_DISCOVERY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = OIDC_DISCOVERY_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = cache.get(issuer_url) {
             if entry.fetched_at.elapsed().as_secs() < OIDC_DISCOVERY_TTL_SECS {
                 return Ok(entry.discovery.clone());
@@ -83,7 +85,9 @@ async fn fetch_oidc_discovery(
 
     // Update cache
     {
-        let mut cache = OIDC_DISCOVERY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = OIDC_DISCOVERY_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         cache.insert(
             issuer_url.to_string(),
             CachedDiscovery {
@@ -597,7 +601,8 @@ pub async fn logout(
             + REFRESH_TOKEN_TTL as u64;
         crate::services::token_revocation::revoke(refresh_token, refresh_exp);
         if let Some(pool) = &db_pool {
-            crate::services::token_revocation::persist_revocation(pool, refresh_token, refresh_exp).await;
+            crate::services::token_revocation::persist_revocation(pool, refresh_token, refresh_exp)
+                .await;
         }
     }
 
@@ -960,17 +965,12 @@ pub async fn refresh(
     .await
     .map_err(AppError::Database)?;
 
-    let (username, role) = user_row
-        .ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
+    let (username, role) =
+        user_row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
 
     // Issue a new access token with the latest username/role
-    let (access_token, _jti) = create_local_jwt(
-        user_id,
-        &username,
-        &role,
-        "access",
-        ACCESS_TOKEN_TTL,
-    )?;
+    let (access_token, _jti) =
+        create_local_jwt(user_id, &username, &role, "access", ACCESS_TOKEN_TTL)?;
 
     Ok(Json(json!({
         "access_token": access_token,
@@ -1027,7 +1027,9 @@ pub async fn sso_login(
         // Hard cap to prevent OOM from unauthenticated floods
         if store.len() >= MAX_SSO_STATE_ENTRIES {
             tracing::warn!("SSO state store at capacity ({MAX_SSO_STATE_ENTRIES}) — rejecting");
-            return Err(AppError::Auth("Too many pending SSO requests. Please try again later.".into()));
+            return Err(AppError::Auth(
+                "Too many pending SSO requests. Please try again later.".into(),
+            ));
         }
         store.insert(state.clone(), Instant::now());
     }

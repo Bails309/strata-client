@@ -19,9 +19,7 @@ pub fn resolve_ttl(user_pref: Option<i32>, admin_max: i64) -> i32 {
 /// Validate a hex color string (e.g. "#ff00aa" or "#abc").
 pub fn is_valid_hex_color(s: &str) -> bool {
     let s = s.as_bytes();
-    matches!(s.len(), 4 | 7)
-        && s[0] == b'#'
-        && s[1..].iter().all(|b| b.is_ascii_hexdigit())
+    matches!(s.len(), 4 | 7) && s[0] == b'#' && s[1..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Parse the `ignore-cert` field from a connection's `extra` JSON.
@@ -289,7 +287,9 @@ pub async fn create_tag(
     }
     let color = body.color.unwrap_or_else(|| "#6366f1".to_string());
     if !is_valid_hex_color(&color) {
-        return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+        return Err(AppError::Validation(
+            "Color must be a valid hex color (e.g. #ff00aa)".into(),
+        ));
     }
     let tag: UserTag = sqlx::query_as(
         "INSERT INTO user_tags (user_id, name, color) VALUES ($1, $2, $3)
@@ -327,7 +327,9 @@ pub async fn update_tag(
     }
     if let Some(ref c) = body.color {
         if !is_valid_hex_color(c) {
-            return Err(AppError::Validation("Color must be a valid hex color (e.g. #ff00aa)".into()));
+            return Err(AppError::Validation(
+                "Color must be a valid hex color (e.g. #ff00aa)".into(),
+            ));
         }
     }
     let tag: UserTag = sqlx::query_as(
@@ -1586,7 +1588,8 @@ mod tests {
                 guacd_pool: None,
                 file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                     "/tmp/strata-files",
-                )).await,
+                ))
+                .await,
                 started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;
@@ -1606,7 +1609,8 @@ mod tests {
                 guacd_pool: None,
                 file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
                     "/tmp/strata-files",
-                )).await,
+                ))
+                .await,
                 started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;

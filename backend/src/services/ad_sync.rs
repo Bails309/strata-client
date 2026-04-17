@@ -72,12 +72,11 @@ pub async fn run_sync(pool: &Pool<Postgres>, config: &AdSyncConfig) -> anyhow::R
     let uuid_bytes = config.id.as_u128();
     let lock_key_hi = (uuid_bytes >> 64) as i64;
     let lock_key_lo = uuid_bytes as i64;
-    let acquired: bool =
-        sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
-            .bind(lock_key_hi as i32)
-            .bind(lock_key_lo as i32)
-            .fetch_one(&mut *conn)
-            .await?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+        .bind(lock_key_hi as i32)
+        .bind(lock_key_lo as i32)
+        .fetch_one(&mut *conn)
+        .await?;
     if !acquired {
         anyhow::bail!("Sync already in progress for config '{}'", config.label);
     }

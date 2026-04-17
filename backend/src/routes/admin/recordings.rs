@@ -143,7 +143,7 @@ pub async fn session_stats(
          FROM recordings
          WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY started_at::date
-         ORDER BY date"
+         ORDER BY date",
     )
     .fetch_all(&db.pool)
     .await?;
@@ -168,7 +168,7 @@ pub async fn session_stats(
          FROM recordings
          WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY hour
-         ORDER BY hour"
+         ORDER BY hour",
     )
     .fetch_all(&db.pool)
     .await?;
@@ -182,7 +182,7 @@ pub async fn session_stats(
          WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY connection_id, connection_name
          ORDER BY sessions DESC
-         LIMIT 10"
+         LIMIT 10",
     )
     .fetch_all(&db.pool)
     .await?;
@@ -196,7 +196,7 @@ pub async fn session_stats(
          WHERE started_at >= NOW() - INTERVAL '30 days'
          GROUP BY user_id, username
          ORDER BY sessions DESC
-         LIMIT 10"
+         LIMIT 10",
     )
     .fetch_all(&db.pool)
     .await?;

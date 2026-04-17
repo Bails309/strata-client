@@ -325,7 +325,9 @@ pub async fn ws_tunnel(
     // Verify the ticket belongs to the authenticated user (prevent cross-user credential leakage)
     if let Some(ref tc) = ticket_creds {
         if tc.user_id != user.id {
-            return Err(AppError::Auth("Tunnel ticket does not belong to the authenticated user".into()));
+            return Err(AppError::Auth(
+                "Tunnel ticket does not belong to the authenticated user".into(),
+            ));
         }
     }
 

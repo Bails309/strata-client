@@ -32,12 +32,11 @@ pub async fn log(
         .execute(&mut *tx)
         .await?;
 
-    let previous_hash: String = sqlx::query_scalar(
-        "SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or_default();
+    let previous_hash: String =
+        sqlx::query_scalar("SELECT current_hash FROM audit_logs ORDER BY id DESC LIMIT 1")
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or_default();
 
     let current_hash = compute_chain_hash(&previous_hash, action_type, &details.to_string());
 

@@ -181,7 +181,8 @@ async fn main() -> anyhow::Result<()> {
         guacd_pool: Some(guacd_pool),
         file_store: services::file_store::FileStore::new(std::path::PathBuf::from(
             "/tmp/strata-files",
-        )).await,
+        ))
+        .await,
         started_at: std::time::Instant::now(),
     }));
 

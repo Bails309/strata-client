@@ -224,8 +224,14 @@ fn get_base_url(headers: &HeaderMap) -> String {
     if let Ok(allowed) = std::env::var("ALLOWED_HOSTS") {
         let allowed_hosts: Vec<&str> = allowed.split(',').map(|s| s.trim()).collect();
         let host_without_port = host.split(':').next().unwrap_or(host);
-        if !allowed_hosts.iter().any(|&h| h.eq_ignore_ascii_case(host_without_port)) {
-            tracing::warn!(host = host, "Host header not in ALLOWED_HOSTS — using localhost");
+        if !allowed_hosts
+            .iter()
+            .any(|&h| h.eq_ignore_ascii_case(host_without_port))
+        {
+            tracing::warn!(
+                host = host,
+                "Host header not in ALLOWED_HOSTS — using localhost"
+            );
             return format!("{}://localhost", protocol);
         }
     }

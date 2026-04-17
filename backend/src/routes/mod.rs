@@ -397,8 +397,8 @@ mod tests {
         std::env::remove_var("STRATA_DOMAIN");
     }
 
-    #[test]
-    fn build_router_does_not_panic() {
+    #[tokio::test]
+    async fn build_router_does_not_panic() {
         use std::sync::Arc;
         use tokio::sync::RwLock;
         let state: SharedState = Arc::new(RwLock::new(crate::services::app_state::AppState {

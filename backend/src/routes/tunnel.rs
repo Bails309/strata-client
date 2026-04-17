@@ -550,7 +550,7 @@ pub async fn ws_tunnel(
     let audit_pool = db.pool.clone();
     Ok(ws
         .protocols(["guacamole"])
-        .max_message_size(1 * 1024 * 1024)
+        .max_message_size(1024 * 1024)
         .on_upgrade(move |socket| async move {
             let nvr = NvrContext {
                 registry: session_registry,

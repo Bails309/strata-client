@@ -1426,7 +1426,7 @@ mod tests {
     }
 
     /// Create a minimal SharedState with no DB for unit tests.
-    fn test_state() -> SharedState {
+    async fn test_state() -> SharedState {
         use crate::services::app_state::{AppState, BootPhase};
         use crate::services::file_store::FileStore;
         use crate::services::session_registry::SessionRegistry;
@@ -1443,7 +1443,7 @@ mod tests {
 
     #[tokio::test]
     async fn logout_missing_auth_header() {
-        let state = test_state();
+        let state = test_state().await;
         let headers = HeaderMap::new();
         let result = logout(State(state), headers).await;
         assert!(result.is_err());
@@ -1451,7 +1451,7 @@ mod tests {
 
     #[tokio::test]
     async fn logout_invalid_auth_header() {
-        let state = test_state();
+        let state = test_state().await;
         let mut headers = HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,
@@ -1464,7 +1464,7 @@ mod tests {
     #[tokio::test]
     async fn logout_with_bearer_token() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
-        let state = test_state();
+        let state = test_state().await;
         let mut headers = HeaderMap::new();
         // Use a fake JWT-like token (won't decode but that's OK - it goes to the else branch)
         headers.insert(
@@ -1480,7 +1480,7 @@ mod tests {
     #[tokio::test]
     async fn logout_with_valid_local_jwt() {
         let _ = crate::config::JWT_SECRET.set("test-secret-for-unit-tests".into());
-        let state = test_state();
+        let state = test_state().await;
         let uid = Uuid::new_v4();
         let (token, _jti) =
             create_local_jwt(uid, "test_user", "admin", "access", ACCESS_TOKEN_TTL).unwrap();

@@ -111,7 +111,7 @@ pub async fn accept_terms(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
     let version = body.get("version").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-    if version < 1 || version > 1000 {
+    if !(1..=1000).contains(&version) {
         return Err(AppError::Validation("Invalid terms version".into()));
     }
     sqlx::query(

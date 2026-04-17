@@ -101,10 +101,8 @@ mod tests {
 
     #[test]
     fn expired_ticket_returns_none() {
-        let ticket = TunnelTicket {
-            created_at: Instant::now() - std::time::Duration::from_secs(TICKET_TTL_SECS + 10),
-            ..make_ticket()
-        };
+        let mut ticket = make_ticket();
+        ticket.created_at = Instant::now() - std::time::Duration::from_secs(TICKET_TTL_SECS + 10);
         let id = create(ticket);
         assert!(consume(&id).is_none());
     }

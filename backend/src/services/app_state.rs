@@ -61,8 +61,8 @@ mod tests {
         assert_eq!(format!("{:?}", BootPhase::Running), "Running");
     }
 
-    #[test]
-    fn app_state_debug_format() {
+    #[tokio::test]
+    async fn app_state_debug_format() {
         let state = AppState {
             phase: BootPhase::Setup,
             config: None,

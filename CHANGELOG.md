@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JSON Serialization Panic**: Two `.unwrap()` calls on `serde_json::to_string` in the auth module have been replaced with proper error propagation, preventing a theoretical panic on serialization failure.
 
 ### Database
-- **Migration 038**: Adds `idx_users_deleted_at` (partial index on soft-deleted users), `idx_user_connection_access_conn_user` (composite index for connection access checks), and `NOT NULL` constraint on `connection_shares.expires_at`.
+- **Migration 039**: Adds `idx_users_deleted_at` (partial index on soft-deleted users), `idx_user_connection_access_conn_user` (composite index for connection access checks), and `NOT NULL` constraint on `connection_shares.expires_at`.
 
 ## [0.15.3] — 2026-04-16
 

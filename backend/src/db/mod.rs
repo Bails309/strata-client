@@ -81,6 +81,39 @@ impl Database {
 
         let migrator = sqlx::migrate!("./migrations");
 
+        // ── Checksum auto-repair ────────────────────────────────────
+        // If a migration file was modified after it was applied (e.g. a
+        // comment change, whitespace fix, or idempotent content update),
+        // sqlx will refuse to run *any* subsequent migrations.  Repair
+        // the stored checksum so the migrator proceeds normally.
+        for migration in migrator.iter() {
+            let version = migration.version;
+            let new_checksum = &migration.checksum;
+
+            let row: Option<(Vec<u8>,)> = sqlx::query_as(
+                "SELECT checksum FROM _sqlx_migrations WHERE version = $1",
+            )
+            .bind(version)
+            .fetch_optional(&mut *conn)
+            .await
+            .unwrap_or(None);
+
+            if let Some((old_checksum,)) = row {
+                if old_checksum != new_checksum.as_ref() {
+                    tracing::warn!(
+                        "Migration {version} checksum mismatch — repairing stored checksum"
+                    );
+                    sqlx::query(
+                        "UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2",
+                    )
+                    .bind(new_checksum.as_ref())
+                    .bind(version)
+                    .execute(&mut *conn)
+                    .await?;
+                }
+            }
+        }
+
         // sqlx::migrate!().run() requires a Pool, but we hold the lock on
         // `conn`.  The lock prevents other instances from running migrations
         // concurrently.  The migrator may use any pool connection for DDL,

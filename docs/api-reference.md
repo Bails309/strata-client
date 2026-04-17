@@ -747,6 +747,8 @@ Pre-connect information for a specific connection. Used by the session client to
   "has_credentials": false,
   "ignore_cert": true,
   "watermark": "inherit",
+  "file_transfer_enabled": true,
+  "file_transfer_enabled": true,
   "expired_profile": {
     "id": "uuid",
     "label": "sa1_prochnickit ICS",
@@ -760,7 +762,9 @@ Pre-connect information for a specific connection. Used by the session client to
 | `protocol` | string | `rdp`, `vnc`, or `ssh` |
 | `has_credentials` | boolean | `true` if a non-expired vault credential profile is mapped to this user + connection |
 | `ignore_cert` | boolean | Whether the connection's RDP certificate validation is disabled |
+| `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |
 | `watermark` | string | Per-connection watermark setting (`inherit`, `enabled`, `disabled`) |
+| `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |
 | `expired_profile` | object \| null | Present only when `has_credentials` is `false` and an expired profile is mapped. Contains `id`, `label`, and `ttl_hours` for the expired profile. |
 
 ### Favorites

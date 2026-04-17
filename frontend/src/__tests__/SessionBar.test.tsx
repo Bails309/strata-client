@@ -240,6 +240,11 @@ describe('SessionBar', () => {
     expect(screen.getByText('Alt+Tab')).toBeInTheDocument();
     expect(screen.getByText('Esc')).toBeInTheDocument();
     expect(screen.getByText('F11')).toBeInTheDocument();
+    // Keyboard mappings reference section
+    expect(screen.getByText('Keyboard Mappings')).toBeInTheDocument();
+    expect(screen.getByText('Right Ctrl')).toBeInTheDocument();
+    expect(screen.getByText('Ctrl+Alt+`')).toBeInTheDocument();
+    expect(screen.getByText('⊞ Win key')).toBeInTheDocument();
   });
 
   it('shows fullscreen button', () => {

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] — 2026-04-17
+
+### Added
+- **Command Palette (Ctrl+K)**: A new quick-launch overlay accessible via `Ctrl+K` while connected to any session. Searches all available connections by name, protocol, hostname, description, or folder. Arrow key navigation, Enter to launch, Escape to close. Shows an "Active" badge on already-connected sessions. Also works from pop-out and multi-monitor windows (relayed to the main window via `postMessage`).
+- **Keyboard Shortcut Proxy (Ctrl+Alt+`)**: Pressing `Ctrl+Alt+`` sends `Win+Tab` (Task View) to the remote session. This is the only reliable browser-level proxy shortcut — Windows intercepts `Ctrl+Alt+Tab` before JavaScript can capture it.
+- **Windows Key Proxy (Right Ctrl)**: Right Ctrl is remapped to the Super/Win key for the remote session. Hold Right Ctrl + another key to send Win+key combos (e.g. Win+E, Win+R). Tap Right Ctrl alone to open the Start menu. Works in single sessions, pop-outs, and multi-monitor windows.
+- **Keyboard Lock API (Fullscreen + HTTPS)**: When a session is in fullscreen mode over HTTPS, the browser captures OS-level shortcuts (Win, Alt+Tab, Escape) directly via the Keyboard Lock API and forwards them to the remote session — no proxy keys needed.
+- **Conditional Quick Share Button**: The Quick Share upload button in the Session Bar is now only visible when the connection has file transfer enabled (`enable-drive` or `enable-sftp`). Previously it was always shown regardless of the connection configuration.
+- **File Transfer Enabled API Field**: The `/user/connections/:id/info` endpoint now returns `file_transfer_enabled: bool`, derived from the connection's `enable-drive` and `enable-sftp` extra settings.
+
+### Improved
+- **Session Bar Keyboard Help**: The Session Bar keyboard popover now shows a full mapping reference: Right Ctrl → Win key, Right Ctrl + key → Win+key, Ctrl+Alt+` → Win+Tab, Ctrl+K → Quick Launch. Includes explanatory notes about Right Ctrl+Tab browser interception and the fullscreen HTTPS tip.
+- **Session Bar Quick Tools**: Shortcut buttons for Alt+Tab, Win+Tab, and Ctrl+Alt+T (Terminal) are available in the Session Bar for one-click sending of common key sequences to the remote session.
+
 ## [0.16.1] — 2026-04-17
 
 ### Improved

@@ -4,6 +4,7 @@ import { useSessionManager, GuacSession } from './SessionManager';
 import { createShareLink } from '../api';
 import FileBrowser from './FileBrowser';
 import QuickShare from './QuickShare';
+import { requestFullscreenWithLock, exitFullscreenWithUnlock } from '../utils/keyboardLock';
 
 export default function SessionBar() {
   const { 
@@ -37,6 +38,7 @@ export default function SessionBar() {
     { label: 'C+A+Del', title: 'Ctrl+Alt+Delete', keys: [KEY_SYMS.CTRL_L, KEY_SYMS.ALT_L, KEY_SYMS.DELETE] },
     { label: '⊞ Win', title: 'Windows key', keys: [KEY_SYMS.SUPER_L] },
     { label: 'Alt+Tab', title: 'Switch windows', keys: [KEY_SYMS.ALT_L, KEY_SYMS.TAB] },
+    { label: 'Win+Tab', title: 'Task View (or Ctrl+Alt+`)', keys: [KEY_SYMS.SUPER_L, KEY_SYMS.TAB] },
     { label: 'Esc', title: 'Escape', keys: [KEY_SYMS.ESCAPE] },
     { label: 'F11', title: 'F11 (Fullscreen)', keys: [KEY_SYMS.F11] },
     { label: 'C+A+T', title: 'Ctrl+Alt+T (Terminal)', keys: [KEY_SYMS.CTRL_L, KEY_SYMS.ALT_L, 0x0074] },
@@ -247,6 +249,7 @@ export default function SessionBar() {
               )}
 
               {/* Quick Share */}
+              {activeSession.fileTransferEnabled && (
               <button
                 className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${quickShareOpen ? 'bg-accent/20 border-accent/40 text-accent-light' : 'bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20'}`}
                 onClick={() => setQuickShareOpen(!quickShareOpen)}
@@ -258,13 +261,14 @@ export default function SessionBar() {
                   <line x1="12" y1="3" x2="12" y2="15" />
                 </svg>
               </button>
+              )}
 
               {/* Fullscreen */}
               <button
                 className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${isFullscreen ? 'bg-accent/20 border-accent/40 text-accent-light' : 'bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20'}`}
                 onClick={() => {
-                  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-                  else document.documentElement.requestFullscreen().catch(() => {});
+                  if (document.fullscreenElement) exitFullscreenWithUnlock(document).catch(() => {});
+                  else requestFullscreenWithLock(document.documentElement).catch(() => {});
                 }}
                 title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
               >
@@ -325,18 +329,37 @@ export default function SessionBar() {
 
             {/* Keyboard Shortcuts List */}
             {keyboardOpen && (
-              <div className="grid grid-cols-2 gap-2 mt-4 animate-in fade-in slide-in-from-top-2 duration-200">
-                {KEYBOARD_COMBOS.map((combo) => (
-                  <button
-                    key={combo.label}
-                    className="flex flex-col items-center justify-center gap-1 p-2 h-14 rounded border border-white/5 bg-white/5 hover:bg-white/10 transition-all active:scale-95"
-                    onClick={() => sendCombo(combo.keys)}
-                    title={combo.title}
-                  >
-                    <span className="text-[0.65rem] font-bold text-txt-primary">{combo.label}</span>
-                    <span className="text-[0.5rem] text-txt-tertiary uppercase tracking-tighter truncate w-full text-center">{combo.title}</span>
-                  </button>
-                ))}
+              <div className="mt-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                <div className="grid grid-cols-2 gap-2">
+                  {KEYBOARD_COMBOS.map((combo) => (
+                    <button
+                      key={combo.label}
+                      className="flex flex-col items-center justify-center gap-1 p-2 h-14 rounded border border-white/5 bg-white/5 hover:bg-white/10 transition-all active:scale-95"
+                      onClick={() => sendCombo(combo.keys)}
+                      title={combo.title}
+                    >
+                      <span className="text-[0.65rem] font-bold text-txt-primary">{combo.label}</span>
+                      <span className="text-[0.5rem] text-txt-tertiary uppercase tracking-tighter truncate w-full text-center">{combo.title}</span>
+                    </button>
+                  ))}
+                </div>
+                {/* Keyboard shortcut reference */}
+                <div className="mt-3 pt-3 border-t border-white/5">
+                  <div className="text-[0.55rem] font-bold text-txt-tertiary uppercase tracking-widest mb-2">Keyboard Mappings</div>
+                  <div className="space-y-1.5 text-[0.6rem] text-txt-secondary">
+                    <div className="flex justify-between"><kbd className="text-txt-primary font-mono bg-white/5 px-1 rounded">Right Ctrl</kbd><span className="text-txt-tertiary">⊞ Win key</span></div>
+                    <div className="flex justify-between gap-2"><kbd className="text-txt-primary font-mono bg-white/5 px-1 rounded whitespace-nowrap">Right Ctrl + key</kbd><span className="text-txt-tertiary">Win+key</span></div>
+                    <div className="flex justify-between"><kbd className="text-txt-primary font-mono bg-white/5 px-1 rounded">Ctrl+Alt+`</kbd><span className="text-txt-tertiary">Win+Tab</span></div>
+                    <div className="flex justify-between"><kbd className="text-txt-primary font-mono bg-white/5 px-1 rounded">Ctrl+K</kbd><span className="text-txt-tertiary">Quick Launch</span></div>
+                  </div>
+                  <p className="mt-2 text-[0.5rem] text-txt-tertiary leading-relaxed">
+                    Right Ctrl acts as the Win key for most combos (e.g. Win+E, Win+R).
+                    Right Ctrl+Tab cannot send Win+Tab because the browser intercepts Ctrl+Tab — use Ctrl+Alt+` instead.
+                  </p>
+                  <p className="mt-1 text-[0.5rem] text-accent-light/70 leading-relaxed">
+                    Tip: In fullscreen mode over HTTPS, Win, Alt+Tab, and other OS shortcuts are captured directly — no proxy keys needed.
+                  </p>
+                </div>
               </div>
             )}
             {/* Share Popover Implementation */}

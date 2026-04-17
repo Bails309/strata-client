@@ -686,6 +686,45 @@ You can share a live session with another user by generating a temporary read-on
 - Each click of the share button generates a new share link
 - Viewers see a banner at the top of the screen indicating that they are in read-only mode
 
+### Command Palette (Quick Launch)
+
+Press **Ctrl+K** while connected to any session to open the command palette — an instant search overlay for finding and launching connections without leaving the current session.
+
+| Feature | Details |
+|---|---|
+| **Open** | `Ctrl+K` (also works from pop-out and multi-monitor windows) |
+| **Search** | Filters connections by name, protocol, hostname, description, or folder |
+| **Navigate** | `↑` / `↓` arrow keys to move, `Enter` to launch, `Esc` to close |
+| **Active badge** | Connections you're already connected to show a green "Active" badge |
+| **Mouse** | Click any result to launch it directly |
+
+The command palette fetches your available connections from the server each time it opens, so newly added connections appear immediately.
+
+### Keyboard Shortcuts
+
+When connected to a remote session, the following keyboard shortcuts are available:
+
+| Shortcut | Action | Notes |
+|---|---|---|
+| `Right Ctrl` (tap) | Send Win key (open Start menu) | Right Ctrl is remapped to Super/Win for the remote session |
+| `Right Ctrl + key` | Send Win+key combo | e.g. `Right Ctrl + E` → Win+E (File Explorer) |
+| `Ctrl+Alt+\`` | Send Win+Tab (Task View) | The only reliable browser-level proxy — Windows intercepts `Ctrl+Alt+Tab` |
+| `Ctrl+K` | Open Command Palette | Search and launch connections from keyboard |
+| `F12` | Browser DevTools | Passed through to the browser (not sent to remote) |
+| `Ctrl+Shift+I/J` | Browser DevTools | Passed through to the browser (not sent to remote) |
+
+#### Keyboard Lock (Fullscreen + HTTPS)
+
+When a session is in **fullscreen mode** and accessed over **HTTPS**, the browser captures OS-level shortcuts directly via the [Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard/lock):
+
+- **Win key** — captured and sent to the remote session
+- **Alt+Tab** — captured and sent to the remote session
+- **Escape** — captured and sent to the remote session
+
+This eliminates the need for proxy shortcuts like Right Ctrl or Ctrl+Alt+\`. Keyboard Lock requires a secure context (HTTPS or localhost) and is supported in Chromium-based browsers.
+
+> **Note:** Keyboard Lock does not work over HTTP. In that case, use the Right Ctrl and Ctrl+Alt+\` proxy shortcuts described above.
+
 ---
 
 ## Troubleshooting

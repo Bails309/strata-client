@@ -25,6 +25,37 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.16.2',
+    subtitle: 'Command Palette, Keyboard Shortcuts & Quick Share Visibility',
+    sections: [
+      {
+        title: 'Command Palette (Ctrl+K)',
+        description:
+          'Press Ctrl+K while connected to any session to open an instant search overlay. Find and launch any connection by name, protocol, hostname, or folder — all from the keyboard. Arrow keys navigate, Enter launches, Escape closes. Active sessions show a green badge.',
+      },
+      {
+        title: 'Keyboard Shortcut Proxy',
+        description:
+          'Ctrl+Alt+` sends Win+Tab (Task View) to the remote session. Right Ctrl acts as the Win key — hold it with another key for Win+combos (Win+E, Win+R, etc.), or tap it alone for the Start menu.',
+      },
+      {
+        title: 'Keyboard Lock (Fullscreen + HTTPS)',
+        description:
+          'In fullscreen mode over HTTPS, OS-level shortcuts (Win, Alt+Tab, Escape) are captured directly by the browser and forwarded to the remote session via the Keyboard Lock API — no proxy keys needed.',
+      },
+      {
+        title: 'Conditional Quick Share',
+        description:
+          'The Quick Share upload button now only appears when the connection has file transfer enabled (drive or SFTP). Connections without file transfer configured no longer show an unusable upload button.',
+      },
+      {
+        title: 'Session Bar Keyboard Help',
+        description:
+          'The Session Bar now includes a keyboard mappings reference showing all available shortcuts: Right Ctrl → Win, Ctrl+Alt+` → Win+Tab, Ctrl+K → Quick Launch, plus tips on fullscreen capture.',
+      },
+    ],
+  },
+  {
     version: '0.16.1',
     subtitle: 'Multi-Monitor Rendering, Cursor Sync & Layout Improvements',
     sections: [

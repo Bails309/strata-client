@@ -1061,11 +1061,22 @@ pub async fn connection_info(
         false
     };
 
+    // Check if any file transfer mechanism is enabled in the connection's extra settings
+    let file_transfer_enabled = extra
+        .as_ref()
+        .and_then(|e| e.as_object())
+        .map(|obj| {
+            obj.get("enable-drive").and_then(|v| v.as_str()) == Some("true")
+                || obj.get("enable-sftp").and_then(|v| v.as_str()) == Some("true")
+        })
+        .unwrap_or(false);
+
     let mut resp = json!({
         "protocol": protocol,
         "has_credentials": has_vault_creds,
         "ignore_cert": ignore_cert,
         "watermark": watermark,
+        "file_transfer_enabled": file_transfer_enabled,
     });
 
     if let Some((ep_id, ep_label, ep_ttl)) = expired_profile {

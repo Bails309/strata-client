@@ -10,6 +10,9 @@ import { useMultiMonitor } from '../components/useMultiMonitor';
 import SessionWatermark from '../components/SessionWatermark';
 import Select from '../components/Select';
 import { createWinKeyProxy } from '../utils/winKeyProxy';
+import { installShortcutProxy } from '../utils/shortcutProxy';
+import { installKeyboardLock } from '../utils/keyboardLock';
+import CommandPalette from '../components/CommandPalette';
 
 /*
  * Phases:
@@ -46,6 +49,7 @@ export default function SessionClient() {
   const [hasDomain, setHasDomain] = useState(false);
   const [ignoreCert, setIgnoreCert] = useState(false);
   const [connectionWatermark, setConnectionWatermark] = useState<string>('inherit');
+  const [fileTransferEnabled, setFileTransferEnabled] = useState(false);
   const [vaultProfiles, setVaultProfiles] = useState<CredentialProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [expiredProfile, setExpiredProfile] = useState<ConnectionInfo['expired_profile']>();
@@ -55,6 +59,8 @@ export default function SessionClient() {
   const [renewLoading, setRenewLoading] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string; credential_profile_id?: string }>({ username: '', password: '' });
 
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const commandPaletteOpenRef = useRef(false);
   const containerFocusedRef = useRef(false);
   const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
   const [reconnectLoading, setReconnectLoading] = useState(false);
@@ -125,6 +131,7 @@ export default function SessionClient() {
         setHasDomain(!!connDetail?.domain);
         setIgnoreCert(!!info.ignore_cert);
         setConnectionWatermark(info.watermark || 'inherit');
+        setFileTransferEnabled(!!info.file_transfer_enabled);
         if (info.expired_profile) {
           setExpiredProfile(info.expired_profile);
           setRenewMode(true);
@@ -225,6 +232,7 @@ export default function SessionClient() {
           connectParams,
         });
 
+        session.fileTransferEnabled = fileTransferEnabled;
         wireHandlersRef.current?.(session, attempt);
         attachSession(session, container);
         setReconnecting(null);
@@ -408,6 +416,7 @@ export default function SessionClient() {
         connectParams,
       });
 
+      session.fileTransferEnabled = fileTransferEnabled;
       wireHandlersRef.current?.(session, 0);
       attachSession(session, container);
 
@@ -497,6 +506,7 @@ export default function SessionClient() {
         connectParams,
       });
 
+      session.fileTransferEnabled = fileTransferEnabled;
       wireSessionErrorHandlers(session);
 
       pendingCredsRef.current = { username: '', password: '' };
@@ -506,7 +516,7 @@ export default function SessionClient() {
     });
 
     return () => { cancelled = true; cancelAnimationFrame(raf); };
-  }, [phase, connectionId, protocol, connectionName, createSession, getSession, wireSessionErrorHandlers, ignoreCert]);
+  }, [phase, connectionId, protocol, connectionName, fileTransferEnabled, createSession, getSession, wireSessionErrorHandlers, ignoreCert]);
 
   // Re-attach when switching back to an existing session
   useEffect(() => {
@@ -616,11 +626,11 @@ export default function SessionClient() {
 
     const winProxy = createWinKeyProxy((p, k) => client.sendKeyEvent(p, k));
     kb.onkeydown = (keysym: number) => {
-      if (!containerFocusedRef.current) { winProxy.reset(); return false; }
+      if (!containerFocusedRef.current || commandPaletteOpenRef.current) { winProxy.reset(); return false; }
       return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {
-      if (!containerFocusedRef.current) { winProxy.reset(); return; }
+      if (!containerFocusedRef.current || commandPaletteOpenRef.current) { winProxy.reset(); return; }
       winProxy.onkeyup(keysym);
     };
 
@@ -634,14 +644,48 @@ export default function SessionClient() {
       // Allow browser dev-tools shortcuts through
       if (e.key === 'F12') return;
       if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) return;
+      // Ctrl+K → open command palette (intercept before Guacamole)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setCommandPaletteOpen(true);
+        commandPaletteOpenRef.current = true;
+        kb.reset();
+        return;
+      }
+      // While command palette is open, don't trap keys — let it handle them
+      if (commandPaletteOpenRef.current) return;
       e.preventDefault();
     };
     document.addEventListener('keydown', trapKeyDown, true);
+
+    // Shortcut proxy: Ctrl+Alt+Tab → Alt+Tab, Ctrl+Alt+` → Win+Tab
+    const removeShortcutProxy = installShortcutProxy(
+      document,
+      (p, k) => client.sendKeyEvent(p, k),
+      () => containerFocusedRef.current,
+    );
+
+    // Keyboard Lock: capture OS-level shortcuts (Win, Alt+Tab, etc.) in fullscreen
+    const removeKeyboardLock = installKeyboardLock(document);
+
+    // Listen for Ctrl+K relay from popout/multi-monitor windows
+    const handlePaletteMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'strata:open-command-palette') {
+        setCommandPaletteOpen(true);
+        commandPaletteOpenRef.current = true;
+        kb.reset();
+      }
+    };
+    window.addEventListener('message', handlePaletteMessage);
 
     return () => {
       kb.onkeydown = null;
       kb.onkeyup = null;
       document.removeEventListener('keydown', trapKeyDown, true);
+      window.removeEventListener('message', handlePaletteMessage);
+      removeShortcutProxy();
+      removeKeyboardLock();
     };
   }, [currentSession, activeSessionId, phase, sshRequired]);
 
@@ -990,6 +1034,16 @@ export default function SessionClient() {
           </div>
         </div>
       )}
+
+      {/* Command Palette (Ctrl+K) */}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => {
+          setCommandPaletteOpen(false);
+          commandPaletteOpenRef.current = false;
+          containerRef.current?.focus();
+        }}
+      />
 
       {sshRequired && (
         <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(0,0,0,0.85)' }}>

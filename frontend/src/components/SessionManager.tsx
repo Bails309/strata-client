@@ -26,6 +26,8 @@ export interface GuacSession {
   popIn?: () => void;
   /** Whether multi-monitor mode is active */
   isMultiMonitor?: boolean;
+  /** Whether drive/SFTP file transfer is enabled on the connection */
+  fileTransferEnabled?: boolean;
   /** Number of screens detected by the Window Management API */
   screenCount?: number;
   enableMultiMonitor?: () => void | Promise<void>;

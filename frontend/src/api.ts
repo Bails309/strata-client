@@ -631,6 +631,7 @@ export interface ConnectionInfo {
   has_credentials: boolean;
   ignore_cert?: boolean;
   watermark?: string;
+  file_transfer_enabled?: boolean;
   expired_profile?: {
     id: string;
     label: string;

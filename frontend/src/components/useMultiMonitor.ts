@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Guacamole from 'guacamole-common-js';
 import { GuacSession } from './SessionManager';
 import { createWinKeyProxy } from '../utils/winKeyProxy';
+import { installShortcutProxy } from '../utils/shortcutProxy';
+import { installKeyboardLock, requestFullscreenWithLock } from '../utils/keyboardLock';
 
 /**
  * Browser-based multi-monitor support via canvas slicing.
@@ -63,6 +65,8 @@ interface SecondaryWindow {
   sliceH: number;
   keyboard: Guacamole.Keyboard;
   mouse: Guacamole.Mouse;
+  removeShortcutProxy: () => void;
+  removeKeyboardLock: () => void;
 }
 
 /** Live ScreenDetails object — fires `screenschange` when monitors change. */
@@ -356,7 +360,7 @@ export function useMultiMonitor(
       // This can fail if the user-activation has expired — that's fine,
       // the popup still covers most of the screen.
       try {
-        popup.document.documentElement.requestFullscreen().catch(() => {});
+        requestFullscreenWithLock(popup.document.documentElement).catch(() => {});
       } catch { /* Fullscreen API unavailable */ }
 
       const canvas = popup.document.createElement('canvas');
@@ -423,8 +427,25 @@ export function useMultiMonitor(
       popup.document.addEventListener('keydown', (e: KeyboardEvent) => {
         if (e.key === 'F12') return;
         if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) return;
+        // Ctrl+K → relay to main window to open command palette
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          keyboard.reset();
+          window.postMessage({ type: 'strata:open-command-palette' }, '*');
+          return;
+        }
         e.preventDefault();
       }, true);
+
+      // Shortcut proxy: Ctrl+Alt+Tab → Alt+Tab, Ctrl+Alt+` → Win+Tab
+      const removeShortcutProxy = installShortcutProxy(
+        popup.document,
+        (pressed, keysym) => client.sendKeyEvent(pressed, keysym),
+      );
+
+      // Keyboard Lock: capture OS-level shortcuts in fullscreen popups
+      const removeKeyboardLock = installKeyboardLock(popup.document);
 
       // Handle secondary window close → teardown all multi-monitor
       const pollId = setInterval(() => {
@@ -444,6 +465,8 @@ export function useMultiMonitor(
         sliceH: Math.min(screen.height, layout.aggregateHeight),
         keyboard,
         mouse,
+        removeShortcutProxy,
+        removeKeyboardLock,
       });
     }
 
@@ -514,6 +537,8 @@ export function useMultiMonitor(
         sw.mouse.onmousedown = null;
         sw.mouse.onmouseup = null;
         sw.mouse.onmousemove = null;
+        sw.removeShortcutProxy();
+        sw.removeKeyboardLock();
         if (!sw.win.closed) {
           try { sw.win.close(); } catch { /* ignore */ }
         }

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
 import { GuacSession } from './SessionManager';
 import { createWinKeyProxy } from '../utils/winKeyProxy';
+import { installShortcutProxy } from '../utils/shortcutProxy';
+import { installKeyboardLock } from '../utils/keyboardLock';
 
 /**
  * Hook that manages popping a Guacamole session out into a separate browser window.
@@ -171,9 +173,26 @@ export function usePopOut(
     const trapKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F12') return;
       if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) return;
+      // Ctrl+K → relay to main window to open command palette
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        kb.reset();
+        window.postMessage({ type: 'strata:open-command-palette' }, '*');
+        return;
+      }
       e.preventDefault();
     };
     popup.document.addEventListener('keydown', trapKeyDown, true);
+
+    // Shortcut proxy: Ctrl+Alt+Tab → Alt+Tab, Ctrl+Alt+` → Win+Tab
+    const removeShortcutProxy = installShortcutProxy(
+      popup.document,
+      (p, k) => sess.client.sendKeyEvent(p, k),
+    );
+
+    // Keyboard Lock: capture OS-level shortcuts in fullscreen popouts
+    const removeKeyboardLock = installKeyboardLock(popup.document);
 
     // ── Clipboard sync for the popup window ──
     // The main window's paste listener doesn't fire in the popup, so we
@@ -297,6 +316,8 @@ export function usePopOut(
       try {
         popup.document.removeEventListener('keydown', trapKeyDown, true);
         popup.document.removeEventListener('paste', handlePastePopup);
+        removeShortcutProxy();
+        removeKeyboardLock();
       } catch { /* popup may already be closed */ }
       try {
         sess.displayEl.removeEventListener('mouseenter', pushClipboardPopup);

@@ -85,10 +85,7 @@ pub async fn upload(
                 session_id = Some(text);
             }
             "file" => {
-                let filename = field
-                    .file_name()
-                    .unwrap_or("upload")
-                    .to_string();
+                let filename = field.file_name().unwrap_or("upload").to_string();
                 let content_type = field
                     .content_type()
                     .unwrap_or("application/octet-stream")

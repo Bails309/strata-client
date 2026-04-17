@@ -94,11 +94,7 @@ impl FileStore {
         let mut inner = self.inner.write().await;
 
         // Enforce per-session limit.
-        let count = inner
-            .sessions
-            .get(session_id)
-            .map(|v| v.len())
-            .unwrap_or(0);
+        let count = inner.sessions.get(session_id).map(|v| v.len()).unwrap_or(0);
         if count >= MAX_FILES_PER_SESSION {
             return Err(FileStoreError::TooManyFiles);
         }

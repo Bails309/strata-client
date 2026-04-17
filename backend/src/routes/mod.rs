@@ -260,9 +260,17 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/sessions/:id/observe",
             get(user::my_observe_session),
-        )        .route("/api/files/upload", post(files::upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)))
-        .route("/api/files/session/:session_id", get(files::list_session_files))
-        .route("/api/files/delete/:token", delete(files::delete_file))        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        )
+        .route(
+            "/api/files/upload",
+            post(files::upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+        )
+        .route(
+            "/api/files/session/:session_id",
+            get(files::list_session_files),
+        )
+        .route("/api/files/delete/:token", delete(files::delete_file))
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public
         .merge(admin)

@@ -3482,6 +3482,7 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -3498,6 +3499,7 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
+            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

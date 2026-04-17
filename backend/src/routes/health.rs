@@ -404,7 +404,9 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
-            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
+            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
+                "/tmp/strata-files",
+            )),
             started_at: std::time::Instant::now(),
         }));
         let result = status(axum::extract::State(state)).await;
@@ -423,7 +425,9 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
-            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
+            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
+                "/tmp/strata-files",
+            )),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -460,7 +464,9 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
-            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
+            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
+                "/tmp/strata-files",
+            )),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -499,7 +505,9 @@ mod tests {
             db: None,
             session_registry: crate::services::session_registry::SessionRegistry::new(),
             guacd_pool: None,
-            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from("/tmp/strata-files")),
+            file_store: crate::services::file_store::FileStore::new(std::path::PathBuf::from(
+                "/tmp/strata-files",
+            )),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;

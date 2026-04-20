@@ -846,7 +846,11 @@ export default function Dashboard() {
                         }
                         options={[
                           { value: '', label: '— Enter manually —' },
-                          ...filteredProfiles.filter((p: CredentialProfile) => !p.expired).map((p: CredentialProfile) => ({ value: p.id, label: p.label })),
+                          ...filteredProfiles.filter((p: CredentialProfile) => !p.expired).map((p: CredentialProfile) => {
+                            const checkout = p.checkout_id ? allCheckouts.find(c => c.id === p.checkout_id) : null;
+                            const effectivelyExpired = (p.checkout_id && checkout && !isCheckoutLive(checkout));
+                            return { value: p.id, label: effectivelyExpired ? `${p.label} (expired)` : p.label };
+                          }),
                         ]}
                       />
                     </div>
@@ -1120,7 +1124,11 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
                 placeholder="No profile"
                 options={[
                   { value: '', label: 'None' },
-                  ...credProfiles.map((p: CredentialProfile) => ({ value: p.id, label: p.expired ? `${p.label} (expired)` : p.label })),
+                  ...credProfiles.map((p: CredentialProfile) => {
+                    const checkout = p.checkout_id ? allCheckouts.find(c => c.id === p.checkout_id) : null;
+                    const effectivelyExpired = p.expired || (p.checkout_id && checkout && !isCheckoutLive(checkout));
+                    return { value: p.id, label: effectivelyExpired ? `${p.label} (expired)` : p.label };
+                  }),
                 ]}
               />
             </div>

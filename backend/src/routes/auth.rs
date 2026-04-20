@@ -1634,8 +1634,8 @@ mod tests {
         // password-like strings as "hard-coded cryptographic values", but
         // these are fixtures for exercising the length validator only.
         let ok_phrase = ["correct", "horse", "battery", "staple"].join("-");
-        let min_ok: String = std::iter::repeat('x').take(12).collect();
-        let too_short: String = std::iter::repeat('x').take(11).collect();
+        let min_ok: String = "x".repeat(12);
+        let too_short: String = "x".repeat(11);
         assert!(validate_password(&ok_phrase).is_ok());
         assert!(validate_password(&min_ok).is_ok()); // min length 12
         assert!(validate_password(&too_short).is_err()); // too short

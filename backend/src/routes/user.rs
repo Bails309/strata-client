@@ -1256,6 +1256,7 @@ pub async fn connection_info(
 
     // If no active credentials, check for an expired profile mapped to this connection.
     // Also check if it's a managed account with self-approval rights.
+    #[allow(clippy::type_complexity)]
     let expired_profile: Option<(String, String, i32, Option<String>, Option<Uuid>, bool)> =
         if !has_vault_creds && has_vault {
             sqlx::query_as::<_, (String, String, i32, Option<String>, Option<Uuid>, bool)>(

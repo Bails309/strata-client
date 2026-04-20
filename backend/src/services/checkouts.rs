@@ -574,6 +574,7 @@ pub async fn expire_checkout(
 
 // ── LDAP password reset via unicodePwd modify ──────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub async fn ldap_reset_password(
     ldap_url: &str,
     bind_dn: &str,

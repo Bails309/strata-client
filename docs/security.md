@@ -309,30 +309,42 @@ The Password Management service account (either the AD Sync bind account or the 
 | **Read lockoutTime** | Property-specific | Detect locked-out accounts before attempting reset |
 | **Write lockoutTime** | Property-specific | Unlock accounts if needed during password rotation |
 
-#### Delegating Permissions for Standard User Accounts
+#### Delegating Permissions for Standard & Protected Accounts
 
 ##### Option 1: Automated Delegation (PowerShell)
 
-For rapid deployment, use the following PowerShell script. Run this from a machine with Active Directory Administrative Tools installed, using an account with Domain Admin or equivalent permissions.
+The following script automates the delegation of minimum required permissions. It includes a toggle to also apply these permissions to the **AdminSDHolder** container, which is necessary for managing "Protected Accounts" (e.g., Domain Admins).
 
 ```powershell
 # --- Configuration ---
-$ServiceAccount = "YOURDOMAIN\strata-pm-svc"     # The Strata PM service account
-$TargetDN = "OU=ManagedAccounts,DC=corp,DC=com"  # The OU containing accounts to manage
+$ServiceAccount = "YOURDOMAIN\strata-pm-svc"      # The Strata PM service account
+$TargetOU = "OU=ManagedAccounts,DC=corp,DC=com"   # The OU containing standard accounts
+$ApplyToProtectedAccounts = $true                 # Set to $true to also delegate for Domain Admins/Protected groups
 # ---------------------
 
-Write-Host "Delegating Password Management permissions on $TargetDN to $ServiceAccount..." -ForegroundColor Cyan
+function Delegate-StrataPM($Path) {
+    Write-Host "Delegating permissions on: $Path" -ForegroundColor Cyan
+    # 1. Reset Password (Extended Right)
+    dsacls $Path /I:S /G "$($ServiceAccount):CA;Reset Password;user"
+    # 2. Read/Write account restrictions (Property Set)
+    dsacls $Path /I:S /G "$($ServiceAccount):RPWP;account restrictions;user"
+    # 3. Read/Write lockoutTime (Individual Property)
+    dsacls $Path /I:S /G "$($ServiceAccount):RPWP;lockoutTime;user"
+}
 
-# 1. Reset Password (Extended Right)
-dsacls $TargetDN /I:S /G "$($ServiceAccount):CA;Reset Password;user"
+# 1. Apply to Standard OU
+Delegate-StrataPM $TargetOU
 
-# 2. Read/Write account restrictions (Property Set)
-dsacls $TargetDN /I:S /G "$($ServiceAccount):RPWP;account restrictions;user"
+# 2. Apply to AdminSDHolder (for Protected Accounts)
+if ($ApplyToProtectedAccounts) {
+    $DomainDN = ([ADSI]"").distinguishedName
+    $AdminSDHolderPath = "CN=AdminSDHolder,CN=System,$DomainDN"
+    Write-Host "`nProtected accounts detected ($ApplyToProtectedAccounts). Applying to AdminSDHolder..." -ForegroundColor Yellow
+    Delegate-StrataPM $AdminSDHolderPath
+    Write-Host "Note: Permission propagation for protected accounts (SDProp) may take up to 60 minutes." -ForegroundColor Gray
+}
 
-# 3. Read/Write lockoutTime (Individual Property)
-dsacls $TargetDN /I:S /G "$($ServiceAccount):RPWP;lockoutTime;user"
-
-Write-Host "Delegation complete." -ForegroundColor Green
+Write-Host "`nDelegation complete." -ForegroundColor Green
 ```
 
 ##### Option 2: Manual Delegation (GUI)

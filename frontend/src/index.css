@@ -402,6 +402,26 @@ html.light .recent-card-btn:hover {
     @apply opacity-40 cursor-not-allowed;
   }
 
+  .btn-sm {
+    @apply cursor-pointer rounded-sm font-medium relative overflow-hidden transition-all duration-150 inline-flex items-center gap-1;
+    padding: 0.3rem 0.75rem;
+    font-size: 0.75rem;
+    font-family: inherit;
+    letter-spacing: -0.005em;
+    background: var(--color-surface-tertiary);
+    color: var(--color-txt-secondary);
+    border: 1px solid var(--color-border);
+  }
+  .btn-sm:hover {
+    background: var(--color-btn-hover-bg);
+    color: var(--color-txt-primary);
+    border-color: var(--color-btn-hover-border);
+  }
+  .btn-sm:active { opacity: 0.85; }
+  .btn-sm:disabled {
+    @apply opacity-40 cursor-not-allowed;
+  }
+
   .btn-primary {
     @apply cursor-pointer rounded-sm text-[0.8125rem] font-medium relative overflow-hidden transition-all duration-150 text-white;
     padding: 0.55rem 1.15rem;
@@ -449,26 +469,6 @@ html.light .recent-card-btn:hover {
   }
   .btn-success:active { opacity: 0.85; }
   .btn-success:disabled {
-    @apply opacity-40 cursor-not-allowed;
-  }
-
-  .btn-sm {
-    @apply cursor-pointer rounded-sm font-medium relative overflow-hidden transition-all duration-150 inline-flex items-center gap-1;
-    padding: 0.3rem 0.75rem;
-    font-size: 0.75rem;
-    font-family: inherit;
-    letter-spacing: -0.005em;
-    background: var(--color-surface-tertiary);
-    color: var(--color-txt-secondary);
-    border: 1px solid var(--color-border);
-  }
-  .btn-sm:hover {
-    background: var(--color-btn-hover-bg);
-    color: var(--color-txt-primary);
-    border-color: var(--color-btn-hover-border);
-  }
-  .btn-sm:active { opacity: 0.85; }
-  .btn-sm:disabled {
     @apply opacity-40 cursor-not-allowed;
   }
 

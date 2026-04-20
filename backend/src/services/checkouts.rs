@@ -927,6 +927,7 @@ pub async fn auto_rotate_service_account(
         &new_password,
         config.tls_skip_verify,
         config.ca_cert_pem.as_deref(),
+        false, // Manual rotation - verification required
     )
     .await?;
 

@@ -1061,7 +1061,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
               Connect
             </button>
           {vaultConfigured && (
-            <div className="min-w-[140px]">
+            <div className="w-[200px] shrink-0">
               <Select
                 value={assignedProfileId}
                 onChange={(v) => onProfileChange(conn.id, v)}

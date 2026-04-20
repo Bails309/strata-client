@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import Guacamole from 'guacamole-common-js';
-import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialProfiles, updateCredentialProfile, CredentialProfile, ConnectionInfo } from '../api';
+import { getConnectionInfo, getConnections, createTunnelTicket, getCredentialProfiles, updateCredentialProfile, requestCheckout, linkCheckoutToProfile, CredentialProfile, ConnectionInfo } from '../api';
 import { useSessionManager, GuacSession } from '../components/SessionManager';
 import { useSidebarWidth } from '../components/Layout';
 import { usePopOut } from '../components/usePopOut';
@@ -54,6 +54,7 @@ export default function SessionClient() {
   const [selectedProfileId, setSelectedProfileId] = useState('');
   const [expiredProfile, setExpiredProfile] = useState<ConnectionInfo['expired_profile']>();
   const [renewMode, setRenewMode] = useState(false);
+  const [renewDuration, setRenewDuration] = useState(60);
   const [renewForm, setRenewForm] = useState({ username: '', password: '' });
   const [renewError, setRenewError] = useState('');
   const [renewLoading, setRenewLoading] = useState(false);
@@ -176,26 +177,49 @@ export default function SessionClient() {
   // ── Renew expired profile + connect ──
   const handleRenewAndConnect = useCallback(async () => {
     if (!expiredProfile) return;
-    if (!renewForm.username || !renewForm.password) {
-      setRenewError('Username and password are required.');
-      return;
-    }
+    
     setRenewLoading(true);
     setRenewError('');
+
     try {
-      await updateCredentialProfile(expiredProfile.id, {
-        username: renewForm.username,
-        password: renewForm.password,
-      });
-      // Profile is now renewed — connect using it
-      pendingCredsRef.current = { username: '', password: '', credential_profile_id: expiredProfile.id };
-      setPhase('connected');
+      if (expiredProfile.managed_ad_dn && expiredProfile.can_self_approve) {
+        // One-click managed renewal sequence
+        const checkout = await requestCheckout({
+          managed_ad_dn: expiredProfile.managed_ad_dn,
+          ad_sync_config_id: expiredProfile.ad_sync_config_id,
+          requested_duration_mins: renewDuration,
+          justification_comment: 'Automated renewal for interactive session',
+        });
+
+        if (checkout.status !== 'Active') {
+            throw new Error(`Checkout requested but status is ${checkout.status}. Ensure your account is healthy.`);
+        }
+
+        await linkCheckoutToProfile(expiredProfile.id, checkout.id);
+        
+        // Success — connection will proceed with the now-active profile
+        pendingCredsRef.current = { username: '', password: '', credential_profile_id: expiredProfile.id };
+        setPhase('connected');
+      } else {
+        // Standard manual renewal
+        if (!renewForm.username || !renewForm.password) {
+          setRenewError('Username and password are required.');
+          setRenewLoading(false);
+          return;
+        }
+        await updateCredentialProfile(expiredProfile.id, {
+          username: renewForm.username,
+          password: renewForm.password,
+        });
+        pendingCredsRef.current = { username: '', password: '', credential_profile_id: expiredProfile.id };
+        setPhase('connected');
+      }
     } catch (err: any) {
       setRenewError(err?.message || 'Failed to update credentials.');
     } finally {
       setRenewLoading(false);
     }
-  }, [expiredProfile, renewForm]);
+  }, [expiredProfile, renewForm, renewDuration]);
 
   // ── Auto-reconnect: attempt to re-establish a dropped session ──
   const attemptReconnect = useCallback((attempt: number): void => {
@@ -971,23 +995,56 @@ export default function SessionClient() {
                     style={{ color: 'var(--color-primary)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
                     onClick={() => setRenewMode(true)}
                   >
-                    Update credentials &amp; connect
+                    {expiredProfile.managed_ad_dn && expiredProfile.can_self_approve ? 'Renew & connect' : 'Update credentials & connect'}
                   </button>
                 ) : (
                   <form onSubmit={(e) => { e.preventDefault(); handleRenewAndConnect(); }} className="mt-2">
-                    <div className="form-group !mb-2">
-                      <label className="text-xs">Username</label>
-                      <input type="text" value={renewForm.username} onChange={(e) => setRenewForm((f) => ({ ...f, username: e.target.value }))} autoFocus />
-                    </div>
-                    <div className="form-group !mb-2">
-                      <label className="text-xs">Password</label>
-                      <input type="password" value={renewForm.password} onChange={(e) => setRenewForm((f) => ({ ...f, password: e.target.value }))} />
-                    </div>
+                    {expiredProfile.managed_ad_dn ? (
+                      expiredProfile.can_self_approve ? (
+                        <div className="form-group !mb-3">
+                          <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Checkout Duration</label>
+                          <Select
+                            value={String(renewDuration)}
+                            onChange={(v) => setRenewDuration(parseInt(v))}
+                            options={[
+                              { value: '30', label: '30 Minutes' },
+                              { value: '60', label: '1 Hour' },
+                              { value: '240', label: '4 Hours' },
+                              { value: '480', label: '8 Hours' },
+                              { value: '720', label: '12 Hours' },
+                            ]}
+                          />
+                        </div>
+                      ) : (
+                        <div className="mb-4">
+                          <div className="p-3 rounded-lg bg-warning/10 border border-warning/20 text-warning text-xs leading-relaxed">
+                            <strong>Approval Required:</strong> This is a managed account that requires administrative approval. You cannot manually update this password. Please visit the <strong>Credentials</strong> tab to request a checkout.
+                          </div>
+                        </div>
+                      )
+                    ) : (
+                      <>
+                        <div className="form-group !mb-2">
+                          <label className="text-xs">Username</label>
+                          <input type="text" value={renewForm.username} onChange={(e) => setRenewForm((f) => ({ ...f, username: e.target.value }))} autoFocus />
+                        </div>
+                        <div className="form-group !mb-2">
+                          <label className="text-xs">Password</label>
+                          <input type="password" value={renewForm.password} onChange={(e) => setRenewForm((f) => ({ ...f, password: e.target.value }))} />
+                        </div>
+                      </>
+                    )}
                     {renewError && <p className="text-xs mb-2" style={{ color: 'var(--color-error)' }}>{renewError}</p>}
                     <div className="flex gap-2">
-                      <button className="btn-primary flex-1 !text-sm !py-1.5" type="submit" disabled={renewLoading}>
-                        {renewLoading ? 'Updating…' : 'Update & Connect'}
-                      </button>
+                      {expiredProfile.managed_ad_dn && !expiredProfile.can_self_approve ? (
+                        <button className="btn-primary flex-1 !text-sm !py-1.5" type="button" onClick={() => navigate('/')}>
+                          Return to Dashboard
+                        </button>
+                      ) : (
+                        <button className="btn-primary flex-1 !text-sm !py-1.5" type="submit" disabled={renewLoading}>
+                          {renewLoading ? 'Updating…' : (expiredProfile.managed_ad_dn && expiredProfile.can_self_approve ? 'Self-Approve & Connect' : 'Update & Connect')}
+                        </button>
+                      )}
                       <button className="btn flex-1 !text-sm !py-1.5" type="button" onClick={() => { setRenewMode(false); setRenewError(''); }}>
                         Cancel
                       </button>

@@ -91,6 +91,7 @@ export default function Select({ value, onChange, options, placeholder, disabled
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={selected ? selected.label : placeholder || 'Select…'}
       >
         <span className="overflow-hidden text-ellipsis whitespace-nowrap">
           {selected ? selected.label : placeholder || 'Select…'}

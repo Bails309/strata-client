@@ -761,6 +761,9 @@ export interface ConnectionInfo {
     id: string;
     label: string;
     ttl_hours: number;
+    managed_ad_dn?: string;
+    ad_sync_config_id?: string;
+    can_self_approve: boolean;
   };
 }
 

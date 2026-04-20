@@ -1254,12 +1254,21 @@ pub async fn connection_info(
         .unwrap_or(false)
     };
 
-    // If no active credentials, check for an expired profile mapped to this connection
-    let expired_profile: Option<(String, String, i32)> = if !has_vault_creds && has_vault {
-        sqlx::query_as::<_, (String, String, i32)>(
-            "SELECT cp.id::text, cp.label, cp.ttl_hours
+    // If no active credentials, check for an expired profile mapped to this connection.
+    // Also check if it's a managed account with self-approval rights.
+    let expired_profile: Option<(String, String, i32, Option<String>, Option<Uuid>, bool)> = if !has_vault_creds && has_vault {
+        sqlx::query_as::<_, (String, String, i32, Option<String>, Option<Uuid>, bool)>(
+            "SELECT 
+                cp.id::text, 
+                cp.label, 
+                cp.ttl_hours,
+                pcr.managed_ad_dn,
+                pcr.ad_sync_config_id,
+                COALESCE(uam.can_self_approve, false) as can_self_approve
              FROM credential_mappings cm
              JOIN credential_profiles cp ON cp.id = cm.credential_id
+             LEFT JOIN password_checkout_requests pcr ON pcr.id = cp.checkout_id
+             LEFT JOIN user_account_mappings uam ON uam.user_id = cp.user_id AND uam.managed_ad_dn = pcr.managed_ad_dn
              WHERE cm.connection_id = $1 AND cp.user_id = $2
                AND cp.expires_at <= now()
              LIMIT 1",
@@ -1297,11 +1306,14 @@ pub async fn connection_info(
         "file_transfer_enabled": file_transfer_enabled,
     });
 
-    if let Some((ep_id, ep_label, ep_ttl)) = expired_profile {
+    if let Some((ep_id, ep_label, ep_ttl, ep_dn, ep_cfg_id, ep_self_approve)) = expired_profile {
         resp["expired_profile"] = json!({
             "id": ep_id,
             "label": ep_label,
             "ttl_hours": ep_ttl,
+            "managed_ad_dn": ep_dn,
+            "ad_sync_config_id": ep_cfg_id,
+            "can_self_approve": ep_self_approve,
         });
     }
 

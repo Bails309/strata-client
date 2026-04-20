@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getMyConnections, getConnectionInfo, Connection, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, setCredentialMapping, removeCredentialMapping, CredentialProfile, createTunnelTicket, getStatus, getTags, getConnectionTags, setConnectionTags, createTag, deleteTag, UserTag, getAdminTags, getAdminConnectionTags } from '../api';
+import { getMyConnections, getConnectionInfo, Connection, getFavorites, toggleFavorite, getCredentialProfiles, getProfileMappings, getMyCheckouts, setCredentialMapping, removeCredentialMapping, CredentialProfile, CheckoutRequest, createTunnelTicket, getStatus, getTags, getConnectionTags, setConnectionTags, createTag, deleteTag, UserTag, getAdminTags, getAdminConnectionTags } from '../api';
 import { useSessionManager } from '../components/SessionManager';
 import Select from '../components/Select';
 import { useSettings } from '../contexts/SettingsContext';
@@ -81,6 +81,7 @@ export default function Dashboard() {
       return saved ? new Set(JSON.parse(saved)) : new Set();
     } catch { return new Set(); }
   });
+  const [allCheckouts, setAllCheckouts] = useState<CheckoutRequest[]>([]);
   const { formatDateTime } = useSettings();
   const navigate = useNavigate();
   const { createSession, setTiledSessionIds, setFocusedSessionIds, setActiveSessionId } = useSessionManager();
@@ -106,6 +107,12 @@ export default function Dashboard() {
     } catch { /* vault may not be configured */ }
   }, []);
 
+  const loadCheckouts = useCallback(async () => {
+    try {
+      setAllCheckouts(await getMyCheckouts());
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     getMyConnections().then((conns) => {
       setConnections(conns);
@@ -122,7 +129,8 @@ export default function Dashboard() {
     getAdminTags().then(setAdminTags).catch(() => {});
     getAdminConnectionTags().then(setAdminConnTagMap).catch(() => {});
     loadProfiles();
-  }, [loadProfiles]);
+    loadCheckouts();
+  }, [loadProfiles, loadCheckouts]);
 
   // Set of admin tag IDs (for disabling toggles in row UI)
   const adminTagIds = useMemo(() => new Set(adminTags.map(t => t.id)), [adminTags]);
@@ -143,6 +151,20 @@ export default function Dashboard() {
     }
     return merged;
   }, [connTagMap, adminConnTagMap]);
+
+  // Derived: filtered profiles list (hides [managed] profiles if already linked to a named one)
+  const filteredProfiles = useMemo(() => {
+    return credProfiles.filter((p) => {
+      if (!p.label.startsWith('[managed]')) return true;
+      // It's a [managed] profile -> show it ONLY if there isn't another profile linked to the same AD account
+      const dn = p.label.replace('[managed] ', '');
+      const isLinkedElsewhere = credProfiles.some((other) => {
+        if (other.id === p.id || !other.checkout_id) return false;
+        return allCheckouts.find(c => c.id === other.checkout_id)?.managed_ad_dn === dn;
+      });
+      return !isLinkedElsewhere;
+    });
+  }, [credProfiles, allCheckouts]);
 
   const filtered = useMemo(() => {
     let list = connections;
@@ -806,7 +828,7 @@ export default function Dashboard() {
                         }
                         options={[
                           { value: '', label: '— Enter manually —' },
-                          ...credProfiles.filter((p) => !p.expired).map((p) => ({ value: p.id, label: p.label })),
+                          ...filteredProfiles.filter((p) => !p.expired).map((p) => ({ value: p.id, label: p.label })),
                         ]}
                       />
                     </div>
@@ -1068,7 +1090,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
                 placeholder="No profile"
                 options={[
                   { value: '', label: 'None' },
-                  ...credProfiles.map(p => ({ value: p.id, label: p.expired ? `${p.label} (expired)` : p.label })),
+                  ...filteredProfiles.map(p => ({ value: p.id, label: p.expired ? `${p.label} (expired)` : p.label })),
                 ]}
               />
             </div>

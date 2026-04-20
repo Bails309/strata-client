@@ -667,7 +667,7 @@ export default function Dashboard() {
                     favorites={favorites}
                     onToggleFavorite={handleToggleFavorite}
                     vaultConfigured={vaultConfigured}
-                    credProfiles={credProfiles}
+                    credProfiles={filteredProfiles}
                     connProfileMap={connProfileMap}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
@@ -691,7 +691,7 @@ export default function Dashboard() {
                     favorites={favorites}
                     onToggleFavorite={handleToggleFavorite}
                     vaultConfigured={vaultConfigured}
-                    credProfiles={credProfiles}
+                    credProfiles={filteredProfiles}
                     connProfileMap={connProfileMap}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
@@ -713,7 +713,7 @@ export default function Dashboard() {
                   isFavorite={favorites.has(conn.id)}
                   onToggleFavorite={() => handleToggleFavorite(conn.id)}
                   vaultConfigured={vaultConfigured}
-                  credProfiles={credProfiles}
+                  credProfiles={filteredProfiles}
                   assignedProfileId={connProfileMap[conn.id] || ''}
                   onProfileChange={handleProfileChange}
                   onConnect={() => navigate(`/session/${conn.id}`)}
@@ -814,7 +814,7 @@ export default function Dashboard() {
                     <span className="badge badge-accent" style={{ marginRight: 8 }}>{conn.protocol.toUpperCase()}</span>
                     {conn.name}
                   </div>
-                  {credProfiles.filter((p) => !p.expired).length > 0 && (
+                  {filteredProfiles.filter((p: CredentialProfile) => !p.expired).length > 0 && (
                     <div className="form-group" style={{ marginBottom: 6 }}>
                       <Select
                         value={tiledCreds[conn.id]?.credential_profile_id || ''}
@@ -828,7 +828,7 @@ export default function Dashboard() {
                         }
                         options={[
                           { value: '', label: '— Enter manually —' },
-                          ...filteredProfiles.filter((p) => !p.expired).map((p) => ({ value: p.id, label: p.label })),
+                          ...filteredProfiles.filter((p: CredentialProfile) => !p.expired).map((p: CredentialProfile) => ({ value: p.id, label: p.label })),
                         ]}
                       />
                     </div>
@@ -1090,7 +1090,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
                 placeholder="No profile"
                 options={[
                   { value: '', label: 'None' },
-                  ...filteredProfiles.map(p => ({ value: p.id, label: p.expired ? `${p.label} (expired)` : p.label })),
+                  ...credProfiles.map((p: CredentialProfile) => ({ value: p.id, label: p.expired ? `${p.label} (expired)` : p.label })),
                 ]}
               />
             </div>

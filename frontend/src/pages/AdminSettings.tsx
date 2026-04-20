@@ -5460,6 +5460,7 @@ function PasswordsTab({
                       onChange={(val) => setNewMapping({ ...newMapping, user_id: val })}
                       placeholder="Select user..."
                       options={users.map((u) => ({ value: u.id, label: u.username }))}
+                      searchable={true}
                     />
                   </div>
                 </div>
@@ -5476,6 +5477,7 @@ function PasswordsTab({
                       onChange={(val) => setNewMapping({ ...newMapping, managed_ad_dn: val })}
                       placeholder="Select discovered account..."
                       options={unmapped.map((a) => ({ value: a.dn, label: `${a.name} — ${a.dn}` }))}
+                      searchable={true}
                     />
                   ) : (
                     <input

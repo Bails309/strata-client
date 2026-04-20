@@ -86,6 +86,32 @@ import { formatDateTime } from '../utils/time';
 
 type Tab = 'health' | 'display' | 'network' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'tags' | 'ad-sync' | 'passwords' | 'sessions' | 'security';
 
+// ── RDP keyboard layout options (shared between the RDP form and the AD Sync
+// connection defaults) ─────────────────────────────────────────────────────
+const RDP_KEYBOARD_LAYOUTS: { value: string; label: string }[] = [
+  { value: '', label: 'Default (US English)' },
+  { value: 'en-us-qwerty', label: 'US English (Qwerty)' },
+  { value: 'en-gb-qwerty', label: 'UK English (Qwerty)' },
+  { value: 'de-de-qwertz', label: 'German (Qwertz)' },
+  { value: 'de-ch-qwertz', label: 'Swiss German (Qwertz)' },
+  { value: 'fr-fr-azerty', label: 'French (Azerty)' },
+  { value: 'fr-ch-qwertz', label: 'Swiss French (Qwertz)' },
+  { value: 'fr-be-azerty', label: 'Belgian French (Azerty)' },
+  { value: 'it-it-qwerty', label: 'Italian (Qwerty)' },
+  { value: 'es-es-qwerty', label: 'Spanish (Qwerty)' },
+  { value: 'es-latam-qwerty', label: 'Latin American (Qwerty)' },
+  { value: 'pt-br-qwerty', label: 'Brazilian Portuguese (Qwerty)' },
+  { value: 'pt-pt-qwerty', label: 'Portuguese (Qwerty)' },
+  { value: 'sv-se-qwerty', label: 'Swedish (Qwerty)' },
+  { value: 'da-dk-qwerty', label: 'Danish (Qwerty)' },
+  { value: 'no-no-qwerty', label: 'Norwegian (Qwerty)' },
+  { value: 'fi-fi-qwerty', label: 'Finnish (Qwerty)' },
+  { value: 'hu-hu-qwertz', label: 'Hungarian (Qwertz)' },
+  { value: 'ja-jp-qwerty', label: 'Japanese (Qwerty)' },
+  { value: 'tr-tr-qwerty', label: 'Turkish-Q (Qwerty)' },
+  { value: 'failsafe', label: 'Failsafe (Unicode events)' },
+];
+
 export default function AdminSettings({ user }: { user: MeResponse }) {
   const [tab, setTab] = useState<Tab>(
     user.can_manage_system ? 'health' : 
@@ -2196,34 +2222,17 @@ function RdpSections({
               value={ex('server-layout')}
               onChange={(v) => setEx('server-layout', v)}
               placeholder="Default (US English)"
-              options={[
-                { value: '', label: 'Default (US English)' },
-                { value: 'en-us-qwerty', label: 'US English (Qwerty)' },
-                { value: 'en-gb-qwerty', label: 'UK English (Qwerty)' },
-                { value: 'de-de-qwertz', label: 'German (Qwertz)' },
-                { value: 'de-ch-qwertz', label: 'Swiss German (Qwertz)' },
-                { value: 'fr-fr-azerty', label: 'French (Azerty)' },
-                { value: 'fr-ch-qwertz', label: 'Swiss French (Qwertz)' },
-                { value: 'fr-be-azerty', label: 'Belgian French (Azerty)' },
-                { value: 'it-it-qwerty', label: 'Italian (Qwerty)' },
-                { value: 'es-es-qwerty', label: 'Spanish (Qwerty)' },
-                { value: 'es-latam-qwerty', label: 'Latin American (Qwerty)' },
-                { value: 'pt-br-qwerty', label: 'Brazilian Portuguese (Qwerty)' },
-                { value: 'pt-pt-qwerty', label: 'Portuguese (Qwerty)' },
-                { value: 'sv-se-qwerty', label: 'Swedish (Qwerty)' },
-                { value: 'da-dk-qwerty', label: 'Danish (Qwerty)' },
-                { value: 'no-no-qwerty', label: 'Norwegian (Qwerty)' },
-                { value: 'fi-fi-qwerty', label: 'Finnish (Qwerty)' },
-                { value: 'hu-hu-qwertz', label: 'Hungarian (Qwertz)' },
-                { value: 'ja-jp-qwerty', label: 'Japanese (Qwerty)' },
-                { value: 'tr-tr-qwerty', label: 'Turkish-Q (Qwerty)' },
-                { value: 'failsafe', label: 'Failsafe (Unicode events)' },
-              ]}
+              options={RDP_KEYBOARD_LAYOUTS}
             />
           </div>
           <div className="form-group !mb-0">
             <label title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">Timezone</label>
-            <input value={ex('timezone')} onChange={(e) => setEx('timezone', e.target.value)} placeholder="America/New_York" title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York)." />
+            <Select
+              value={ex('timezone')}
+              onChange={(v) => setEx('timezone', v)}
+              placeholder="System default"
+              options={[{ value: '', label: 'System default' }, ...getTimezones().map((tz) => ({ value: tz, label: tz }))]}
+            />
           </div>
           <div className="form-group !mb-0">
             <label title="The name of the client to present to the RDP server. Typically not required.">Client Name</label>
@@ -2725,7 +2734,12 @@ function SshSections({ ex, setEx }: { ex: (k: string) => string; setEx: (k: stri
           </div>
           <div className="form-group !mb-0">
             <label title="The timezone to pass to the SSH server via the TZ environment variable, in IANA format (e.g. America/New_York).">Timezone</label>
-            <input value={ex('timezone')} onChange={(e) => setEx('timezone', e.target.value)} placeholder="America/New_York" title="The timezone to pass to the SSH server via the TZ environment variable, in IANA format (e.g. America/New_York)." />
+            <Select
+              value={ex('timezone')}
+              onChange={(v) => setEx('timezone', v)}
+              placeholder="System default"
+              options={[{ value: '', label: 'System default' }, ...getTimezones().map((tz) => ({ value: tz, label: tz }))]}
+            />
           </div>
           <div className="form-group !mb-0">
             <label title="The terminal emulator type string to send to the SSH server (e.g. xterm-256color, vt100). This determines which escape sequences are supported.">Terminal Type</label>
@@ -3893,6 +3907,36 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
 
           {(editing.protocol || 'rdp') === 'rdp' && (
             <>
+              <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">RDP Basic Settings</div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 mb-4">
+                <div className="form-group !mb-0">
+                  <label title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted.">Keyboard Layout</label>
+                  <Select
+                    value={(editing.connection_defaults ?? {})['server-layout'] || ''}
+                    onChange={(v) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (v) cd['server-layout'] = v; else delete cd['server-layout'];
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                    placeholder="Default (US English)"
+                    options={RDP_KEYBOARD_LAYOUTS}
+                  />
+                </div>
+                <div className="form-group !mb-0">
+                  <label title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">Timezone</label>
+                  <Select
+                    value={(editing.connection_defaults ?? {})['timezone'] || ''}
+                    onChange={(v) => {
+                      const cd = { ...(editing.connection_defaults ?? {}) };
+                      if (v) cd['timezone'] = v; else delete cd['timezone'];
+                      setEditing({ ...editing, connection_defaults: cd });
+                    }}
+                    placeholder="System default"
+                    options={[{ value: '', label: 'System default' }, ...getTimezones().map((tz) => ({ value: tz, label: tz }))]}
+                  />
+                </div>
+              </div>
+
               <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2">RDP Display &amp; Performance</div>
               <div className="grid grid-cols-2 gap-x-6 gap-y-2 mb-4">
                 {([

@@ -455,7 +455,7 @@ export const setRoleAssignments = (roleId: string, user_ids: string[]) =>
 
 // Admin: Role account scope
 export const getRoleAccounts = (roleId: string) =>
-  request<UserAccountMapping[]>(`/admin/approval-roles/${roleId}/accounts`);
+  request<{ dn: string; friendly_name?: string }[]>(`/admin/approval-roles/${roleId}/accounts`);
 export const setRoleAccounts = (roleId: string, managed_accounts: { dn: string; friendly_name?: string }[]) =>
   request<{ status: string }>(`/admin/approval-roles/${roleId}/accounts`, { method: 'PUT', body: JSON.stringify({ managed_accounts }) });
 

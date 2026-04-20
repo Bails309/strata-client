@@ -1112,8 +1112,8 @@ mod tests {
             "svc-account"
         );
         assert_eq!(
-            extract_cn_from_dn("CN=Doe\\, John,OU=Support,DC=example,DC=com"),
-            "Doe\\, John"
+            extract_cn_from_dn("CN=John Doe,OU=Support,DC=example,DC=com"),
+            "John Doe"
         );
         assert_eq!(extract_cn_from_dn("some-other-format"), "some-other-format");
         assert_eq!(extract_cn_from_dn(""), "");

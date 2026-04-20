@@ -5053,7 +5053,7 @@ function PasswordsTab({
         r.map(async (role) => {
           const [a, accounts] = await Promise.all([getRoleAssignments(role.id), getRoleAccounts(role.id)]);
           assignObj[role.id] = a;
-          acctObj[role.id] = accounts.map(acc => acc.dn);
+          acctObj[role.id] = accounts;
         }),
       );
       setRoleAssignments(assignObj);

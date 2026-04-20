@@ -3941,9 +3941,9 @@ pub async fn list_unmapped_accounts(
             } else {
                 d.dn.clone()
             };
-            json!({ 
-                "dn": d.dn, 
-                "name": d.name, 
+            json!({
+                "dn": d.dn,
+                "name": d.name,
                 "description": d.description,
                 "friendly_name": friendly
             })
@@ -4024,8 +4024,21 @@ async fn ad_sync_discover_users(
         for entry in results {
             let se = SearchEntry::construct(entry);
             if seen.insert(se.dn.clone()) {
-                let sam = se.attrs.get("sAMAccountName").and_then(|v| v.first()).cloned().unwrap_or_default();
-                let name = if !sam.is_empty() { sam.clone() } else { se.attrs.get("cn").and_then(|v| v.first()).cloned().unwrap_or_else(|| se.dn.clone()) };
+                let sam = se
+                    .attrs
+                    .get("sAMAccountName")
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .unwrap_or_default();
+                let name = if !sam.is_empty() {
+                    sam.clone()
+                } else {
+                    se.attrs
+                        .get("cn")
+                        .and_then(|v| v.first())
+                        .cloned()
+                        .unwrap_or_else(|| se.dn.clone())
+                };
                 let desc = se.attrs.get("description").and_then(|v| v.first()).cloned();
                 all.push(DiscoveredUser {
                     dn: se.dn,

@@ -1256,8 +1256,9 @@ pub async fn connection_info(
 
     // If no active credentials, check for an expired profile mapped to this connection.
     // Also check if it's a managed account with self-approval rights.
-    let expired_profile: Option<(String, String, i32, Option<String>, Option<Uuid>, bool)> = if !has_vault_creds && has_vault {
-        sqlx::query_as::<_, (String, String, i32, Option<String>, Option<Uuid>, bool)>(
+    let expired_profile: Option<(String, String, i32, Option<String>, Option<Uuid>, bool)> =
+        if !has_vault_creds && has_vault {
+            sqlx::query_as::<_, (String, String, i32, Option<String>, Option<Uuid>, bool)>(
             "SELECT 
                 cp.id::text, 
                 cp.label, 
@@ -1278,9 +1279,9 @@ pub async fn connection_info(
         .fetch_optional(&db.pool)
         .await
         .unwrap_or(None)
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let ignore_cert = if protocol == "rdp" {
         parse_ignore_cert(&extra)

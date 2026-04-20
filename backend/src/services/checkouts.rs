@@ -706,7 +706,7 @@ pub async fn ldap_reset_password(
         if modify_result.rc == 50 {
             use ldap3::controls::RawControl;
             use ldap3::{Scope, SearchEntry};
-            
+
             // Query adminCount and nTSecurityDescriptor to pinpoint why access is denied.
             // OID for LDAP_SERVER_SD_FLAGS_OID is 1.2.840.113556.1.4.801
             // BER for Integer 7 (Owner+Group+DACL) is 02 01 07
@@ -715,7 +715,7 @@ pub async fn ldap_reset_password(
                 crit: false,
                 val: Some(vec![0x02, 0x01, 0x07]),
             };
-            
+
             let diag_search = ldap
                 .with_controls(vec![sd_flags_control])
                 .search(
@@ -729,7 +729,7 @@ pub async fn ldap_reset_password(
             if let Ok(ldap3::SearchResult(rs, _)) = diag_search {
                 for entry in rs {
                     let se = SearchEntry::construct(entry);
-                    
+
                     // 1. Check for Protected Account (adminCount == 1)
                     if let Some(ac) = se.attrs.get("adminCount").and_then(|v| v.first()) {
                         if ac == "1" {
@@ -738,7 +738,11 @@ pub async fn ldap_reset_password(
                     }
 
                     // 2. Check for Blocked Inheritance (DACL_PROTECTED bit in SD Control field)
-                    if let Some(sd_bytes) = se.bin_attrs.get("nTSecurityDescriptor").and_then(|v| v.first()) {
+                    if let Some(sd_bytes) = se
+                        .bin_attrs
+                        .get("nTSecurityDescriptor")
+                        .and_then(|v| v.first())
+                    {
                         // SECURITY_DESCRIPTOR header: Revision(1), Sbz1(1), Control(2, LE)
                         if sd_bytes.len() >= 4 {
                             let control = u16::from_le_bytes([sd_bytes[2], sd_bytes[3]]);

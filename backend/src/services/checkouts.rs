@@ -802,7 +802,17 @@ pub async fn ldap_reset_password(
         }
         Ok(ref res) => {
             let is_locked = res.text.contains("data 775");
-            if is_locked {
+            // data 52f = ERROR_ACCOUNT_RESTRICTIONS (smart card required, logon hours,
+            // workstation restrictions, Protected Users group, etc.). The password modify
+            // itself succeeded (rc=0); AD is only refusing the simple_bind verification
+            // due to non-password account policy. Treat as success.
+            let is_account_restricted = res.text.contains("data 52f");
+            if is_account_restricted {
+                tracing::warn!(
+                    "VERIFICATION BIND for '{}' blocked by AD account restrictions (data 52f: smart card required / logon hours / workstation restriction / Protected Users). Password modify rc=0 so change is confirmed — proceeding without simple-bind verification.",
+                    target_dn
+                );
+            } else if is_locked {
                 if is_scramble {
                     tracing::warn!(
                         "VERIFICATION BIND FAILED for '{}' with DATA 775 (Locked Out) — but proceeding because this is a scramble operation and modify rc=0.",

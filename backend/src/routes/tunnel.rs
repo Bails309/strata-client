@@ -508,6 +508,35 @@ pub async fn ws_tunnel(
         &user.username,
     );
 
+    // ── Block expired managed credentials ────────────────────────────
+    // If the user has a mapped credential profile linked to a checkout
+    // (managed account) but that profile is expired, do NOT send stale
+    // credentials to AD — that would trigger an auth-failure and could
+    // cause account lockout.  Only block when no other credential source
+    // (ticket, query-string) provided a password.
+    if final_password.is_none() {
+        let has_expired_managed: bool = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(
+                SELECT 1 FROM credential_mappings cm
+                JOIN credential_profiles cp ON cp.id = cm.credential_id
+                WHERE cm.connection_id = $1 AND cp.user_id = $2
+                  AND cp.checkout_id IS NOT NULL
+                  AND cp.expires_at <= now()
+            )",
+        )
+        .bind(connection_id)
+        .bind(user.id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap_or(false);
+
+        if has_expired_managed {
+            return Err(AppError::Validation(
+                "Managed credential profile has expired. Please request a new checkout before connecting.".into(),
+            ));
+        }
+    }
+
     let has_creds = final_password.is_some();
 
     let debug_msg = format!(

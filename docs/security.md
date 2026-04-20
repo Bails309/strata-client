@@ -157,9 +157,11 @@ When establishing a tunnel, the backend resolves credentials in the following pr
 
 1. **One-off vault profile** — A `credential_profile_id` supplied on the tunnel ticket. The profile is decrypted directly from the user's `credential_profiles` table (no permanent `credential_mappings` entry required). The profile must belong to the requesting user and must not be expired.
 2. **Permanently mapped vault profile** — A credential profile linked to the connection via the `credential_mappings` table.
-3. **Expired profile renewal** — When a mapped profile has expired, the connection info endpoint returns its metadata. The pre-connect prompt offers an "Update & Connect" form so the user can renew the credentials (via `PUT /api/user/credential-profiles/:id`) and connect in a single step, without leaving the session flow.
-3. **Ticket credentials** — Username/password supplied in the one-time tunnel ticket (from the credential prompt form).
-4. **Query string fallback** — Legacy credential parameters on the WebSocket URL (kept for backward compatibility).
+3. **Expired profile renewal** — When a mapped profile has expired, the connection info endpoint returns its metadata. The pre-connect prompt offers an "Update & Connect" form so the user can renew the credentials (via `PUT /api/user/credential-profiles/:id`) and connect in a single step, without leaving the session flow. For **managed (password-management) profiles**, the prompt instead offers an inline checkout request (justification + duration): self-approving users get a one-click "Self-Approve & Connect" flow, while approval-required users submit a pending request and are clearly informed the connection is blocked until approved.
+4. **Ticket credentials** — Username/password supplied in the one-time tunnel ticket (from the credential prompt form).
+5. **Query string fallback** — Legacy credential parameters on the WebSocket URL (kept for backward compatibility).
+
+**Expired managed credential safeguard** — The tunnel refuses to open a session when the only credential source available for a connection is an expired managed credential profile (`credential_profiles.expires_at <= now()` with a non-null `checkout_id`). This prevents stale credentials from being sent to Active Directory, which would otherwise cause repeated failed binds and could contribute to account lockout. Users are redirected to the renewal/checkout request flow instead.
 
 This design allows users to use vault-stored credentials for ad-hoc connections without creating permanent mappings, while maintaining the security guarantee that only the profile owner can decrypt their credentials.
 

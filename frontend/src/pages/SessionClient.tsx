@@ -146,7 +146,7 @@ export default function SessionClient() {
         if (info.expired_profile) {
           setExpiredProfile(info.expired_profile);
           setRenewMode(true);
-          setPhase('loading'); // Stay in loading/renew mode, DO NOT connect yet
+          setPhase('prompt'); // Show the checkout / renewal prompt
         } else if (info.has_credentials) {
           setPhase('connected');
         } else if (info.protocol === 'rdp') {
@@ -183,14 +183,14 @@ export default function SessionClient() {
     setRenewError('');
 
     try {
-      if (expiredProfile.managed_ad_dn && expiredProfile.can_self_approve) {
+      if (expiredProfile.managed_ad_dn) {
+        // Managed account — submit checkout request (works for both self-approve and approval-required)
         if (!renewJustification.trim()) {
           setRenewError('Justification is required.');
           setRenewLoading(false);
           return;
         }
 
-        // One-click managed renewal sequence
         const checkout = await requestCheckout({
           managed_ad_dn: expiredProfile.managed_ad_dn,
           ad_sync_config_id: expiredProfile.ad_sync_config_id,
@@ -198,15 +198,16 @@ export default function SessionClient() {
           justification_comment: renewJustification,
         });
 
-        if (checkout.status !== 'Active') {
-          throw new Error(`Checkout requested but status is ${checkout.status}. Ensure your account is healthy.`);
+        if (checkout.status === 'Active') {
+          // Self-approved and activated — link and connect immediately
+          await linkCheckoutToProfile(expiredProfile.id, checkout.id);
+          pendingCredsRef.current = { username: '', password: '', credential_profile_id: expiredProfile.id };
+          setPhase('connected');
+        } else {
+          // Approval required — inform the user and block connection
+          setRenewError('Checkout request submitted and is pending administrator approval. You will be able to connect once the request is approved.');
+          setRenewLoading(false);
         }
-
-        await linkCheckoutToProfile(expiredProfile.id, checkout.id);
-        
-        // Success — connection will proceed with the now-active profile
-        pendingCredsRef.current = { username: '', password: '', credential_profile_id: expiredProfile.id };
-        setPhase('connected');
       } else {
         // Standard manual renewal
         if (!renewForm.username || !renewForm.password) {
@@ -226,7 +227,7 @@ export default function SessionClient() {
     } finally {
       setRenewLoading(false);
     }
-  }, [expiredProfile, renewForm, renewDuration]);
+  }, [expiredProfile, renewForm, renewDuration, renewJustification]);
 
   // ── Auto-reconnect: attempt to re-establish a dropped session ──
   const attemptReconnect = useCallback((attempt: number): void => {
@@ -1002,46 +1003,45 @@ export default function SessionClient() {
                     style={{ color: 'var(--color-primary)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
                     onClick={() => setRenewMode(true)}
                   >
-                    {expiredProfile.managed_ad_dn && expiredProfile.can_self_approve ? 'Renew & connect' : 'Update credentials & connect'}
+                    {expiredProfile.managed_ad_dn ? 'Request checkout & connect' : 'Update credentials & connect'}
                   </button>
                 ) : (
                   <form onSubmit={(e) => { e.preventDefault(); handleRenewAndConnect(); }} className="mt-2">
                     {expiredProfile.managed_ad_dn ? (
-                      expiredProfile.can_self_approve ? (
-                        <>
-                          <div className="form-group !mb-3">
-                            <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Checkout Duration</label>
-                            <Select
-                              value={String(renewDuration)}
-                              onChange={(v) => setRenewDuration(parseInt(v))}
-                              options={[
-                                { value: '30', label: '30 Minutes' },
-                                { value: '60', label: '1 Hour' },
-                                { value: '240', label: '4 Hours' },
-                                { value: '480', label: '8 Hours' },
-                                { value: '720', label: '12 Hours' },
-                              ]}
-                            />
+                      <>
+                        {!expiredProfile.can_self_approve && (
+                          <div className="mb-3">
+                            <div className="p-2 rounded-lg bg-warning/10 border border-warning/20 text-warning text-xs leading-relaxed">
+                              <strong>Approval Required:</strong> This checkout will be submitted for administrator approval. You will be able to connect once approved.
+                            </div>
                           </div>
-                          <div className="form-group !mb-3">
-                            <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Justification / Comment</label>
-                            <textarea
-                              className="w-full text-xs p-2 rounded-md bg-input-bg border border-border"
-                              rows={2}
-                              placeholder="Why do you need this checkout?"
-                              value={renewJustification}
-                              onChange={(e) => setRenewJustification(e.target.value)}
-                              required
-                            />
-                          </div>
-                        </>
-                      ) : (
-                        <div className="mb-4">
-                          <div className="p-3 rounded-lg bg-warning/10 border border-warning/20 text-warning text-xs leading-relaxed">
-                            <strong>Approval Required:</strong> This is a managed account that requires administrative approval. You cannot manually update this password. Please visit the <strong>Credentials</strong> tab to request a checkout.
-                          </div>
+                        )}
+                        <div className="form-group !mb-3">
+                          <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Checkout Duration</label>
+                          <Select
+                            value={String(renewDuration)}
+                            onChange={(v) => setRenewDuration(parseInt(v))}
+                            options={[
+                              { value: '30', label: '30 Minutes' },
+                              { value: '60', label: '1 Hour' },
+                              { value: '240', label: '4 Hours' },
+                              { value: '480', label: '8 Hours' },
+                              { value: '720', label: '12 Hours' },
+                            ]}
+                          />
                         </div>
-                      )
+                        <div className="form-group !mb-3">
+                          <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Justification / Comment</label>
+                          <textarea
+                            className="w-full text-xs p-2 rounded-md bg-input-bg border border-border"
+                            rows={2}
+                            placeholder="Why do you need this checkout?"
+                            value={renewJustification}
+                            onChange={(e) => setRenewJustification(e.target.value)}
+                            required
+                          />
+                        </div>
+                      </>
                     ) : (
                       <>
                         <div className="form-group !mb-2">
@@ -1054,17 +1054,17 @@ export default function SessionClient() {
                         </div>
                       </>
                     )}
-                    {renewError && <p className="text-xs mb-2" style={{ color: 'var(--color-error)' }}>{renewError}</p>}
+                    {renewError && (
+                      <p className="text-xs mb-2" style={{ color: renewError.includes('pending administrator approval') ? 'var(--color-warning)' : 'var(--color-error)' }}>
+                        {renewError}
+                      </p>
+                    )}
                     <div className="flex gap-2">
-                      {expiredProfile.managed_ad_dn && !expiredProfile.can_self_approve ? (
-                        <button className="btn-primary flex-1 !text-sm !py-1.5" type="button" onClick={() => navigate('/')}>
-                          Return to Dashboard
-                        </button>
-                      ) : (
-                        <button className="btn-primary flex-1 !text-sm !py-1.5" type="submit" disabled={renewLoading}>
-                          {renewLoading ? 'Updating…' : (expiredProfile.managed_ad_dn && expiredProfile.can_self_approve ? 'Self-Approve & Connect' : 'Update & Connect')}
-                        </button>
-                      )}
+                      <button className="btn-primary flex-1 !text-sm !py-1.5" type="submit" disabled={renewLoading}>
+                        {renewLoading ? 'Submitting…' : (expiredProfile.managed_ad_dn
+                          ? (expiredProfile.can_self_approve ? 'Self-Approve & Connect' : 'Request Checkout')
+                          : 'Update & Connect')}
+                      </button>
                       <button className="btn flex-1 !text-sm !py-1.5" type="button" onClick={() => { setRenewMode(false); setRenewError(''); }}>
                         Cancel
                       </button>

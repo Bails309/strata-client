@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.4] — 2026-04-20
+
+### Fixed
+- **Expired Managed Credentials No Longer Bypass Renewal Prompt**: Connecting with an expired or checked-in managed credential profile previously dropped straight into "Authentication failure (invalid credentials?)" because the session view stayed in the loading phase and stale/empty credentials were still passed to the remote host. The session client now correctly enters the renewal prompt when the backend reports an `expired_profile`, and the tunnel backend refuses to proceed when the only available credential source is an expired managed profile — preventing repeated failed binds against AD (which could also contribute to account lockout).
+
+### Added
+- **Inline Checkout Request on Connect (Approval-Required Managed Accounts)**: When a connection is attempted with an expired/checked-in managed credential profile that requires administrator approval, users now see an inline checkout request form (justification + duration) directly in the session view. Submitting queues a pending approval and clearly informs the user that the connection is blocked until approved — no need to navigate away to the Credentials tab.
+- **Unified Self-Approve & Approval-Required Flow**: Self-approving users get an identical form and, on submit, the checkout is immediately activated, linked to the existing profile, and the session proceeds to connect without additional clicks.
+
+### Changed
+- **Backend Tunnel Safety Check**: `tunnel.rs` now performs an explicit `credential_mappings`/`credential_profiles` check after credential resolution. If the only credential source for a connection is a managed profile that has expired (`expires_at <= now()`), the WebSocket tunnel returns a validation error instead of opening a session with missing credentials.
+- **Session Renew Callback**: `handleRenewAndConnect` now includes `renewJustification` in its dependency array and routes all managed-account renewals (self-approve and approval-required) through a single request path, surfacing an explicit "pending administrator approval" message when the returned checkout status is not `Active`.
+
 ## [0.19.3] — 2026-04-20
 
 ### Added

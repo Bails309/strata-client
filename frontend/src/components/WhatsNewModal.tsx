@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.19.4',
+    subtitle: 'Expired Managed Credentials — Inline Renewal & Tunnel Safety',
+    sections: [
+      {
+        title: 'Connect Now Prompts for a New Checkout',
+        description:
+          'Connecting with an expired or checked-in managed credential profile previously failed silently with an "Authentication failure" message. The session view now correctly opens the renewal prompt so you can request a new password without leaving the connection screen.',
+      },
+      {
+        title: 'Inline Checkout Request (Approval Required)',
+        description:
+          'Managed accounts that require administrator approval now show an inline request form (justification + duration) right on the connection screen. After you submit, the session is blocked with a clear "pending administrator approval" message — no need to navigate to the Credentials tab.',
+      },
+      {
+        title: 'One-Click Self-Approve & Connect',
+        description:
+          'If your account has self-approval rights, submitting the form immediately activates the checkout, links it to your profile, and connects — all in a single click.',
+      },
+      {
+        title: 'Tunnel Safety Check',
+        description:
+          'The backend now refuses to open a session when the only credential source is an expired managed profile. This prevents stale credentials from being sent to Active Directory — avoiding failed binds and helping to protect against inadvertent account lockout.',
+      },
+    ],
+  },
+  {
     version: '0.19.2',
     subtitle: 'Connection Health Checks, Check-In & Migration Resilience',
     sections: [

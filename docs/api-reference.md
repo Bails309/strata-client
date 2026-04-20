@@ -818,7 +818,10 @@ Pre-connect information for a specific connection. Used by the session client to
   "expired_profile": {
     "id": "uuid",
     "label": "sa1_prochnickit ICS",
-    "ttl_hours": 12
+    "ttl_hours": 12,
+    "managed_ad_dn": "CN=sa1_prochnickit,OU=Service Accounts,DC=example,DC=local",
+    "ad_sync_config_id": "uuid",
+    "can_self_approve": true
   }
 }
 ```
@@ -831,7 +834,9 @@ Pre-connect information for a specific connection. Used by the session client to
 | `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |
 | `watermark` | string | Per-connection watermark setting (`inherit`, `enabled`, `disabled`) |
 | `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |
-| `expired_profile` | object \| null | Present only when `has_credentials` is `false` and an expired profile is mapped. Contains `id`, `label`, and `ttl_hours` for the expired profile. |
+| `expired_profile` | object \| null | Present only when `has_credentials` is `false` and an expired or checked-in profile is mapped. Contains `id`, `label`, `ttl_hours`, and — for managed profiles — the linked `managed_ad_dn`, `ad_sync_config_id`, and `can_self_approve` flag so the UI can render the correct renewal/checkout request form. |
+
+> **Tunnel safety**: Even if a client attempts to bypass the pre-connect prompt, the `/api/ws/tunnel/:id` endpoint will reject the connection with a validation error when the only credential source available is an expired managed credential profile. This prevents stale credentials from being sent to Active Directory (which could contribute to account lockout).
 
 ### Favorites
 

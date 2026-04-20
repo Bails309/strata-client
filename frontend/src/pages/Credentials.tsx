@@ -243,8 +243,13 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
     if (!selectedDn) return;
     const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
     const isEmergency = emergencyBypass && !!acct && !acct.can_self_approve && !!acct.pm_allow_emergency_bypass;
-    if (isEmergency && justification.trim().length < 10) {
-      flash('Emergency bypass requires a justification of at least 10 characters');
+    const approvalRequired = !!acct && !acct.can_self_approve;
+    if (approvalRequired && justification.trim().length < 10) {
+      flash(
+        isEmergency
+          ? 'Emergency bypass requires a justification of at least 10 characters'
+          : 'A justification of at least 10 characters is required for approval-required checkouts'
+      );
       return;
     }
     const effectiveDuration = isEmergency ? Math.min(duration, 30) : duration;
@@ -528,29 +533,42 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               </div>
               <div className="mb-4">
                 {(() => {
+                  const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
+                  const approvalRequired = !!acct && !acct.can_self_approve;
                   const isEmergencyActive = emergencyBypass
-                    && !!managedAccounts.find((a) => a.managed_ad_dn === selectedDn && !a.can_self_approve && a.pm_allow_emergency_bypass);
-                  const justificationTooShort = isEmergencyActive && justification.trim().length < 10;
+                    && !!acct && !acct.can_self_approve && !!acct.pm_allow_emergency_bypass;
+                  const justificationRequired = approvalRequired;
+                  const justificationTooShort = justificationRequired && justification.trim().length < 10;
                   return (
                     <>
                       <label className="block text-sm font-medium mb-1">
                         Justification{' '}
-                        {isEmergencyActive ? (
-                          <span className="text-warning">(required, min 10 characters)</span>
+                        {justificationRequired ? (
+                          <span className={isEmergencyActive ? 'text-warning' : 'text-danger'}>
+                            (required, min 10 characters)
+                          </span>
                         ) : (
                           <span className="text-txt-tertiary">(optional)</span>
                         )}
                       </label>
                       <textarea
-                        className={`input w-full ${justificationTooShort ? 'border-warning/60' : ''}`}
+                        className={`input w-full ${justificationTooShort ? (isEmergencyActive ? 'border-warning/60' : 'border-danger/60') : ''}`}
                         rows={2}
                         value={justification}
                         onChange={(e) => setJustification(e.target.value)}
-                        placeholder={isEmergencyActive ? 'Describe the incident and why approval cannot wait…' : 'Reason for checkout...'}
+                        placeholder={
+                          isEmergencyActive
+                            ? 'Describe the incident and why approval cannot wait…'
+                            : justificationRequired
+                              ? 'Explain why you need this account — approvers will see this…'
+                              : 'Reason for checkout...'
+                        }
                       />
                       {justificationTooShort && (
-                        <p className="text-xs text-warning mt-1">
-                          Emergency bypass requires a justification of at least 10 characters.
+                        <p className={`text-xs mt-1 ${isEmergencyActive ? 'text-warning' : 'text-danger'}`}>
+                          {isEmergencyActive
+                            ? 'Emergency bypass requires a justification of at least 10 characters.'
+                            : 'Approval-required checkouts need a justification of at least 10 characters.'}
                           {justification.trim().length > 0 && ` (${justification.trim().length}/10)`}
                         </p>
                       )}
@@ -635,8 +653,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                   !selectedDn
                   || submitting
                   || (scheduleEnabled && !scheduledStart)
-                  || (emergencyBypass
-                    && !!managedAccounts.find((a) => a.managed_ad_dn === selectedDn && !a.can_self_approve && a.pm_allow_emergency_bypass)
+                  || (!!managedAccounts.find((a) => a.managed_ad_dn === selectedDn && !a.can_self_approve)
                     && justification.trim().length < 10)
                 }
               >

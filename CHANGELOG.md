@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.2] — 2026-04-20
+
+### Changed
+- **Justification Mandatory for Approval-Required Checkouts**: `POST /api/user/checkouts` now rejects any checkout from a user without `can_self_approve` unless `justification_comment` is at least 10 characters long. Previously the 10-character floor only applied to Emergency Bypass requests; now it applies to every request that an approver will see, so reviewers always have a written business reason. Self-approving users are unaffected — their comments remain optional.
+- **Checkout Form UX**: The Justification label now reads "(required, min 10 characters)" in accent/warning colour whenever the selected account requires approval. Placeholder text, inline character counter, and submit-button disabled state all reflect the new requirement.
+
 ## [0.20.1] — 2026-04-20
 
 ### Security

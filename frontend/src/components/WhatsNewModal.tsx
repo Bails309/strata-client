@@ -25,6 +25,17 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.20.2',
+    subtitle: 'Justification Mandatory for Approval-Required Checkouts',
+    sections: [
+      {
+        title: 'Approvers Always See a Written Business Reason',
+        description:
+          'Any checkout that requires approval (i.e. the user does not have self-approval rights on the mapping) now requires a justification of at least 10 characters. Previously the 10-character floor only applied to Emergency Bypass; now it applies to every approver-visible request. The form shows the requirement inline with a live character counter, and the submit button is disabled until the minimum is met. Self-approving users are unaffected — their comments remain optional.',
+      },
+    ],
+  },
+  {
     version: '0.20.1',
     subtitle: 'Emergency Bypass — 30-Minute Hard Cap',
     sections: [

@@ -1639,6 +1639,19 @@ pub async fn request_checkout(
         "Pending"
     };
 
+    // Justification is mandatory (≥ 10 characters) whenever approval is
+    // required — i.e. the user does not have self-approval rights. This
+    // ensures every approver-visible request carries a written business
+    // reason. Self-approving users remain free to submit without a comment.
+    if !mapping.can_self_approve {
+        let justification = body.justification_comment.as_deref().unwrap_or("").trim();
+        if justification.len() < 10 {
+            return Err(AppError::Validation(
+                "A justification of at least 10 characters is required for approval-required checkouts".into(),
+            ));
+        }
+    }
+
     // Emergency Approval Bypass: lets a user who normally requires approval
     // release the password immediately. Must be explicitly allowed per AD sync
     // config, must not be used by self-approvers (it's meaningless), and must

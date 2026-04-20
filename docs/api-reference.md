@@ -1553,7 +1553,7 @@ Request a password checkout.
 | `managed_ad_dn` | string | Yes | DN of the managed account |
 | `ad_sync_config_id` | string (UUID) | No | AD sync config |
 | `requested_duration_mins` | number | No | Duration in minutes (1-720, default 60). **Hard-clamped to 30 when `emergency_bypass = true`** — any larger value is silently reduced server-side. |
-| `justification_comment` | string | No | Reason for checkout (required to be ≥ 10 characters when `emergency_bypass = true`) |
+| `justification_comment` | string | Conditional | **Required (≥ 10 characters)** whenever the caller does not have self-approval on the mapping — i.e. for any approval-required checkout, including Emergency Bypass. Optional for self-approving users. |
 | `emergency_bypass` | boolean | No | Break-glass flag. Only accepted when the account's AD sync config has `pm_allow_emergency_bypass = true`. Activates the checkout immediately without approver review, caps `requested_duration_mins` at 30, and writes a `checkout.emergency_bypass` audit event. Cannot be combined with `scheduled_start_at`. |
 | `scheduled_start_at` | string (ISO 8601, UTC) | No | Schedules the release for a future moment. Must be strictly in the future (> now + 30 s) and ≤ 14 days from now. The checkout is created with status `Scheduled` — no password is generated, no LDAP mutation occurs, and no Vault material is written until the scheduled moment. A 60-second background worker activates due rows. |
 

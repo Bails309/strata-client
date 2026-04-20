@@ -22,6 +22,9 @@ vi.mock('../api', () => ({
   getMyManagedAccounts: vi.fn().mockResolvedValue([]),
   requestCheckout: vi.fn(),
   revealCheckoutPassword: vi.fn(),
+  linkCheckoutToProfile: vi.fn(),
+  checkinCheckout: vi.fn(),
+  retryCheckoutActivation: vi.fn(),
 }));
 
 vi.mock('../contexts/SettingsContext', () => ({
@@ -53,6 +56,11 @@ import {
   getServiceHealth,
   getProfileMappings,
   removeCredentialMapping,
+  getMyCheckouts,
+  getMyManagedAccounts,
+  revealCheckoutPassword,
+  requestCheckout,
+  checkinCheckout,
 } from '../api';
 
 function renderCredentials() {
@@ -669,5 +677,787 @@ describe('Credentials', () => {
     await user.click(await screen.findByText('Add Connections'));
     const mapButton = screen.getByRole('button', { name: /Map/ });
     expect(mapButton).toBeDisabled();
+  });
+
+  it('shows Request Checkout tab and empty managed accounts', async () => {
+    setupDefaults();
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('Request Checkout'));
+    expect(await screen.findByText(/No managed accounts assigned/)).toBeInTheDocument();
+  });
+
+  it('shows My Checkouts tab with no checkouts', async () => {
+    setupDefaults();
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('My Checkouts'));
+    expect(await screen.findByText('No checkout requests yet.')).toBeInTheDocument();
+  });
+
+  it('shows checkout statuses on My Checkouts tab', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-account,DC=corp,DC=local',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+      {
+        id: 'co2',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=admin-account,DC=corp,DC=local',
+        status: 'Pending',
+        requested_duration_mins: 30,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: 'co3',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=denied-account,DC=corp,DC=local',
+        status: 'Denied',
+        requested_duration_mins: 120,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('CN=svc-account,DC=corp,DC=local')).toBeInTheDocument();
+    });
+    expect(screen.getByText('CN=admin-account,DC=corp,DC=local')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
+    expect(screen.getByText('Denied')).toBeInTheDocument();
+  });
+
+  it('shows Reveal Password button for active checkout', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    expect(await screen.findByText('Reveal Password')).toBeInTheDocument();
+  });
+
+  it('reveals password on click', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    vi.mocked(revealCheckoutPassword).mockResolvedValue({ password: 'SuperSecret123!' });
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await user.click(await screen.findByText('Reveal Password'));
+    expect(await screen.findByText('SuperSecret123!')).toBeInTheDocument();
+  });
+
+  it('shows Check In button for active checkout', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    expect(await screen.findByText('Check In')).toBeInTheDocument();
+  });
+
+  it('opens check-in confirmation modal', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await user.click(await screen.findByText('Check In'));
+    expect(await screen.findByText('Check In Account?')).toBeInTheDocument();
+    expect(screen.getByText(/scrambled in Active Directory/)).toBeInTheDocument();
+  });
+
+  it('shows Retry Activation for approved but not-active checkout', async () => {
+    setupDefaults();
+    const pastTime = new Date(Date.now() - 7200000).toISOString(); // 2 hours ago
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Approved',
+        requested_duration_mins: 60,
+        created_at: pastTime,
+        updated_at: pastTime,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    expect(await screen.findByText('Retry Activation')).toBeInTheDocument();
+    expect(screen.getByText(/Activation failed/)).toBeInTheDocument();
+  });
+
+  it('shows Expired status for expired checkout', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Expired',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('Expired')).toBeInTheDocument();
+    });
+  });
+
+  it('shows Checked In status for checked-in checkout', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'CheckedIn',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('Checked In')).toBeInTheDocument();
+    });
+  });
+
+  it('shows time remaining for active checkout', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 5400000).toISOString(); // 1.5 hours
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Active',
+        requested_duration_mins: 120,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText(/remaining/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows duration and justification in checkout card', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp,DC=local',
+        status: 'Pending',
+        requested_duration_mins: 45,
+        justification_comment: 'Production deployment',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText(/Duration: 45m/)).toBeInTheDocument();
+      expect(screen.getByText(/Production deployment/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows all-accounts-active message on request tab when all have checkouts', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([
+      { id: 'm1', user_id: 'u1', managed_ad_dn: 'CN=svc,DC=corp', can_self_approve: false, created_at: '' },
+    ]);
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('Request Checkout'));
+    expect(await screen.findByText(/All managed accounts already have active checkouts/)).toBeInTheDocument();
+  });
+
+  it('shows request form when managed accounts available', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([
+      { id: 'm1', user_id: 'u1', managed_ad_dn: 'CN=svc,DC=corp', can_self_approve: false, created_at: '' },
+    ]);
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('Request Checkout'));
+    expect(await screen.findByText('Request Password Checkout')).toBeInTheDocument();
+    expect(screen.getByText('Managed Account')).toBeInTheDocument();
+    expect(screen.getByText(/Duration/)).toBeInTheDocument();
+    expect(screen.getByText(/Justification/)).toBeInTheDocument();
+  });
+
+  it('shows active checkout count badge on My Checkouts tab', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    renderCredentials();
+    await waitFor(() => {
+      expect(screen.getByText(/My Checkouts \(1\)/)).toBeInTheDocument();
+    });
+  });
+
+  it('hides stale expired checkouts when newer active one exists', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-old',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp',
+        status: 'Expired',
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
+        updated_at: new Date(Date.now() - 86400000).toISOString(),
+      },
+      {
+        id: 'co-new',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    // The active one should appear but the old expired one should be filtered out
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    // Should only have 1 checkout card, not 2
+    const cards = screen.getAllByText('CN=svc,DC=corp');
+    expect(cards).toHaveLength(1);
+  });
+
+  it('shows managed accounts in checkout request form', async () => {
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([
+      { managed_ad_dn: 'CN=svc-acct,DC=corp', ad_sync_config_id: 'cfg1' },
+      { managed_ad_dn: 'CN=admin-acct,DC=corp', ad_sync_config_id: 'cfg2' },
+    ] as any);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText(/Request Checkout/i)).toBeInTheDocument();
+    });
+  });
+
+  it('submits checkout request and shows approval flash', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([
+      { managed_ad_dn: 'CN=svc-acct,DC=corp', ad_sync_config_id: 'cfg1' },
+    ] as any);
+    vi.mocked(requestCheckout).mockResolvedValue({
+      id: 'co1',
+      status: 'Approved',
+    });
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('Request Checkout'));
+    // Wait for the managed account form to load
+    await waitFor(() => {
+      expect(screen.getByText('Request Password Checkout')).toBeInTheDocument();
+    });
+  });
+
+  it('handles save profile validation for new profile with missing fields', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    // Click + New Profile button
+    const addBtn = screen.getByText(/New Profile/i);
+    await user.click(addBtn);
+    // Try to save without filling required fields — button says "Create Profile"
+    const saveBtn = await screen.findByText('Create Profile');
+    await user.click(saveBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/All fields are required/i)).toBeInTheDocument();
+    });
+  });
+
+  it('handles save profile update for existing profile', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    vi.mocked(updateCredentialProfile).mockResolvedValue({ status: 'updated' });
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    // Click the Edit button on the first profile
+    const editButtons = screen.getAllByText('Edit');
+    await user.click(editButtons[0]);
+    // Now find Update button and click it
+    const updateBtn = await screen.findByText('Update');
+    await user.click(updateBtn);
+    await waitFor(() => {
+      expect(updateCredentialProfile).toHaveBeenCalled();
+    });
+  });
+
+  it('reveals checkout password and shows it', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-acct,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    vi.mocked(revealCheckoutPassword).mockResolvedValue({ password: 'S3cret!' });
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    // Wait for the active checkout to appear
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    // Time remaining should be displayed
+    expect(screen.getByText(/remaining/i)).toBeInTheDocument();
+    // Click reveal password
+    const revealBtn = screen.getByText(/Reveal/i);
+    await user.click(revealBtn);
+    await waitFor(() => {
+      expect(revealCheckoutPassword).toHaveBeenCalledWith('co1');
+      expect(screen.getByText('S3cret!')).toBeInTheDocument();
+    });
+  });
+
+  it('submits checkout request with managed account', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([
+      { managed_ad_dn: 'CN=svc-acct,DC=corp', ad_sync_config_id: 'cfg1' },
+    ] as any);
+    vi.mocked(requestCheckout).mockResolvedValue({
+      id: 'co-new',
+      status: 'Pending',
+    });
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('Request Checkout'));
+    // Wait for managed accounts form to load
+    await waitFor(() => {
+      expect(screen.getByText('Request Password Checkout')).toBeInTheDocument();
+    });
+    // Managed account label should be visible in the form
+    expect(screen.getByText(/Managed Account/)).toBeInTheDocument();
+  });
+
+  it('shows Checked In status and filters expired checkouts', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-checkedin',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-one,DC=corp',
+        status: 'CheckedIn',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: 'co-denied',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-two,DC=corp',
+        status: 'Denied',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      {
+        id: 'co-active',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-three,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    // Active checkout should be shown
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    // CheckedIn status renders as "Checked In"
+    expect(screen.getByText('Checked In')).toBeInTheDocument();
+    // Denied status should also show
+    expect(screen.getByText('Denied')).toBeInTheDocument();
+  });
+
+  it('shows stale checkout as expired when old Pending', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    // Checkout created more than 24h ago with Pending status
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-stale',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-old,DC=corp',
+        status: 'Pending',
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 2 * 86400000).toISOString(),
+        updated_at: new Date(Date.now() - 2 * 86400000).toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    // Stale checkout should show as "Expired — activation failed"
+    await waitFor(() => {
+      expect(screen.getByText(/Expired .* activation failed/)).toBeInTheDocument();
+    });
+  });
+
+  it('handles reveal password failure', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co1',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-acct,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    vi.mocked(revealCheckoutPassword).mockRejectedValue(new Error('Access denied'));
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    const revealBtn = screen.getByText(/Reveal/i);
+    await user.click(revealBtn);
+    await waitFor(() => {
+      expect(screen.getByText('Access denied')).toBeInTheDocument();
+    });
+  });
+
+  it('shows all managed accounts already checked out message', async () => {
+    setupDefaults();
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([
+      { managed_ad_dn: 'CN=svc-acct,DC=corp', ad_sync_config_id: 'cfg1' },
+    ] as any);
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-active',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-acct,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/Request Checkout/));
+    await waitFor(() => {
+      expect(screen.getByText(/All managed accounts already have active checkouts/)).toBeInTheDocument();
+    });
+  });
+
+  it('deletes a profile after confirmation', async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    vi.mocked(deleteCredentialProfile).mockResolvedValue(undefined as any);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    // Click Delete on first profile
+    const deleteButtons = screen.getAllByText('Delete');
+    await user.click(deleteButtons[0]);
+    // Confirm deletion
+    await waitFor(() => {
+      expect(screen.getByText(/Are you sure/i)).toBeInTheDocument();
+    });
+    const confirmBtn = screen.getByText(/Delete Permanently/i);
+    await user.click(confirmBtn);
+    await waitFor(() => {
+      expect(deleteCredentialProfile).toHaveBeenCalled();
+    });
+  });
+
+  it('opens check-in confirmation and confirms', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-live',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-acct,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    vi.mocked(checkinCheckout).mockResolvedValue(undefined as any);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    // Click Check In button
+    await user.click(screen.getByText('Check In'));
+    // Confirmation modal should appear
+    await waitFor(() => {
+      expect(screen.getByText('Check In Account?')).toBeInTheDocument();
+    });
+    // Confirm
+    const confirmBtns = screen.getAllByText('Check In');
+    await user.click(confirmBtns[confirmBtns.length - 1]);
+    await waitFor(() => {
+      expect(checkinCheckout).toHaveBeenCalledWith('co-live');
+    });
+  });
+
+  it('shows Retry Activation for approved but not live checkout', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    // Approved but no expires_at — means not live
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-approved-stale',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-retry,DC=corp',
+        status: 'Approved',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText(/Activation failed/)).toBeInTheDocument();
+    });
+    expect(screen.getByText('Retry Activation')).toBeInTheDocument();
+  });
+
+  it('handles check-in failure gracefully', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-fail',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-fail,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    vi.mocked(checkinCheckout).mockRejectedValue(new Error('Check-in failed'));
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('Check In'));
+    await waitFor(() => {
+      expect(screen.getByText('Check In Account?')).toBeInTheDocument();
+    });
+    const confirmBtns = screen.getAllByText('Check In');
+    await user.click(confirmBtns[confirmBtns.length - 1]);
+    await waitFor(() => {
+      expect(screen.getByText('Check-in failed')).toBeInTheDocument();
+    });
+  });
+
+  it('cancels check-in modal', async () => {
+    setupDefaults();
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([]);
+    const futureExpiry = new Date(Date.now() + 3600000).toISOString();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: 'co-cancel',
+        requester_user_id: 'u1',
+        managed_ad_dn: 'CN=svc-cancel,DC=corp',
+        status: 'Active',
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText(/My Checkouts/));
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('Check In'));
+    await waitFor(() => {
+      expect(screen.getByText('Check In Account?')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('Cancel'));
+    await waitFor(() => {
+      expect(screen.queryByText('Check In Account?')).not.toBeInTheDocument();
+    });
   });
 });

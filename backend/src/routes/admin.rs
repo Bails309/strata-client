@@ -5221,6 +5221,43 @@ mod tests {
         assert!(validate_ldap_filter("((&(|(cn=a)(cn=b))(sn=c)))").is_ok());
     }
 
+    // ── validate_ldap_url ──────────────────────────────────────────
+
+    #[test]
+    fn validate_ldap_url_ldap() {
+        assert!(validate_ldap_url("ldap://ds.example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_url_ldaps() {
+        assert!(validate_ldap_url("ldaps://ds.example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_http() {
+        assert!(validate_ldap_url("http://ds.example.com").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_https() {
+        assert!(validate_ldap_url("https://ds.example.com").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_ftp() {
+        assert!(validate_ldap_url("ftp://ds.example.com").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_plain_hostname() {
+        assert!(validate_ldap_url("ds.example.com").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_url_rejects_empty() {
+        assert!(validate_ldap_url("").is_err());
+    }
+
     // ── is_safe_hostname (additional coverage) ─────────────────────────
 
     #[test]
@@ -5764,5 +5801,115 @@ mod tests {
         assert!(result.ends_with(';'));
         assert!(result.contains("14.Session killed"));
         assert!(result.contains("3.521"));
+    }
+
+    // ── validate_no_restricted_keys ────────────────────────────────
+
+    #[test]
+    fn validate_no_restricted_keys_empty_ok() {
+        assert!(validate_no_restricted_keys(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_accepts_safe_keys() {
+        let kvs = vec![
+            SettingKV {
+                key: "theme".into(),
+                value: "dark".into(),
+            },
+            SettingKV {
+                key: "max_sessions".into(),
+                value: "100".into(),
+            },
+        ];
+        assert!(validate_no_restricted_keys(&kvs).is_ok());
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_rejects_restricted() {
+        let kvs = vec![SettingKV {
+            key: "jwt_secret".into(),
+            value: "evil".into(),
+        }];
+        assert!(validate_no_restricted_keys(&kvs).is_err());
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_rejects_sso_issuer() {
+        let kvs = vec![SettingKV {
+            key: "sso_issuer_url".into(),
+            value: "http://attacker.com".into(),
+        }];
+        assert!(validate_no_restricted_keys(&kvs).is_err());
+    }
+
+    #[test]
+    fn validate_no_restricted_keys_all_restricted() {
+        for key in RESTRICTED_SETTINGS {
+            let kvs = vec![SettingKV {
+                key: (*key).to_string(),
+                value: "val".into(),
+            }];
+            assert!(
+                validate_no_restricted_keys(&kvs).is_err(),
+                "Key {} should be restricted",
+                key
+            );
+        }
+    }
+
+    // ── is_valid_ipv4 ──────────────────────────────────────────────
+
+    #[test]
+    fn test_is_valid_ipv4() {
+        assert!(is_valid_ipv4("127.0.0.1"));
+        assert!(is_valid_ipv4("10.0.0.1"));
+        assert!(is_valid_ipv4("255.255.255.255"));
+        assert!(!is_valid_ipv4("127.0.0.256"));
+        assert!(!is_valid_ipv4("127.0.0"));
+        assert!(!is_valid_ipv4("127.0.0.1.1"));
+        assert!(!is_valid_ipv4("abc.def.ghi.jkl"));
+        assert!(!is_valid_ipv4(""));
+    }
+
+    // ── is_valid_domain ────────────────────────────────────────────
+
+    #[test]
+    fn test_is_valid_domain() {
+        assert!(is_valid_domain("example.com"));
+        assert!(is_valid_domain("sub.example.com"));
+        assert!(is_valid_domain("my-host.sub.example.com"));
+        assert!(is_valid_domain("a.b.c"));
+        assert!(!is_valid_domain("-example.com"));
+        assert!(!is_valid_domain("example-.com"));
+        assert!(!is_valid_domain(""));
+        assert!(!is_valid_domain("a".repeat(64).as_str()));
+        assert!(!is_valid_domain("host!name.com"));
+    }
+
+    // ── DNS parser tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_parse_and_validate_search_domains() {
+        let raw = "corp.local, infra.net, ";
+        let domains = parse_and_validate_search_domains(raw).unwrap();
+        assert_eq!(domains, vec!["corp.local", "infra.net"]);
+
+        assert!(parse_and_validate_search_domains("a,b,c,d,e,f").is_ok());
+        assert!(parse_and_validate_search_domains("a,b,c,d,e,f,g").is_err()); // max 6
+        assert!(parse_and_validate_search_domains("invalid_domain!").is_err());
+    }
+
+    #[test]
+    fn test_parse_and_validate_dns_servers() {
+        let raw = "1.1.1.1, 8.8.8.8:53, 10.0.0.1";
+        let servers = parse_and_validate_dns_servers(raw).unwrap();
+        assert_eq!(servers.len(), 3);
+        assert_eq!(servers[0], "1.1.1.1");
+        assert_eq!(servers[1], "8.8.8.8:53");
+
+        assert!(parse_and_validate_dns_servers("1.1.1.1:0").is_err()); // port 0
+        assert!(parse_and_validate_dns_servers("999.1.1.1").is_err()); // invalid ip
+        assert!(parse_and_validate_dns_servers("1.1.1.1:65536").is_err()); // invalid port
     }
 }

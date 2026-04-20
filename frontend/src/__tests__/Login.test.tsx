@@ -157,4 +157,17 @@ describe('Login page', () => {
     await screen.findByText(/sign in with sso/i);
     expect(screen.queryByPlaceholderText('admin')).not.toBeInTheDocument();
   });
+
+  it('shows fallback message when login rejects with non-Error', async () => {
+    const user = userEvent.setup();
+    vi.mocked(login).mockRejectedValueOnce('network down');
+
+    renderLogin();
+
+    await user.type(await screen.findByPlaceholderText('admin'), 'testuser');
+    await user.type(screen.getByPlaceholderText('••••••••'), 'wrongpass');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    expect(await screen.findByText('Login failed')).toBeInTheDocument();
+  });
 });

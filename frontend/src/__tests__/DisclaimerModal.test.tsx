@@ -81,4 +81,72 @@ describe('DisclaimerModal', () => {
       expect(onAccept).not.toHaveBeenCalled();
     }
   });
+
+  it('uses ResizeObserver to check if content fits without scrolling', () => {
+    const observerInstances: { observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; _cb: () => void }[] = [];
+    class MockResizeObserver {
+      _cb: () => void;
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      constructor(cb: () => void) {
+        this._cb = cb;
+        observerInstances.push(this);
+      }
+    }
+    const orig = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = MockResizeObserver as any;
+
+    render(<DisclaimerModal onAccept={onAccept} onDecline={onDecline} />);
+    expect(observerInstances).toHaveLength(1);
+    expect(observerInstances[0].observe).toHaveBeenCalled();
+
+    // Trigger the ResizeObserver callback to exercise the if(el) branch
+    observerInstances[0]._cb();
+
+    globalThis.ResizeObserver = orig;
+  });
+
+  it('does not enable accept when user has not scrolled to bottom', () => {
+    // Patch element prototype so scrollHeight is large before render
+    const origScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight');
+    const origClientHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'clientHeight');
+    Object.defineProperty(Element.prototype, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(Element.prototype, 'clientHeight', { value: 100, configurable: true });
+
+    render(<DisclaimerModal onAccept={onAccept} onDecline={onDecline} />);
+
+    // scrollHeight - scrollTop - clientHeight = 1000 - 0 - 100 = 900 >= 20 → button stays disabled
+    const acceptBtn = screen.getAllByRole('button').find(b => b.textContent?.includes('Accept'));
+    expect(acceptBtn).toBeDisabled();
+
+    // Restore
+    if (origScrollHeight) Object.defineProperty(Element.prototype, 'scrollHeight', origScrollHeight);
+    else delete (Element.prototype as any).scrollHeight;
+    if (origClientHeight) Object.defineProperty(Element.prototype, 'clientHeight', origClientHeight);
+    else delete (Element.prototype as any).clientHeight;
+  });
+
+  it('cleans up ResizeObserver on unmount', () => {
+    const observerInstances: { observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>; _cb: () => void }[] = [];
+    class MockResizeObserver {
+      _cb: () => void;
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      constructor(cb: () => void) {
+        this._cb = cb;
+        observerInstances.push(this);
+      }
+    }
+    const orig = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = MockResizeObserver as any;
+
+    const { unmount } = render(<DisclaimerModal onAccept={onAccept} onDecline={onDecline} />);
+    expect(observerInstances).toHaveLength(1);
+    unmount();
+    expect(observerInstances[0].disconnect).toHaveBeenCalled();
+
+    globalThis.ResizeObserver = orig;
+  });
 });

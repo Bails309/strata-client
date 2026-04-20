@@ -2439,6 +2439,19 @@ mod tests {
         assert_eq!(resolve_ttl(Some(1), 12), 1);
     }
 
+    // ── is_valid_hex_color ─────────────────────────────────────────────
+
+    #[test]
+    fn test_is_valid_hex_color() {
+        assert!(is_valid_hex_color("#fff"));
+        assert!(is_valid_hex_color("#000000"));
+        assert!(is_valid_hex_color("#ABCDEF"));
+        assert!(!is_valid_hex_color("#abcd")); // 4 digits total (including #)
+        assert!(!is_valid_hex_color("fff")); // missing #
+        assert!(!is_valid_hex_color("#ghi")); // invalid hex
+        assert!(!is_valid_hex_color("#1234567")); // too long
+    }
+
     // ── parse_ignore_cert ──────────────────────────────────────────────
 
     #[test]

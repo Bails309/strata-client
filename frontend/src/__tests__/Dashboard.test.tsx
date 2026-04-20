@@ -812,4 +812,75 @@ describe('Dashboard', () => {
     await userEvent.click(cards[0].parentElement!);
     // Check if URL changed? (BrowserRouter context)
   });
+
+  it('filters connections by tag', async () => {
+    vi.mocked(getTags).mockResolvedValue([
+      { id: 'tag1', name: 'Important', color: '#ff0000' },
+      { id: 'tag2', name: 'Dev', color: '#00ff00' },
+    ]);
+    vi.mocked(getConnectionTags).mockResolvedValue({ '1': ['tag1'], '2': ['tag2'] });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // The "Tags" label appears before the filter buttons
+    const tagsLabel = screen.getByText('Tags');
+    // Click the first filter button after the Tags label (which is "Important")
+    const filterButton = tagsLabel.parentElement!.querySelector('button')!;
+    await userEvent.click(filterButton);
+    await waitFor(() => {
+      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
+      expect(screen.queryByText('DB Server')).not.toBeInTheDocument();
+    });
+  });
+
+  it('merges admin tags with user tags in filter bar', async () => {
+    vi.mocked(getAdminTags).mockResolvedValue([
+      { id: 'admin-tag', name: 'Admin Tag', color: '#0000ff' },
+    ]);
+    vi.mocked(getTags).mockResolvedValue([
+      { id: 'user-tag', name: 'My Tag', color: '#ff0000' },
+    ]);
+    vi.mocked(getAdminConnectionTags).mockResolvedValue({ '1': ['admin-tag'] });
+    vi.mocked(getConnectionTags).mockResolvedValue({ '2': ['user-tag'] });
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    // Both tags should be visible in the filter bar
+    const tagsLabel = screen.getByText('Tags');
+    const filterBar = tagsLabel.parentElement!;
+    expect(filterBar.textContent).toContain('Admin Tag');
+    expect(filterBar.textContent).toContain('My Tag');
+  });
+
+  it('restores tag filters from localStorage', async () => {
+    vi.mocked(getTags).mockResolvedValue([
+      { id: 'tag1', name: 'Important', color: '#ff0000' },
+    ]);
+    vi.mocked(getConnectionTags).mockResolvedValue({ '1': ['tag1'] });
+    localStorage.setItem('strata-tag-filters', JSON.stringify(['tag1']));
+    renderDashboard();
+    await waitFor(() => {
+      // Should only show Server Alpha (has tag1), not Server Beta or DB Server
+      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
+      expect(screen.queryByText('DB Server')).not.toBeInTheDocument();
+    });
+  });
+
+  it('auto-enables folder view when connections have folders', async () => {
+    localStorage.removeItem('strata-folder-view');
+    vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
+    renderDashboard();
+    await screen.findByText('Production');
+    // Folder view should be auto-enabled
+    expect(localStorage.getItem('strata-folder-view')).toBe('true');
+  });
+
+  it('select-all indeterminate state when some selected', async () => {
+    renderDashboard();
+    await screen.findByText('Server Alpha');
+    const checkboxes = screen.getAllByRole('checkbox');
+    // Click only the first data checkbox (index 1; index 0 is select-all)
+    await userEvent.click(checkboxes[1]);
+    // Select-all should be indeterminate
+    const selectAll = checkboxes[0] as HTMLInputElement;
+    expect(selectAll.indeterminate).toBe(true);
+  });
 });

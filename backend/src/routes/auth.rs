@@ -1626,6 +1626,17 @@ mod tests {
         assert!(validate_login_input(&u, &p).is_ok());
     }
 
+    // ── validate_password ──────────────────────────────────────────────
+
+    #[test]
+    fn test_validate_password() {
+        assert!(validate_password("correct-horse-battery-staple").is_ok());
+        assert!(validate_password("123456789012").is_ok()); // min length 12
+        assert!(validate_password("12345678901").is_err()); // too short
+        assert!(validate_password(&"a".repeat(1024)).is_ok()); // max length
+        assert!(validate_password(&"a".repeat(1025)).is_err()); // too long
+    }
+
     // ── check_rate_limit ───────────────────────────────────────────────
 
     #[test]

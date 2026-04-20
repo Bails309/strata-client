@@ -346,4 +346,19 @@ describe('SessionClient', () => {
       expect(root.getByText('Exit to Dashboard')).toBeInTheDocument();
     });
   });
+
+  it('shows credential prompt with vault profiles', async () => {
+    vi.mocked(api.getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false, pre_connect_fields: ['username', 'password'] } as any);
+    vi.mocked(api.getCredentialProfiles).mockResolvedValue([
+      { id: 'p1', label: 'My Profile', expires_at: null },
+    ] as any);
+
+    await renderSessionClient();
+
+    const root = within(document.getElementById('root')!);
+    await waitFor(() => {
+      expect(root.getByText(/Connect to RDP/i)).toBeInTheDocument();
+    });
+    expect(root.getByText('Saved Credential Profile')).toBeInTheDocument();
+  });
 });

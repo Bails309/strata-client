@@ -438,4 +438,106 @@ describe('usePopOut', () => {
     expect(mouseOnEach).toHaveBeenCalled();
     expect(touchOnEach).toHaveBeenCalled();
   });
+
+  it('initializes isPoppedOut=true when session already has _popout', () => {
+    const session = createMockSession();
+    (session as any)._popout = { window: { closed: false }, keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() }, mouse: {}, touch: {}, cleanup: vi.fn() };
+    const containerRef = { current: document.createElement('div') };
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
+    expect(result.current.isPoppedOut).toBe(true);
+  });
+
+  it('returnDisplay with no container adopts display and navigates', async () => {
+    const session = createMockSession();
+    const containerRef = { current: null };
+    const mockPopup = createMockPopupWindow();
+    vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
+
+    await act(async () => {
+      await result.current.popOut();
+    });
+    expect(result.current.isPoppedOut).toBe(true);
+
+    act(() => {
+      result.current.returnDisplay();
+    });
+    expect(result.current.isPoppedOut).toBe(false);
+    // Popup should still be closed
+    expect(mockPopup.close).toHaveBeenCalled();
+  });
+
+  it('returnDisplay skips close when popup already closed', async () => {
+    const session = createMockSession();
+    const containerRef = { current: document.createElement('div') };
+    const mockPopup = createMockPopupWindow();
+    vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
+
+    await act(async () => {
+      await result.current.popOut();
+    });
+
+    // Mark popup as already closed
+    mockPopup.closed = true;
+
+    act(() => {
+      result.current.returnDisplay();
+    });
+    expect(result.current.isPoppedOut).toBe(false);
+  });
+
+  it('syncs isPoppedOut when session changes', () => {
+    const session1 = createMockSession();
+    const session2 = createMockSession();
+    (session2 as any).id = 'sess-2';
+    const containerRef = { current: document.createElement('div') };
+
+    const { result, rerender } = renderHook(
+      ({ sess }) => usePopOut(sess as any, containerRef as any),
+      { wrapper: routerWrapper, initialProps: { sess: session1 } },
+    );
+    expect(result.current.isPoppedOut).toBe(false);
+
+    // Give session2 an active popout
+    (session2 as any)._popout = { window: { closed: false }, keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() }, mouse: {}, touch: {}, cleanup: vi.fn() };
+    rerender({ sess: session2 });
+    expect(result.current.isPoppedOut).toBe(true);
+  });
+
+  it('returnDisplay re-scales display when dimensions are valid', async () => {
+    const scaleFn = vi.fn();
+    const session = {
+      ...createMockSession(),
+      client: {
+        ...createMockSession().client,
+        getDisplay: vi.fn(() => ({
+          getElement: () => document.createElement('div'),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale: scaleFn,
+        })),
+        sendMouseState: vi.fn(),
+        sendKeyEvent: vi.fn(),
+        sendSize: vi.fn(),
+        createClipboardStream: vi.fn(() => ({ sendBlob: vi.fn(), sendEnd: vi.fn() })),
+      },
+    };
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 800 });
+    Object.defineProperty(container, 'clientHeight', { value: 600 });
+    const containerRef = { current: container };
+    const mockPopup = createMockPopupWindow();
+    vi.spyOn(window, 'open').mockReturnValue(mockPopup as any);
+
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), { wrapper: routerWrapper });
+    await act(async () => { await result.current.popOut(); });
+
+    scaleFn.mockClear();
+    act(() => { result.current.returnDisplay(); });
+    expect(scaleFn).toHaveBeenCalled();
+    expect(session.client.sendSize).toHaveBeenCalledWith(800, 600);
+  });
 });

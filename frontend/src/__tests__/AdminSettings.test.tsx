@@ -57,6 +57,7 @@ vi.mock('../api', () => ({
   getAdminConnectionTagsAdmin: vi.fn(),
   setAdminConnectionTags: vi.fn(),
   getDisplaySettings: vi.fn(),
+  updateDns: vi.fn(),
   getApprovalRoles: vi.fn().mockResolvedValue([]),
   createApprovalRole: vi.fn(),
   deleteApprovalRole: vi.fn(),
@@ -103,6 +104,9 @@ import {
   updateAuthMethods, updateSettings, updateRoleMappings, getSessionStats, getRecordings,
   updateUser,
   getAdminTagsAdmin, createAdminTag, deleteAdminTag, getAdminConnectionTagsAdmin,
+  updateDns,
+  getApprovalRoles, createApprovalRole, deleteApprovalRole,
+  getCheckoutRequests,
 } from '../api';
 
 const healthOk = {
@@ -1963,6 +1967,182 @@ describe('ConnectionForm protocol sections', () => {
     await user.click(cancelButtons[cancelButtons.length - 1]);
     expect(screen.queryByPlaceholderText('My Server')).not.toBeInTheDocument();
   });
+
+  it('shows RDP Authentication section open by default in Add Connection form', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    expect(screen.getByText('Ignore server certificate')).toBeInTheDocument();
+    expect(screen.getByText(/Security Mode/)).toBeInTheDocument();
+  });
+
+  it('expands RDP Remote Desktop Gateway section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Remote Desktop Gateway/ }));
+    expect(screen.getByText('Gateway Hostname')).toBeInTheDocument();
+    expect(screen.getByText('Gateway Port')).toBeInTheDocument();
+    expect(screen.getByText('Gateway Username')).toBeInTheDocument();
+  });
+
+  it('expands RDP Basic Settings section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Basic Settings/ }));
+    expect(screen.getByText('Keyboard Layout')).toBeInTheDocument();
+  });
+
+  it('expands RDP Display section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Display/ }));
+    expect(screen.getByText('Color Depth')).toBeInTheDocument();
+  });
+
+  it('expands RDP Performance section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Performance/ }));
+    expect(screen.getByText('Enable wallpaper')).toBeInTheDocument();
+  });
+
+  it('expands RDP Drive Redirection section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Device Redirection/ }));
+    expect(screen.getByText('Enable drive / file transfer')).toBeInTheDocument();
+  });
+
+  it('expands RDP Screen Recording section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Screen Recording/ }));
+    expect(screen.getByText('Exclude graphical output')).toBeInTheDocument();
+  });
+
+  it('expands RDP Wake-on-LAN section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Wake-on-LAN/ }));
+    expect(screen.getByText('Send WoL packet before connecting')).toBeInTheDocument();
+  });
+
+  it('expands RDP Clipboard section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Clipboard/ }));
+    expect(screen.getByText('Disable copy from remote')).toBeInTheDocument();
+  });
+
+  it('expands RDP RemoteApp section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ RemoteApp/ }));
+    expect(screen.getByPlaceholderText('||notepad')).toBeInTheDocument();
+  });
+
+  it('expands RDP Load Balancing section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Load Balancing/ }));
+    expect(screen.getByText('Load Balance Info')).toBeInTheDocument();
+  });
+
+  it('expands RDP SFTP section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ SFTP/ }));
+    expect(screen.getByText('Enable SFTP file transfer')).toBeInTheDocument();
+  });
+
+  it('expands RDP Kerberos / NLA section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByRole('button', { name: /▸ Kerberos/ }));
+    expect(screen.getByText('Auth Package')).toBeInTheDocument();
+  });
+
+  it('expands SSH Terminal Behavior section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    const row = screen.getByText('Server A').closest('tr')!;
+    await user.click(within(row).getByText('Edit'));
+    await user.click(screen.getByRole('button', { name: /▸ Terminal Behavior/ }));
+    expect(screen.getByPlaceholderText('Execute on connect')).toBeInTheDocument();
+  });
+
+  it('expands SSH SFTP section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    const row = screen.getByText('Server A').closest('tr')!;
+    await user.click(within(row).getByText('Edit'));
+    await user.click(screen.getByRole('button', { name: /▸ SFTP/ }));
+    expect(screen.getByText('Enable SFTP')).toBeInTheDocument();
+  });
+
+  it('expands SSH Screen Recording section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    const row = screen.getByText('Server A').closest('tr')!;
+    await user.click(within(row).getByText('Edit'));
+    await user.click(screen.getByRole('button', { name: /▸ Screen Recording/ }));
+    expect(screen.getByText('Include key events')).toBeInTheDocument();
+  });
+
+  it('expands SSH Wake-on-LAN section', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText('Access'));
+    await screen.findByText('Server A');
+    const row = screen.getByText('Server A').closest('tr')!;
+    await user.click(within(row).getByText('Edit'));
+    await user.click(screen.getByRole('button', { name: /▸ Wake-on-LAN/ }));
+    expect(screen.getByText('Send WoL packet')).toBeInTheDocument();
+  });
 });
 
 describe('DisplayTab', () => {
@@ -2142,5 +2322,349 @@ describe('TagsTab', () => {
     await user.click(screen.getByText('Assign'));
     // Should show the connection assignment panel with Server A
     expect(await screen.findByText('Server A')).toBeInTheDocument();
+  });
+});
+
+describe('NetworkTab', () => {
+  beforeEach(setupDefaults);
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders Network & DNS Settings heading', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText(/Network & DNS Settings/)).toBeInTheDocument();
+  });
+
+  it('shows Enable Custom DNS checkbox', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText('Enable Custom DNS')).toBeInTheDocument();
+  });
+
+  it('shows DNS server fields when enabled', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText('DNS Server Addresses')).toBeInTheDocument();
+    expect(screen.getByText('Search Domains')).toBeInTheDocument();
+  });
+
+  it('hides DNS server fields when disabled', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'false' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    await screen.findByText('Enable Custom DNS');
+    expect(screen.queryByText('DNS Server Addresses')).not.toBeInTheDocument();
+  });
+
+  it('enables DNS fields when checkbox is toggled', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({});
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    const checkbox = await screen.findByRole('checkbox');
+    await user.click(checkbox);
+    expect(await screen.findByText('DNS Server Addresses')).toBeInTheDocument();
+  });
+
+  it('shows validation error for invalid IP', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: 'not-an-ip', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText(/Invalid DNS server address/)).toBeInTheDocument();
+  });
+
+  it('shows validation error for invalid IP octets', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '999.999.999.999', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText(/Invalid IP address/)).toBeInTheDocument();
+  });
+
+  it('shows validation error for invalid port', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1:99999', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText(/Invalid port number/)).toBeInTheDocument();
+  });
+
+  it('shows validation error for invalid search domain', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: 'bad domain!' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText(/Invalid domain/)).toBeInTheDocument();
+  });
+
+  it('shows validation error for too many search domains', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: 'a.com,b.com,c.com,d.com,e.com,f.com,g.com' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText(/at most 6 search domains/)).toBeInTheDocument();
+  });
+
+  it('accepts valid IP addresses', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1, 192.168.1.1', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    await screen.findByText('DNS Server Addresses');
+    expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
+  });
+
+  it('saves DNS settings and shows restart notice', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: 'corp.local' });
+    vi.mocked(updateDns).mockResolvedValue({ status: 'ok', restart_required: true, message: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    await screen.findByText('DNS Server Addresses');
+    await user.click(screen.getByText('Save Network Settings'));
+    await waitFor(() => {
+      expect(updateDns).toHaveBeenCalledWith({
+        dns_enabled: true,
+        dns_servers: '10.0.0.1',
+        dns_search_domains: 'corp.local',
+      });
+    });
+    expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
+  });
+
+  it('saves DNS settings without restart notice', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: '' });
+    vi.mocked(updateDns).mockResolvedValue({ status: 'ok', restart_required: false, message: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    await screen.findByText('DNS Server Addresses');
+    await user.click(screen.getByText('Save Network Settings'));
+    await waitFor(() => {
+      expect(updateDns).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/Restart required/)).not.toBeInTheDocument();
+  });
+
+  it('shows How it works section when DNS is enabled', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    expect(await screen.findByText('How it works')).toBeInTheDocument();
+  });
+
+  it('accepts valid IP:port format', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1:53', dns_search_domains: '' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Network'));
+    await screen.findByText('DNS Server Addresses');
+    expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
+  });
+});
+
+describe('PasswordsTab', () => {
+  beforeEach(setupDefaults);
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders Password Management heading', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    expect(await screen.findByText('Password Management')).toBeInTheDocument();
+  });
+
+  it('shows approval roles sub-tabs', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    expect(await screen.findByText('Approval Roles')).toBeInTheDocument();
+    expect(screen.getByText('Account Mappings')).toBeInTheDocument();
+    expect(screen.getByText('Checkout Requests')).toBeInTheDocument();
+  });
+
+  it('shows no approval roles empty state', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    expect(await screen.findByText('No approval roles defined yet.')).toBeInTheDocument();
+  });
+
+  it('shows create approval role form', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    expect(await screen.findByText('Create Approval Role')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Role name')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Description (optional)')).toBeInTheDocument();
+    expect(screen.getByText('Create Role')).toBeInTheDocument();
+  });
+
+  it('creates an approval role', async () => {
+    const user = userEvent.setup();
+    vi.mocked(createApprovalRole).mockResolvedValue({ id: 'r1', status: 'created' });
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await user.type(screen.getByPlaceholderText('Role name'), 'Admins');
+    await user.type(screen.getByPlaceholderText('Description (optional)'), 'Admin approvers');
+    await user.click(screen.getByText('Create Role'));
+    await waitFor(() => {
+      expect(createApprovalRole).toHaveBeenCalledWith({ name: 'Admins', description: 'Admin approvers' });
+    });
+  });
+
+  it('renders existing approval roles', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getApprovalRoles).mockResolvedValue([
+      { id: 'r1', name: 'IT Admins', description: 'IT team', created_at: '', updated_at: '' },
+    ]);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    expect(await screen.findByText('IT Admins')).toBeInTheDocument();
+    expect(screen.getByText('IT team')).toBeInTheDocument();
+  });
+
+  it('deletes an approval role', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getApprovalRoles).mockResolvedValue([
+      { id: 'r1', name: 'IT Admins', description: '', created_at: '', updated_at: '' },
+    ]);
+    vi.mocked(deleteApprovalRole).mockResolvedValue(undefined as any);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await screen.findByText('IT Admins');
+    await user.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(deleteApprovalRole).toHaveBeenCalledWith('r1');
+    });
+  });
+
+  it('expands a role to show configure options', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getApprovalRoles).mockResolvedValue([
+      { id: 'r1', name: 'IT Admins', description: '', created_at: '', updated_at: '' },
+    ]);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await screen.findByText('IT Admins');
+    await user.click(screen.getByText('Configure'));
+    expect(await screen.findByText('Managed Account Scope')).toBeInTheDocument();
+    expect(screen.getByText('Approvers')).toBeInTheDocument();
+  });
+
+  it('collapses expanded role', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getApprovalRoles).mockResolvedValue([
+      { id: 'r1', name: 'IT Admins', description: '', created_at: '', updated_at: '' },
+    ]);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await screen.findByText('IT Admins');
+    await user.click(screen.getByText('Configure'));
+    await screen.findByText('Managed Account Scope');
+    await user.click(screen.getByText('Collapse'));
+    await waitFor(() => {
+      expect(screen.queryByText('Managed Account Scope')).not.toBeInTheDocument();
+    });
+  });
+
+  it('switches to Account Mappings sub-tab', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await user.click(screen.getByText('Account Mappings'));
+    // No PM-enabled configs = shows empty state
+    expect(await screen.findByText(/No PM-enabled AD Sync sources/)).toBeInTheDocument();
+  });
+
+  it('shows account mappings form when PM configs exist', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getAdSyncConfigs).mockResolvedValue([
+      {
+        id: 'adc1', label: 'AD Source', ldap_url: 'ldap://dc.corp', bind_dn: 'CN=admin', bind_password: '',
+        search_bases: ['DC=corp'], search_filter: '', search_scope: 'sub', protocol: 'rdp',
+        default_port: 3389, tls_skip_verify: false, sync_interval_minutes: 60, enabled: true,
+        auth_method: 'simple', pm_enabled: true, created_at: '', updated_at: '',
+      },
+    ]);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await user.click(screen.getByText('Account Mappings'));
+    expect(await screen.findByText('Create Account Mapping')).toBeInTheDocument();
+    expect(screen.getByText('No account mappings.')).toBeInTheDocument();
+  });
+
+  it('switches to Checkout Requests sub-tab', async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await user.click(screen.getByText('Checkout Requests'));
+    expect(await screen.findByText('No checkout requests.')).toBeInTheDocument();
+  });
+
+  it('shows checkout requests table with data', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCheckoutRequests).mockResolvedValue([
+      {
+        id: 'cr1', requester_user_id: 'u1', managed_ad_dn: 'CN=svc,DC=corp', status: 'Active',
+        requested_duration_mins: 60, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      },
+    ]);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await user.click(screen.getByText('Checkout Requests'));
+    expect(await screen.findByText('CN=svc,DC=corp')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('60m')).toBeInTheDocument();
+  });
+
+  it('refreshes checkout requests', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCheckoutRequests).mockResolvedValue([]);
+    renderAdmin();
+    await screen.findByText('Admin Settings');
+    await user.click(screen.getByText('Password Mgmt'));
+    await user.click(screen.getByText('Checkout Requests'));
+    await screen.findByText('No checkout requests.');
+    await user.click(screen.getByText('Refresh'));
+    await waitFor(() => {
+      expect(getCheckoutRequests).toHaveBeenCalledTimes(2);
+    });
   });
 });

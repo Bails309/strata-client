@@ -1466,7 +1466,7 @@ pub async fn create_connection(
     let row: ConnectionRow = sqlx::query_as(
         "INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, extra, watermark)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark",
+         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark, health_status, health_checked_at",
     )
     .bind(&body.name)
     .bind(&body.protocol)
@@ -1502,7 +1502,7 @@ pub async fn update_connection(
     let row: ConnectionRow = sqlx::query_as(
         "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, folder_id = $7, extra = $8, watermark = $9, updated_at = now()
          WHERE id = $10 AND soft_deleted_at IS NULL
-         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark",
+         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark, health_status, health_checked_at",
     )
     .bind(&body.name)
     .bind(&body.protocol)

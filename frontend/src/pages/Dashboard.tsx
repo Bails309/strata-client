@@ -1108,8 +1108,9 @@ function ConnectionFolderRows({ folderId: _fid, folderName, connections, collaps
         onClick={onToggleCollapse}
         style={{ cursor: 'pointer', background: 'var(--color-surface-secondary)' }}
       >
+        <td />
         <td colSpan={6} className="!py-2">
-          <div className="flex items-center gap-2 font-semibold text-[0.8125rem]">
+          <div className="flex items-center gap-2 font-semibold text-[0.8125rem] -ml-2">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
             </svg>

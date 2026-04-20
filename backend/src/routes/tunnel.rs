@@ -1058,5 +1058,4 @@ mod tests {
         assert_eq!(u.as_deref(), Some("john"));
         assert_eq!(p.as_deref(), Some("p4"));
     }
-
 }

@@ -219,21 +219,6 @@ export default function Dashboard() {
 
   // ── Checkout Status Helpers ──
 
-  /** Detect if an Approved/Pending checkout is stale (created_at + duration has passed) */
-  const isCheckoutStale = useCallback((c: CheckoutRequest) => {
-    if (c.status !== 'Approved' && c.status !== 'Pending') return false;
-    const deadline = new Date(c.created_at).getTime() + c.requested_duration_mins * 60000;
-    return Date.now() > deadline;
-  }, []);
-
-  /** Detect if a checkout is effectively expired (status Expired, stale, or Active past expires_at) */
-  const isCheckoutExpired = useCallback((c: CheckoutRequest) => {
-    if (c.status === 'Expired' || c.status === 'Denied' || c.status === 'CheckedIn') return true;
-    if (isCheckoutStale(c)) return true;
-    if (c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() <= Date.now()) return true;
-    return false;
-  }, [isCheckoutStale]);
-
   /** Is this checkout truly active (Active status AND not past expires_at) */
   const isCheckoutLive = useCallback((c: CheckoutRequest) => {
     return c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() > Date.now();
@@ -939,13 +924,6 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
     const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number }>({});
     const [newTagName, setNewTagName] = useState('');
     const tagMenuRef = useRef<HTMLDivElement>(null);
-
-    /** Detect if an Approved/Pending checkout is stale (created_at + duration has passed) */
-    const isCheckoutStale = useCallback((c: CheckoutRequest) => {
-      if (c.status !== 'Approved' && c.status !== 'Pending') return false;
-      const deadline = new Date(c.created_at).getTime() + c.requested_duration_mins * 60000;
-      return Date.now() > deadline;
-    }, []);
 
     /** Is this checkout truly active (Active status AND not past expires_at) */
     const isCheckoutLive = useCallback((c: CheckoutRequest) => {

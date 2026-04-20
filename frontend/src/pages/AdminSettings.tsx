@@ -4814,11 +4814,11 @@ function NetworkTab({ settings, onSave }: { settings: Record<string, string>; on
                 className="input"
                 value={dnsSearchDomains}
                 onChange={(e) => { setDnsSearchDomains(e.target.value); setRestartNeeded(false); }}
-                placeholder="e.g. capita-ics.dmz.local, corp.example.com"
+                placeholder="e.g. example.local, corp.example.com"
               />
               <p className="text-sm text-txt-secondary mt-1">
                 Comma-separated list of DNS search domains. Required for <code>.local</code> zones
-                and allows short hostnames (e.g. <code>server01</code>) to resolve as <code>server01.capita-ics.dmz.local</code>.
+                and allows short hostnames (e.g. <code>server01</code>) to resolve as <code>server01.example.local</code>.
                 Equivalent to the <code>Domains=</code> directive in <code>systemd-resolved</code>.
               </p>
               {searchDomainError && (

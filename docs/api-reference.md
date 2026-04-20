@@ -333,7 +333,7 @@ Configure custom DNS servers and search domains for guacd containers. Validated 
 {
   "dns_enabled": true,
   "dns_servers": "10.0.0.1, 10.0.0.2",
-  "dns_search_domains": "capita-ics.dmz.local, corp.example.com"
+  "dns_search_domains": "example.local, corp.example.com"
 }
 ```
 

@@ -1082,6 +1082,26 @@ mod tests {
     }
 
     #[test]
+    fn generate_password_no_numbers() {
+        let policy = PasswordPolicy {
+            require_numbers: false,
+            ..PasswordPolicy::default()
+        };
+        let pw = generate_password(&policy);
+        assert!(!pw.chars().any(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn password_policy_default() {
+        let p = PasswordPolicy::default();
+        assert_eq!(p.min_length, 16);
+        assert!(p.require_uppercase);
+        assert!(p.require_lowercase);
+        assert!(p.require_numbers);
+        assert!(p.require_symbols);
+    }
+
+    #[test]
     fn extract_cn_works() {
         assert_eq!(
             extract_cn_from_dn("CN=John.Doe,OU=Users,DC=example,DC=com"),
@@ -1091,6 +1111,8 @@ mod tests {
             extract_cn_from_dn("cn=svc-account,OU=ServiceAccounts,DC=corp,DC=net"),
             "svc-account"
         );
+        assert_eq!(extract_cn_from_dn("CN=Bailey\\, Matt,OU=Tier 1,DC=strata,DC=io"), "Bailey\\, Matt");
         assert_eq!(extract_cn_from_dn("some-other-format"), "some-other-format");
+        assert_eq!(extract_cn_from_dn(""), "");
     }
 }

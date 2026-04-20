@@ -812,11 +812,11 @@ pub async fn update_dns(
 
     // Save to database
     settings::set(&db.pool, "dns_enabled", &body.dns_enabled.to_string()).await?;
-    settings::set(&db.pool, "dns_servers", &body.dns_servers.trim()).await?;
+    settings::set(&db.pool, "dns_servers", body.dns_servers.trim()).await?;
     settings::set(
         &db.pool,
         "dns_search_domains",
-        &body.dns_search_domains.trim(),
+        body.dns_search_domains.trim(),
     )
     .await?;
 
@@ -3302,7 +3302,7 @@ pub async fn test_pm_target_filter(
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| body.bind_dn.clone().unwrap_or_default());
-    let effective_bind_pw = if body.pm_bind_user.as_ref().map_or(false, |s| !s.is_empty()) {
+    let effective_bind_pw = if body.pm_bind_user.as_ref().is_some_and(|s| !s.is_empty()) {
         pm_bind_pw
     } else {
         bind_password
@@ -4391,6 +4391,8 @@ mod tests {
             extra: serde_json::json!({"color-depth": "24"}),
             last_accessed: None,
             watermark: "inherit".into(),
+            health_status: "unknown".into(),
+            health_checked_at: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["hostname"], "10.0.0.1");
@@ -4816,6 +4818,8 @@ mod tests {
             extra: serde_json::json!({"color-depth": "32", "enable-wallpaper": "true"}),
             last_accessed: Some(chrono::Utc::now()),
             watermark: "inherit".into(),
+            health_status: "unknown".into(),
+            health_checked_at: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["extra"]["color-depth"], "32");
@@ -5125,6 +5129,7 @@ mod tests {
             expires_at: now,
             expired: false,
             ttl_hours: 8,
+            checkout_id: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Work");

@@ -2131,6 +2131,8 @@ mod tests {
             folder_name: Some("Production".into()),
             last_accessed: None,
             watermark: "inherit".into(),
+            health_status: "unknown".into(),
+            health_checked_at: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "server-1");
@@ -2149,6 +2151,7 @@ mod tests {
             expires_at: chrono::Utc::now(),
             expired: false,
             ttl_hours: 8,
+            checkout_id: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Work");
@@ -2300,6 +2303,7 @@ mod tests {
             expires_at: now,
             expired: true,
             ttl_hours: 4,
+            checkout_id: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Expired Profile");
@@ -2322,6 +2326,8 @@ mod tests {
             folder_name: Some("Production".into()),
             last_accessed: Some(chrono::Utc::now()),
             watermark: "inherit".into(),
+            health_status: "unknown".into(),
+            health_checked_at: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["folder_name"], "Production");
@@ -2342,6 +2348,8 @@ mod tests {
             folder_name: None,
             last_accessed: None,
             watermark: "on".into(),
+            health_status: "unknown".into(),
+            health_checked_at: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["folder_id"].is_null());

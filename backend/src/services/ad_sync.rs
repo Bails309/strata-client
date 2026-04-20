@@ -840,6 +840,18 @@ mod tests {
             connection_defaults: serde_json::json!({}),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            pm_enabled: false,
+            pm_bind_user: None,
+            pm_bind_password: None,
+            pm_target_filter: default_pm_target_filter(),
+            pm_pwd_min_length: default_pm_pwd_min_length(),
+            pm_pwd_require_uppercase: true,
+            pm_pwd_require_lowercase: true,
+            pm_pwd_require_numbers: true,
+            pm_pwd_require_symbols: true,
+            pm_auto_rotate_enabled: false,
+            pm_auto_rotate_interval_days: default_pm_rotate_interval(),
+            pm_last_rotated_at: None,
         }
     }
 

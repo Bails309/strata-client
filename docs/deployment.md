@@ -312,15 +312,19 @@ If your target RDP/SSH hosts use internal DNS names (e.g. `.local`, `.dmz.local`
 1. Navigate to **Admin → Network**
 2. Enable **Custom DNS**
 3. Enter one or more DNS server IP addresses (comma-separated), e.g. `10.0.0.1, 10.0.0.2`
-4. Click **Save**
-5. Restart guacd containers to apply:
+4. Enter your DNS search domains (comma-separated), e.g. `capita-ics.dmz.local, corp.example.com`
+5. Click **Save**
+6. Restart guacd containers to apply:
    ```bash
    docker compose restart guacd
    # If using sidecar scaling:
    docker compose restart guacd guacd-2
    ```
 
-**How it works:** The backend validates the DNS IPs, saves them to the database, and writes a `resolv.conf` file to the shared `backend-config` Docker volume. On startup, each guacd container's entrypoint copies this file to `/etc/resolv.conf`, enabling hostname resolution for internal domains.
+**How it works:** The backend validates the DNS IPs and search domains, saves them to the database, and writes a `resolv.conf` file to the shared `backend-config` Docker volume. Docker's embedded DNS resolver (`127.0.0.11`) is always appended as a fallback nameserver, so existing connections that resolve via public DNS or Docker service discovery continue working without reconfiguration. On startup, each guacd container's entrypoint copies this file to `/etc/resolv.conf`, enabling hostname resolution for internal domains.
+
+> [!IMPORTANT]
+> **Search domains are required for `.local` zones.** The `.local` TLD is special — without a `search` directive in `resolv.conf`, many systems won't resolve bare hostnames against `.local` domains. The search domain field is equivalent to the `Domains=` directive in `systemd-resolved` on your host OS. For example, with `capita-ics.dmz.local` as a search domain, a connection targeting `server01` will resolve as `server01.capita-ics.dmz.local`.
 
 > [!NOTE]
 > DNS changes require a guacd container restart to take effect. Active sessions on the restarted containers will be disconnected.

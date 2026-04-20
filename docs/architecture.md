@@ -57,7 +57,7 @@ Volumes:
 - `krb5-config` → `/etc/krb5` — dynamically generated `krb5.conf`
 - `backend-config` → `/app/config` (read-only) — custom `resolv.conf` written by the backend for DNS configuration
 
-**Custom DNS resolution:** The guacd container uses a custom `entrypoint.sh` wrapper that checks for `/app/config/resolv.conf` on startup. If present, it copies the file to `/etc/resolv.conf`, enabling the container to resolve internal hostnames (e.g. `.local`, `.dmz.local` domains). The entrypoint then drops privileges to the `guacd` user via `su-exec` before launching the daemon. DNS servers are configured via the Admin Settings Network tab and written to the shared `backend-config` volume by the backend.
+**Custom DNS resolution:** The guacd container uses a custom `entrypoint.sh` wrapper that checks for `/app/config/resolv.conf` on startup. If present, it copies the file to `/etc/resolv.conf`, enabling the container to resolve internal hostnames (e.g. `.local`, `.dmz.local` domains). The entrypoint then drops privileges to the `guacd` user via `su-exec` before launching the daemon. DNS servers and search domains are configured via the Admin Settings Network tab and written to the shared `backend-config` volume by the backend. Docker's embedded DNS (`127.0.0.11`) is always appended as a fallback nameserver so existing connections that resolve via public DNS continue working.
 
 ### 2. Rust Backend
 
@@ -85,7 +85,7 @@ The central orchestrator. Responsibilities:
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
 - **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators
-- **DNS configuration** — admin-configurable DNS servers written to a shared Docker volume as `resolv.conf`; guacd containers apply this on startup for internal hostname resolution
+- **DNS configuration** — admin-configurable DNS servers and search domains written to a shared Docker volume as `resolv.conf`; guacd containers apply this on startup for internal hostname resolution; Docker's embedded DNS is preserved as fallback
 - **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each
 - **Audit** — SHA-256 hash-chained append-only log
 
@@ -216,7 +216,7 @@ user_account_mappings ───── user ↔ managed AD account (with self-app
 password_checkout_requests ─ checkout lifecycle tracking (status, timestamps, Vault-sealed password)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `046_dns_settings.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `047_dns_search_domains.sql` for the full DDL.
 
 ## Directory Structure
 

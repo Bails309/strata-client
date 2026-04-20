@@ -5,13 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] — 2026-04-20
+
+### Added
+- **DNS Search Domains**: The Network tab now supports configurable DNS search domains alongside DNS servers. Search domains are written as a `search` directive in the generated `resolv.conf`, enabling short-name resolution for internal zones (e.g. `.local`, `.dmz.local`). This is equivalent to the `Domains=` directive in `systemd-resolved` on the host OS.
+- **Docker DNS Fallback**: The generated `resolv.conf` now appends Docker's embedded DNS resolver (`127.0.0.11`) as a fallback nameserver. This ensures existing connections that resolve via public DNS or Docker service discovery continue working when custom DNS is enabled — no reconfiguration needed.
+- **Migration 047 (Backfill)**: New migration `047_dns_search_domains.sql` backfills the `dns_search_domains` key into `system_settings` for instances that already ran migration 046 before search domains were added. Uses `ON CONFLICT DO NOTHING` for idempotent application.
+
+### Changed
+- **DNS Configuration (Network Tab)**: Updated to include a Search Domains input field with domain format validation (max 6 domains). The "How it works" explanation now describes the equivalence to `systemd-resolved` `Domains=` directive.
+- **Backend DNS endpoint**: `PUT /api/admin/settings/dns` now accepts `dns_search_domains` (comma-separated domain list). Validated domain names are written as a `search` line in the generated `resolv.conf`. Audit log includes search domains in the event payload.
+- **resolv.conf generation**: Now writes `search <domains>` line (when configured), followed by custom `nameserver` entries, followed by `nameserver 127.0.0.11` as Docker DNS fallback.
+
+### Database
+- **Migration 047**: Backfills `dns_search_domains` key into `system_settings` for existing installations.
+
 ## [0.19.0] — 2026-04-19
 
 ### Added
-- **DNS Configuration (Network Tab)**: Administrators can now configure custom DNS servers for guacd containers directly from the Admin Settings UI via a new **Network** tab. DNS entries are validated (IPv4 format), persisted in `system_settings`, and written to a shared Docker volume (`backend-config`) as `resolv.conf`. The guacd entrypoint copies this file on startup, enabling resolution of internal hostnames (e.g. `.local`, `.dmz.local` domains) without hardcoding DNS in `docker-compose.yml`. A restart-required banner reminds admins to run `docker compose restart guacd` after changes.
-  - **Migration**: `046_dns_settings.sql` inserts `dns_enabled` (false) and `dns_servers` (empty) into `system_settings`.
-  - **Backend**: New `PUT /api/admin/settings/dns` endpoint with IPv4 validation, DB persistence, `resolv.conf` file write, and audit logging.
-  - **Frontend**: `NetworkTab` component with DNS enable toggle, DNS servers input, client-side validation, "How it works" explanation, and restart-required warning after save.
+- **DNS Configuration (Network Tab)**: Administrators can now configure custom DNS servers and search domains for guacd containers directly from the Admin Settings UI via a new **Network** tab. DNS entries are validated (IPv4 format), search domains are validated (domain format, max 6), persisted in `system_settings`, and written to a shared Docker volume (`backend-config`) as `resolv.conf`. The guacd entrypoint copies this file on startup, enabling resolution of internal hostnames (e.g. `.local`, `.dmz.local` domains) without hardcoding DNS in `docker-compose.yml`. A restart-required banner reminds admins to run `docker compose restart guacd` after changes.
+  - **Migration**: `046_dns_settings.sql` inserts `dns_enabled` (false), `dns_servers` (empty), and `dns_search_domains` (empty) into `system_settings`.
+  - **Backend**: New `PUT /api/admin/settings/dns` endpoint with IPv4 validation, domain validation, DB persistence, `resolv.conf` file write (with Docker DNS fallback), and audit logging.
+  - **Frontend**: `NetworkTab` component with DNS enable toggle, DNS servers input, search domains input, client-side validation, "How it works" explanation, and restart-required warning after save.
   - **guacd**: New `entrypoint.sh` wrapper that applies `/app/config/resolv.conf` before starting the daemon. Uses `su-exec` to drop privileges to the `guacd` user.
 - **Dynamic Browser Tab Title**: The browser tab now displays the active session's server name while connected (e.g. "SERVER01 — Strata"), making it easy to identify which server you're on when the sidebar is collapsed or when switching between browser tabs. Reverts to "Strata Client" on disconnect.
 
@@ -23,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed test scripts (`test_me.sh`, `test_me2.sh`) containing debug/throwaway code.
 
 ### Database
-- **Migration 046**: Inserts `dns_enabled` and `dns_servers` keys into `system_settings` for UI-driven DNS configuration.
+- **Migration 046**: Inserts `dns_enabled`, `dns_servers`, and `dns_search_domains` keys into `system_settings` for UI-driven DNS configuration.
 
 ## [0.18.0] — 2026-04-18
 

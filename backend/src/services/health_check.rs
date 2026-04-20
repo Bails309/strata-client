@@ -33,16 +33,13 @@ async fn run_health_checks(state: SharedState) -> anyhow::Result<()> {
         if s.phase != BootPhase::Running {
             return Ok(());
         }
-        s.db.clone()
-            .ok_or_else(|| anyhow::anyhow!("No DB"))?
-            .pool
+        s.db.clone().ok_or_else(|| anyhow::anyhow!("No DB"))?.pool
     };
 
-    let targets: Vec<ConnTarget> = sqlx::query_as(
-        "SELECT id, hostname, port FROM connections WHERE soft_deleted_at IS NULL",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let targets: Vec<ConnTarget> =
+        sqlx::query_as("SELECT id, hostname, port FROM connections WHERE soft_deleted_at IS NULL")
+            .fetch_all(&pool)
+            .await?;
 
     // Probe all connections concurrently with a per-connection timeout
     let handles: Vec<_> = targets

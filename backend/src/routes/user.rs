@@ -973,14 +973,13 @@ pub async fn link_checkout_to_profile(
     let db = require_running(&state).await?;
 
     // Verify profile belongs to user
-    let _: (Uuid,) = sqlx::query_as(
-        "SELECT id FROM credential_profiles WHERE id = $1 AND user_id = $2",
-    )
-    .bind(profile_id)
-    .bind(user.id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Credential profile not found".into()))?;
+    let _: (Uuid,) =
+        sqlx::query_as("SELECT id FROM credential_profiles WHERE id = $1 AND user_id = $2")
+            .bind(profile_id)
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Credential profile not found".into()))?;
 
     // Unlink
     if body.checkout_id.is_none() {
@@ -1011,9 +1010,9 @@ pub async fn link_checkout_to_profile(
         ));
     }
 
-    let cred_id = checkout.vault_credential_id.ok_or_else(|| {
-        AppError::Internal("Checkout has no credential stored".into())
-    })?;
+    let cred_id = checkout
+        .vault_credential_id
+        .ok_or_else(|| AppError::Internal("Checkout has no credential stored".into()))?;
 
     // Copy encrypted credentials from the checkout's managed credential to this profile
     let (enc_pw, enc_dek, nonce): (Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
@@ -1657,12 +1656,11 @@ pub async fn pending_approvals(
 ) -> Result<Json<Vec<CheckoutRequest>>, AppError> {
     let db = require_running(&state).await?;
     // Get all role IDs for the current user
-    let role_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT role_id FROM approval_role_assignments WHERE user_id = $1",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let role_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT role_id FROM approval_role_assignments WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_all(&db.pool)
+            .await?;
 
     if role_ids.is_empty() {
         return Ok(Json(vec![]));
@@ -1703,24 +1701,22 @@ pub async fn decide_checkout(
     let db = require_running(&state).await?;
 
     // Get the user's approval role IDs
-    let role_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT role_id FROM approval_role_assignments WHERE user_id = $1",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let role_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT role_id FROM approval_role_assignments WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_all(&db.pool)
+            .await?;
     if role_ids.is_empty() {
         return Err(AppError::Forbidden);
     }
 
     // Fetch the checkout
-    let checkout: CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1",
-    )
-    .bind(checkout_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+    let checkout: CheckoutRequest =
+        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
+            .bind(checkout_id)
+            .fetch_optional(&db.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
     if checkout.status != "Pending" {
         return Err(AppError::Validation(format!(
@@ -1847,8 +1843,8 @@ pub async fn reveal_checkout_password(
 
     let plaintext = vault::unseal(&vault_cfg, &row.1, &row.0, &row.2).await?;
     let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-    let parsed: serde_json::Value = serde_json::from_str(&plain_str)
-        .unwrap_or_else(|_| json!({ "p": plain_str }));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&plain_str).unwrap_or_else(|_| json!({ "p": plain_str }));
     let password: String = parsed["p"].as_str().unwrap_or_default().to_string();
 
     crate::services::audit::log(
@@ -1897,7 +1893,8 @@ pub async fn retry_checkout_activation(
             .ok_or(AppError::Internal("Vault not configured".into()))?
     };
 
-    crate::services::checkouts::activate_checkout(&db.pool, &vault_cfg, checkout_id).await
+    crate::services::checkouts::activate_checkout(&db.pool, &vault_cfg, checkout_id)
+        .await
         .map_err(|e| {
             tracing::error!("Retry activation failed for checkout {checkout_id}: {e}");
             AppError::Validation(format!("Activation failed: {e}"))
@@ -1921,7 +1918,8 @@ pub async fn checkin_checkout(
             .ok_or(AppError::Internal("Vault not configured".into()))?
     };
 
-    crate::services::checkouts::checkin_checkout(&db.pool, &vault_cfg, checkout_id, user.id).await?;
+    crate::services::checkouts::checkin_checkout(&db.pool, &vault_cfg, checkout_id, user.id)
+        .await?;
 
     Ok(Json(json!({ "status": "CheckedIn" })))
 }

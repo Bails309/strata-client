@@ -25,13 +25,34 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.19.1',
+    subtitle: 'DNS Search Domains & Docker DNS Fallback',
+    sections: [
+      {
+        title: 'DNS Search Domains',
+        description:
+          'The Network tab now supports configurable DNS search domains alongside DNS servers. Search domains enable short-name resolution for internal zones (e.g. .local, .dmz.local) — equivalent to the Domains= directive in systemd-resolved on your host OS.',
+      },
+      {
+        title: 'Docker DNS Fallback',
+        description:
+          'Custom DNS configuration now preserves Docker\'s embedded DNS resolver as a fallback. Existing connections that resolve via public DNS or Docker service discovery continue working without reconfiguration when custom DNS is enabled.',
+      },
+      {
+        title: 'Migration Backfill (047)',
+        description:
+          'A new migration automatically backfills the dns_search_domains setting for instances that already ran migration 046. No manual database changes needed.',
+      },
+    ],
+  },
+  {
     version: '0.19.0',
     subtitle: 'DNS Configuration, Dynamic Tab Titles & guacd Improvements',
     sections: [
       {
         title: 'DNS Configuration (Network Tab)',
         description:
-          'A new Network tab in Admin Settings lets you configure custom DNS servers for guacd containers. Enter your internal DNS server IPs, save, and restart guacd — no more editing docker-compose.yml for internal hostname resolution (e.g. .local, .dmz.local domains).',
+          'A new Network tab in Admin Settings lets you configure custom DNS servers and search domains for guacd containers. Enter your internal DNS server IPs and search domains, save, and restart guacd — no more editing docker-compose.yml for internal hostname resolution (e.g. .local, .dmz.local domains).',
       },
       {
         title: 'Dynamic Browser Tab Title',

@@ -4691,19 +4691,21 @@ function SecurityTab({ settings, onSave }: { settings: Record<string, string>; o
 function NetworkTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
   const [dnsEnabled, setDnsEnabled] = useState(settings.dns_enabled === 'true');
   const [dnsServers, setDnsServers] = useState(settings.dns_servers || '');
+  const [dnsSearchDomains, setDnsSearchDomains] = useState(settings.dns_search_domains || '');
   const [saving, setSaving] = useState(false);
   const [restartNeeded, setRestartNeeded] = useState(false);
 
   useEffect(() => {
     setDnsEnabled(settings.dns_enabled === 'true');
     setDnsServers(settings.dns_servers || '');
+    setDnsSearchDomains(settings.dns_search_domains || '');
   }, [settings]);
 
   async function handleSave() {
     setSaving(true);
     setRestartNeeded(false);
     try {
-      const res = await updateDns({ dns_enabled: dnsEnabled, dns_servers: dnsServers.trim() });
+      const res = await updateDns({ dns_enabled: dnsEnabled, dns_servers: dnsServers.trim(), dns_search_domains: dnsSearchDomains.trim() });
       if (res.restart_required) setRestartNeeded(true);
       onSave();
     } catch { /* handled by parent */ }
@@ -4728,6 +4730,21 @@ function NetworkTab({ settings, onSave }: { settings: Record<string, string>; on
   }
 
   const validationError = validateServers();
+
+  // Validate search domains (alphanumeric + dots + hyphens, max 6)
+  function validateSearchDomains(): string | null {
+    if (!dnsEnabled || !dnsSearchDomains.trim()) return null;
+    const domains = dnsSearchDomains.split(',').map(s => s.trim()).filter(Boolean);
+    if (domains.length > 6) return 'resolv.conf supports at most 6 search domains.';
+    for (const d of domains) {
+      if (!/^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(d)) {
+        return `Invalid domain: "${d}". Use only letters, numbers, dots, and hyphens.`;
+      }
+    }
+    return null;
+  }
+
+  const searchDomainError = validateSearchDomains();
 
   return (
     <div className="card mt-6">
@@ -4789,6 +4806,26 @@ function NetworkTab({ settings, onSave }: { settings: Record<string, string>; on
               )}
             </div>
 
+            <div className="form-group mt-6">
+              <label className="form-label">
+                Search Domains
+              </label>
+              <input
+                className="input"
+                value={dnsSearchDomains}
+                onChange={(e) => { setDnsSearchDomains(e.target.value); setRestartNeeded(false); }}
+                placeholder="e.g. capita-ics.dmz.local, corp.example.com"
+              />
+              <p className="text-sm text-txt-secondary mt-1">
+                Comma-separated list of DNS search domains. Required for <code>.local</code> zones
+                and allows short hostnames (e.g. <code>server01</code>) to resolve as <code>server01.capita-ics.dmz.local</code>.
+                Equivalent to the <code>Domains=</code> directive in <code>systemd-resolved</code>.
+              </p>
+              {searchDomainError && (
+                <p className="text-sm text-danger mt-1">{searchDomainError}</p>
+              )}
+            </div>
+
             <div className="mt-4 p-4 rounded-lg bg-surface-secondary/30 border border-border/30">
               <h5 className="text-sm font-medium text-txt-primary mb-2">How it works</h5>
               <ol className="text-sm text-txt-secondary space-y-1 list-decimal list-inside">
@@ -4818,7 +4855,7 @@ function NetworkTab({ settings, onSave }: { settings: Record<string, string>; on
         <button
           className="btn btn-primary"
           onClick={handleSave}
-          disabled={saving || (dnsEnabled && !!validationError)}
+          disabled={saving || (dnsEnabled && (!!validationError || !!searchDomainError))}
         >
           {saving ? 'Saving...' : 'Save Network Settings'}
         </button>

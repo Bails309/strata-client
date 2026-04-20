@@ -326,13 +326,14 @@ Configure or switch Vault mode.
 
 #### `PUT /api/admin/settings/dns`
 
-Configure custom DNS servers for guacd containers. Validated DNS entries are saved to the database and written to a shared Docker volume as `resolv.conf`. Requires a `docker compose restart guacd` to take effect.
+Configure custom DNS servers and search domains for guacd containers. Validated entries are saved to the database and written to a shared Docker volume as `resolv.conf`. Requires a `docker compose restart guacd` to take effect.
 
 **Request Body**
 ```json
 {
   "dns_enabled": true,
-  "dns_servers": "10.0.0.1, 10.0.0.2"
+  "dns_servers": "10.0.0.1, 10.0.0.2",
+  "dns_search_domains": "capita-ics.dmz.local, corp.example.com"
 }
 ```
 
@@ -340,6 +341,7 @@ Configure custom DNS servers for guacd containers. Validated DNS entries are sav
 |---|---|---|---|
 | `dns_enabled` | boolean | Yes | Enable or disable custom DNS configuration |
 | `dns_servers` | string | Yes | Comma-separated list of IPv4 DNS server addresses |
+| `dns_search_domains` | string | No | Comma-separated list of DNS search domains (max 6). Required for `.local` zones. Equivalent to `Domains=` in `systemd-resolved` or `search` in `resolv.conf` |
 
 **Response** `200 OK`
 ```json
@@ -351,7 +353,7 @@ Configure custom DNS servers for guacd containers. Validated DNS entries are sav
 ```
 
 **Errors:**
-- `400 Bad Request` — invalid IPv4 address in the DNS servers list
+- `400 Bad Request` — invalid IPv4 address or invalid domain name
 - `500 Internal Server Error` — failed to write `resolv.conf` to the shared volume
 
 ### Health

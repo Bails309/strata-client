@@ -218,10 +218,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/ad-sync-configs/:id/unmapped-accounts",
             get(admin::list_unmapped_accounts),
         )
-        .route(
-            "/api/admin/pm/test-rotation",
-            post(admin::test_rotation),
-        )
+        .route("/api/admin/pm/test-rotation", post(admin::test_rotation))
         .route(
             "/api/admin/checkout-requests",
             get(admin::list_checkout_requests),
@@ -314,10 +311,7 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::my_observe_session),
         )
         // ── Password checkout user routes ────────────────────────────
-        .route(
-            "/api/user/managed-accounts",
-            get(user::my_managed_accounts),
-        )
+        .route("/api/user/managed-accounts", get(user::my_managed_accounts))
         .route(
             "/api/user/checkouts",
             get(user::my_checkouts).post(user::request_checkout),
@@ -338,10 +332,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/user/checkouts/:id/checkin",
             post(user::checkin_checkout),
         )
-        .route(
-            "/api/user/pending-approvals",
-            get(user::pending_approvals),
-        )
+        .route("/api/user/pending-approvals", get(user::pending_approvals))
         .route(
             "/api/files/upload",
             post(files::upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),

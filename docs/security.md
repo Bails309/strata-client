@@ -372,10 +372,11 @@ The backend runs a background worker that TCP-probes every non-deleted connectio
 
 ### Input Validation
 
-The `PUT /api/admin/settings/dns` endpoint validates all DNS server entries before writing:
-- Each entry must be a valid IPv4 address (four octets, 0–255, no leading zeros)
+The `PUT /api/admin/settings/dns` endpoint validates all DNS entries before writing:
+- Each DNS server entry must be a valid IPv4 address (four octets, 0–255, no leading zeros)
+- Each search domain must be a valid DNS domain name (alphanumeric labels, hyphens allowed, no leading/trailing hyphens, max 253 characters total, max 6 domains)
 - Empty or whitespace-only entries are rejected
-- The validated IP list is written to `/app/config/resolv.conf` as `nameserver <ip>` lines
+- The validated entries are written to `/app/config/resolv.conf` as `search <domains>` and `nameserver <ip>` lines, with Docker's embedded DNS (`127.0.0.11`) appended as a fallback
 
 ### File System Isolation
 
@@ -383,10 +384,11 @@ The `resolv.conf` file is written to the `backend-config` Docker volume, which i
 - The backend controls DNS configuration via the shared volume
 - guacd cannot modify the source file (read-only mount)
 - The entrypoint runs as root only long enough to copy the file, then drops to the `guacd` user
+- Docker's embedded DNS is always preserved as a fallback to prevent breaking existing connections
 
 ### Audit Trail
 
-DNS configuration changes are logged as `dns.updated` in the append-only audit log, recording which admin made the change and the new DNS server list.
+DNS configuration changes are logged as `dns.updated` in the append-only audit log, recording which admin made the change, the new DNS server list, and the configured search domains.
 
 ---
 

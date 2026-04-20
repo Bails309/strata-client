@@ -218,13 +218,12 @@ pub async fn activate_checkout(
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
     // Load the checkout request
-    let req: CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1",
-    )
-    .bind(checkout_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+    let req: CheckoutRequest =
+        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
+            .bind(checkout_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
     if req.status != "Approved" && req.status != "Active" {
         return Err(AppError::Validation(format!(
@@ -233,22 +232,21 @@ pub async fn activate_checkout(
         )));
     }
 
-    let config_id = req.ad_sync_config_id.ok_or_else(|| {
-        AppError::Validation("Checkout has no associated AD sync config".into())
-    })?;
+    let config_id = req
+        .ad_sync_config_id
+        .ok_or_else(|| AppError::Validation("Checkout has no associated AD sync config".into()))?;
 
     // Load password policy and generate new password
     let policy = load_policy(pool, config_id).await?;
     let new_password = generate_password(&policy);
 
     // Load the AD sync config for LDAP credentials
-    let config: crate::services::ad_sync::AdSyncConfig = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs WHERE id = $1",
-    )
-    .bind(config_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    let config: crate::services::ad_sync::AdSyncConfig =
+        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
+            .bind(config_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
     // Push password to AD via LDAP modify
     let bind_dn = config
@@ -373,21 +371,20 @@ pub async fn checkin_checkout(
         )));
     }
 
-    let config_id = req.ad_sync_config_id.ok_or_else(|| {
-        AppError::Internal("Checkout has no AD sync config".into())
-    })?;
+    let config_id = req
+        .ad_sync_config_id
+        .ok_or_else(|| AppError::Internal("Checkout has no AD sync config".into()))?;
 
     // Generate a random password to scramble the account in AD
     let policy = load_policy(pool, config_id).await?;
     let scramble_password = generate_password(&policy);
 
-    let config: crate::services::ad_sync::AdSyncConfig = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs WHERE id = $1",
-    )
-    .bind(config_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    let config: crate::services::ad_sync::AdSyncConfig =
+        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
+            .bind(config_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
     let bind_dn = config
         .pm_bind_user
@@ -422,12 +419,10 @@ pub async fn checkin_checkout(
 
     // Expire the managed credential profile
     if let Some(profile_id) = req.vault_credential_id {
-        let _ = sqlx::query(
-            "UPDATE credential_profiles SET expires_at = now() WHERE id = $1",
-        )
-        .bind(profile_id)
-        .execute(pool)
-        .await;
+        let _ = sqlx::query("UPDATE credential_profiles SET expires_at = now() WHERE id = $1")
+            .bind(profile_id)
+            .execute(pool)
+            .await;
     }
 
     // Mark checkout as CheckedIn
@@ -440,7 +435,9 @@ pub async fn checkin_checkout(
 
     tracing::info!(
         "Checkout {} checked in by user {}, password scrambled for DN '{}'",
-        checkout_id, user_id, req.managed_ad_dn
+        checkout_id,
+        user_id,
+        req.managed_ad_dn
     );
 
     crate::services::audit::log(
@@ -464,13 +461,12 @@ pub async fn expire_checkout(
     _vault_cfg: &VaultConfig,
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
-    let req: CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1",
-    )
-    .bind(checkout_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+    let req: CheckoutRequest =
+        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
+            .bind(checkout_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
     if req.status != "Active" {
         return Ok(()); // Already expired or not active
@@ -494,13 +490,12 @@ pub async fn expire_checkout(
     let policy = load_policy(pool, config_id).await?;
     let orphan_password = generate_password(&policy);
 
-    let config: crate::services::ad_sync::AdSyncConfig = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs WHERE id = $1",
-    )
-    .bind(config_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    let config: crate::services::ad_sync::AdSyncConfig =
+        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
+            .bind(config_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
     let bind_dn = config
         .pm_bind_user
@@ -513,7 +508,8 @@ pub async fn expire_checkout(
         .filter(|s| !s.is_empty())
         .unwrap_or(&config.bind_password);
     // Decrypt vault-encrypted bind password
-    let bind_pw = crate::services::vault::unseal_setting(_vault_cfg, raw_pw).await
+    let bind_pw = crate::services::vault::unseal_setting(_vault_cfg, raw_pw)
+        .await
         .unwrap_or_else(|_| raw_pw.to_string());
 
     // Best-effort: push orphan password to AD
@@ -537,12 +533,10 @@ pub async fn expire_checkout(
 
     // Mark the credential profile as expired (don't delete — mapping stays intact)
     if let Some(profile_id) = req.vault_credential_id {
-        let _ = sqlx::query(
-            "UPDATE credential_profiles SET expires_at = now() WHERE id = $1",
-        )
-        .bind(profile_id)
-        .execute(pool)
-        .await;
+        let _ = sqlx::query("UPDATE credential_profiles SET expires_at = now() WHERE id = $1")
+            .bind(profile_id)
+            .execute(pool)
+            .await;
     }
 
     // Mark checkout as Expired
@@ -631,13 +625,22 @@ pub async fn ldap_reset_password(
         .success()
         .map_err(|e| AppError::Internal(format!("LDAP bind failed: {e}")))?;
 
-    tracing::info!("LDAP bind successful for DN '{}', resetting password for '{}'", bind_dn, target_dn);
+    tracing::info!(
+        "LDAP bind successful for DN '{}', resetting password for '{}'",
+        bind_dn,
+        target_dn
+    );
 
     // Check pwdLastSet BEFORE modify
     {
-        use ldap3::{SearchEntry, Scope};
+        use ldap3::{Scope, SearchEntry};
         let (rs, _result) = ldap
-            .search(target_dn, Scope::Base, "(objectClass=*)", vec!["pwdLastSet"])
+            .search(
+                target_dn,
+                Scope::Base,
+                "(objectClass=*)",
+                vec!["pwdLastSet"],
+            )
             .await
             .map_err(|e| AppError::Internal(format!("LDAP search pre-modify: {e}")))?
             .success()
@@ -645,7 +648,11 @@ pub async fn ldap_reset_password(
         if let Some(entry) = rs.into_iter().next() {
             let se = SearchEntry::construct(entry);
             let pwd_last_set = se.attrs.get("pwdLastSet").cloned().unwrap_or_default();
-            tracing::info!("PRE-MODIFY pwdLastSet for '{}': {:?}", target_dn, pwd_last_set);
+            tracing::info!(
+                "PRE-MODIFY pwdLastSet for '{}': {:?}",
+                target_dn,
+                pwd_last_set
+            );
         } else {
             tracing::warn!("PRE-MODIFY: no entry found for '{}'", target_dn);
         }
@@ -653,11 +660,16 @@ pub async fn ldap_reset_password(
 
     // AD requires unicodePwd as a quoted UTF-16LE encoded string
     let quoted = format!("\"{}\"", new_password);
-    let utf16le: Vec<u8> = quoted.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+    let utf16le: Vec<u8> = quoted
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
 
     tracing::info!(
         "Attempting unicodePwd modify for '{}': password_len={}, utf16le_len={}",
-        target_dn, new_password.len(), utf16le.len()
+        target_dn,
+        new_password.len(),
+        utf16le.len()
     );
 
     let mods = vec![Mod::Replace(
@@ -665,7 +677,8 @@ pub async fn ldap_reset_password(
         HashSet::from([utf16le.clone()]),
     )];
 
-    let modify_result = ldap.modify(target_dn, mods)
+    let modify_result = ldap
+        .modify(target_dn, mods)
         .await
         .map_err(|e| AppError::Internal(format!("LDAP modify: {e}")))?;
 
@@ -677,19 +690,23 @@ pub async fn ldap_reset_password(
         modify_result.refs
     );
 
-    modify_result.success()
-        .map_err(|e| {
-            AppError::Internal(format!(
-                "LDAP password reset failed for '{}': {e}",
-                target_dn
-            ))
-        })?;
+    modify_result.success().map_err(|e| {
+        AppError::Internal(format!(
+            "LDAP password reset failed for '{}': {e}",
+            target_dn
+        ))
+    })?;
 
     // Check pwdLastSet AFTER modify to verify
     {
-        use ldap3::{SearchEntry, Scope};
+        use ldap3::{Scope, SearchEntry};
         let (rs, _result) = ldap
-            .search(target_dn, Scope::Base, "(objectClass=*)", vec!["pwdLastSet"])
+            .search(
+                target_dn,
+                Scope::Base,
+                "(objectClass=*)",
+                vec!["pwdLastSet"],
+            )
             .await
             .map_err(|e| AppError::Internal(format!("LDAP search post-modify: {e}")))?
             .success()
@@ -697,7 +714,11 @@ pub async fn ldap_reset_password(
         if let Some(entry) = rs.into_iter().next() {
             let se = SearchEntry::construct(entry);
             let pwd_last_set = se.attrs.get("pwdLastSet").cloned().unwrap_or_default();
-            tracing::info!("POST-MODIFY pwdLastSet for '{}': {:?}", target_dn, pwd_last_set);
+            tracing::info!(
+                "POST-MODIFY pwdLastSet for '{}': {:?}",
+                target_dn,
+                pwd_last_set
+            );
         } else {
             tracing::warn!("POST-MODIFY: no entry found for '{}'", target_dn);
         }
@@ -725,7 +746,8 @@ pub async fn ldap_reset_password(
         Err(ref e) => {
             tracing::error!(
                 "VERIFICATION BIND ERROR for '{}': {} — password may NOT have changed!",
-                target_dn, e
+                target_dn,
+                e
             );
             return Err(AppError::Internal(format!(
                 "Password modify returned rc=0 but verification bind errored for '{}': {}",
@@ -744,9 +766,14 @@ pub async fn ldap_reset_password(
         .map_err(|e| AppError::Internal(format!("LDAP re-bind failed: {e}")))?;
 
     let sam_account_name = {
-        use ldap3::{SearchEntry, Scope};
+        use ldap3::{Scope, SearchEntry};
         let (rs, _) = ldap
-            .search(target_dn, Scope::Base, "(objectClass=*)", vec!["sAMAccountName"])
+            .search(
+                target_dn,
+                Scope::Base,
+                "(objectClass=*)",
+                vec!["sAMAccountName"],
+            )
             .await
             .map_err(|e| AppError::Internal(format!("LDAP sAMAccountName search: {e}")))?
             .success()
@@ -755,16 +782,24 @@ pub async fn ldap_reset_password(
             .next()
             .and_then(|entry| {
                 let se = SearchEntry::construct(entry);
-                se.attrs.get("sAMAccountName")
+                se.attrs
+                    .get("sAMAccountName")
                     .and_then(|v| v.first().cloned())
             })
             .unwrap_or_else(|| {
-                tracing::warn!("Could not read sAMAccountName for '{}', falling back to CN", target_dn);
+                tracing::warn!(
+                    "Could not read sAMAccountName for '{}', falling back to CN",
+                    target_dn
+                );
                 extract_cn_from_dn(target_dn)
             })
     };
 
-    tracing::info!("Password reset completed and VERIFIED for DN '{}', sAMAccountName='{}'", target_dn, sam_account_name);
+    tracing::info!(
+        "Password reset completed and VERIFIED for DN '{}', sAMAccountName='{}'",
+        target_dn,
+        sam_account_name
+    );
 
     let _ = ldap.unbind().await;
 
@@ -778,13 +813,12 @@ pub async fn auto_rotate_service_account(
     vault_cfg: &VaultConfig,
     config_id: Uuid,
 ) -> Result<(), AppError> {
-    let config: crate::services::ad_sync::AdSyncConfig = sqlx::query_as(
-        "SELECT * FROM ad_sync_configs WHERE id = $1",
-    )
-    .bind(config_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
+    let config: crate::services::ad_sync::AdSyncConfig =
+        sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
+            .bind(config_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
     if !config.pm_auto_rotate_enabled {
         return Ok(());
@@ -880,7 +914,10 @@ pub async fn auto_rotate_service_account(
 fn extract_cn_from_dn(dn: &str) -> String {
     dn.split(',')
         .next()
-        .and_then(|part| part.strip_prefix("CN=").or_else(|| part.strip_prefix("cn=")))
+        .and_then(|part| {
+            part.strip_prefix("CN=")
+                .or_else(|| part.strip_prefix("cn="))
+        })
         .unwrap_or(dn)
         .to_string()
 }

@@ -299,8 +299,16 @@ pub async fn ws_tunnel(
                 connection_id, managed_user
             );
             (
-                if managed_user.is_empty() { None } else { Some(managed_user) },
-                if managed_pass.is_empty() { None } else { Some(managed_pass) },
+                if managed_user.is_empty() {
+                    None
+                } else {
+                    Some(managed_user)
+                },
+                if managed_pass.is_empty() {
+                    None
+                } else {
+                    Some(managed_pass)
+                },
             )
         } else {
             // No active checkout — fall back to the user's own profile credentials
@@ -416,8 +424,16 @@ pub async fn ws_tunnel(
                     managed_user
                 );
                 (
-                    if managed_user.is_empty() { None } else { Some(managed_user) },
-                    if managed_pass.is_empty() { None } else { Some(managed_pass) },
+                    if managed_user.is_empty() {
+                        None
+                    } else {
+                        Some(managed_user)
+                    },
+                    if managed_pass.is_empty() {
+                        None
+                    } else {
+                        Some(managed_pass)
+                    },
                 )
             } else if let Some((enc_payload, enc_dek, nonce)) = own_cred {
                 // No active checkout — fall back to the profile's own credentials

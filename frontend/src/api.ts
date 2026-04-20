@@ -491,7 +491,7 @@ export const getPendingApprovals = () => request<CheckoutRequest[]>('/user/pendi
 export const updateVault = (data: { mode: string; address?: string; token?: string; transit_key?: string }) =>
   request('/admin/settings/vault', { method: 'PUT', body: JSON.stringify(data) });
 
-export const updateDns = (data: { dns_enabled: boolean; dns_servers: string }) =>
+export const updateDns = (data: { dns_enabled: boolean; dns_servers: string; dns_search_domains: string }) =>
   request<{ status: string; restart_required: boolean; message: string }>('/admin/settings/dns', { method: 'PUT', body: JSON.stringify(data) });
 
 export const updateRecordings = (data: {

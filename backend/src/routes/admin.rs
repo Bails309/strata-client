@@ -685,10 +685,11 @@ pub struct DnsUpdateRequest {
 /// Validate that a string looks like a valid IPv4 address.
 fn is_valid_ipv4(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
-    parts.len() == 4 && parts.iter().all(|p| {
-        // Must be a valid u8 and either "0" or not start with '0' (prevents leading zeros)
-        p.parse::<u8>().is_ok() && (p.len() == 1 || !p.starts_with('0'))
-    })
+    parts.len() == 4
+        && parts.iter().all(|p| {
+            // Must be a valid u8 and either "0" or not start with '0' (prevents leading zeros)
+            p.parse::<u8>().is_ok() && (p.len() == 1 || !p.starts_with('0'))
+        })
 }
 
 /// Validate that a string looks like a valid DNS domain name (labels separated by dots,

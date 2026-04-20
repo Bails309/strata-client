@@ -13,6 +13,61 @@ permissions:
   contents: read
 
 jobs:
+  # ── Secrets scanning ──────────────────────────────────────────────
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Database migration validation ─────────────────────────────────
+  migrations-check:
+    name: DB Migrations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strata
+          POSTGRES_PASSWORD: strata
+          POSTGRES_DB: strata
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strata"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,rustls --locked
+      - name: Apply all migrations
+        env:
+          DATABASE_URL: postgres://strata:strata@localhost:5432/strata
+        run: sqlx migrate run --source backend/migrations
+      - name: Verify no pending migrations
+        env:
+          DATABASE_URL: postgres://strata:strata@localhost:5432/strata
+        run: |
+          # Re-run should be a no-op. Capture output; fail if any "applied" lines appear.
+          OUT=$(sqlx migrate run --source backend/migrations)
+          echo "$OUT"
+          if echo "$OUT" | grep -i "applied"; then
+            echo "ERROR: migrations were not idempotent"
+            exit 1
+          fi
+
   # ── Backend: lint, check, test ────────────────────────────────────
   backend-check:
     name: Backend (Rust)

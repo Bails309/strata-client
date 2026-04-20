@@ -219,3 +219,201 @@ pub enum FileStoreError {
     #[error("I/O error: {0}")]
     Io(std::io::Error),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use tokio::io::AsyncWriteExt;
+
+    async fn make_store() -> (FileStore, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let store = FileStore::new(tmp.path().to_path_buf()).await;
+        (store, tmp)
+    }
+
+    /// Write `bytes` to a new temp file under `root` and return its path.
+    async fn make_temp_file(root: &Path, bytes: &[u8]) -> PathBuf {
+        let path = root.join(format!("src-{}", Uuid::new_v4()));
+        let mut f = tokio::fs::File::create(&path).await.unwrap();
+        f.write_all(bytes).await.unwrap();
+        f.flush().await.unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn store_and_get_roundtrip() {
+        let (store, tmp) = make_store().await;
+        let src = make_temp_file(tmp.path(), b"hello").await;
+        let user = Uuid::new_v4();
+
+        let meta = store
+            .store_from_path("sess-1", user, "hello.txt", "text/plain", &src, 5)
+            .await
+            .unwrap();
+
+        assert_eq!(meta.filename, "hello.txt");
+        assert_eq!(meta.session_id, "sess-1");
+        assert_eq!(meta.size, 5);
+        assert!(meta.path.exists());
+
+        let looked_up = store.get(&meta.token).await.expect("file missing");
+        assert_eq!(looked_up.token, meta.token);
+        assert_eq!(looked_up.user_id, user);
+
+        assert!(!src.exists(), "source temp file should be moved");
+    }
+
+    #[tokio::test]
+    async fn rejects_files_over_max_size() {
+        let (store, tmp) = make_store().await;
+        let src = make_temp_file(tmp.path(), b"x").await;
+
+        let err = store
+            .store_from_path(
+                "sess",
+                Uuid::new_v4(),
+                "big.bin",
+                "application/octet-stream",
+                &src,
+                MAX_FILE_SIZE + 1,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, FileStoreError::TooLarge));
+    }
+
+    #[tokio::test]
+    async fn enforces_per_session_file_limit() {
+        let (store, tmp) = make_store().await;
+        let user = Uuid::new_v4();
+
+        for i in 0..MAX_FILES_PER_SESSION {
+            let src = make_temp_file(tmp.path(), b"a").await;
+            store
+                .store_from_path("sess", user, &format!("f{i}.txt"), "text/plain", &src, 1)
+                .await
+                .unwrap();
+        }
+
+        let src = make_temp_file(tmp.path(), b"a").await;
+        let err = store
+            .store_from_path("sess", user, "overflow.txt", "text/plain", &src, 1)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, FileStoreError::TooManyFiles));
+    }
+
+    #[tokio::test]
+    async fn sanitises_path_traversal_filename() {
+        let (store, tmp) = make_store().await;
+        let src = make_temp_file(tmp.path(), b"x").await;
+
+        let meta = store
+            .store_from_path(
+                "sess",
+                Uuid::new_v4(),
+                "../../etc/passwd",
+                "text/plain",
+                &src,
+                1,
+            )
+            .await
+            .unwrap();
+
+        // file_name() strips the traversal — only the basename survives.
+        assert_eq!(meta.filename, "passwd");
+        // Stored path must be inside the store root.
+        let root = tmp.path().canonicalize().unwrap();
+        let stored = meta.path.canonicalize().unwrap();
+        assert!(stored.starts_with(&root), "stored path escaped root");
+    }
+
+    #[tokio::test]
+    async fn list_session_returns_all_files_for_session_only() {
+        let (store, tmp) = make_store().await;
+        let user = Uuid::new_v4();
+
+        for n in 0..3 {
+            let src = make_temp_file(tmp.path(), b"x").await;
+            store
+                .store_from_path("sess-A", user, &format!("a{n}.txt"), "text/plain", &src, 1)
+                .await
+                .unwrap();
+        }
+        let src = make_temp_file(tmp.path(), b"x").await;
+        store
+            .store_from_path("sess-B", user, "b.txt", "text/plain", &src, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(store.list_session("sess-A").await.len(), 3);
+        assert_eq!(store.list_session("sess-B").await.len(), 1);
+        assert_eq!(store.list_session("sess-unknown").await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_file_and_disk_dir() {
+        let (store, tmp) = make_store().await;
+        let src = make_temp_file(tmp.path(), b"bye").await;
+
+        let meta = store
+            .store_from_path("sess", Uuid::new_v4(), "bye.txt", "text/plain", &src, 3)
+            .await
+            .unwrap();
+
+        let parent = meta.path.parent().unwrap().to_path_buf();
+        assert!(parent.exists());
+
+        assert!(store.delete(&meta.token).await);
+        assert!(store.get(&meta.token).await.is_none());
+        assert!(!parent.exists(), "on-disk directory should be removed");
+
+        // Deleting the same token again returns false.
+        assert!(!store.delete(&meta.token).await);
+        // Session index should be empty now.
+        assert!(store.list_session("sess").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleanup_session_purges_all_files_for_session() {
+        let (store, tmp) = make_store().await;
+        let user = Uuid::new_v4();
+
+        let mut parents = Vec::new();
+        for n in 0..4 {
+            let src = make_temp_file(tmp.path(), b"x").await;
+            let m = store
+                .store_from_path("sess-A", user, &format!("a{n}.txt"), "text/plain", &src, 1)
+                .await
+                .unwrap();
+            parents.push(m.path.parent().unwrap().to_path_buf());
+        }
+        let src = make_temp_file(tmp.path(), b"x").await;
+        let other = store
+            .store_from_path("sess-B", user, "b.txt", "text/plain", &src, 1)
+            .await
+            .unwrap();
+
+        let removed = store.cleanup_session("sess-A").await;
+        assert_eq!(removed, 4);
+        for p in &parents {
+            assert!(!p.exists(), "sess-A dir should be removed");
+        }
+        // sess-B is untouched.
+        assert!(store.get(&other.token).await.is_some());
+        assert_eq!(store.list_session("sess-B").await.len(), 1);
+
+        // Cleaning an unknown session returns 0.
+        assert_eq!(store.cleanup_session("sess-none").await, 0);
+    }
+
+    #[tokio::test]
+    async fn unknown_token_lookup_returns_none() {
+        let (store, _tmp) = make_store().await;
+        assert!(store.get("not-a-real-token").await.is_none());
+        assert!(!store.delete("not-a-real-token").await);
+    }
+}

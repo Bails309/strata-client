@@ -4996,6 +4996,17 @@ function DisplayTab({ settings, onSave }: { settings: Record<string, string>; on
 
 // ── Password Management Tab ────────────────────────────────────────────
 
+function parseDN(dn: string): string {
+  if (!dn) return '—';
+  const cnMatch = dn.match(/(?:^|,)CN=((?:\\.|[^,])+)/i);
+  const cn = cnMatch ? cnMatch[1].replace(/\\(.)/g, '$1') : 'Unknown';
+  
+  const dcMatches = [...dn.matchAll(/DC=([^,]+)/gi)];
+  const domain = dcMatches.map(m => m[1]).join('.');
+  
+  return domain ? `${domain}\\${cn}` : cn;
+}
+
 function PasswordsTab({
   users,
   adSyncConfigs,
@@ -5608,7 +5619,7 @@ function PasswordsTab({
                 {requests.map((r) => (
                   <tr key={r.id} className="border-b border-border/5">
                     <td className="py-1">
-                      <div className="text-sm font-medium">{r.friendly_name || '—'}</div>
+                      <div className="text-sm font-medium">{r.friendly_name || parseDN(r.managed_ad_dn)}</div>
                       <div className="text-[10px] text-txt-tertiary font-mono truncate max-w-[200px]" title={r.managed_ad_dn}>{r.managed_ad_dn}</div>
                     </td>
                     <td className="py-1">

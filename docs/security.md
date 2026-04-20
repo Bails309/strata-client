@@ -311,6 +311,32 @@ The Password Management service account (either the AD Sync bind account or the 
 
 #### Delegating Permissions for Standard User Accounts
 
+##### Option 1: Automated Delegation (PowerShell)
+
+For rapid deployment, use the following PowerShell script. Run this from a machine with Active Directory Administrative Tools installed, using an account with Domain Admin or equivalent permissions.
+
+```powershell
+# --- Configuration ---
+$ServiceAccount = "YOURDOMAIN\strata-pm-svc"     # The Strata PM service account
+$TargetDN = "OU=ManagedAccounts,DC=corp,DC=com"  # The OU containing accounts to manage
+# ---------------------
+
+Write-Host "Delegating Password Management permissions on $TargetDN to $ServiceAccount..." -ForegroundColor Cyan
+
+# 1. Reset Password (Extended Right)
+dsacls $TargetDN /I:S /G "$($ServiceAccount):CA;Reset Password;user"
+
+# 2. Read/Write account restrictions (Property Set)
+dsacls $TargetDN /I:S /G "$($ServiceAccount):RPWP;account restrictions;user"
+
+# 3. Read/Write lockoutTime (Individual Property)
+dsacls $TargetDN /I:S /G "$($ServiceAccount):RPWP;lockoutTime;user"
+
+Write-Host "Delegation complete." -ForegroundColor Green
+```
+
+##### Option 2: Manual Delegation (GUI)
+
 Use the Active Directory Delegation of Control Wizard:
 
 1. Open **Active Directory Users & Computers** (ADUC)

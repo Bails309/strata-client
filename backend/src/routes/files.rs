@@ -326,12 +326,13 @@ pub async fn delete_file(
 mod tests {
     use super::*;
     use crate::services::file_store::StoredFile;
-    use chrono::{TimeZone, Utc};
+    use chrono::Utc;
     use std::path::PathBuf;
+    use uuid::Uuid;
 
     #[test]
     fn file_list_entry_from_stored_file() {
-        let now = Utc.with_yml_md_hms(2026, 4, 20, 10, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 4, 20, 10, 0, 0).unwrap();
         let f = StoredFile {
             token: "abc-123".into(),
             session_id: "sess-456".into(),
@@ -341,7 +342,6 @@ mod tests {
             path: PathBuf::from("/tmp/test.txt"),
             size: 1024,
             created_at: now,
-            expires_at: now,
         };
 
         let entry = FileListEntry::from(&f);

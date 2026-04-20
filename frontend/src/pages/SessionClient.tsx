@@ -700,9 +700,13 @@ export default function SessionClient() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         e.stopImmediatePropagation();
+        // Flush any keys currently held down (typically Ctrl/Meta) to the
+        // remote BEFORE flipping the guard — otherwise the keyup events
+        // raised by kb.reset() are dropped and the modifier stays stuck
+        // on the server after the palette closes.
+        kb.reset();
         setCommandPaletteOpen(true);
         commandPaletteOpenRef.current = true;
-        kb.reset();
         return;
       }
       // While command palette is open, don't trap keys — let it handle them
@@ -724,9 +728,11 @@ export default function SessionClient() {
     // Listen for Ctrl+K relay from popout/multi-monitor windows
     const handlePaletteMessage = (e: MessageEvent) => {
       if (e.data?.type === 'strata:open-command-palette') {
+        // Release any held keys on the server BEFORE flipping the guard
+        // so the generated keyup events are not swallowed.
+        kb.reset();
         setCommandPaletteOpen(true);
         commandPaletteOpenRef.current = true;
-        kb.reset();
       }
     };
     window.addEventListener('message', handlePaletteMessage);

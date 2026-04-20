@@ -757,7 +757,7 @@ pub async fn ldap_reset_password(
     }
 
     // Query the actual sAMAccountName so callers can use the real login name
-    // (the CN from the DN may be a display name like "Bailey, Matt (Tier 1)")
+    // (the CN from the DN may be a display name like "Doe, John (Support)")
     // Re-bind as the service account since we just bound as the target user
     ldap.simple_bind(bind_dn, bind_password)
         .await
@@ -1111,7 +1111,10 @@ mod tests {
             extract_cn_from_dn("cn=svc-account,OU=ServiceAccounts,DC=corp,DC=net"),
             "svc-account"
         );
-        assert_eq!(extract_cn_from_dn("CN=Bailey\\, Matt,OU=Tier 1,DC=strata,DC=io"), "Bailey\\, Matt");
+        assert_eq!(
+            extract_cn_from_dn("CN=Doe\\, John,OU=Support,DC=example,DC=com"),
+            "Doe\\, John"
+        );
         assert_eq!(extract_cn_from_dn("some-other-format"), "some-other-format");
         assert_eq!(extract_cn_from_dn(""), "");
     }

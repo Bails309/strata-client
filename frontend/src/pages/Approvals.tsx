@@ -133,7 +133,7 @@ export default function Approvals({ user: _user }: { user: MeResponse }) {
                 <div className="flex gap-2 pt-2"
                      style={{ borderTop: '1px solid var(--color-glass-border)' }}>
                   <button
-                    className="btn btn-sm btn-primary"
+                    className="btn btn-sm btn-success"
                     disabled={deciding === p.id}
                     onClick={() => handleDecide(p.id, true)}
                   >

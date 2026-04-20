@@ -436,6 +436,22 @@ html.light .recent-card-btn:hover {
     @apply opacity-40 cursor-not-allowed;
   }
 
+  .btn-success {
+    @apply cursor-pointer rounded-sm text-[0.8125rem] font-medium relative overflow-hidden transition-all duration-150 text-white;
+    padding: 0.55rem 1.15rem;
+    font-family: inherit;
+    letter-spacing: -0.005em;
+    background: var(--color-success);
+    border: 1px solid transparent;
+  }
+  .btn-success:hover {
+    opacity: 0.9;
+  }
+  .btn-success:active { opacity: 0.85; }
+  .btn-success:disabled {
+    @apply opacity-40 cursor-not-allowed;
+  }
+
   .btn-sm {
     @apply cursor-pointer rounded-sm font-medium relative overflow-hidden transition-all duration-150 inline-flex items-center gap-1;
     padding: 0.3rem 0.75rem;

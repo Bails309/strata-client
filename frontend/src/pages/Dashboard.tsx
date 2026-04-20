@@ -217,6 +217,28 @@ export default function Dashboard() {
     });
   }, []);
 
+  // ── Checkout Status Helpers ──
+
+  /** Detect if an Approved/Pending checkout is stale (created_at + duration has passed) */
+  const isCheckoutStale = useCallback((c: CheckoutRequest) => {
+    if (c.status !== 'Approved' && c.status !== 'Pending') return false;
+    const deadline = new Date(c.created_at).getTime() + c.requested_duration_mins * 60000;
+    return Date.now() > deadline;
+  }, []);
+
+  /** Detect if a checkout is effectively expired (status Expired, stale, or Active past expires_at) */
+  const isCheckoutExpired = useCallback((c: CheckoutRequest) => {
+    if (c.status === 'Expired' || c.status === 'Denied' || c.status === 'CheckedIn') return true;
+    if (isCheckoutStale(c)) return true;
+    if (c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() <= Date.now()) return true;
+    return false;
+  }, [isCheckoutStale]);
+
+  /** Is this checkout truly active (Active status AND not past expires_at) */
+  const isCheckoutLive = useCallback((c: CheckoutRequest) => {
+    return c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() > Date.now();
+  }, []);
+
   // The visible connections: folder view shows all filtered, flat view shows paged slice
   const visibleConnections = folderView ? filtered : paged;
 
@@ -434,8 +456,16 @@ export default function Dashboard() {
     if (!profileId) return 'none';
     const profile = credProfiles.find((p) => p.id === profileId);
     if (!profile) return 'none';
-    return profile.expired ? 'expired' : 'active';
-  }, [connProfileMap, credProfiles]);
+    if (profile.expired) return 'expired';
+
+    // If linked to a checkout, that checkout must be live
+    if (profile.checkout_id) {
+      const checkout = allCheckouts.find(c => c.id === profile.checkout_id);
+      if (checkout && !isCheckoutLive(checkout)) return 'expired';
+    }
+
+    return 'active';
+  }, [connProfileMap, credProfiles, allCheckouts, isCheckoutLive]);
 
   return (
     <div>
@@ -668,6 +698,7 @@ export default function Dashboard() {
                     onToggleFavorite={handleToggleFavorite}
                     vaultConfigured={vaultConfigured}
                     credProfiles={filteredProfiles}
+                    allCheckouts={allCheckouts}
                     connProfileMap={connProfileMap}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
@@ -692,6 +723,7 @@ export default function Dashboard() {
                     onToggleFavorite={handleToggleFavorite}
                     vaultConfigured={vaultConfigured}
                     credProfiles={filteredProfiles}
+                    allCheckouts={allCheckouts}
                     connProfileMap={connProfileMap}
                     onProfileChange={handleProfileChange}
                     navigate={navigate}
@@ -714,6 +746,7 @@ export default function Dashboard() {
                   onToggleFavorite={() => handleToggleFavorite(conn.id)}
                   vaultConfigured={vaultConfigured}
                   credProfiles={filteredProfiles}
+                  allCheckouts={allCheckouts}
                   assignedProfileId={connProfileMap[conn.id] || ''}
                   onProfileChange={handleProfileChange}
                   onConnect={() => navigate(`/session/${conn.id}`)}
@@ -883,7 +916,7 @@ export default function Dashboard() {
 
 // ── Connection Row Component ────────────────────────────────────────
 
-function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFavorite, vaultConfigured, credProfiles, assignedProfileId, onProfileChange, onConnect, tags, connTagIds, onSetTags, onCreateTag, adminTagIds }: {
+function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFavorite, vaultConfigured, credProfiles, allCheckouts, assignedProfileId, onProfileChange, onConnect, tags, connTagIds, onSetTags, onCreateTag, adminTagIds }: {
   conn: Connection;
   checked: boolean;
   onToggleChecked: () => void;
@@ -891,6 +924,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
   onToggleFavorite: () => void;
   vaultConfigured: boolean;
   credProfiles: CredentialProfile[];
+  allCheckouts: CheckoutRequest[];
   assignedProfileId: string;
   onProfileChange: (connectionId: string, profileId: string) => void;
   onConnect: () => void;
@@ -906,6 +940,18 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
     const [newTagName, setNewTagName] = useState('');
     const tagMenuRef = useRef<HTMLDivElement>(null);
 
+    /** Detect if an Approved/Pending checkout is stale (created_at + duration has passed) */
+    const isCheckoutStale = useCallback((c: CheckoutRequest) => {
+      if (c.status !== 'Approved' && c.status !== 'Pending') return false;
+      const deadline = new Date(c.created_at).getTime() + c.requested_duration_mins * 60000;
+      return Date.now() > deadline;
+    }, []);
+
+    /** Is this checkout truly active (Active status AND not past expires_at) */
+    const isCheckoutLive = useCallback((c: CheckoutRequest) => {
+      return c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() > Date.now();
+    }, []);
+
     useEffect(() => {
       if (!showTagMenu) return;
       const handler = (e: MouseEvent) => {
@@ -918,8 +964,14 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
     const status: 'active' | 'expired' | 'none' = useMemo(() => {
       const profile = credProfiles.find(p => p.id === assignedProfileId);
       if (!profile) return 'none';
-      return profile.expired ? 'expired' : 'active';
-    }, [credProfiles, assignedProfileId]);
+      if (profile.expired) return 'expired';
+
+      if (profile.checkout_id) {
+        const checkout = allCheckouts.find(c => c.id === profile.checkout_id);
+        if (checkout && !isCheckoutLive(checkout)) return 'expired';
+      }
+      return 'active';
+    }, [credProfiles, assignedProfileId, allCheckouts, isCheckoutLive]);
 
     const connTags = useMemo(() => tags.filter(t => connTagIds.includes(t.id)), [tags, connTagIds]);
 
@@ -1103,7 +1155,7 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
 
 // ── Connection Folder Rows ───────────────────────────────────────────
 
-function ConnectionFolderRows({ folderId: _fid, folderName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, connProfileMap, onProfileChange, navigate, tags, connTagMap, onSetConnectionTags, onCreateTag, adminTagIds }: {
+function ConnectionFolderRows({ folderId: _fid, folderName, connections, collapsed, onToggleCollapse, checked, toggleChecked, favorites, onToggleFavorite, vaultConfigured, credProfiles, allCheckouts, connProfileMap, onProfileChange, navigate, tags, connTagMap, onSetConnectionTags, onCreateTag, adminTagIds }: {
   folderId: string;
   folderName: string;
   connections: Connection[];
@@ -1115,6 +1167,7 @@ function ConnectionFolderRows({ folderId: _fid, folderName, connections, collaps
   onToggleFavorite: (id: string) => void;
   vaultConfigured: boolean;
   credProfiles: CredentialProfile[];
+  allCheckouts: CheckoutRequest[];
   connProfileMap: Record<string, string>;
   onProfileChange: (connectionId: string, profileId: string) => void;
   navigate: (path: string) => void;
@@ -1154,6 +1207,7 @@ function ConnectionFolderRows({ folderId: _fid, folderName, connections, collaps
           onToggleFavorite={() => onToggleFavorite(conn.id)}
           vaultConfigured={vaultConfigured}
           credProfiles={credProfiles}
+          allCheckouts={allCheckouts}
           assignedProfileId={connProfileMap[conn.id] || ''}
           onProfileChange={onProfileChange}
           onConnect={() => navigate(`/session/${conn.id}`)}

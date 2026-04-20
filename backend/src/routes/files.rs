@@ -321,3 +321,56 @@ pub async fn delete_file(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::file_store::StoredFile;
+    use chrono::{TimeZone, Utc};
+    use std::path::PathBuf;
+
+    #[test]
+    fn file_list_entry_from_stored_file() {
+        let now = Utc.with_yml_md_hms(2026, 4, 20, 10, 0, 0).unwrap();
+        let f = StoredFile {
+            token: "abc-123".into(),
+            session_id: "sess-456".into(),
+            user_id: Uuid::new_v4(),
+            filename: "test.txt".into(),
+            content_type: "text/plain".into(),
+            path: PathBuf::from("/tmp/test.txt"),
+            size: 1024,
+            created_at: now,
+            expires_at: now,
+        };
+
+        let entry = FileListEntry::from(&f);
+        assert_eq!(entry.token, "abc-123");
+        assert_eq!(entry.filename, "test.txt");
+        assert_eq!(entry.size, 1024);
+        assert_eq!(entry.content_type, "text/plain");
+        assert_eq!(entry.download_url, "/api/files/abc-123");
+        assert_eq!(entry.created_at, "2026-04-20T10:00:00+00:00");
+    }
+
+    #[test]
+    fn file_upload_response_serialization() {
+        let resp = FileUploadResponse {
+            token: "t".into(),
+            filename: "f".into(),
+            size: 100,
+            content_type: "c".into(),
+            download_url: "d".into(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["token"], "t");
+        assert_eq!(json["filename"], "f");
+    }
+
+    #[test]
+    fn file_rate_limit_constants() {
+        assert_eq!(MAX_DOWNLOADS_PER_IP, 60);
+        assert_eq!(DOWNLOAD_WINDOW_SECS, 60);
+        assert!(MAX_DOWNLOAD_RATE_ENTRIES > 0);
+    }
+}

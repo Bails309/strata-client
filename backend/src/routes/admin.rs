@@ -5268,6 +5268,26 @@ mod tests {
         assert!(is_safe_hostname("myhost:8080"));
     }
 
+    #[test]
+    fn is_safe_hostname_rejects_injection() {
+        assert!(!is_safe_hostname("host; rm -rf /"));
+        assert!(!is_safe_hostname("host$(id)"));
+        assert!(!is_safe_hostname("host`id`"));
+    }
+
+    #[test]
+    fn is_safe_hostname_rejects_null_bytes() {
+        assert!(!is_safe_hostname("host\0name"));
+    }
+
+    #[test]
+    fn is_safe_hostname_valid_cases_expanded() {
+        assert!(is_safe_hostname("a-b.c_d")); // underscores allowed in some contexts
+        assert!(is_safe_hostname("123.456"));
+        assert!(is_safe_hostname("localhost"));
+        assert!(is_safe_hostname("A.B.C"));
+    }
+
     // ── redact_settings (additional coverage) ──────────────────────────
 
     #[test]
@@ -5778,6 +5798,10 @@ mod tests {
         assert!(!is_valid_ipv4("127.0.0.1.1"));
         assert!(!is_valid_ipv4("abc.def.ghi.jkl"));
         assert!(!is_valid_ipv4(""));
+        // Boundary cases
+        assert!(!is_valid_ipv4("127.0.0.01")); // leading zero
+        assert!(!is_valid_ipv4(" 127.0.0.1")); // leading space
+        assert!(!is_valid_ipv4("127.0.0.1 ")); // trailing space
     }
 
     // ── is_valid_domain ────────────────────────────────────────────

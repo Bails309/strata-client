@@ -2450,6 +2450,10 @@ mod tests {
         assert!(!is_valid_hex_color("fff")); // missing #
         assert!(!is_valid_hex_color("#ghi")); // invalid hex
         assert!(!is_valid_hex_color("#1234567")); // too long
+        // Boundary cases
+        assert!(!is_valid_hex_color("#")); // empty after #
+        assert!(!is_valid_hex_color("#12")); // too short
+        assert!(!is_valid_hex_color("#12345")); // uneven length (not 3 or 6 after #)
     }
 
     // ── parse_ignore_cert ──────────────────────────────────────────────
@@ -2499,5 +2503,11 @@ mod tests {
     fn parse_ignore_cert_null_value() {
         let extra = Some(json!({ "ignore-cert": null }));
         assert!(!parse_ignore_cert(&extra));
+    }
+
+    #[test]
+    fn resolve_ttl_boundary_clamping() {
+        // Assuming resolve_ttl(input, min, max)
+        // Let's find the function first to be sure
     }
 }

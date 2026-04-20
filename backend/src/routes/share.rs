@@ -407,7 +407,7 @@ mod tests {
     fn rate_limit_constants() {
         assert_eq!(MAX_SHARE_ATTEMPTS, 10);
         assert_eq!(SHARE_WINDOW_SECS, 60);
-        const { assert!(MAX_SHARE_RATE_ENTRIES >= 1000) };
+        assert_eq!(MAX_SHARE_RATE_ENTRIES, 10_000);
     }
 
     #[test]

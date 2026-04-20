@@ -173,6 +173,35 @@ mod tests {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    // ── into_response additional branches ────────────────────────────
+
+    #[test]
+    fn into_response_exercises_all_logging_arms() {
+        // These tests trigger the tracing::error! branches in into_response.
+        // We catch the StatusCode to ensure the match logic is correct.
+        
+        // Database
+        let (s, _) = error_response(AppError::Database(sqlx::Error::RowNotFound));
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Config
+        let (s, _) = error_response(AppError::Config("bad value".into()));
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+
+        // Vault
+        let (s, _) = error_response(AppError::Vault("unsealed".into()));
+        assert_eq!(s, StatusCode::BAD_GATEWAY);
+
+        // Reqwest
+        let req_err = reqwest::Client::new().get("not-a-url").build().unwrap_err();
+        let (s, _) = error_response(AppError::Reqwest(req_err));
+        assert_eq!(s, StatusCode::BAD_GATEWAY);
+
+        // Internal
+        let (s, _) = error_response(AppError::Internal("stack trace".into()));
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     #[test]
     fn anyhow_converts_to_internal() {
         let err: AppError = anyhow::anyhow!("something went wrong").into();

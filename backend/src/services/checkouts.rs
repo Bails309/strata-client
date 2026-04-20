@@ -698,18 +698,18 @@ pub async fn ldap_reset_password(
 
         // ── Enhanced Diagnostics for Insufficient Access (rc=50) ──
         if modify_result.rc == 50 {
-            use ldap3::controls::Control;
+            use ldap3::controls::RawControl;
             use ldap3::{Scope, SearchEntry};
             
             // Query adminCount and nTSecurityDescriptor to pinpoint why access is denied.
             // OID for LDAP_SERVER_SD_FLAGS_OID is 1.2.840.113556.1.4.801
             // BER for Integer 7 (Owner+Group+DACL) is 02 01 07
-            let sd_flags_control = Control {
+            let sd_flags_control = RawControl {
                 ctype: "1.2.840.113556.1.4.801".to_string(),
-                critical: false,
+                crit: false,
                 val: Some(vec![0x02, 0x01, 0x07]),
             };
-
+            
             let diag_search = ldap
                 .with_controls(vec![sd_flags_control])
                 .search(

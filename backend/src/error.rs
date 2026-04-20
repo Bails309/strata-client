@@ -179,7 +179,7 @@ mod tests {
     fn into_response_exercises_all_logging_arms() {
         // These tests trigger the tracing::error! branches in into_response.
         // We catch the StatusCode to ensure the match logic is correct.
-        
+
         // Database
         let (s, _) = error_response(AppError::Database(sqlx::Error::RowNotFound));
         assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);

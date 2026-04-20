@@ -2450,7 +2450,7 @@ mod tests {
         assert!(!is_valid_hex_color("fff")); // missing #
         assert!(!is_valid_hex_color("#ghi")); // invalid hex
         assert!(!is_valid_hex_color("#1234567")); // too long
-        // Boundary cases
+                                                  // Boundary cases
         assert!(!is_valid_hex_color("#")); // empty after #
         assert!(!is_valid_hex_color("#12")); // too short
         assert!(!is_valid_hex_color("#12345")); // uneven length (not 3 or 6 after #)

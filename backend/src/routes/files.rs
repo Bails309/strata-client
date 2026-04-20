@@ -371,6 +371,6 @@ mod tests {
     fn file_rate_limit_constants() {
         assert_eq!(MAX_DOWNLOADS_PER_IP, 60);
         assert_eq!(DOWNLOAD_WINDOW_SECS, 60);
-        assert!(MAX_DOWNLOAD_RATE_ENTRIES > 0);
+        const { assert!(MAX_DOWNLOAD_RATE_ENTRIES > 0) };
     }
 }

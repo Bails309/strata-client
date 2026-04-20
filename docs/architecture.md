@@ -197,11 +197,11 @@ Browser                    Backend                   guacd              Target
 system_settings ──── key/value config store
 users ──────────────── OIDC subject, username, role FK
 roles ──────────────── granular permissions (can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_view_sessions, etc.)
-connections ──────── target host, protocol, port, domain, description, group FK, ad_source FK
+connections ──────── target host, protocol, port, domain, description, group FK, ad_source FK, health_status, health_checked_at
 connection_groups ── folder hierarchy with parent_id self-reference
 role_connections ──── many-to-many role ↔ connection
 user_credentials ──── encrypted password + DEK + nonce per user/connection
-credential_profiles ─ saved credential profiles with optional TTL expiry
+credential_profiles ─ saved credential profiles with optional TTL expiry and optional checkout_id link to password management
 user_favorites ────── user ↔ connection favorites (composite PK)
 connection_shares ── temporary share links with mode (view/control); viewers observe via NVR broadcast
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
@@ -213,10 +213,10 @@ approval_roles ──── named approval roles for password management
 approval_role_assignments ── many-to-many user ↔ approval role
 approval_role_accounts ──── explicit scope: approval role ↔ managed AD account DN
 user_account_mappings ───── user ↔ managed AD account (with self-approve flag)
-password_checkout_requests ─ checkout lifecycle tracking (status, timestamps, Vault-sealed password)
+password_checkout_requests ─ checkout lifecycle tracking (Pending/Approved/Active/Expired/Denied/CheckedIn, timestamps, Vault-sealed password)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `047_dns_search_domains.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `048_connection_health_repair.sql` for the full DDL.
 
 ## Directory Structure
 
@@ -250,6 +250,7 @@ strata-client/
 │           ├── auth.rs        OIDC token validation
 │           ├── checkouts.rs   Password checkout lifecycle + rotation workers
 │           ├── guacd_pool.rs  Round-robin guacd pool
+│           ├── health_check.rs  Background TCP health probes for connections
 │           ├── kerberos.rs    Multi-realm krb5.conf generation
 │           ├── middleware.rs   JWT auth + admin middleware
 │           ├── recordings.rs  Recording config

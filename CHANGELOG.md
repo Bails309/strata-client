@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] — 2026-04-20
+
+### Added
+- **Connection Health Checks**: Background TCP probing of every connection's hostname:port every 2 minutes with a 5-second connect timeout. Results (online/offline/unknown) are persisted in the database and exposed via the connections API. Dashboard displays green/red/gray status dots next to each connection for at-a-glance operational visibility without requiring agents on target machines.
+- **Checked-In Status for Password Checkouts**: Users can now voluntarily check-in (return) an active password checkout before its expiry. Adds `CheckedIn` to the `password_checkout_requests` status enum, triggering immediate password rotation on check-in.
+- **Credential Profile ↔ Checkout Link**: Credential profiles can now reference a `checkout_id` linking them to the password checkout they were generated from. Enables automatic cleanup and traceability between vault profiles and PM checkouts.
+
+### Fixed
+- **Migration Resilience (048)**: Added idempotent repair migration `048_connection_health_repair.sql` to safely add `health_status` and `health_checked_at` columns on environments where migration 042 was recorded as applied but the DDL did not take effect. Uses `IF NOT EXISTS` for columns and `pg_constraint` checks for the CHECK constraint.
+
+### Database
+- **Migration 042**: Adds `health_status` (TEXT, NOT NULL, DEFAULT 'unknown', CHECK constraint) and `health_checked_at` (TIMESTAMPTZ) columns to `connections` table.
+- **Migration 043**: Adds `checkout_id` FK column to `credential_profiles`; relaxes `encrypted_username` NOT NULL constraint for managed credential profiles.
+- **Migration 044**: Extends `password_checkout_requests` status CHECK constraint to include `CheckedIn`.
+- **Migration 048**: Idempotent repair — ensures health columns and constraint exist regardless of prior migration state.
+
 ## [0.19.1] — 2026-04-20
 
 ### Added

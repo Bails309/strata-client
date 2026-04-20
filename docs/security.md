@@ -263,6 +263,7 @@ Password checkouts follow a strict lifecycle:
 2. **Approval** — an authorized approver reviews and approves/denies the request. Approvers can only see and act on requests for managed accounts explicitly assigned to their approval role via the `approval_role_accounts` table. The approver's user ID is recorded as `approved_by_user_id` on the request, and the `requester_username` is resolved via JOIN for display
 3. **Activation** — on approval, a new password is generated, the AD account password is reset via LDAP `unicodePwd` modify, and the new password is sealed in Vault
 4. **Expiry** — a background worker sweeps every 60 seconds and expires checkouts past their TTL (computed from approval time). On expiry, the password is rotated again so the checked-out password is no longer valid
+5. **Check-In** — users can voluntarily return an active checkout before expiry via a "Check In" action. Check-in immediately sets the status to `CheckedIn` and triggers password rotation, invalidating the previously issued credentials
 
 ### Approval Role Account Scoping
 
@@ -365,6 +366,18 @@ If any permission is missing, the service account will receive an LDAP error whe
 ## Connection Health Checks
 
 The backend runs a background worker that TCP-probes every non-deleted connection's `hostname:port` every 2 minutes. Each probe uses a 5-second connect timeout. Results are stored as `health_status` (online/offline/unknown) and `health_checked_at` in the connections table. Health checks run concurrently across all connections using `tokio::spawn` tasks. This feature provides operational visibility without requiring agents on target machines.
+
+---
+
+## Connection Health Checks
+
+The backend runs a background worker that TCP-probes every non-deleted connection's `hostname:port` every 2 minutes. Each probe uses a 5-second connect timeout. Results are stored as `health_status` (online/offline/unknown) and `health_checked_at` in the connections table. Health checks run concurrently across all connections using `tokio::spawn` tasks. This feature provides operational visibility without requiring agents on target machines.
+
+**Security properties:**
+- Health checks use TCP connect only — no authentication data is transmitted during probes
+- Results are exposed only to authenticated users who already have access to the connection via their role mapping
+- The background worker runs within the backend process and cannot be triggered externally
+- Probe intervals and timeouts are fixed (2 minutes / 5 seconds) and not user-configurable, preventing abuse
 
 ---
 

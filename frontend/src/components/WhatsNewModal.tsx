@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.19.2',
+    subtitle: 'Connection Health Checks, Check-In & Migration Resilience',
+    sections: [
+      {
+        title: 'Connection Health Checks',
+        description:
+          'Background TCP probing of every connection\'s hostname:port every 2 minutes with a 5-second timeout. The Dashboard now displays green/red/gray status dots (online/offline/unknown) next to each connection for at-a-glance operational visibility — no agents required on target machines.',
+      },
+      {
+        title: 'Voluntary Checkout Check-In',
+        description:
+          'Users can now check-in (return) an active password checkout before it expires. Check-in immediately triggers password rotation so the previously issued credentials are invalidated — enabling secure early release of privileged access.',
+      },
+      {
+        title: 'Credential Profile ↔ Checkout Link',
+        description:
+          'Credential profiles can now reference the password checkout they were generated from, enabling automatic cleanup and full traceability between vault profiles and password management checkouts.',
+      },
+      {
+        title: 'Migration Resilience (048)',
+        description:
+          'Added an idempotent repair migration that ensures connection health columns exist even on environments where migration 042 was recorded as applied but the DDL did not take effect. Deployments that already have the columns are unaffected (no-op).',
+      },
+    ],
+  },
+  {
     version: '0.19.1',
     subtitle: 'DNS Search Domains & Docker DNS Fallback',
     sections: [

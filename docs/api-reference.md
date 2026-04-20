@@ -424,10 +424,14 @@ List all remote connections.
     "domain": "CORP",
     "description": "Primary production RDP host",
     "group_id": "uuid",
-    "last_accessed": "2026-04-05T14:30:00Z"
+    "last_accessed": "2026-04-05T14:30:00Z",
+    "health_status": "online",
+    "health_checked_at": "2026-04-20T10:02:00Z"
   }
 ]
 ```
+
+`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). Updated automatically every 2 minutes by the background health check worker.
 
 #### `POST /api/admin/connections`
 
@@ -1133,6 +1137,7 @@ All errors follow this format:
 | `checkout.denied` | Approver denied a password checkout request |
 | `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
 | `checkout.expired` | Password checkout expired (automatic or manual) |
+| `checkout.checked_in` | User voluntarily checked-in (returned) an active checkout early |
 | `rotation.completed` | Automatic service account password rotation completed |
 
 ---
@@ -1580,3 +1585,19 @@ Reveal the active checkout password. Only the requester can call this.
 ```json
 { "password": "...", "expires_at": "2025-01-01T12:00:00Z" }
 ```
+
+#### `POST /api/user/checkouts/:id/checkin`
+
+Voluntarily check-in (return) an active checkout before its expiry. Only the requester can call this. Immediately triggers password rotation so the previously issued credentials are invalidated.
+
+**Path Parameter**: `id` (UUID) — checkout request ID
+
+**Response** `200 OK`
+```json
+{ "status": "checked_in" }
+```
+
+**Errors:**
+- `403` — not the requester
+- `404` — checkout not found
+- `409` — checkout is not in `Active` state (already expired, denied, or checked in)

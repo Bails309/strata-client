@@ -190,4 +190,21 @@ describe('CommandPalette', () => {
     await user.keyboard('{ArrowUp}{Enter}');
     expect(mockNavigate).toHaveBeenCalledWith('/session/c1');
   });
+
+  it('renders default protocol icon for unknown protocols', async () => {
+    (getMyConnections as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'c4', name: 'Telnet Box', protocol: 'telnet', hostname: 'legacy.local', port: 23 },
+    ]);
+    (useSessionManager as ReturnType<typeof vi.fn>).mockReturnValue({ sessions: [] });
+
+    render(
+      <MemoryRouter>
+        <CommandPalette open={true} onClose={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Telnet Box')).toBeInTheDocument());
+    // Should render a generic monitor icon SVG (not crash)
+    expect(screen.getByText('Telnet Box').closest('[role="option"]')).toBeInTheDocument();
+  });
 });

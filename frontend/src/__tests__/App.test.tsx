@@ -161,4 +161,51 @@ describe('App routing', () => {
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
     });
   });
+
+  it('handleLogin clears tokens when auth check returns not authenticated', async () => {
+    renderApp('/login');
+    await screen.findByText('Login Page');
+
+    localStorage.setItem('access_token', fakeJwt());
+    localStorage.setItem('token_expiry', String(Date.now() + 3600000));
+    mockFetch({ authenticated: false });
+
+    await act(async () => {
+      await userEvent.click(screen.getByText('mock-login'));
+    });
+
+    expect(localStorage.getItem('access_token')).toBeNull();
+    expect(localStorage.getItem('token_expiry')).toBeNull();
+  });
+
+  it('shows disclaimer modal when terms not accepted', async () => {
+    localStorage.setItem('access_token', fakeJwt());
+    const noTermsUser = { authenticated: true, user: { id: '1', username: 'admin', role: 'admin', terms_accepted_at: null, terms_accepted_version: 0 } };
+    mockFetch(noTermsUser);
+
+    renderApp('/');
+    expect(await screen.findByText('Session Recording Disclaimer')).toBeInTheDocument();
+  });
+
+  it('redirects non-admin user from /admin to /', async () => {
+    localStorage.setItem('access_token', fakeJwt());
+    const regularUser = { authenticated: true, user: { id: '2', username: 'user1', role: 'user', terms_accepted_at: '2024-01-01T00:00:00Z', terms_accepted_version: 1 } };
+    mockFetch(regularUser);
+
+    renderApp('/admin');
+    await waitFor(() => {
+      expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+  });
+
+  it('redirects user without vault from /credentials to /', async () => {
+    localStorage.setItem('access_token', fakeJwt());
+    const noVaultUser = { authenticated: true, user: { id: '2', username: 'user1', role: 'user', terms_accepted_at: '2024-01-01T00:00:00Z', terms_accepted_version: 1, vault_configured: false } };
+    mockFetch(noVaultUser);
+
+    renderApp('/credentials');
+    await waitFor(() => {
+      expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+  });
 });

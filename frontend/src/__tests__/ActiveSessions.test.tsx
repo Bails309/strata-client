@@ -156,4 +156,71 @@ describe('ActiveSessions', () => {
     expect(screen.getByText('Active Since')).toBeInTheDocument();
     expect(screen.getByText('Traffic')).toBeInTheDocument();
   });
+
+  it('renders ssh and vnc protocol badges', async () => {
+    vi.mocked(getActiveSessions).mockResolvedValue([
+      makeSession({ session_id: 's1', protocol: 'ssh', connection_name: 'SSH Box' }),
+      makeSession({ session_id: 's2', protocol: 'vnc', connection_name: 'VNC Desktop' }),
+      makeSession({ session_id: 's3', protocol: 'telnet', connection_name: 'Legacy' }),
+    ]);
+    await act(async () => {
+      render(<ActiveSessions />);
+    });
+    expect(await screen.findByText('ssh')).toBeInTheDocument();
+    expect(screen.getByText('vnc')).toBeInTheDocument();
+    expect(screen.getByText('telnet')).toBeInTheDocument();
+  });
+
+  it('toggles all sessions with select-all checkbox', async () => {
+    vi.mocked(getActiveSessions).mockResolvedValue([
+      makeSession({ session_id: 's1' }),
+      makeSession({ session_id: 's2', connection_name: 'Server B' }),
+    ]);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await act(async () => {
+      render(<ActiveSessions />);
+    });
+    await screen.findByText('Server A');
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    // First checkbox is select-all
+    await user.click(checkboxes[0]);
+    expect(screen.getByText('Kill 2 Session(s)')).toBeInTheDocument();
+
+    // Toggle all off
+    await user.click(checkboxes[0]);
+    expect(screen.getByText('Kill 0 Session(s)')).toBeInTheDocument();
+  });
+
+  it('shows duration with minutes only when less than 1 hour', async () => {
+    vi.mocked(getActiveSessions).mockResolvedValue([
+      makeSession({ started_at: new Date(Date.now() - 5 * 60 * 1000).toISOString() }),
+    ]);
+    await act(async () => {
+      render(<ActiveSessions />);
+    });
+    await screen.findByText('Server A');
+    // Should show "5m Xs" without hours
+    expect(screen.getByText(/^\d+m \d+s$/)).toBeInTheDocument();
+  });
+
+  it('handles kill failure gracefully', async () => {
+    vi.mocked(killSessions).mockRejectedValue(new Error('network'));
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await act(async () => {
+      render(<ActiveSessions />);
+    });
+    await screen.findByText('Server A');
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[1]);
+    await user.click(screen.getByText('Kill 1 Session(s)'));
+    await user.click(screen.getByText('Terminate'));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Failed to terminate sessions');
+    });
+    alertSpy.mockRestore();
+  });
 });

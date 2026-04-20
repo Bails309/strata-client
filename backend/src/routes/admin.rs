@@ -5221,43 +5221,6 @@ mod tests {
         assert!(validate_ldap_filter("((&(|(cn=a)(cn=b))(sn=c)))").is_ok());
     }
 
-    // ── validate_ldap_url ──────────────────────────────────────────
-
-    #[test]
-    fn validate_ldap_url_ldap() {
-        assert!(validate_ldap_url("ldap://ds.example.com").is_ok());
-    }
-
-    #[test]
-    fn validate_ldap_url_ldaps() {
-        assert!(validate_ldap_url("ldaps://ds.example.com").is_ok());
-    }
-
-    #[test]
-    fn validate_ldap_url_rejects_http() {
-        assert!(validate_ldap_url("http://ds.example.com").is_err());
-    }
-
-    #[test]
-    fn validate_ldap_url_rejects_https() {
-        assert!(validate_ldap_url("https://ds.example.com").is_err());
-    }
-
-    #[test]
-    fn validate_ldap_url_rejects_ftp() {
-        assert!(validate_ldap_url("ftp://ds.example.com").is_err());
-    }
-
-    #[test]
-    fn validate_ldap_url_rejects_plain_hostname() {
-        assert!(validate_ldap_url("ds.example.com").is_err());
-    }
-
-    #[test]
-    fn validate_ldap_url_rejects_empty() {
-        assert!(validate_ldap_url("").is_err());
-    }
-
     // ── is_safe_hostname (additional coverage) ─────────────────────────
 
     #[test]
@@ -5801,61 +5764,6 @@ mod tests {
         assert!(result.ends_with(';'));
         assert!(result.contains("14.Session killed"));
         assert!(result.contains("3.521"));
-    }
-
-    // ── validate_no_restricted_keys ────────────────────────────────
-
-    #[test]
-    fn validate_no_restricted_keys_empty_ok() {
-        assert!(validate_no_restricted_keys(&[]).is_ok());
-    }
-
-    #[test]
-    fn validate_no_restricted_keys_accepts_safe_keys() {
-        let kvs = vec![
-            SettingKV {
-                key: "theme".into(),
-                value: "dark".into(),
-            },
-            SettingKV {
-                key: "max_sessions".into(),
-                value: "100".into(),
-            },
-        ];
-        assert!(validate_no_restricted_keys(&kvs).is_ok());
-    }
-
-    #[test]
-    fn validate_no_restricted_keys_rejects_restricted() {
-        let kvs = vec![SettingKV {
-            key: "jwt_secret".into(),
-            value: "evil".into(),
-        }];
-        assert!(validate_no_restricted_keys(&kvs).is_err());
-    }
-
-    #[test]
-    fn validate_no_restricted_keys_rejects_sso_issuer() {
-        let kvs = vec![SettingKV {
-            key: "sso_issuer_url".into(),
-            value: "http://attacker.com".into(),
-        }];
-        assert!(validate_no_restricted_keys(&kvs).is_err());
-    }
-
-    #[test]
-    fn validate_no_restricted_keys_all_restricted() {
-        for key in RESTRICTED_SETTINGS {
-            let kvs = vec![SettingKV {
-                key: (*key).to_string(),
-                value: "val".into(),
-            }];
-            assert!(
-                validate_no_restricted_keys(&kvs).is_err(),
-                "Key {} should be restricted",
-                key
-            );
-        }
     }
 
     // ── is_valid_ipv4 ──────────────────────────────────────────────

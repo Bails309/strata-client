@@ -298,6 +298,16 @@ html.light .recent-card-btn:hover {
     color: var(--color-txt-tertiary);
   }
 
+  /* Hide native number input spinners — we render custom +/- controls instead */
+  input[type="number"].no-spinner::-webkit-outer-spin-button,
+  input[type="number"].no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"].no-spinner {
+    -moz-appearance: textfield;
+  }
+
   select {
     cursor: pointer;
     appearance: none;

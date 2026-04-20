@@ -482,14 +482,44 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                 <label className="block text-sm font-medium mb-1">
                   Duration (minutes, 1–{emergencyBypass ? 30 : 720})
                 </label>
-                <input
-                  type="number"
-                  className="input w-32"
-                  min={1}
-                  max={emergencyBypass ? 30 : 720}
-                  value={duration}
-                  onChange={(e) => setDuration(Number(e.target.value))}
-                />
+                {(() => {
+                  const durationMax = emergencyBypass ? 30 : 720;
+                  const clampDuration = (n: number) => Math.min(durationMax, Math.max(1, Math.round(n || 0)));
+                  return (
+                    <div className="inline-flex items-stretch rounded-md border border-border bg-bg-primary overflow-hidden focus-within:border-accent/60 transition-colors">
+                      <button
+                        type="button"
+                        className="px-3 text-lg leading-none text-txt-secondary hover:bg-border/30 hover:text-txt-primary active:bg-border/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        onClick={() => setDuration((d) => clampDuration(d - (d > 60 ? 15 : d > 10 ? 5 : 1)))}
+                        disabled={duration <= 1}
+                        aria-label="Decrease duration"
+                      >
+                        −
+                      </button>
+                      <input
+                        type="number"
+                        className="no-spinner w-20 text-center border-0 bg-transparent focus:shadow-none focus:border-0 tabular-nums"
+                        min={1}
+                        max={durationMax}
+                        value={duration}
+                        onChange={(e) => setDuration(clampDuration(Number(e.target.value)))}
+                        onBlur={(e) => setDuration(clampDuration(Number(e.target.value)))}
+                      />
+                      <button
+                        type="button"
+                        className="px-3 text-lg leading-none text-txt-secondary hover:bg-border/30 hover:text-txt-primary active:bg-border/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        onClick={() => setDuration((d) => clampDuration(d + (d >= 60 ? 15 : d >= 10 ? 5 : 1)))}
+                        disabled={duration >= durationMax}
+                        aria-label="Increase duration"
+                      >
+                        +
+                      </button>
+                      <span className="px-3 flex items-center text-xs text-txt-tertiary border-l border-border bg-bg-secondary/40 select-none">
+                        min
+                      </span>
+                    </div>
+                  );
+                })()}
                 {emergencyBypass && (
                   <p className="text-xs text-warning mt-1">
                     Emergency bypass checkouts are capped at 30 minutes.
@@ -497,14 +527,36 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                 )}
               </div>
               <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Justification (optional)</label>
-                <textarea
-                  className="input w-full"
-                  rows={2}
-                  value={justification}
-                  onChange={(e) => setJustification(e.target.value)}
-                  placeholder="Reason for checkout..."
-                />
+                {(() => {
+                  const isEmergencyActive = emergencyBypass
+                    && !!managedAccounts.find((a) => a.managed_ad_dn === selectedDn && !a.can_self_approve && a.pm_allow_emergency_bypass);
+                  const justificationTooShort = isEmergencyActive && justification.trim().length < 10;
+                  return (
+                    <>
+                      <label className="block text-sm font-medium mb-1">
+                        Justification{' '}
+                        {isEmergencyActive ? (
+                          <span className="text-warning">(required, min 10 characters)</span>
+                        ) : (
+                          <span className="text-txt-tertiary">(optional)</span>
+                        )}
+                      </label>
+                      <textarea
+                        className={`input w-full ${justificationTooShort ? 'border-warning/60' : ''}`}
+                        rows={2}
+                        value={justification}
+                        onChange={(e) => setJustification(e.target.value)}
+                        placeholder={isEmergencyActive ? 'Describe the incident and why approval cannot wait…' : 'Reason for checkout...'}
+                      />
+                      {justificationTooShort && (
+                        <p className="text-xs text-warning mt-1">
+                          Emergency bypass requires a justification of at least 10 characters.
+                          {justification.trim().length > 0 && ` (${justification.trim().length}/10)`}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
               <div className="mb-4">
                 <label className="flex items-center gap-2 cursor-pointer text-sm font-medium mb-1">
@@ -579,7 +631,14 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               <button
                 className={`btn ${emergencyBypass ? 'btn-warning' : 'btn-primary'}`}
                 onClick={handleRequestCheckout}
-                disabled={!selectedDn || submitting || (scheduleEnabled && !scheduledStart)}
+                disabled={
+                  !selectedDn
+                  || submitting
+                  || (scheduleEnabled && !scheduledStart)
+                  || (emergencyBypass
+                    && !!managedAccounts.find((a) => a.managed_ad_dn === selectedDn && !a.can_self_approve && a.pm_allow_emergency_bypass)
+                    && justification.trim().length < 10)
+                }
               >
                 {submitting
                   ? 'Submitting...'

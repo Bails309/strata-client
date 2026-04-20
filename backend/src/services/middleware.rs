@@ -657,4 +657,75 @@ mod tests {
         // "tokenx=abc" should not match
         assert_eq!(extract_token_from_query("tokenx=abc"), None);
     }
+
+    // ── permission checker tests ──────────────────────────────────
+
+    fn user_with(system: bool, users: bool, conns: bool, audit: bool, sessions: bool) -> AuthUser {
+        AuthUser {
+            id: Uuid::nil(),
+            sub: "s".into(),
+            username: "u".into(),
+            full_name: None,
+            role: "user".into(),
+            can_manage_system: system,
+            can_manage_users: users,
+            can_manage_connections: conns,
+            can_view_audit_logs: audit,
+            can_create_users: false,
+            can_create_user_groups: false,
+            can_create_connections: false,
+            can_create_connection_folders: false,
+            can_create_sharing_profiles: false,
+            can_view_sessions: sessions,
+        }
+    }
+
+    #[test]
+    fn check_system_permission_requires_system_flag() {
+        assert!(check_system_permission(&user_with(true, false, false, false, false)).is_ok());
+        assert!(check_system_permission(&user_with(false, true, true, true, true)).is_err());
+    }
+
+    #[test]
+    fn check_user_management_permission_accepts_users_or_system() {
+        assert!(
+            check_user_management_permission(&user_with(false, true, false, false, false)).is_ok()
+        );
+        assert!(
+            check_user_management_permission(&user_with(true, false, false, false, false)).is_ok()
+        );
+        assert!(
+            check_user_management_permission(&user_with(false, false, true, true, true)).is_err()
+        );
+    }
+
+    #[test]
+    fn check_connection_management_permission_accepts_conns_or_system() {
+        assert!(check_connection_management_permission(&user_with(
+            false, false, true, false, false
+        ))
+        .is_ok());
+        assert!(check_connection_management_permission(&user_with(
+            true, false, false, false, false
+        ))
+        .is_ok());
+        assert!(
+            check_connection_management_permission(&user_with(false, true, false, true, true))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn check_audit_permission_accepts_audit_or_system() {
+        assert!(check_audit_permission(&user_with(false, false, false, true, false)).is_ok());
+        assert!(check_audit_permission(&user_with(true, false, false, false, false)).is_ok());
+        assert!(check_audit_permission(&user_with(false, true, true, false, true)).is_err());
+    }
+
+    #[test]
+    fn check_session_permission_accepts_sessions_or_system() {
+        assert!(check_session_permission(&user_with(false, false, false, false, true)).is_ok());
+        assert!(check_session_permission(&user_with(true, false, false, false, false)).is_ok());
+        assert!(check_session_permission(&user_with(false, true, true, true, false)).is_err());
+    }
 }

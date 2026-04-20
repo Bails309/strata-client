@@ -1703,4 +1703,67 @@ mod tests {
         // Hard clear leaves only the new entry
         assert!(map.len() <= 1);
     }
+
+    // ── extract_cookie tests ──────────────────────────────────────
+
+    #[test]
+    fn extract_cookie_single_value() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "refresh_token=abc123".parse().unwrap(),
+        );
+        assert_eq!(extract_cookie(&h, "refresh_token"), Some("abc123"));
+    }
+
+    #[test]
+    fn extract_cookie_multiple_cookies() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "session=xyz; refresh_token=abc123; theme=dark"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(extract_cookie(&h, "refresh_token"), Some("abc123"));
+        assert_eq!(extract_cookie(&h, "session"), Some("xyz"));
+        assert_eq!(extract_cookie(&h, "theme"), Some("dark"));
+    }
+
+    #[test]
+    fn extract_cookie_missing_header() {
+        let h = HeaderMap::new();
+        assert_eq!(extract_cookie(&h, "refresh_token"), None);
+    }
+
+    #[test]
+    fn extract_cookie_name_not_present() {
+        let mut h = HeaderMap::new();
+        h.insert(axum::http::header::COOKIE, "session=xyz".parse().unwrap());
+        assert_eq!(extract_cookie(&h, "refresh_token"), None);
+    }
+
+    #[test]
+    fn extract_cookie_does_not_match_prefix() {
+        // "refresh_token_other" should not match lookup for "refresh_token"
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "refresh_token_other=abc".parse().unwrap(),
+        );
+        assert_eq!(extract_cookie(&h, "refresh_token"), None);
+    }
+
+    #[test]
+    fn extract_cookie_trims_whitespace() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::COOKIE,
+            "a=1;   refresh_token=abc   ".parse().unwrap(),
+        );
+        // leading whitespace stripped; trailing value is preserved as-is
+        let v = extract_cookie(&h, "refresh_token");
+        assert!(v.is_some());
+        assert!(v.unwrap().starts_with("abc"));
+    }
 }

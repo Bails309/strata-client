@@ -609,4 +609,201 @@ mod tests {
         assert!(env.encrypted_dek.is_empty());
         assert!(env.nonce.is_empty());
     }
+
+    // ── HTTP-mocked integration tests ──────────────────────────────
+
+    use axum::extract::{Path as AxumPath, State as AxumState};
+    use axum::response::IntoResponse;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[derive(Clone, Default)]
+    struct MockVault {
+        /// Map of fake vault ciphertext → original base64 plaintext (DEK).
+        store: Arc<Mutex<HashMap<String, String>>>,
+        /// If > 0, next N encrypt calls return 500 and this counter decrements.
+        fail_5xx_next: Arc<Mutex<u32>>,
+        /// If true, encrypt returns 403.
+        fail_4xx: Arc<Mutex<bool>>,
+        /// If true, decrypt returns 400.
+        decrypt_fail_4xx: Arc<Mutex<bool>>,
+        /// If true, encrypt returns 200 with malformed JSON body.
+        bad_json_on_encrypt: Arc<Mutex<bool>>,
+    }
+
+    async fn encrypt_handler(
+        AxumState(state): AxumState<MockVault>,
+        AxumPath(_key): AxumPath<String>,
+        Json(body): Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        if *state.fail_4xx.lock().await {
+            return (axum::http::StatusCode::FORBIDDEN, "denied").into_response();
+        }
+        let mut n = state.fail_5xx_next.lock().await;
+        if *n > 0 {
+            *n -= 1;
+            drop(n);
+            return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom").into_response();
+        }
+        drop(n);
+        if *state.bad_json_on_encrypt.lock().await {
+            return (axum::http::StatusCode::OK, "not-json").into_response();
+        }
+        let pt = body
+            .get("plaintext")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut map = state.store.lock().await;
+        let ct = format!("vault:v1:tok{}", map.len());
+        map.insert(ct.clone(), pt);
+        Json(serde_json::json!({ "data": { "ciphertext": ct } })).into_response()
+    }
+
+    async fn decrypt_handler(
+        AxumState(state): AxumState<MockVault>,
+        AxumPath(_key): AxumPath<String>,
+        Json(body): Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        if *state.decrypt_fail_4xx.lock().await {
+            return (axum::http::StatusCode::BAD_REQUEST, "bad").into_response();
+        }
+        let ct = body
+            .get("ciphertext")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let map = state.store.lock().await;
+        match map.get(&ct) {
+            Some(pt) => Json(serde_json::json!({ "data": { "plaintext": pt } })).into_response(),
+            None => (axum::http::StatusCode::NOT_FOUND, "unknown ct").into_response(),
+        }
+    }
+
+    async fn start_mock_vault(state: MockVault) -> SocketAddr {
+        let app = Router::new()
+            .route("/v1/transit/encrypt/:key", post(encrypt_handler))
+            .route("/v1/transit/decrypt/:key", post(decrypt_handler))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        addr
+    }
+
+    fn vault_cfg(addr: &SocketAddr) -> VaultConfig {
+        VaultConfig {
+            address: format!("http://{addr}"),
+            token: "test-token".into(),
+            transit_key: "strata-key".into(),
+            mode: crate::config::VaultMode::Local,
+            unseal_key: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn seal_with_mock_returns_envelope() {
+        let state = MockVault::default();
+        let addr = start_mock_vault(state.clone()).await;
+        let sealed = seal(&vault_cfg(&addr), b"hello world").await.unwrap();
+        assert!(!sealed.ciphertext.is_empty());
+        assert!(!sealed.encrypted_dek.is_empty());
+        assert_eq!(sealed.nonce.len(), 12);
+        assert_eq!(state.store.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn seal_unseal_roundtrip_via_mock() {
+        let state = MockVault::default();
+        let addr = start_mock_vault(state).await;
+        let cfg = vault_cfg(&addr);
+        let plaintext = b"super-secret-password-123";
+        let sealed = seal(&cfg, plaintext).await.unwrap();
+        let recovered = unseal(
+            &cfg,
+            &sealed.encrypted_dek,
+            &sealed.ciphertext,
+            &sealed.nonce,
+        )
+        .await
+        .unwrap();
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[tokio::test]
+    async fn seal_setting_unseal_setting_roundtrip() {
+        let state = MockVault::default();
+        let addr = start_mock_vault(state).await;
+        let cfg = vault_cfg(&addr);
+        let envelope = seal_setting(&cfg, "ldap-bind-password").await.unwrap();
+        assert!(envelope.starts_with("vault:"));
+        let recovered = unseal_setting(&cfg, &envelope).await.unwrap();
+        assert_eq!(recovered, "ldap-bind-password");
+    }
+
+    #[tokio::test]
+    async fn seal_returns_error_on_4xx() {
+        let state = MockVault::default();
+        *state.fail_4xx.lock().await = true;
+        let addr = start_mock_vault(state).await;
+        let result = seal(&vault_cfg(&addr), b"x").await;
+        let Err(err) = result else {
+            panic!("expected error")
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("Vault encrypt failed"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn seal_retries_on_5xx_then_succeeds() {
+        let state = MockVault::default();
+        *state.fail_5xx_next.lock().await = 1;
+        let addr = start_mock_vault(state.clone()).await;
+        let sealed = seal(&vault_cfg(&addr), b"retry-me").await.unwrap();
+        assert!(!sealed.encrypted_dek.is_empty());
+        assert_eq!(*state.fail_5xx_next.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn seal_unreachable_returns_error() {
+        // Bind and immediately release a port → connecting will fail fast.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let result = seal(&vault_cfg(&addr), b"x").await;
+        let Err(err) = result else {
+            panic!("expected error")
+        };
+        assert!(matches!(err, AppError::Vault(_)));
+    }
+
+    #[tokio::test]
+    async fn unseal_setting_returns_error_on_decrypt_4xx() {
+        let state = MockVault::default();
+        let addr = start_mock_vault(state.clone()).await;
+        let cfg = vault_cfg(&addr);
+        let envelope = seal_setting(&cfg, "secret").await.unwrap();
+        // Now make decrypt fail
+        *state.decrypt_fail_4xx.lock().await = true;
+        let err = unseal_setting(&cfg, &envelope).await.unwrap_err();
+        assert!(format!("{err}").contains("Vault decrypt failed"));
+    }
+
+    #[tokio::test]
+    async fn seal_errors_on_malformed_json_response() {
+        let state = MockVault::default();
+        *state.bad_json_on_encrypt.lock().await = true;
+        let addr = start_mock_vault(state).await;
+        let result = seal(&vault_cfg(&addr), b"x").await;
+        let Err(err) = result else {
+            panic!("expected error")
+        };
+        assert!(format!("{err}").contains("response parse"));
+    }
 }

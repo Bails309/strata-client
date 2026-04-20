@@ -326,7 +326,7 @@ pub async fn delete_file(
 mod tests {
     use super::*;
     use crate::services::file_store::StoredFile;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
     use uuid::Uuid;
 

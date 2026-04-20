@@ -5910,9 +5910,9 @@ mod tests {
             id: Uuid::nil(),
             realm: "CORP.LOCAL".into(),
             kdc_servers: "kdc1.corp.local, kdc2.corp.local ".into(),
-            admin_server: Some("admin.corp.local".into()),
-            ticket_lifetime: Some("10h".into()),
-            renew_lifetime: Some("7d".into()),
+            admin_server: "admin.corp.local".into(),
+            ticket_lifetime: "10h".into(),
+            renew_lifetime: "7d".into(),
             is_default: true,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -5921,7 +5921,7 @@ mod tests {
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].realm, "CORP.LOCAL");
         assert_eq!(configs[0].kdcs, vec!["kdc1.corp.local", "kdc2.corp.local"]);
-        assert_eq!(configs[0].admin_server.as_deref(), Some("admin.corp.local"));
-        assert_eq!(configs[0].ticket_lifetime.as_deref(), Some("10h"));
+        assert_eq!(configs[0].admin_server, "admin.corp.local");
+        assert_eq!(configs[0].ticket_lifetime, "10h");
     }
 }

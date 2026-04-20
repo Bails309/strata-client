@@ -76,6 +76,9 @@ import {
   getSessionStats,
   listQuickShareFiles,
   deleteQuickShareFile,
+  checkinCheckout,
+  getMyRecordings,
+  buildMyRecordingStreamUrl,
 } from '../api';
 
 // We test the ApiError class and the request helper's behavior
@@ -1293,5 +1296,114 @@ describe('additional endpoint functions', () => {
     const url = await buildNvrObserveUrl('s1', 100, 8);
     expect(url).toContain('speed=8');
     expect(url).toContain('offset=100');
+  });
+});
+
+// ── checkinCheckout ─────────────────────────────────────────────────
+
+describe('checkinCheckout', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('sends POST to checkin endpoint', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ status: 'CheckedIn' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await checkinCheckout('ck-123');
+    expect(result).toEqual({ status: 'CheckedIn' });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/user/checkouts/ck-123/checkin',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+});
+
+// ── getMyRecordings ─────────────────────────────────────────────────
+
+describe('getMyRecordings', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('calls endpoint with no params when none provided', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    await getMyRecordings();
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(url).toBe('/api/user/recordings?');
+  });
+
+  it('includes connection_id param', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    await getMyRecordings({ connection_id: 'c1' });
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(url).toContain('connection_id=c1');
+  });
+
+  it('includes limit and offset params', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    await getMyRecordings({ limit: 10, offset: 20 });
+    const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(url).toContain('limit=10');
+    expect(url).toContain('offset=20');
+  });
+});
+
+// ── buildMyRecordingStreamUrl ───────────────────────────────────────
+
+describe('buildMyRecordingStreamUrl', () => {
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('builds wss URL when on https with token', () => {
+    Object.defineProperty(window, 'location', {
+      value: { protocol: 'https:', host: 'app.example.com' },
+      writable: true,
+    });
+    localStorage.setItem('access_token', 'jwt-abc');
+
+    const url = buildMyRecordingStreamUrl('rec-1');
+    expect(url).toContain('wss://app.example.com/api/user/recordings/rec-1/stream');
+    expect(url).toContain('token=jwt-abc');
+  });
+
+  it('builds ws URL when on http without token', () => {
+    Object.defineProperty(window, 'location', {
+      value: { protocol: 'http:', host: 'localhost:3000' },
+      writable: true,
+    });
+
+    const url = buildMyRecordingStreamUrl('rec-2');
+    expect(url).toContain('ws://localhost:3000/api/user/recordings/rec-2/stream');
+    expect(url).not.toContain('token=');
   });
 });

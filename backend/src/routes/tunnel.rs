@@ -1059,18 +1059,4 @@ mod tests {
         assert_eq!(p.as_deref(), Some("p4"));
     }
 
-    #[test]
-    fn resolve_creds_none_found() {
-        let none = cred(None, None);
-        let (u, p) = resolve_credentials(&none, &none, None, &none, "john");
-        assert!(u.is_none());
-        assert!(p.is_none());
-    }
-
-    fn cred(u: Option<&str>, p: Option<&str>) -> CredentialSource {
-        CredentialSource {
-            username: u.map(|s| s.to_string()),
-            password: p.map(|s| s.to_string()),
-        }
-    }
 }

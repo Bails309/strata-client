@@ -25,6 +25,89 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.19.0',
+    subtitle: 'DNS Configuration, Dynamic Tab Titles & guacd Improvements',
+    sections: [
+      {
+        title: 'DNS Configuration (Network Tab)',
+        description:
+          'A new Network tab in Admin Settings lets you configure custom DNS servers for guacd containers. Enter your internal DNS server IPs, save, and restart guacd — no more editing docker-compose.yml for internal hostname resolution (e.g. .local, .dmz.local domains).',
+      },
+      {
+        title: 'Dynamic Browser Tab Title',
+        description:
+          'The browser tab now shows the active session\'s server name (e.g. "SERVER01 — Strata") while connected, making it easy to identify which server you\'re on when the sidebar is collapsed or switching between browser tabs.',
+      },
+      {
+        title: 'guacd Entrypoint Wrapper',
+        description:
+          'The guacd container now uses a custom entrypoint that applies DNS configuration from a shared volume before starting the daemon, with proper privilege dropping via su-exec.',
+      },
+    ],
+  },
+  {
+    version: '0.18.0',
+    subtitle: 'Approval Role Scoping, Approvals Redesign & Decided-By Tracking',
+    sections: [
+      {
+        title: 'Approval Role Account Scoping',
+        description:
+          'Approval roles now use explicit account-to-role mapping instead of LDAP filter matching. Each role is scoped to specific managed AD accounts via a searchable dropdown with chip tags — precise, auditable control over which accounts each approver can approve checkouts for.',
+      },
+      {
+        title: 'Approvals Page Redesign',
+        description:
+          'The Pending Approvals page has been completely redesigned with a premium card layout. Each request card shows the requester\'s avatar and username, the account CN (with full DN below), formatted duration, and a highlighted justification section. Approve and deny buttons use SVG icons with disabled state during processing.',
+      },
+      {
+        title: 'Approver Navigation Visibility',
+        description:
+          'The "Pending Approvals" sidebar link now only appears for users assigned to at least one approval role. Non-approvers no longer see the link.',
+      },
+      {
+        title: 'Decided-By Tracking',
+        description:
+          'The Checkout Requests table in Admin Settings now shows who approved or denied each request — the approver\'s username, "Self Approved" when the approver is also the requester, or "—" for undecided requests.',
+      },
+      {
+        title: 'Bug Fixes',
+        description:
+          'Fixed managed credential override in tunnel connections, checkout expiry calculation (now computed from approval time), and pending approvals scope enforcement so approvers only see requests for their assigned accounts.',
+      },
+    ],
+  },
+  {
+    version: '0.17.0',
+    subtitle: 'Password Management, Connection Health & UI Polish',
+    sections: [
+      {
+        title: 'Password Management',
+        description:
+          'Full privileged account password checkout and rotation for AD-managed accounts. Admins configure approval roles and map AD accounts to Strata users. Users request time-limited password checkouts with inline reveal and countdown timers. Passwords are auto-generated per policy, reset via LDAP, and sealed in Vault — no human ever sees the stored password.',
+      },
+      {
+        title: 'AD Sync Password Management Config',
+        description:
+          'Each AD Sync source now has a collapsible Password Management section: enable/disable PM, choose bind credentials (reuse AD source creds or provide separate PM-specific ones), set the target account LDAP filter, configure password generation policy (length, character requirements), and enable zero-knowledge auto-rotation on a schedule.',
+      },
+      {
+        title: 'Target Filter Preview',
+        description:
+          'A "Preview" button next to the target account filter lets you test your LDAP filter against Active Directory before saving. See a table of matching accounts (name, DN, description) with a total count — no more guessing whether your filter is correct.',
+      },
+      {
+        title: 'Connection Health Checks',
+        description:
+          'All connections are now automatically probed every 2 minutes via TCP. A green, red, or gray status dot on each connection row and recent card shows whether the target machine is online, offline, or not yet checked. Hover for the last check timestamp.',
+      },
+      {
+        title: 'Credentials & Approvals Reorganization',
+        description:
+          '"Request Checkout" and "My Checkouts" have moved from the Approvals page to the Credentials page, consolidating all credential-related actions in one place. The Approvals page now focuses solely on pending approval decisions.',
+      },
+    ],
+  },
+  {
     version: '0.16.3',
     subtitle: 'Display Tags for Active Sessions',
     sections: [

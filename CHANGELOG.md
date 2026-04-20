@@ -5,6 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-04-19
+
+### Added
+- **DNS Configuration (Network Tab)**: Administrators can now configure custom DNS servers for guacd containers directly from the Admin Settings UI via a new **Network** tab. DNS entries are validated (IPv4 format), persisted in `system_settings`, and written to a shared Docker volume (`backend-config`) as `resolv.conf`. The guacd entrypoint copies this file on startup, enabling resolution of internal hostnames (e.g. `.local`, `.dmz.local` domains) without hardcoding DNS in `docker-compose.yml`. A restart-required banner reminds admins to run `docker compose restart guacd` after changes.
+  - **Migration**: `046_dns_settings.sql` inserts `dns_enabled` (false) and `dns_servers` (empty) into `system_settings`.
+  - **Backend**: New `PUT /api/admin/settings/dns` endpoint with IPv4 validation, DB persistence, `resolv.conf` file write, and audit logging.
+  - **Frontend**: `NetworkTab` component with DNS enable toggle, DNS servers input, client-side validation, "How it works" explanation, and restart-required warning after save.
+  - **guacd**: New `entrypoint.sh` wrapper that applies `/app/config/resolv.conf` before starting the daemon. Uses `su-exec` to drop privileges to the `guacd` user.
+- **Dynamic Browser Tab Title**: The browser tab now displays the active session's server name while connected (e.g. "SERVER01 — Strata"), making it easy to identify which server you're on when the sidebar is collapsed or when switching between browser tabs. Reverts to "Strata Client" on disconnect.
+
+### Changed
+- **guacd Dockerfile**: Added `su-exec` to runtime packages, replaced direct `USER guacd` + `ENTRYPOINT` with a custom `entrypoint.sh` that applies DNS configuration before dropping privileges. Added `/app/config` directory for shared volume mount.
+- **Docker Compose**: Removed hardcoded `dns:` directives from `guacd` and `guacd-2` services (DNS is now UI-managed). Added `backend-config:/app/config:ro` volume mount to both guacd services.
+
+### Removed
+- Removed test scripts (`test_me.sh`, `test_me2.sh`) containing debug/throwaway code.
+
+### Database
+- **Migration 046**: Inserts `dns_enabled` and `dns_servers` keys into `system_settings` for UI-driven DNS configuration.
+
+## [0.18.0] — 2026-04-18
+
+### Added
+- **Approval Role Account Scoping**: Approval roles now use direct account-to-role mapping (`approval_role_accounts` table) instead of LDAP target filter matching (`approval_group_mappings`). Each approval role is explicitly scoped to specific managed AD accounts via a searchable dropdown selector. This replaces the previous LDAP filter-based approach for precise, auditable control over which accounts each approver can approve checkouts for.
+  - **Migration**: `045_approval_role_accounts.sql` creates the `approval_role_accounts` table with `(role_id, managed_ad_dn)` composite unique index and drops the legacy `approval_group_mappings` table.
+  - **Admin UI**: Approval role configuration now shows a searchable dropdown populated from all PM-enabled AD sync sources, with selected accounts displayed as removable chip tags. Replaces the previous checkbox grid for improved scalability with large account sets.
+  - **Backend**: New CRUD endpoints for `approval_role_accounts`. The `pending_approvals` query now scopes pending requests to only those accounts explicitly listed in the approver's role, rather than matching against LDAP filters.
+- **Approver Navigation Visibility**: The "Pending Approvals" sidebar link is now conditionally visible only to users who are assigned to at least one approval role. The `is_approver` boolean is returned by both `/api/user/me` and `/api/auth/check` endpoints and derived from `SELECT EXISTS(SELECT 1 FROM approval_role_assignments WHERE user_id = $1)`.
+- **Requester Username on Pending Approvals**: Checkout requests now include the `requester_username` field, populated via a `LEFT JOIN users` in the pending approvals query. The Approvals page displays the requester's username and avatar instead of a raw UUID.
+- **Checkout Request "Decided By" Column**: The Checkout Requests table in Admin Settings now shows who approved or denied each request. Displays the approver's username, "Self Approved" when the approver is the same user as the requester, or "—" for undecided requests.
+
+### Improved
+- **Approvals Page Redesign**: Complete visual overhaul of the Pending Approvals page with a premium card-based layout. Each request card features an avatar circle with the requester's initial, labeled sections (ACCOUNT showing CN with full DN below, DURATION formatted as hours/minutes, JUSTIFICATION in an elevated surface box), and prominent approve/deny buttons with SVG icons and disabled state during decision processing.
+- **CN Display Helper**: New `cnFromDn()` utility correctly extracts the Common Name from Distinguished Names, handling escaped commas (e.g., `CN=Smith\, John (Tier 1),OU=...` → `Smith, John (Tier 1)`).
+- **Approval Role Delete Button Styling**: Changed from solid red `btn-danger` to `btn-secondary text-danger` to match the site-wide delete button pattern used in AD Sync configuration.
+- **Unmapped Accounts Refresh**: The unmapped accounts list now auto-refreshes when the selected AD source changes, ensuring the dropdown always reflects the current state.
+
+### Fixed
+- **Managed Credential Override in Tunnel**: Fixed an issue where the tunnel handshake would use ticket-supplied credentials even when a managed checkout password was active for the connection's managed AD account. The managed credential path now takes priority when the connection has a `managed_ad_dn` and an active checkout exists.
+- **Checkout Expiry `expires_at` Calculation**: Fixed a bug where `expires_at` was computed from the original request time instead of the approval time, causing checkouts to expire earlier than the requested duration.
+- **Pending Approvals Scope**: Approvers now only see checkout requests for accounts explicitly assigned to their approval role, preventing visibility of requests outside their scope.
+
+### Database
+- **Migration 045**: Creates `approval_role_accounts` table (role_id + managed_ad_dn with cascade delete and composite unique index). Drops legacy `approval_group_mappings` table.
+
+## [0.17.0] — 2026-04-18
+
+### Added
+- **Password Management (Account Password Blade)**: Full privileged account password checkout, rotation, and approval workflow for AD-managed accounts.
+  - **Backend**: New `checkouts.rs` service with password generation (configurable policy), LDAP `unicodePwd` reset, Vault-sealed credential storage, checkout lifecycle (request → approve → activate → expire), and two background workers (60s expiration sweep, daily auto-rotation).
+  - **Migration**: `041_password_management.sql` adds PM columns to `ad_sync_configs`, creates `approval_roles`, `approval_role_assignments`, `approval_group_mappings`, `user_account_mappings`, and `password_checkout_requests` tables.
+  - **Admin Endpoints**: CRUD for approval roles, role assignments, AD target filter mappings, user-to-account mappings, unmapped account discovery, test rotation, and checkout request listing.
+  - **User Endpoints**: Request checkout (`POST /user/checkouts`), list own checkouts, list pending approvals, approve/deny decisions, and password reveal for active checkouts.
+  - **Admin UI**: New "Password Mgmt" tab in Admin Settings with three sub-tabs: Approval Roles (create/configure roles, assign users, set AD filters), Account Mappings (discover unmapped AD accounts, create/delete mappings, test rotation), and Checkout Requests (status dashboard).
+  - **Approvals Page**: Dedicated page for pending password checkout approval decisions. "Request Checkout" and "My Checkouts" tabs moved to the Credentials page for a more logical workflow.
+  - **Credentials Page**: Now has three tabs — Profiles, Request Checkout, and My Checkouts — consolidating all credential-related actions in one place.
+  - **AD Sync Config**: 11 new optional PM fields (pm_enabled, pm_bind_user, pm_bind_password, pm_target_filter, 5 password policy fields, pm_auto_rotate_enabled, pm_auto_rotate_interval_days) on create/update.
+- **AD Sync Password Management UI**: Collapsible "Password Management" section within the AD Sync editing form with: PM enable toggle, service account credential source radio (use AD source bind creds or separate PM-specific creds), target account LDAP filter, password generation policy (min length, uppercase/lowercase/numbers/symbols toggles), auto-rotation enable with configurable interval, and test rotation button.
+- **Target Account Filter Preview**: "Preview" button next to the target account filter input that live-tests the LDAP filter against Active Directory and displays matching accounts in a results table (account name, distinguished name, description). Shows up to 25 results with a total count. New `POST /api/admin/ad-sync-configs/test-filter` endpoint.
+- **Account Mappings Redesign**: Unified flow replacing the previous two-card layout — select a PM-enabled AD source from a dropdown, auto-discover accounts, then map them to Strata users via dropdowns with optional self-approve checkbox.
+- **Connection Health Checks**: Automatic background TCP probing of all connections every 2 minutes. Each connection's hostname:port is tested with a 5-second timeout, and the result (online/offline/unknown) is stored in the database and exposed via the API.
+  - **Migration**: `042_connection_health.sql` adds `health_status` and `health_checked_at` columns to the `connections` table.
+  - **Backend Worker**: New `health_check.rs` service with concurrent TCP probes across all non-deleted connections.
+  - **Dashboard UI**: Green (online), red (offline), or gray (unknown) status dot indicator on each connection row in the table view and on recent connection cards. Hover tooltip shows the last check timestamp.
+  - **Status Column**: New "Status" column in the connections table header.
+
+### Improved
+- **Styled Radio Buttons**: Custom `.radio` CSS class matching the existing `.checkbox` design system — purple gradient when selected, white inner dot, same sizing/shadows/transitions as checkboxes. Applied to the AD Sync PM credential source selector.
+
 ## [0.16.3] — 2026-04-17
 
 ### Added

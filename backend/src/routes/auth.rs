@@ -877,6 +877,15 @@ pub async fn check_auth(
         s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some()
     };
 
+    // Is the user an approver?
+    let is_approver: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM approval_role_assignments WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap_or(false);
+
     Json(json!({
         "authenticated": true,
         "user": {
@@ -900,6 +909,7 @@ pub async fn check_auth(
             "can_create_connection_folders": user.can_create_connection_folders,
             "can_create_sharing_profiles": user.can_create_sharing_profiles,
             "can_view_sessions": user.can_view_sessions,
+            "is_approver": is_approver,
         }
     }))
 }

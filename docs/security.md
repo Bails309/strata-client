@@ -200,9 +200,16 @@ The `audit_logs` table is designed as an append-only, tamper-evident log:
 | `ad_sync.config_updated` | AD sync source configuration updated |
 | `ad_sync.config_deleted` | AD sync source configuration deleted |
 | `ad_sync.completed` | AD sync run finished (includes created/updated/deleted counts) |
+| `checkout.requested` | User requested a password checkout for an AD-managed account |
+| `checkout.approved` | Approver approved a password checkout request |
+| `checkout.denied` | Approver denied a password checkout request |
+| `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
+| `checkout.expired` | Password checkout expired (automatic or manual) |
+| `rotation.completed` | Automatic service account password rotation completed |
 | `kerberos_realm.created` | Kerberos realm added |
 | `kerberos_realm.updated` | Kerberos realm settings changed |
 | `kerberos_realm.deleted` | Kerberos realm removed |
+| `dns.updated` | Admin updated DNS configuration (Network tab) |
 
 ---
 
@@ -239,6 +246,150 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 
 ---
 
+## Password Management Security
+
+### Credential Isolation
+
+Password management supports separate bind credentials for PM operations (`pm_bind_user` / `pm_bind_password`), allowing administrators to use a dedicated service account with password-reset permissions rather than granting those privileges to the main AD sync bind account. PM bind passwords are encrypted at rest using the same Vault Transit envelope encryption as all other credentials.
+
+### Password Generation
+
+Generated passwords use a cryptographically secure random number generator (`rand::OsRng`) and comply with configurable policy rules (minimum length, uppercase, lowercase, numbers, symbols). The default minimum length is 16 characters. Passwords are generated server-side and sealed in Vault immediately — they are only revealed to the user during an active checkout window.
+
+### Checkout Lifecycle
+
+Password checkouts follow a strict lifecycle:
+1. **Request** — user requests a checkout; the request is recorded in `password_checkout_requests` with `status = 'pending'`
+2. **Approval** — an authorized approver reviews and approves/denies the request. Approvers can only see and act on requests for managed accounts explicitly assigned to their approval role via the `approval_role_accounts` table. The approver's user ID is recorded as `approved_by_user_id` on the request, and the `requester_username` is resolved via JOIN for display
+3. **Activation** — on approval, a new password is generated, the AD account password is reset via LDAP `unicodePwd` modify, and the new password is sealed in Vault
+4. **Expiry** — a background worker sweeps every 60 seconds and expires checkouts past their TTL (computed from approval time). On expiry, the password is rotated again so the checked-out password is no longer valid
+
+### Approval Role Account Scoping
+
+Approval roles use explicit account-to-role mapping via the `approval_role_accounts` table rather than LDAP filter matching. Each approval role is scoped to specific managed AD account DNs. When an approver queries pending approvals, the backend returns only requests where the `managed_ad_dn` exists in their role's account list:
+
+```sql
+SELECT pcr.*, u.username AS requester_username
+FROM password_checkout_requests pcr
+LEFT JOIN users u ON u.id = pcr.requester_user_id
+WHERE pcr.status = 'Pending'
+  AND EXISTS (
+    SELECT 1 FROM approval_role_accounts ara
+    WHERE ara.role_id = ANY($1)
+      AND ara.managed_ad_dn = pcr.managed_ad_dn
+  )
+```
+
+This ensures approvers cannot see or act on checkout requests outside their explicitly assigned scope. The `is_approver` flag (derived from `approval_role_assignments`) is included in both `/api/user/me` and `/api/auth/check` responses to control frontend navigation visibility.
+
+### Zero-Knowledge Auto-Rotation
+
+When enabled, the service account's own password is automatically rotated on a configurable schedule (default: 90 days). The new password is generated, set via LDAP, and sealed in Vault — no human ever sees the password. The `pm_last_rotated_at` timestamp is recorded for audit purposes.
+
+### Target Filter Preview
+
+The `POST /api/admin/ad-sync-configs/test-filter` endpoint allows administrators to preview which accounts a target filter would match before saving the configuration. This endpoint requires `can_manage_system` permission and uses the same bind credential resolution as production queries (including Vault unsealing and PM-specific credential fallback).
+
+### Active Directory Service Account Permissions
+
+The Password Management service account (either the AD Sync bind account or the dedicated PM bind account) requires specific delegated permissions in Active Directory to discover, manage, and rotate passwords on target accounts. These are the **minimum required permissions** — do not grant Domain Admin or other broad privileges.
+
+#### Required Permissions
+
+| Permission | Type | Purpose |
+|---|---|---|
+| **Reset Password** | General | Reset the `unicodePwd` attribute on managed accounts |
+| **Read Account Restrictions** | Property-specific | Read `userAccountControl`, password policy flags |
+| **Write Account Restrictions** | Property-specific | Update account restrictions after password reset |
+| **Read lockoutTime** | Property-specific | Detect locked-out accounts before attempting reset |
+| **Write lockoutTime** | Property-specific | Unlock accounts if needed during password rotation |
+
+#### Delegating Permissions for Standard User Accounts
+
+Use the Active Directory Delegation of Control Wizard:
+
+1. Open **Active Directory Users & Computers** (ADUC)
+2. Right-click the OU (or domain root) containing the managed accounts → **Delegate Control** → Next
+3. **Add** the Strata PM service account (e.g. `YOURDOMAIN\strata-pm-svc`) → Next
+4. Select **"Create a custom task to delegate"** → Next
+5. Select **"Only the following objects in the folder"** → tick **User objects** → Next
+6. Tick **General** and **Property-specific**, then select:
+   - ☑ Reset Password
+   - ☑ Read and write account restrictions
+   - ☑ Read lockoutTime
+   - ☑ Write lockoutTime
+7. Click **Next** → **Finish**
+
+#### Delegating Permissions for Protected Accounts
+
+Active Directory Protected Accounts (members of Domain Admins, Enterprise Admins, Administrators, etc.) have their ACLs reset every 60 minutes by the `SDProp` process. Standard delegation is overwritten. To manage passwords on protected accounts, set permissions on the `AdminSDHolder` container instead:
+
+```powershell
+# Replace YOURDOMAIN and strata-pm-svc with your actual domain and service account
+dsacls "CN=AdminSDHolder,CN=System,DC=YOURDOMAIN,DC=COM" /G "YOURDOMAIN\strata-pm-svc:CA;Reset Password"
+dsacls "CN=AdminSDHolder,CN=System,DC=YOURDOMAIN,DC=COM" /G "YOURDOMAIN\strata-pm-svc:WP;Account Restrictions"
+dsacls "CN=AdminSDHolder,CN=System,DC=YOURDOMAIN,DC=COM" /G "YOURDOMAIN\strata-pm-svc:RP;LockoutTime"
+dsacls "CN=AdminSDHolder,CN=System,DC=YOURDOMAIN,DC=COM" /G "YOURDOMAIN\strata-pm-svc:WP;LockoutTime"
+```
+
+After running these commands, wait for the `SDProp` process to propagate the permissions (runs every 60 minutes by default, or trigger it manually via `runProtectAdminGroupsTask` in ADSI Edit).
+
+> **Security note:** Only delegate permissions on the `AdminSDHolder` if you specifically need to manage passwords on protected accounts. For most deployments, the standard delegation on the target OU is sufficient and carries less risk.
+
+#### Validating Permissions
+
+To verify the service account has the correct effective permissions on a managed user:
+
+1. Open **ADUC** → **View** → enable **Advanced Features**
+2. Right-click a managed user → **Properties** → **Security** tab → **Advanced**
+3. Select the **Effective Access** tab
+4. Click **Select a user** → choose the PM service account
+5. Click **View effective access** and confirm the following are ticked:
+   - ☑ Reset Password
+   - ☑ Read account restrictions
+   - ☑ Write account restrictions
+   - ☑ Read lockoutTime
+   - ☑ Write lockoutTime
+
+If any permission is missing, the service account will receive an LDAP error when attempting password resets, and the checkout activation or auto-rotation will fail with a descriptive error message in the audit log.
+
+#### Principle of Least Privilege
+
+- Create a **dedicated service account** for PM operations rather than reusing the AD Sync bind account. Use the "Use separate credentials for password management" option in the AD Sync configuration.
+- Delegate permissions **only on the specific OUs** containing accounts that will be managed, not the entire domain.
+- Do **not** add the PM service account to Domain Admins, Account Operators, or any other built-in privileged group.
+- Use a strong, unique password for the PM service account. Enable auto-rotation in Strata to rotate the service account's own password on a schedule (zero-knowledge — sealed in Vault).
+
+---
+
+## Connection Health Checks
+
+The backend runs a background worker that TCP-probes every non-deleted connection's `hostname:port` every 2 minutes. Each probe uses a 5-second connect timeout. Results are stored as `health_status` (online/offline/unknown) and `health_checked_at` in the connections table. Health checks run concurrently across all connections using `tokio::spawn` tasks. This feature provides operational visibility without requiring agents on target machines.
+
+---
+
+## DNS Configuration Security
+
+### Input Validation
+
+The `PUT /api/admin/settings/dns` endpoint validates all DNS server entries before writing:
+- Each entry must be a valid IPv4 address (four octets, 0–255, no leading zeros)
+- Empty or whitespace-only entries are rejected
+- The validated IP list is written to `/app/config/resolv.conf` as `nameserver <ip>` lines
+
+### File System Isolation
+
+The `resolv.conf` file is written to the `backend-config` Docker volume, which is mounted read-only (`ro`) into guacd containers. The guacd `entrypoint.sh` copies the file to `/etc/resolv.conf` before dropping privileges via `su-exec`. This ensures:
+- The backend controls DNS configuration via the shared volume
+- guacd cannot modify the source file (read-only mount)
+- The entrypoint runs as root only long enough to copy the file, then drops to the `guacd` user
+
+### Audit Trail
+
+DNS configuration changes are logged as `dns.updated` in the append-only audit log, recording which admin made the change and the new DNS server list.
+
+---
+
 ## Network Security
 
 ### Database Connection TLS
@@ -258,7 +409,7 @@ For production external databases, use `require` at minimum. Use `verify-full` w
 
 ### Container Isolation
 
-All containers communicate over an internal Docker bridge network (`guac-internal`). Only the Caddy reverse proxy exposes host-mapped ports (`HTTP_PORT` default 8080, `HTTPS_PORT` default 443). The frontend, backend, `guacd`, `postgres-local`, and Vault are **not** exposed to the host network.
+All containers communicate over an internal Docker bridge network (`guac-internal`). Only the nginx reverse proxy (frontend container) exposes host-mapped ports (`HTTP_PORT` default 80, `HTTPS_PORT` default 443). The backend, `guacd`, `postgres-local`, and Vault are **not** exposed to the host network.
 
 ### guacd Communication
 

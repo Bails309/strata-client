@@ -117,6 +117,7 @@ const adminUser: MeResponse = {
   can_create_connection_folders: true,
   can_create_sharing_profiles: true,
   can_view_sessions: true,
+  is_approver: false,
 };
 
 const regularUser: MeResponse = {

@@ -79,6 +79,15 @@ pub async fn me(
             .await?;
     let (terms_accepted_at, terms_accepted_version) = terms_row.unwrap_or((None, None));
 
+    // Check whether the user has any approval roles assigned
+    let is_approver: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM approval_role_assignments WHERE user_id = $1)",
+    )
+    .bind(user.id)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap_or(false);
+
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -100,6 +109,7 @@ pub async fn me(
         "can_create_connection_folders": user.can_create_connection_folders,
         "can_create_sharing_profiles": user.can_create_sharing_profiles,
         "can_view_sessions": user.can_view_sessions,
+        "is_approver": is_approver,
     })))
 }
 
@@ -138,6 +148,8 @@ pub struct UserConnectionRow {
     pub folder_name: Option<String>,
     pub last_accessed: Option<chrono::DateTime<chrono::Utc>>,
     pub watermark: String,
+    pub health_status: String,
+    pub health_checked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn my_connections(
@@ -152,7 +164,8 @@ pub async fn my_connections(
         // seeded this table from global data; subsequent connections update this per-user.
         sqlx::query_as(
             "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark
+                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark,
+                    c.health_status, c.health_checked_at
              FROM connections c
              LEFT JOIN connection_folders cf ON cf.id = c.folder_id
              LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
@@ -165,7 +178,8 @@ pub async fn my_connections(
     } else {
         sqlx::query_as(
             "SELECT DISTINCT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark
+                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark,
+                    c.health_status, c.health_checked_at
              FROM connections c
              LEFT JOIN connection_folders cf ON cf.id = c.folder_id
              LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
@@ -670,6 +684,7 @@ pub struct CredentialProfileRow {
     pub expires_at: chrono::DateTime<chrono::Utc>,
     pub expired: bool,
     pub ttl_hours: i32,
+    pub checkout_id: Option<Uuid>,
 }
 
 pub async fn list_credential_profiles(
@@ -679,7 +694,7 @@ pub async fn list_credential_profiles(
     let db = require_running(&state).await?;
     let rows: Vec<CredentialProfileRow> = sqlx::query_as(
         "SELECT id, label, created_at, updated_at, expires_at,
-                (expires_at < now()) AS expired, ttl_hours
+                (expires_at < now()) AS expired, ttl_hours, checkout_id
          FROM credential_profiles WHERE user_id = $1 ORDER BY label",
     )
     .bind(user.id)
@@ -940,6 +955,114 @@ pub async fn delete_credential_profile(
     .await?;
 
     Ok(Json(json!({ "status": "deleted" })))
+}
+
+// ── Link a credential profile to an active checkout ─────────────────
+
+#[derive(Deserialize)]
+pub struct LinkCheckoutRequest {
+    pub checkout_id: Option<Uuid>,
+}
+
+pub async fn link_checkout_to_profile(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(profile_id): Path<Uuid>,
+    Json(body): Json<LinkCheckoutRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Verify profile belongs to user
+    let _: (Uuid,) = sqlx::query_as(
+        "SELECT id FROM credential_profiles WHERE id = $1 AND user_id = $2",
+    )
+    .bind(profile_id)
+    .bind(user.id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Credential profile not found".into()))?;
+
+    // Unlink
+    if body.checkout_id.is_none() {
+        sqlx::query(
+            "UPDATE credential_profiles SET checkout_id = NULL, updated_at = now() WHERE id = $1",
+        )
+        .bind(profile_id)
+        .execute(&db.pool)
+        .await?;
+        return Ok(Json(json!({ "status": "unlinked" })));
+    }
+
+    let checkout_id = body.checkout_id.unwrap();
+
+    // Verify checkout belongs to user and is active
+    let checkout: crate::services::checkouts::CheckoutRequest = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
+    )
+    .bind(checkout_id)
+    .bind(user.id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
+
+    if checkout.status != "Active" {
+        return Err(AppError::Validation(
+            "Only active checkouts can be linked to profiles. Approved checkouts must be activated first.".into(),
+        ));
+    }
+
+    let cred_id = checkout.vault_credential_id.ok_or_else(|| {
+        AppError::Internal("Checkout has no credential stored".into())
+    })?;
+
+    // Copy encrypted credentials from the checkout's managed credential to this profile
+    let (enc_pw, enc_dek, nonce): (Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
+        "SELECT encrypted_password, encrypted_dek, nonce FROM credential_profiles WHERE id = $1",
+    )
+    .bind(cred_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::Internal("Checkout credential profile not found".into()))?;
+
+    // Update the profile with the checkout's credentials and expiry
+    sqlx::query(
+        "UPDATE credential_profiles
+         SET encrypted_password = $1,
+             encrypted_dek = $2,
+             nonce = $3,
+             encrypted_username = NULL,
+             checkout_id = $4,
+             expires_at = $5,
+             updated_at = now()
+         WHERE id = $6",
+    )
+    .bind(&enc_pw)
+    .bind(&enc_dek)
+    .bind(&nonce)
+    .bind(checkout_id)
+    .bind(checkout.expires_at)
+    .bind(profile_id)
+    .execute(&db.pool)
+    .await?;
+
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "credential_profile.linked_checkout",
+        &json!({
+            "profile_id": profile_id.to_string(),
+            "checkout_id": checkout_id.to_string(),
+            "managed_ad_dn": checkout.managed_ad_dn,
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "status": "linked",
+        "checkout_id": checkout_id,
+        "managed_ad_dn": checkout.managed_ad_dn,
+        "expires_at": checkout.expires_at,
+    })))
 }
 
 // ── Credential Mappings (profile ↔ connection) ──────────────────────
@@ -1385,6 +1508,422 @@ pub async fn my_recording_stream(
                 tracing::error!("User recording stream error: {e}");
             }
         }))
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Password Checkout — user-facing endpoints
+// ════════════════════════════════════════════════════════════════════════
+
+use crate::services::checkouts::CheckoutRequest;
+
+/// My managed account mappings (accounts I can request checkout for).
+pub async fn my_managed_accounts(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::services::checkouts::UserAccountMapping>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows: Vec<crate::services::checkouts::UserAccountMapping> = sqlx::query_as(
+        "SELECT * FROM user_account_mappings WHERE user_id = $1 ORDER BY managed_ad_dn",
+    )
+    .bind(user.id)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+/// Request a password checkout.
+#[derive(Deserialize)]
+pub struct RequestCheckoutBody {
+    pub managed_ad_dn: String,
+    #[allow(dead_code)]
+    pub ad_sync_config_id: Option<Uuid>,
+    pub requested_duration_mins: Option<i32>,
+    pub justification_comment: Option<String>,
+}
+
+pub async fn request_checkout(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<RequestCheckoutBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let dn = body.managed_ad_dn.trim();
+    if dn.is_empty() {
+        return Err(AppError::Validation("managed_ad_dn is required".into()));
+    }
+
+    // Verify user has a mapping for this DN
+    let mapping: Option<crate::services::checkouts::UserAccountMapping> = sqlx::query_as(
+        "SELECT * FROM user_account_mappings WHERE user_id = $1 AND managed_ad_dn = $2",
+    )
+    .bind(user.id)
+    .bind(dn)
+    .fetch_optional(&db.pool)
+    .await?;
+    let mapping = mapping.ok_or(AppError::Forbidden)?;
+
+    let duration = body.requested_duration_mins.unwrap_or(60).clamp(1, 720);
+
+    // Check for active/pending checkout on same DN by same user
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM password_checkout_requests
+         WHERE requester_user_id = $1 AND managed_ad_dn = $2 AND status IN ('Pending','Active')",
+    )
+    .bind(user.id)
+    .bind(dn)
+    .fetch_optional(&db.pool)
+    .await?;
+    if existing.is_some() {
+        return Err(AppError::Validation(
+            "You already have a pending or active checkout for this account".into(),
+        ));
+    }
+
+    // If self-approve, go straight to Approved
+    let initial_status = if mapping.can_self_approve {
+        "Approved"
+    } else {
+        "Pending"
+    };
+
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO password_checkout_requests
+         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+    )
+    .bind(user.id)
+    .bind(dn)
+    .bind(mapping.ad_sync_config_id)
+    .bind(initial_status)
+    .bind(duration)
+    .bind(body.justification_comment.as_deref().unwrap_or(""))
+    .fetch_one(&db.pool)
+    .await?;
+
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "checkout.requested",
+        &json!({ "checkout_id": id, "dn": dn, "status": initial_status }),
+    )
+    .await?;
+
+    // Auto-activate if self-approved
+    if initial_status == "Approved" {
+        let vault_cfg = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.clone())
+        };
+        if let Some(ref vc) = vault_cfg {
+            match crate::services::checkouts::activate_checkout(&db.pool, vc, id).await {
+                Ok(()) => {
+                    return Ok(Json(json!({ "id": id, "status": "Active" })));
+                }
+                Err(e) => {
+                    tracing::error!("Checkout {id} approved but activation failed: {e}");
+                    // Return success with Approved status — user can retry
+                    return Ok(Json(json!({
+                        "id": id,
+                        "status": "Approved",
+                        "activation_error": format!("{e}")
+                    })));
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({ "id": id, "status": initial_status })))
+}
+
+/// My checkout requests.
+pub async fn my_checkouts(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<CheckoutRequest>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows: Vec<CheckoutRequest> = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE requester_user_id = $1 ORDER BY created_at DESC LIMIT 100",
+    )
+    .bind(user.id)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+/// List pending requests that I can approve (my role covers the request's managed account).
+pub async fn pending_approvals(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<CheckoutRequest>>, AppError> {
+    let db = require_running(&state).await?;
+    // Get all role IDs for the current user
+    let role_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT role_id FROM approval_role_assignments WHERE user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    if role_ids.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Get pending requests whose managed_ad_dn is in the scope of the user's approval roles
+    let pending: Vec<CheckoutRequest> = sqlx::query_as(
+        "SELECT pcr.*, u.username AS requester_username
+         FROM password_checkout_requests pcr
+         LEFT JOIN users u ON u.id = pcr.requester_user_id
+         WHERE pcr.status = 'Pending'
+         AND EXISTS (
+             SELECT 1 FROM approval_role_accounts ara
+             WHERE ara.role_id = ANY($1)
+             AND ara.managed_ad_dn = pcr.managed_ad_dn
+         )
+         ORDER BY pcr.created_at ASC LIMIT 200",
+    )
+    .bind(&role_ids)
+    .fetch_all(&db.pool)
+    .await?;
+
+    Ok(Json(pending))
+}
+
+/// Approve a pending checkout.
+#[derive(Deserialize)]
+pub struct ApprovalDecisionBody {
+    pub approved: bool,
+}
+
+pub async fn decide_checkout(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(checkout_id): Path<Uuid>,
+    Json(body): Json<ApprovalDecisionBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Get the user's approval role IDs
+    let role_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT role_id FROM approval_role_assignments WHERE user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_all(&db.pool)
+    .await?;
+    if role_ids.is_empty() {
+        return Err(AppError::Forbidden);
+    }
+
+    // Fetch the checkout
+    let checkout: CheckoutRequest = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE id = $1",
+    )
+    .bind(checkout_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+
+    if checkout.status != "Pending" {
+        return Err(AppError::Validation(format!(
+            "Cannot change status from '{}'",
+            checkout.status
+        )));
+    }
+
+    // Verify the approver's roles cover this account's DN
+    let covers: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM approval_role_accounts
+         WHERE role_id = ANY($1) AND managed_ad_dn = $2",
+    )
+    .bind(&role_ids)
+    .bind(&checkout.managed_ad_dn)
+    .fetch_one(&db.pool)
+    .await?;
+    if covers == 0 {
+        return Err(AppError::Forbidden);
+    }
+
+    if body.approved {
+        sqlx::query(
+            "UPDATE password_checkout_requests SET status = 'Approved', approved_by_user_id = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(user.id)
+        .bind(checkout_id)
+        .execute(&db.pool)
+        .await?;
+
+        crate::services::audit::log(
+            &db.pool,
+            Some(user.id),
+            "checkout.approved",
+            &json!({ "checkout_id": checkout_id }),
+        )
+        .await?;
+
+        // Auto-activate
+        let vault_cfg = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.clone())
+        };
+        if let Some(ref vc) = vault_cfg {
+            match crate::services::checkouts::activate_checkout(&db.pool, vc, checkout_id).await {
+                Ok(()) => {
+                    return Ok(Json(json!({ "status": "Active" })));
+                }
+                Err(e) => {
+                    tracing::error!("Checkout {checkout_id} approved but activation failed: {e}");
+                    return Ok(Json(json!({
+                        "status": "Approved",
+                        "activation_error": format!("{e}")
+                    })));
+                }
+            }
+        }
+
+        Ok(Json(json!({ "status": "Approved" })))
+    } else {
+        sqlx::query(
+            "UPDATE password_checkout_requests SET status = 'Denied', approved_by_user_id = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(user.id)
+        .bind(checkout_id)
+        .execute(&db.pool)
+        .await?;
+
+        crate::services::audit::log(
+            &db.pool,
+            Some(user.id),
+            "checkout.denied",
+            &json!({ "checkout_id": checkout_id }),
+        )
+        .await?;
+
+        Ok(Json(json!({ "status": "Denied" })))
+    }
+}
+
+/// Get the revealed password for an active checkout (only the requester can see it).
+pub async fn reveal_checkout_password(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(checkout_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    let checkout: CheckoutRequest = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
+    )
+    .bind(checkout_id)
+    .bind(user.id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
+
+    if checkout.status != "Active" {
+        return Err(AppError::Validation(
+            "Password can only be revealed for active checkouts".into(),
+        ));
+    }
+
+    let cred_id = checkout
+        .vault_credential_id
+        .ok_or_else(|| AppError::Internal("No credential stored for this checkout".into()))?;
+
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or(AppError::Internal("Vault not configured".into()))?
+    };
+
+    // Fetch the credential profile
+    let row: (Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
+        "SELECT encrypted_password, encrypted_dek, nonce FROM credential_profiles WHERE id = $1",
+    )
+    .bind(cred_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::Internal("Credential profile not found".into()))?;
+
+    let plaintext = vault::unseal(&vault_cfg, &row.1, &row.0, &row.2).await?;
+    let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+        .unwrap_or_else(|_| json!({ "p": plain_str }));
+    let password: String = parsed["p"].as_str().unwrap_or_default().to_string();
+
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "checkout.password_revealed",
+        &json!({ "checkout_id": checkout_id }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "password": password,
+        "expires_at": checkout.expires_at,
+    })))
+}
+
+/// Retry activation of an Approved checkout that failed to activate.
+pub async fn retry_checkout_activation(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(checkout_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    let checkout: CheckoutRequest = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
+    )
+    .bind(checkout_id)
+    .bind(user.id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
+
+    if checkout.status != "Approved" {
+        return Err(AppError::Validation(format!(
+            "Only Approved checkouts can be retried, current status: '{}'",
+            checkout.status
+        )));
+    }
+
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or(AppError::Internal("Vault not configured".into()))?
+    };
+
+    crate::services::checkouts::activate_checkout(&db.pool, &vault_cfg, checkout_id).await
+        .map_err(|e| {
+            tracing::error!("Retry activation failed for checkout {checkout_id}: {e}");
+            AppError::Validation(format!("Activation failed: {e}"))
+        })?;
+
+    Ok(Json(json!({ "status": "Active" })))
+}
+
+pub async fn checkin_checkout(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(checkout_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or(AppError::Internal("Vault not configured".into()))?
+    };
+
+    crate::services::checkouts::checkin_checkout(&db.pool, &vault_cfg, checkout_id, user.id).await?;
+
+    Ok(Json(json!({ "status": "CheckedIn" })))
 }
 
 #[cfg(test)]

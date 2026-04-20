@@ -74,6 +74,7 @@ pub fn build_router(state: SharedState) -> Router {
             put(admin::update_recordings),
         )
         .route("/api/admin/settings/vault", put(admin::update_vault))
+        .route("/api/admin/settings/dns", put(admin::update_dns))
         .route("/api/admin/health", get(health::service_health))
         .route(
             "/api/admin/roles",
@@ -157,6 +158,10 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::test_ad_sync_connection),
         )
         .route(
+            "/api/admin/ad-sync-configs/test-filter",
+            post(admin::test_pm_target_filter),
+        )
+        .route(
             "/api/admin/ad-sync-configs/:id",
             put(admin::update_ad_sync_config),
         )
@@ -183,6 +188,43 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/admin/connection-tags",
             get(admin::list_admin_connection_tags).post(admin::set_admin_connection_tags),
+        )
+        // ── Password Management admin routes ─────────────────────────
+        .route(
+            "/api/admin/approval-roles",
+            get(admin::list_approval_roles).post(admin::create_approval_role),
+        )
+        .route(
+            "/api/admin/approval-roles/:id",
+            put(admin::update_approval_role).delete(admin::delete_approval_role),
+        )
+        .route(
+            "/api/admin/approval-roles/:id/assignments",
+            get(admin::list_role_assignments).put(admin::set_role_assignments),
+        )
+        .route(
+            "/api/admin/approval-roles/:id/accounts",
+            get(admin::list_role_accounts).put(admin::set_role_accounts),
+        )
+        .route(
+            "/api/admin/account-mappings",
+            get(admin::list_account_mappings).post(admin::create_account_mapping),
+        )
+        .route(
+            "/api/admin/account-mappings/:id",
+            delete(admin::delete_account_mapping),
+        )
+        .route(
+            "/api/admin/ad-sync-configs/:id/unmapped-accounts",
+            get(admin::list_unmapped_accounts),
+        )
+        .route(
+            "/api/admin/pm/test-rotation",
+            post(admin::test_rotation),
+        )
+        .route(
+            "/api/admin/checkout-requests",
+            get(admin::list_checkout_requests),
         )
         .route("/api/recordings/:filename", get(user::get_recording))
         .layer(middleware::from_fn(require_admin))
@@ -214,6 +256,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/credential-profiles/:profile_id/mappings",
             get(user::get_profile_mappings),
+        )
+        .route(
+            "/api/user/credential-profiles/:profile_id/link-checkout",
+            post(user::link_checkout_to_profile),
         )
         .route(
             "/api/user/credential-mappings",
@@ -266,6 +312,35 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/sessions/:id/observe",
             get(user::my_observe_session),
+        )
+        // ── Password checkout user routes ────────────────────────────
+        .route(
+            "/api/user/managed-accounts",
+            get(user::my_managed_accounts),
+        )
+        .route(
+            "/api/user/checkouts",
+            get(user::my_checkouts).post(user::request_checkout),
+        )
+        .route(
+            "/api/user/checkouts/:id/decide",
+            post(user::decide_checkout),
+        )
+        .route(
+            "/api/user/checkouts/:id/reveal",
+            get(user::reveal_checkout_password),
+        )
+        .route(
+            "/api/user/checkouts/:id/retry",
+            post(user::retry_checkout_activation),
+        )
+        .route(
+            "/api/user/checkouts/:id/checkin",
+            post(user::checkin_checkout),
+        )
+        .route(
+            "/api/user/pending-approvals",
+            get(user::pending_approvals),
         )
         .route(
             "/api/files/upload",

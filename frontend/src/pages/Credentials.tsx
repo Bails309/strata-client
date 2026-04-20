@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSettings } from '../contexts/SettingsContext';
 import { createPortal } from 'react-dom';
+import Select from '../components/Select';
 import {
   getCredentialProfiles,
   createCredentialProfile,
@@ -10,9 +11,18 @@ import {
   setCredentialMapping,
   removeCredentialMapping,
   getMyConnections,
+  getMyCheckouts,
+  getMyManagedAccounts,
+  requestCheckout,
+  revealCheckoutPassword,
+  retryCheckoutActivation,
+  checkinCheckout,
+  linkCheckoutToProfile,
   CredentialProfile,
   CredentialMapping,
   Connection,
+  CheckoutRequest,
+  UserAccountMapping,
 } from '../api';
 
 interface EditingProfile {
@@ -24,6 +34,8 @@ interface EditingProfile {
 }
 
 export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
+  type Tab = 'profiles' | 'request' | 'my-checkouts';
+  const [tab, setTab] = useState<Tab>('profiles');
   const [profiles, setProfiles] = useState<CredentialProfile[]>([]);
   const { formatDateTime } = useSettings();
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -40,6 +52,40 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   const mappingTriggerRef = useRef<HTMLDivElement>(null);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [checkinId, setCheckinId] = useState<string | null>(null);
+  const [activeCheckouts, setActiveCheckouts] = useState<CheckoutRequest[]>([]);
+  const [allCheckouts, setAllCheckouts] = useState<CheckoutRequest[]>([]);
+  const [revealedPw, setRevealedPw] = useState<Record<string, string>>({});
+  const revealTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Auto-hide revealed password after 30 seconds
+  const scheduleHidePassword = (id: string) => {
+    if (revealTimers.current[id]) clearTimeout(revealTimers.current[id]);
+    revealTimers.current[id] = setTimeout(() => {
+      setRevealedPw((p) => { const { [id]: _, ...rest } = p; return rest; });
+      delete revealTimers.current[id];
+    }, 30000);
+  };
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(revealTimers.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  // Checkout request state
+  const [managedAccounts, setManagedAccounts] = useState<UserAccountMapping[]>([]);
+  const [selectedDn, setSelectedDn] = useState('');
+  const [duration, setDuration] = useState(60);
+  const [justification, setJustification] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const flash = (text: string) => { setMsg(text); setTimeout(() => setMsg(''), 4000); };
+
+  // Checkout-to-profile linking
+  const [linkingProfileId, setLinkingProfileId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -49,6 +95,17 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       ]);
       setProfiles(profs);
       setConnections(conns);
+
+      // Load active checkouts
+      getMyCheckouts()
+        .then((all) => {
+          setAllCheckouts(all);
+          setActiveCheckouts(all.filter((c) => !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending')));
+        })
+        .catch(() => {});
+
+      // Load managed accounts for checkout request
+      getMyManagedAccounts().then(setManagedAccounts).catch(() => {});
 
       // Load mappings for all profiles
       const m: Record<string, CredentialMapping[]> = {};
@@ -176,6 +233,99 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
     }
   }
 
+  // ── Checkout handlers ──
+  const handleRequestCheckout = async () => {
+    if (!selectedDn) return;
+    setSubmitting(true);
+    try {
+      const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
+      const res = await requestCheckout({
+        managed_ad_dn: selectedDn,
+        ad_sync_config_id: acct?.ad_sync_config_id || undefined,
+        requested_duration_mins: duration,
+        justification_comment: justification || undefined,
+      });
+      flash(`Checkout ${res.status === 'Approved' ? 'approved and activated' : 'submitted for approval'}`);
+      setSelectedDn('');
+      setJustification('');
+      load();
+    } catch (e: any) {
+      flash(e.message || 'Request failed');
+    }
+    setSubmitting(false);
+  };
+
+  const handleRevealCheckout = async (id: string) => {
+    try {
+      const res = await revealCheckoutPassword(id);
+      setRevealedPw((p) => ({ ...p, [id]: res.password }));
+      scheduleHidePassword(id);
+    } catch (e: any) {
+      flash(e.message || 'Failed to reveal password');
+    }
+  };
+
+  const handleLinkCheckout = async (profileId: string, checkoutId: string | null) => {
+    try {
+      await linkCheckoutToProfile(profileId, checkoutId);
+      flash(checkoutId ? 'Checkout linked to profile' : 'Checkout unlinked');
+      setLinkingProfileId(null);
+      await load();
+    } catch (e: any) {
+      flash(e.message || 'Failed to link checkout');
+    }
+  };
+
+  const getTimeRemaining = (expiresAt?: string) => {
+    if (!expiresAt) return '';
+    const diff = new Date(expiresAt).getTime() - Date.now();
+    if (diff <= 0) return 'Expired';
+    const secs = Math.floor(diff / 1000);
+    const hrs = Math.floor(secs / 3600);
+    const mins = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (hrs > 0) return `${hrs}h ${mins}m ${s}s remaining`;
+    if (mins > 0) return `${mins}m ${s}s remaining`;
+    return `${s}s remaining`;
+  };
+
+  // Detect if an Approved/Pending checkout is stale (created_at + duration has passed)
+  const isCheckoutStale = (c: CheckoutRequest) => {
+    if (c.status !== 'Approved' && c.status !== 'Pending') return false;
+    const deadline = new Date(c.created_at).getTime() + c.requested_duration_mins * 60000;
+    return Date.now() > deadline;
+  };
+
+  // Detect if a checkout is effectively expired (status Expired, stale, or Active past expires_at)
+  const isCheckoutExpired = (c: CheckoutRequest) => {
+    if (c.status === 'Expired' || c.status === 'Denied' || c.status === 'CheckedIn') return true;
+    if (isCheckoutStale(c)) return true;
+    if (c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() <= Date.now()) return true;
+    return false;
+  };
+
+  // Is this checkout truly active (Active status AND not past expires_at)
+  const isCheckoutLive = (c: CheckoutRequest) => {
+    return c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() > Date.now();
+  };
+
+  // Effective display status
+  const getEffectiveStatus = (c: CheckoutRequest) => {
+    if (c.status === 'CheckedIn') return 'Checked In';
+    if (isCheckoutStale(c)) return 'Expired — activation failed';
+    if (c.status === 'Active' && c.expires_at && new Date(c.expires_at!).getTime() <= Date.now()) return 'Expired';
+    return c.status;
+  };
+
+  // Live countdown tick for active checkouts
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const hasActive = allCheckouts.some((c) => isCheckoutLive(c));
+    if (!hasActive) return;
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [allCheckouts]);
+
   // Connections already mapped to any profile by this user
   const mappedConnectionIds = new Set(
     Object.values(mappings).flat().map((m) => m.connection_id),
@@ -221,9 +371,10 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         <div>
           <h1 className="!mb-0">Credentials</h1>
           <p className="text-txt-secondary text-sm mt-1">
-            Manage your saved credentials and map them to connections.
+            Manage your saved credentials, request password checkouts, and map them to connections.
           </p>
         </div>
+        {tab === 'profiles' && (
         <button
           className="btn-primary"
           onClick={() => setEditing({ label: '', username: '', password: '', ttl_hours: 12 })}
@@ -235,13 +386,200 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
             New Profile
           </span>
         </button>
+        )}
       </div>
 
-      {error && (
-        <div className="rounded-sm mb-4 px-4 py-2 text-[0.8125rem] bg-danger-dim text-danger">
-          {error}
+      {(msg || error) && (
+        <div className={`rounded-sm mb-4 px-4 py-2 text-[0.8125rem] ${error ? 'bg-danger-dim text-danger' : 'bg-success-dim text-success'}`}>
+          {error || msg}
         </div>
       )}
+
+      <div className="tabs mb-4">
+        {(['profiles', 'request', 'my-checkouts'] as Tab[]).map((t) => (
+          <button
+            key={t}
+            className={`tab ${tab === t ? 'tab-active' : ''}`}
+            onClick={() => setTab(t)}
+          >
+            {t === 'profiles'
+              ? 'Profiles'
+              : t === 'request'
+                ? 'Request Checkout'
+                : `My Checkouts${allCheckouts.filter((c) => isCheckoutLive(c)).length ? ` (${allCheckouts.filter((c) => isCheckoutLive(c)).length})` : ''}`}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Request Checkout ── */}
+      {tab === 'request' && (
+        <div className="card p-6">
+          <h2 className="text-lg font-semibold mb-4">Request Password Checkout</h2>
+          {managedAccounts.length === 0 ? (
+            <p className="text-txt-secondary">No managed accounts assigned to you. Contact an administrator.</p>
+          ) : managedAccounts.every((a) => allCheckouts.some(
+              (c) => c.managed_ad_dn === a.managed_ad_dn && !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending')
+            )) ? (
+            <p className="text-txt-secondary">All managed accounts already have active checkouts. Wait for current checkouts to expire before requesting new ones.</p>
+          ) : (
+            <>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Managed Account</label>
+                <Select
+                  value={selectedDn}
+                  onChange={setSelectedDn}
+                  placeholder="Select account..."
+                  options={managedAccounts
+                    .filter((a) => !allCheckouts.some(
+                      (c) => c.managed_ad_dn === a.managed_ad_dn && !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending')
+                    ))
+                    .map((a) => ({
+                      value: a.managed_ad_dn,
+                      label: a.managed_ad_dn + (a.can_self_approve ? ' (self-approve)' : ''),
+                    }))}
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Duration (minutes, 1–720)</label>
+                <input
+                  type="number"
+                  className="input w-32"
+                  min={1}
+                  max={720}
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Justification (optional)</label>
+                <textarea
+                  className="input w-full"
+                  rows={2}
+                  value={justification}
+                  onChange={(e) => setJustification(e.target.value)}
+                  placeholder="Reason for checkout..."
+                />
+              </div>
+              <button
+                className="btn btn-primary"
+                onClick={handleRequestCheckout}
+                disabled={!selectedDn || submitting}
+              >
+                {submitting ? 'Submitting...' : 'Request Checkout'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── My Checkouts ── */}
+      {tab === 'my-checkouts' && (
+        <div>
+          <button className="btn btn-sm mb-4" onClick={load}>Refresh</button>
+          {allCheckouts.length === 0 ? (
+            <p className="text-txt-secondary">No checkout requests yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {allCheckouts.filter((c) => {
+                // Hide old Expired/stale checkouts if a newer Active one exists for the same account
+                if (c.status === 'Expired' || isCheckoutStale(c) || isCheckoutExpired(c)) {
+                  const hasNewer = allCheckouts.some(
+                    (other) => other.managed_ad_dn === c.managed_ad_dn
+                      && other.id !== c.id
+                      && !isCheckoutExpired(other)
+                      && (other.status === 'Active' || other.status === 'Approved' || other.status === 'Pending')
+                      && new Date(other.created_at).getTime() > new Date(c.created_at).getTime()
+                  );
+                  return !hasNewer;
+                }
+                return true;
+              }).map((c) => (
+                <div key={c.id} className="card p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-medium">{c.managed_ad_dn}</div>
+                    <span
+                      className={`text-xs font-medium px-2 py-0.5 rounded ${
+                        c.status === 'CheckedIn'
+                          ? 'bg-accent/20 text-accent'
+                          : isCheckoutExpired(c)
+                            ? 'bg-danger/20 text-danger'
+                            : isCheckoutLive(c)
+                              ? 'bg-success/20 text-success'
+                              : c.status === 'Pending'
+                                ? 'bg-warning/20 text-warning'
+                                : c.status === 'Denied'
+                                  ? 'bg-danger/20 text-danger'
+                                  : 'bg-border/20 text-txt-secondary'
+                      }`}
+                    >
+                      {getEffectiveStatus(c)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-txt-secondary mb-2">
+                    Duration: {c.requested_duration_mins}m
+                    {c.justification_comment && ` · ${c.justification_comment}`}
+                  </div>
+                  {isCheckoutLive(c) && (
+                    <div className={`text-sm font-mono font-semibold mb-2 tabular-nums ${
+                      new Date(c.expires_at!).getTime() - Date.now() < 300000 ? 'text-danger' :
+                      new Date(c.expires_at!).getTime() - Date.now() < 900000 ? 'text-warning' : 'text-success'
+                    }`}>
+                      ⏱ {getTimeRemaining(c.expires_at)}
+                    </div>
+                  )}
+                  {isCheckoutLive(c) && (
+                    <div>
+                      {revealedPw[c.id] ? (
+                        <div className="bg-bg-secondary p-3 rounded font-mono text-sm break-all">
+                          {revealedPw[c.id]}
+                        </div>
+                      ) : (
+                        <button
+                          className="btn btn-sm btn-primary"
+                          onClick={() => handleRevealCheckout(c.id)}
+                        >
+                          Reveal Password
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-sm btn-outline ml-2 mt-2"
+                        onClick={() => setCheckinId(c.id)}
+                      >
+                        Check In
+                      </button>
+                    </div>
+                  )}
+                  {c.status === 'Approved' && !isCheckoutLive(c) && (
+                    <div className="mt-2">
+                      <div className="text-xs text-warning mb-2">
+                        Activation failed — the password was not set in AD. You can retry.
+                      </div>
+                      <button
+                        className="btn btn-sm btn-primary"
+                        onClick={async () => {
+                          try {
+                            setError('');
+                            await retryCheckoutActivation(c.id);
+                            await load();
+                          } catch (e: any) {
+                            setError(e?.message || 'Retry failed');
+                          }
+                        }}
+                      >
+                        Retry Activation
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Profiles tab ── */}
+      {tab === 'profiles' && (<>
+
 
       {/* ── Create / Edit modal ── */}
       {editing && (
@@ -256,56 +594,186 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               autoFocus
             />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          {editing.label.startsWith('[managed]') ? (
+            <div className="bg-accent/5 border border-accent/20 rounded-lg px-4 py-3 mb-2">
+              <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">Managed Account</div>
+              <div className="text-xs text-txt-secondary">
+                This profile is automatically managed by the password checkout system. Username, password, and expiry are controlled by the active checkout.
+              </div>
+            </div>
+          ) : (<>
+          {(() => {
+            const currentProfile = editing.id ? profiles.find((p) => p.id === editing.id) : null;
+            const editLinkedCheckout = currentProfile?.checkout_id
+              ? allCheckouts.find((c) => c.id === currentProfile.checkout_id)
+              : null;
+            const hasLinkedCheckout = !!editLinkedCheckout && isCheckoutLive(editLinkedCheckout);
+            return hasLinkedCheckout ? (
+              <div className="form-group">
+                <div className="bg-success/5 border border-success/20 rounded-lg px-4 py-3">
+                  <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">Managed Account Linked</div>
+                  <div className="text-sm font-medium">{editLinkedCheckout.managed_ad_dn}</div>
+                  <div className="text-xs text-txt-secondary mt-1">
+                    Username and password are managed by the checked-out account.
+                    Expires {formatDateTime(editLinkedCheckout.expires_at ?? null)} · {getTimeRemaining(editLinkedCheckout.expires_at)}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                  <div className="form-group">
+                    <label>Username</label>
+                    <input
+                      value={editing.username}
+                      onChange={(e) => setEditing({ ...editing, username: e.target.value })}
+                      placeholder={editing.id ? '(unchanged)' : 'sAMAccountName (e.g. jsmith)'}
+                      autoComplete="off"
+                    />
+                    <p className="text-txt-tertiary text-[0.6875rem] mt-1">
+                      Note: Use sAMAccountName format (e.g. jsmith), not UPN or full email address.
+                    </p>
+                  </div>
+                  <div className="form-group">
+                    <label>Password</label>
+                    <input
+                      type="password"
+                      value={editing.password}
+                      onChange={(e) => setEditing({ ...editing, password: e.target.value })}
+                      placeholder={editing.id ? '(unchanged)' : 'Enter password'}
+                      autoComplete="new-password"
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Password Expiry</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={1}
+                      max={12}
+                      step={1}
+                      value={editing.ttl_hours}
+                      onChange={(e) => setEditing({ ...editing, ttl_hours: Number(e.target.value) })}
+                      className="flex-1"
+                      style={{ accentColor: 'var(--color-accent)' }}
+                    />
+                    <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
+                      {editing.ttl_hours} {editing.ttl_hours === 1 ? 'hour' : 'hours'}
+                    </span>
+                  </div>
+                  <p className="text-txt-tertiary text-xs mt-1">
+                    Credentials expire after this duration and must be updated. Maximum 12 hours.
+                  </p>
+                </div>
+              </>
+            );
+          })()}
+          {/* Checkout linking */}
+          {editing.id && activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 && (
             <div className="form-group">
-              <label>Username</label>
-              <input
-                value={editing.username}
-                onChange={(e) => setEditing({ ...editing, username: e.target.value })}
-                placeholder={editing.id ? '(unchanged)' : 'sAMAccountName (e.g. jsmith)'}
-                autoComplete="off"
-              />
-              <p className="text-txt-tertiary text-[0.6875rem] mt-1">
-                Note: Use sAMAccountName format (e.g. jsmith), not UPN or full email address.
+              <label>Link Checked-Out Account</label>
+              <p className="text-txt-tertiary text-xs mb-2">
+                Populate this profile with credentials from an active password checkout. The profile's expiry will match the checkout duration.
               </p>
+              {(() => {
+                const currentProfile = profiles.find((p) => p.id === editing.id);
+                const linkedCheckout = currentProfile?.checkout_id
+                  ? allCheckouts.find((c) => c.id === currentProfile.checkout_id)
+                  : null;
+                return linkedCheckout ? (
+                  <div className="flex items-center justify-between bg-success/5 border border-success/20 rounded-lg px-4 py-2.5">
+                    <div>
+                      <div className="text-sm font-medium">{linkedCheckout.managed_ad_dn}</div>
+                      <div className="text-xs text-txt-secondary">
+                        {isCheckoutLive(linkedCheckout)
+                          ? `Expires ${formatDateTime(linkedCheckout.expires_at ?? null)} · ${getTimeRemaining(linkedCheckout.expires_at!)}`
+                          : linkedCheckout.status === 'CheckedIn' ? 'Checked in — password scrambled'
+                          : linkedCheckout.status === 'Expired' || isCheckoutExpired(linkedCheckout) ? 'Checkout expired' : linkedCheckout.status}
+                      </div>
+                    </div>
+                    <button
+                      className="btn !px-2 !py-1 text-xs text-danger"
+                      onClick={async () => {
+                        await handleLinkCheckout(editing.id!, null);
+                      }}
+                    >
+                      Unlink
+                    </button>
+                  </div>
+                ) : (
+                  <Select
+                    value=""
+                    onChange={async (val) => {
+                      if (val) await handleLinkCheckout(editing.id!, val);
+                    }}
+                    placeholder="— Select a checked-out account —"
+                    options={activeCheckouts
+                      .filter((c) => isCheckoutLive(c))
+                      .map((c) => ({
+                        value: c.id,
+                        label: `${c.managed_ad_dn} — ${getTimeRemaining(c.expires_at)}`,
+                      }))}
+                  />
+                );
+              })()}
             </div>
-            <div className="form-group">
-              <label>Password</label>
-              <input
-                type="password"
-                value={editing.password}
-                onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-                placeholder={editing.id ? '(unchanged)' : 'Enter password'}
-                autoComplete="new-password"
-              />
-            </div>
-          </div>
-          <div className="form-group">
-            <label>Password Expiry</label>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={1}
-                max={12}
-                step={1}
-                value={editing.ttl_hours}
-                onChange={(e) => setEditing({ ...editing, ttl_hours: Number(e.target.value) })}
-                className="flex-1"
-                style={{ accentColor: 'var(--color-accent)' }}
-              />
-              <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
-                {editing.ttl_hours} {editing.ttl_hours === 1 ? 'hour' : 'hours'}
-              </span>
-            </div>
-            <p className="text-txt-tertiary text-xs mt-1">
-              Credentials expire after this duration and must be updated. Maximum 12 hours.
-            </p>
-          </div>
+          )}
+          </>)}
           <div className="flex items-center gap-3 mt-2">
             <button className="btn-primary" onClick={handleSaveProfile} disabled={saving}>
               {saving ? 'Saving…' : editing.id ? 'Update' : 'Create Profile'}
             </button>
             <button className="btn" onClick={() => setEditing(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Active Checkouts ── */}
+      {activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-txt-secondary mb-3 uppercase tracking-wider">Active Checkouts</h2>
+          <div className="flex flex-col gap-2">
+            {activeCheckouts.filter((c) => isCheckoutLive(c)).map((co) => (
+              <div key={co.id} className="card flex items-center justify-between px-5 py-3">
+                <div>
+                  <div className="text-sm font-medium">{co.managed_ad_dn}</div>
+                  <div className="text-xs text-txt-secondary">
+                    {isCheckoutLive(co)
+                      ? `Expires: ${formatDateTime(co.expires_at ?? null)}`
+                      : getEffectiveStatus(co)}
+                    {' · '}{co.requested_duration_mins}m
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                    isCheckoutLive(co)
+                      ? 'bg-success/20 text-success'
+                      : 'bg-warning/20 text-warning'
+                  }`}>
+                    {getEffectiveStatus(co)}
+                  </span>
+                  {isCheckoutLive(co) && (
+                    revealedPw[co.id] ? (
+                      <code className="text-xs bg-bg-secondary px-2 py-1 rounded font-mono">{revealedPw[co.id]}</code>
+                    ) : (
+                      <button
+                        className="btn btn-sm"
+                        onClick={async () => {
+                          try {
+                            const res = await revealCheckoutPassword(co.id);
+                            setRevealedPw((p) => ({ ...p, [co.id]: res.password }));
+                            scheduleHidePassword(co.id);
+                          } catch { /* */ }
+                        }}
+                      >
+                        Reveal
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -322,13 +790,23 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          {profiles.map((profile) => {
+          {profiles.filter((p) => {
+            // Hide [managed] profiles that are linked to another user profile
+            if (p.label.startsWith('[managed]')) {
+              const isLinked = profiles.some((other) => other.checkout_id && other.id !== p.id
+                && allCheckouts.find((c) => c.id === other.checkout_id)?.managed_ad_dn === p.label.replace('[managed] ', ''));
+              return !isLinked;
+            }
+            return true;
+          }).map((profile) => {
             const isExpanded = expanded === profile.id;
             const profileMappings = mappings[profile.id] || [];
             const isAddingMapping = mappingProfileId === profile.id;
+            const linkedCo = profile.checkout_id ? allCheckouts.find((c) => c.id === profile.checkout_id) : null;
+            const linkedActive = linkedCo ? isCheckoutLive(linkedCo) : false;
 
             return (
-              <div key={profile.id} className="card !p-0 !overflow-hidden" style={profile.expired ? { borderColor: 'var(--color-danger)', borderWidth: 1 } : undefined}>
+              <div key={profile.id} className="card !p-0 !overflow-hidden" style={profile.expired && !linkedActive ? { borderColor: 'var(--color-danger)', borderWidth: 1 } : undefined}>
                 {/* Profile header */}
                 <div
                   className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors duration-150"
@@ -349,13 +827,25 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                       <span className="text-txt-tertiary text-xs ml-3">
                         {profileMappings.length} connection{profileMappings.length !== 1 ? 's' : ''}
                       </span>
-                      {profile.expired ? (
+                      {linkedActive && linkedCo?.expires_at ? (
+                        <span className={`ml-3 text-xs font-semibold ${
+                          new Date(linkedCo.expires_at).getTime() - Date.now() < 300000 ? 'text-danger' :
+                          new Date(linkedCo.expires_at).getTime() - Date.now() < 900000 ? 'text-warning' : 'text-success'
+                        }`}>
+                          ⏱ {getTimeRemaining(linkedCo.expires_at)}
+                        </span>
+                      ) : profile.expired ? (
                         <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
                           Expired — update required
                         </span>
                       ) : (
                         <span className="ml-3 text-xs text-txt-tertiary">
                           Expires {formatDateTime(profile.expires_at)}
+                        </span>
+                      )}
+                      {profile.checkout_id && (
+                        <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-accent/10 text-accent">
+                          🔗 Checkout linked
                         </span>
                       )}
                     </div>
@@ -426,6 +916,66 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                       <p className="text-txt-tertiary text-sm mb-3">
                         No connections mapped. Add a connection below so these credentials are used automatically.
                       </p>
+                    )}
+
+                    {/* Linked checkout badge / link controls */}
+                    {!profile.label.startsWith('[managed]') && activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 && (
+                      <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--color-border)' }}>
+                        <label className="text-xs font-medium text-txt-secondary mb-2 block uppercase tracking-wider">Checked-Out Account</label>
+                        {profile.checkout_id ? (() => {
+                          const linked = allCheckouts.find((c) => c.id === profile.checkout_id);
+                          return (
+                            <div className="flex items-center justify-between bg-success/5 border border-success/20 rounded-lg px-4 py-2.5">
+                              <div>
+                                <div className="text-sm font-medium">{linked?.managed_ad_dn || 'Linked checkout'}</div>
+                                <div className="text-xs text-txt-secondary">
+                                  {linked && isCheckoutLive(linked)
+                                    ? `Expires ${formatDateTime(linked.expires_at ?? null)} · ${getTimeRemaining(linked.expires_at!)}`
+                                    : linked?.status === 'CheckedIn' ? 'Checked in — password scrambled'
+                                    : linked?.status === 'Expired' || (linked && isCheckoutExpired(linked)) ? 'Checkout expired — credentials may be stale' : 'Unknown status'}
+                                </div>
+                              </div>
+                              <button
+                                className="btn !px-2 !py-1 text-xs text-danger"
+                                onClick={() => handleLinkCheckout(profile.id, null)}
+                              >
+                                Unlink
+                              </button>
+                            </div>
+                          );
+                        })() : linkingProfileId === profile.id ? (
+                          <div>
+                            <Select
+                              value=""
+                              onChange={(val) => {
+                                if (val) handleLinkCheckout(profile.id, val);
+                              }}
+                              placeholder="Select an active checkout…"
+                              className="w-full mb-2"
+                              options={activeCheckouts
+                                .filter((c) => isCheckoutLive(c))
+                                .map((c) => ({
+                                  value: c.id,
+                                  label: `${c.managed_ad_dn} — ${getTimeRemaining(c.expires_at)}`,
+                                }))}
+                            />
+                            <button className="btn text-xs" onClick={() => setLinkingProfileId(null)}>Cancel</button>
+                          </div>
+                        ) : (
+                          <button
+                            className="btn text-xs"
+                            onClick={() => setLinkingProfileId(profile.id)}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                              </svg>
+                              Link Checked-Out Account
+                            </span>
+                          </button>
+                        )}
+                      </div>
                     )}
 
                     {/* Add mapping */}
@@ -543,6 +1093,61 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
             );
           })}
         </div>
+      )}
+      </>)}
+
+      {/* ── Check-In Confirmation Modal ── */}
+      {checkinId && createPortal(
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => setCheckinId(null)}
+        >
+          <div 
+            className="card max-w-sm w-full mx-4 shadow-2xl scale-in"
+            onClick={e => e.stopPropagation()}
+            style={{ border: '1px solid rgba(var(--accent-rgb, 139, 92, 246), 0.3)' }}
+          >
+            <div className="flex items-center gap-3 text-accent mb-4">
+              <div className="w-10 h-10 rounded-full bg-accent/10 flex items-center justify-center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+                </svg>
+              </div>
+              <h3 className="!mb-0">Check In Account?</h3>
+            </div>
+            
+            <p className="text-txt-secondary text-sm mb-6">
+              The password will be <span className="text-txt-primary font-semibold">scrambled in Active Directory</span> and the checkout will be ended. The account will become available for checkout again.
+            </p>
+
+            <div className="flex gap-3">
+              <button 
+                className="btn-primary flex-1"
+                onClick={async () => {
+                  const id = checkinId;
+                  setCheckinId(null);
+                  try {
+                    setError('');
+                    await checkinCheckout(id);
+                    setRevealedPw((prev) => { const { [id]: _, ...rest } = prev; return rest; });
+                    await load();
+                  } catch (e: any) {
+                    setError(e?.message || 'Check-in failed');
+                  }
+                }}
+              >
+                Check In
+              </button>
+              <button 
+                className="btn flex-1"
+                onClick={() => setCheckinId(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* ── Delete Confirmation Modal ── */}

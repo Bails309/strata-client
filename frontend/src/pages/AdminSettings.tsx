@@ -14,6 +14,7 @@ import {
   KerberosRealm,
   updateRecordings,
   updateVault,
+  updateDns,
   updateAuthMethods,
   getServiceHealth,
   getMetrics,
@@ -42,6 +43,7 @@ import {
   deleteAdSyncConfig,
   triggerAdSync,
   testAdSyncConnection,
+  testPmTargetFilter,
   testSsoConnection,
   getAdSyncRuns,
   AdSyncConfig,
@@ -62,10 +64,27 @@ import {
   deleteAdminTag,
   getAdminConnectionTagsAdmin,
   setAdminConnectionTags,
+  getApprovalRoles,
+  createApprovalRole,
+  deleteApprovalRole,
+  getRoleAssignments,
+  setRoleAssignments as apiSetRoleAssignments,
+  getRoleAccounts,
+  setRoleAccounts,
+  getAccountMappings,
+  createAccountMapping,
+  deleteAccountMapping,
+  getUnmappedAccounts,
+  testRotation,
+  getCheckoutRequests,
+  ApprovalRole,
+  UserAccountMapping,
+  CheckoutRequest,
+  DiscoveredAccount,
 } from '../api';
 import { formatDateTime } from '../utils/time';
 
-type Tab = 'health' | 'display' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'tags' | 'ad-sync' | 'sessions' | 'security';
+type Tab = 'health' | 'display' | 'network' | 'sso' | 'kerberos' | 'vault' | 'recordings' | 'access' | 'tags' | 'ad-sync' | 'passwords' | 'sessions' | 'security';
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
   const [tab, setTab] = useState<Tab>(
@@ -78,6 +97,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [adSyncConfigs, setAdSyncConfigs] = useState<AdSyncConfig[]>([]);
   const [msg, setMsg] = useState('');
   const [loadError, setLoadError] = useState('');
 
@@ -89,6 +109,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       getConnections().then(setConnections),
       getConnectionFolders().then(setFolders),
       getUsers().then(setUsers),
+      getAdSyncConfigs().then(setAdSyncConfigs).catch(() => {}),
     ]).catch(() => setLoadError('Failed to load settings'));
   }, []);
 
@@ -114,7 +135,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       )}
 
       <div className="tabs">
-        {(['health', 'display', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'tags', 'ad-sync', 'sessions', 'security'] as Tab[])
+        {(['health', 'display', 'network', 'sso', 'kerberos', 'vault', 'recordings', 'access', 'tags', 'ad-sync', 'passwords', 'sessions', 'security'] as Tab[])
           .filter(t => {
             if (t === 'access') return user.can_manage_system || user.can_manage_users || user.can_manage_connections
               || user.can_create_users || user.can_create_user_groups
@@ -128,7 +149,8 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
           .map((t) => (
             <button key={t} className={`tab ${tab === t ? 'tab-active' : ''}`} onClick={() => setTab(t)}>
               {t === 'sso' ? 'SSO / OIDC' : 
-               t === 'ad-sync' ? 'AD Sync' : 
+               t === 'ad-sync' ? 'AD Sync' :
+               t === 'passwords' ? 'Password Mgmt' :
                t === 'sessions' ? 'Sessions' : 
                t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
@@ -143,6 +165,11 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       {/* ── Display ── */}
       {tab === 'display' && (
         <DisplayTab settings={settings} onSave={() => { flash('Display settings updated'); getSettings().then(setSettings).catch(() => {}); }} />
+      )}
+
+      {/* ── Network / DNS ── */}
+      {tab === 'network' && (
+        <NetworkTab settings={settings} onSave={() => { flash('Network settings updated'); getSettings().then(setSettings).catch(() => {}); }} />
       )}
 
       {/* ── SSO ── */}
@@ -190,6 +217,11 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       {/* ── AD Sync ── */}
       {tab === 'ad-sync' && (
         <AdSyncTab folders={folders} onSave={() => flash('AD Sync updated')} />
+      )}
+
+      {/* ── Password Management ── */}
+      {tab === 'passwords' && (
+        <PasswordsTab users={users} adSyncConfigs={adSyncConfigs} onSave={() => flash('Password management updated')} />
       )}
 
       {/* ── Active Sessions (NVR) ── */}
@@ -3551,6 +3583,10 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
   const [syncing, setSyncing] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ status: string; message: string; sample?: string[]; count?: number } | null>(null);
+  const [rotationTesting, setRotationTesting] = useState(false);
+  const [rotationResult, setRotationResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [filterTesting, setFilterTesting] = useState(false);
+  const [filterResult, setFilterResult] = useState<{ status: string; message: string; hint?: string; count?: number; sample?: { dn: string; name: string; description?: string }[] } | null>(null);
   const certFileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
@@ -3562,10 +3598,17 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
   const handleSave = async () => {
     if (!editing) return;
     try {
+      // When 'Use AD source's bind credentials' is selected, pm_bind_user is null/undefined.
+      // Send explicit empty strings so the backend clears them in the database.
+      const payload = {
+        ...editing,
+        pm_bind_user: editing.pm_bind_user ?? '',
+        pm_bind_password: editing.pm_bind_password ?? '',
+      };
       if (editing.id) {
-        await updateAdSyncConfig(editing.id, editing);
+        await updateAdSyncConfig(editing.id, payload);
       } else {
-        await createAdSyncConfig(editing);
+        await createAdSyncConfig(payload);
       }
       setEditing(null);
       load();
@@ -3615,6 +3658,34 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
       setTestResult({ status: 'error', message: e.message || 'Test failed' });
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleRotationTest = async () => {
+    if (!editing?.id) return;
+    setRotationTesting(true);
+    setRotationResult(null);
+    try {
+      const res = await testRotation(editing.id);
+      setRotationResult(res);
+    } catch (e: any) {
+      setRotationResult({ success: false, message: e.message || 'Rotation test failed' });
+    } finally {
+      setRotationTesting(false);
+    }
+  };
+
+  const handleTestFilter = async () => {
+    if (!editing) return;
+    setFilterTesting(true);
+    setFilterResult(null);
+    try {
+      const res = await testPmTargetFilter(editing);
+      setFilterResult(res);
+    } catch (e: any) {
+      setFilterResult({ status: 'error', message: e.message || 'Filter test failed' });
+    } finally {
+      setFilterTesting(false);
     }
   };
 
@@ -3888,6 +3959,195 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
                 ))}
               </div>
             </>
+          )}
+        </div>
+
+        {/* ── Password Management ── */}
+        <div className="mt-6 border-t border-border/20 pt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold uppercase tracking-wider">Password Management</h4>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="checkbox"
+                checked={editing.pm_enabled ?? false}
+                onChange={(e) => setEditing({ ...editing, pm_enabled: e.target.checked })}
+              />
+              Enable
+            </label>
+          </div>
+
+          {editing.pm_enabled && (
+            <div className="space-y-4">
+              {/* Credential source */}
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider opacity-60 block mb-2">Service Account Credentials</span>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      className="radio"
+                      name="pm_cred_source"
+                      checked={!editing.pm_bind_user}
+                      onChange={() => setEditing({ ...editing, pm_bind_user: undefined, pm_bind_password: undefined })}
+                    />
+                    Use this AD source&apos;s bind credentials
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      className="radio"
+                      name="pm_cred_source"
+                      checked={editing.pm_bind_user != null && editing.pm_bind_user !== undefined}
+                      onChange={() => setEditing({ ...editing, pm_bind_user: editing.pm_bind_user || '', pm_bind_password: editing.pm_bind_password || '' })}
+                    />
+                    Use separate credentials for password management
+                  </label>
+                </div>
+                {(editing.pm_bind_user != null && editing.pm_bind_user !== undefined) && (
+                  <div className="grid grid-cols-2 gap-4 mt-2 ml-6">
+                    <label className="block">
+                      <span className="text-xs font-medium">PM Bind DN</span>
+                      <input className="input mt-1" value={editing.pm_bind_user || ''} onChange={(e) => setEditing({ ...editing, pm_bind_user: e.target.value })} placeholder="CN=PMServiceAcct,OU=Service Accounts,DC=contoso,DC=com" />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-medium">PM Bind Password</span>
+                      <input className="input mt-1" type="password" value={editing.pm_bind_password || ''} onChange={(e) => setEditing({ ...editing, pm_bind_password: e.target.value })} placeholder="••••••••" />
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              {/* Target filter */}
+              <div>
+                <label className="block">
+                  <span className="text-xs font-semibold uppercase tracking-wider opacity-60">Target Account Filter</span>
+                  <div className="flex gap-2 mt-1">
+                    <input className="input flex-1" value={editing.pm_target_filter || '(&(objectCategory=person)(objectClass=user))'} onChange={(e) => setEditing({ ...editing, pm_target_filter: e.target.value })} placeholder="(&(objectCategory=person)(objectClass=user))" />
+                    <button
+                      className="btn btn-sm btn-secondary whitespace-nowrap"
+                      disabled={filterTesting}
+                      onClick={(e) => { e.preventDefault(); handleTestFilter(); }}
+                    >
+                      {filterTesting ? 'Searching...' : '🔍 Preview'}
+                    </button>
+                  </div>
+                  <span className="text-xs opacity-50">LDAP filter to discover managed accounts for password checkout</span>
+                </label>
+                {filterResult && (
+                  <div className={`mt-2 p-3 rounded-lg border text-sm ${filterResult.status === 'success' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span>{filterResult.status === 'success' ? '✅' : '❌'}</span>
+                      <span className="font-medium">{filterResult.message}</span>
+                    </div>
+                    {filterResult.hint && (
+                      <div className="mt-2 p-2 rounded bg-yellow-500/10 border border-yellow-500/20 text-yellow-200/90 text-xs leading-relaxed">
+                        <span className="font-semibold">💡 </span>{filterResult.hint}
+                      </div>
+                    )}
+                    {filterResult.sample && filterResult.sample.length > 0 && (
+                      <div className="mt-2 max-h-48 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-left opacity-60">
+                              <th className="pb-1 pr-4">Account Name</th>
+                              <th className="pb-1 pr-4">Distinguished Name</th>
+                              <th className="pb-1">Description</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filterResult.sample.map((u, i) => (
+                              <tr key={i} className="border-t border-border/10">
+                                <td className="py-1 pr-4 font-medium">{u.name}</td>
+                                <td className="py-1 pr-4 opacity-70 break-all">{u.dn}</td>
+                                <td className="py-1 opacity-50">{u.description || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {(filterResult.count ?? 0) > 25 && (
+                          <p className="mt-1 text-xs opacity-50">Showing first 25 of {filterResult.count} accounts</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Password policy */}
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider opacity-60 block mb-2">Password Generation Policy</span>
+                <p className="text-xs opacity-50 mb-2">Generated passwords will comply with these rules so they are accepted by Active Directory.</p>
+                <div className="flex items-center gap-4 mb-2">
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="text-xs font-medium">Minimum Length</span>
+                    <input type="number" className="input w-20" min={8} max={128} value={editing.pm_pwd_min_length ?? 16} onChange={(e) => setEditing({ ...editing, pm_pwd_min_length: Number(e.target.value) })} />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                  {([
+                    ['pm_pwd_require_uppercase', 'Require uppercase (A-Z)'],
+                    ['pm_pwd_require_lowercase', 'Require lowercase (a-z)'],
+                    ['pm_pwd_require_numbers', 'Require numbers (0-9)'],
+                    ['pm_pwd_require_symbols', 'Require special characters (!@#$...)'],
+                  ] as [keyof AdSyncConfig, string][]).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="checkbox"
+                        checked={(editing[key] as boolean) ?? true}
+                        onChange={(e) => setEditing({ ...editing, [key]: e.target.checked })}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Auto-rotation */}
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider opacity-60 block mb-2">Service Account Auto-Rotation (Zero-Knowledge)</span>
+                <p className="text-xs opacity-50 mb-2">When enabled, the service account will automatically rotate its own password on a schedule. The new password is sealed in Vault — no human ever sees it.</p>
+                <label className="flex items-center gap-2 text-sm mb-2">
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={editing.pm_auto_rotate_enabled ?? false}
+                    onChange={(e) => setEditing({ ...editing, pm_auto_rotate_enabled: e.target.checked })}
+                  />
+                  Enable automatic rotation
+                </label>
+                {editing.pm_auto_rotate_enabled && (
+                  <div className="flex items-center gap-4 ml-6 mb-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <span className="text-xs font-medium">Rotation interval (days)</span>
+                      <input type="number" className="input w-20" min={1} max={365} value={editing.pm_auto_rotate_interval_days ?? 30} onChange={(e) => setEditing({ ...editing, pm_auto_rotate_interval_days: Number(e.target.value) })} />
+                    </label>
+                  </div>
+                )}
+                {editing.id && (
+                  <div className="flex items-center gap-3 mt-3">
+                    <button
+                      className="btn btn-sm btn-secondary"
+                      disabled={rotationTesting}
+                      onClick={handleRotationTest}
+                    >
+                      {rotationTesting ? 'Testing...' : '🔄 Test Rotation & Capabilities'}
+                    </button>
+                    {editing.pm_last_rotated_at && (
+                      <span className="text-xs text-txt-secondary">
+                        Last rotated: {formatDateTime(editing.pm_last_rotated_at)}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {rotationResult && (
+                  <div className={`mt-2 p-3 rounded text-sm ${rotationResult.success ? 'bg-green-500/10 text-green-400 border border-green-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30'}`}>
+                    {rotationResult.message}
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
@@ -4426,6 +4686,147 @@ function SecurityTab({ settings, onSave }: { settings: Record<string, string>; o
   );
 }
 
+// ── Network / DNS Tab ───────────────────────────────────────────────
+
+function NetworkTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
+  const [dnsEnabled, setDnsEnabled] = useState(settings.dns_enabled === 'true');
+  const [dnsServers, setDnsServers] = useState(settings.dns_servers || '');
+  const [saving, setSaving] = useState(false);
+  const [restartNeeded, setRestartNeeded] = useState(false);
+
+  useEffect(() => {
+    setDnsEnabled(settings.dns_enabled === 'true');
+    setDnsServers(settings.dns_servers || '');
+  }, [settings]);
+
+  async function handleSave() {
+    setSaving(true);
+    setRestartNeeded(false);
+    try {
+      const res = await updateDns({ dns_enabled: dnsEnabled, dns_servers: dnsServers.trim() });
+      if (res.restart_required) setRestartNeeded(true);
+      onSave();
+    } catch { /* handled by parent */ }
+    setSaving(false);
+  }
+
+  // Simple client-side validation of DNS server entries
+  function validateServers(): string | null {
+    if (!dnsEnabled || !dnsServers.trim()) return null;
+    const entries = dnsServers.split(',').map(s => s.trim()).filter(Boolean);
+    for (const entry of entries) {
+      // Accept ip or ip:port
+      const ipPortMatch = entry.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d+))?$/);
+      if (!ipPortMatch) return `Invalid DNS server address: "${entry}". Use IP or IP:port format.`;
+      const octets = ipPortMatch[1].split('.').map(Number);
+      if (octets.some(o => o > 255)) return `Invalid IP address: "${ipPortMatch[1]}"`;
+      if (ipPortMatch[2] && (Number(ipPortMatch[2]) < 1 || Number(ipPortMatch[2]) > 65535)) {
+        return `Invalid port number: "${ipPortMatch[2]}"`;
+      }
+    }
+    return null;
+  }
+
+  const validationError = validateServers();
+
+  return (
+    <div className="card mt-6">
+      <div className="flex items-center justify-between p-4 bg-surface-secondary/50 border-b border-border mb-6 -mx-7 -mt-7">
+        <div>
+          <h3 className="text-lg font-semibold text-txt-primary">Network &amp; DNS Settings</h3>
+          <p className="text-sm text-txt-secondary mt-0.5">
+            Configure custom DNS servers for the guacd proxy containers. This is required when
+            target servers use internal DNS zones (e.g. <code>.dmz.local</code>) that Docker's
+            built-in DNS cannot resolve.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <div>
+          <h4 className="text-sm font-semibold text-txt-primary uppercase tracking-wider mb-4">Custom DNS Servers</h4>
+          <p className="text-sm text-txt-secondary mb-4">
+            When enabled, your DNS server IPs are applied to the guacd containers so they can
+            resolve internal hostnames the same way your host operating system does.
+            This preserves hostname-based authentication (including Kerberos/NLA).
+          </p>
+          <div className="form-group">
+            <label className="flex items-center gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={dnsEnabled}
+                onChange={(e) => { setDnsEnabled(e.target.checked); setRestartNeeded(false); }}
+                className="checkbox"
+              />
+              <div>
+                <span className="font-medium group-hover:text-txt-primary transition-colors">Enable Custom DNS</span>
+                <p className="text-txt-secondary text-sm mt-0.5">
+                  Apply custom nameservers to the guacd proxy containers.
+                </p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {dnsEnabled && (
+          <div className="pt-6 border-t border-border/10">
+            <h4 className="text-sm font-semibold text-txt-primary uppercase tracking-wider mb-4">DNS Servers</h4>
+            <div className="form-group">
+              <label className="form-label">
+                DNS Server Addresses
+              </label>
+              <input
+                className="input"
+                value={dnsServers}
+                onChange={(e) => { setDnsServers(e.target.value); setRestartNeeded(false); }}
+                placeholder="e.g. 10.179.46.52, 10.179.46.53"
+              />
+              <p className="text-sm text-txt-secondary mt-1">
+                Comma-separated list of DNS server IP addresses (typically your corporate / Active Directory DNS servers).
+              </p>
+              {validationError && (
+                <p className="text-sm text-danger mt-1">{validationError}</p>
+              )}
+            </div>
+
+            <div className="mt-4 p-4 rounded-lg bg-surface-secondary/30 border border-border/30">
+              <h5 className="text-sm font-medium text-txt-primary mb-2">How it works</h5>
+              <ol className="text-sm text-txt-secondary space-y-1 list-decimal list-inside">
+                <li>You configure your internal DNS server IPs here and save</li>
+                <li>The DNS configuration is written to a shared config volume</li>
+                <li>After restarting guacd, it reads the custom DNS config at startup</li>
+                <li>guacd resolves hostnames using your DNS servers — just like your host OS</li>
+              </ol>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {restartNeeded && (
+        <div className="mt-4 rounded-md px-4 py-3 bg-warning/10 border border-warning/30">
+          <p className="text-sm font-medium text-warning">Restart required</p>
+          <p className="text-sm text-txt-secondary mt-1">
+            DNS settings have been saved. Restart the guacd service(s) to apply:
+          </p>
+          <code className="block mt-2 text-sm bg-surface-secondary px-3 py-2 rounded font-mono">
+            docker-compose restart guacd
+          </code>
+        </div>
+      )}
+
+      <div className="mt-8 pt-6 border-t border-border/10">
+        <button
+          className="btn btn-primary"
+          onClick={handleSave}
+          disabled={saving || (dnsEnabled && !!validationError)}
+        >
+          {saving ? 'Saving...' : 'Save Network Settings'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Display Tab ────────────────────────────────────────────────────────
 
 function DisplayTab({ settings, onSave }: { settings: Record<string, string>; onSave: () => void }) {
@@ -4522,6 +4923,636 @@ function DisplayTab({ settings, onSave }: { settings: Record<string, string>; on
           {saving ? 'Saving...' : 'Save Display Settings'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── Password Management Tab ────────────────────────────────────────────
+
+function PasswordsTab({
+  users,
+  adSyncConfigs,
+  onSave,
+}: {
+  users: User[];
+  adSyncConfigs: AdSyncConfig[];
+  onSave: () => void;
+}) {
+  type SubTab = 'roles' | 'mappings' | 'requests';
+  const [subTab, setSubTab] = useState<SubTab>('roles');
+
+  // ── Approval roles ──
+  const [roles, setRoles] = useState<ApprovalRole[]>([]);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [newRoleDesc, setNewRoleDesc] = useState('');
+  const [roleAssignments, setRoleAssignments] = useState<Record<string, { id: string; username: string }[]>>({});
+  const [roleAccountScopes, setRoleAccountScopes] = useState<Record<string, string[]>>({});
+  const [expandedRole, setExpandedRole] = useState<string | null>(null);
+  const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
+  const [scopeSearch, setScopeSearch] = useState('');
+  const [approverSearch, setApproverSearch] = useState('');
+  const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
+
+  // ── Account mappings ──
+  const [mappings, setMappings] = useState<UserAccountMapping[]>([]);
+  const [newMapping, setNewMapping] = useState({ user_id: '', managed_ad_dn: '', can_self_approve: false, ad_sync_config_id: '' });
+  const [unmapped, setUnmapped] = useState<DiscoveredAccount[]>([]);
+  const [loadingUnmapped, setLoadingUnmapped] = useState(false);
+
+  // ── Checkout requests ──
+  const [requests, setRequests] = useState<CheckoutRequest[]>([]);
+
+  // ── Loaders ──
+  const loadRoles = useCallback(async () => {
+    try {
+      const r = await getApprovalRoles();
+      setRoles(r);
+      // Load assignments and mappings for each
+      const assignObj: Record<string, { id: string; username: string }[]> = {};
+      const acctObj: Record<string, string[]> = {};
+      await Promise.all(
+        r.map(async (role) => {
+          const [a, accounts] = await Promise.all([getRoleAssignments(role.id), getRoleAccounts(role.id)]);
+          assignObj[role.id] = a;
+          acctObj[role.id] = accounts;
+        }),
+      );
+      setRoleAssignments(assignObj);
+      setRoleAccountScopes(acctObj);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const loadMappings = useCallback(async () => {
+    try {
+      setMappings(await getAccountMappings());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const loadRequests = useCallback(async () => {
+    try {
+      setRequests(await getCheckoutRequests());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRoles();
+    loadMappings();
+    loadRequests();
+  }, [loadRoles, loadMappings, loadRequests]);
+
+  // ── Handlers ──
+  const handleCreateRole = async () => {
+    if (!newRoleName.trim()) return;
+    await createApprovalRole({ name: newRoleName, description: newRoleDesc || undefined });
+    setNewRoleName('');
+    setNewRoleDesc('');
+    loadRoles();
+    onSave();
+  };
+
+  const handleDeleteRole = async (id: string) => {
+    await deleteApprovalRole(id);
+    loadRoles();
+    onSave();
+  };
+
+  const handleSaveAssignments = async (roleId: string) => {
+    await apiSetRoleAssignments(roleId, selectedUsers);
+    loadRoles();
+    onSave();
+  };
+
+  const handleSaveAccounts = async (roleId: string) => {
+    await setRoleAccounts(roleId, selectedAccounts);
+    loadRoles();
+    onSave();
+  };
+
+  const handleCreateMapping = async () => {
+    if (!newMapping.user_id || !newMapping.managed_ad_dn) return;
+    const configId = newMapping.ad_sync_config_id;
+    await createAccountMapping({
+      user_id: newMapping.user_id,
+      managed_ad_dn: newMapping.managed_ad_dn,
+      can_self_approve: newMapping.can_self_approve,
+      ad_sync_config_id: configId || undefined,
+    });
+    setNewMapping({ user_id: '', managed_ad_dn: '', can_self_approve: false, ad_sync_config_id: configId });
+    loadMappings();
+    // Refresh unmapped accounts so the just-mapped account is removed from the dropdown
+    if (configId) {
+      getUnmappedAccounts(configId).then(setUnmapped).catch(() => setUnmapped([]));
+    }
+    onSave();
+  };
+
+  const handleDeleteMapping = async (id: string) => {
+    await deleteAccountMapping(id);
+    loadMappings();
+    // Refresh unmapped accounts so deleted account reappears in the dropdown
+    if (newMapping.ad_sync_config_id) {
+      getUnmappedAccounts(newMapping.ad_sync_config_id).then(setUnmapped).catch(() => setUnmapped([]));
+    }
+  };
+
+  const pmConfigs = adSyncConfigs.filter((c) => c.pm_enabled);
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold mb-4">Password Management</h2>
+
+      {/* Sub-tab nav */}
+      <div className="tabs mb-4">
+        {(['roles', 'mappings', 'requests'] as SubTab[]).map((t) => (
+          <button
+            key={t}
+            className={`tab ${subTab === t ? 'tab-active' : ''}`}
+            onClick={() => setSubTab(t)}
+          >
+            {t === 'roles' ? 'Approval Roles' : t === 'mappings' ? 'Account Mappings' : 'Checkout Requests'}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Approval Roles ── */}
+      {subTab === 'roles' && (
+        <div>
+          <div className="card p-4 mb-4">
+            <h3 className="font-medium mb-1">Create Approval Role</h3>
+            <p className="text-txt-secondary text-xs mb-3">
+              An approval role links a set of discovered managed AD accounts to Strata users who can approve checkout requests for those accounts.
+            </p>
+            <div className="grid grid-cols-2 gap-4 mb-2">
+              <input
+                className="input"
+                placeholder="Role name"
+                value={newRoleName}
+                onChange={(e) => setNewRoleName(e.target.value)}
+              />
+              <input
+                className="input"
+                placeholder="Description (optional)"
+                value={newRoleDesc}
+                onChange={(e) => setNewRoleDesc(e.target.value)}
+              />
+            </div>
+            <button className="btn btn-primary btn-sm" onClick={handleCreateRole}>
+              Create Role
+            </button>
+          </div>
+
+          {roles.map((role) => (
+            <div key={role.id} className={`card p-4 mb-3 ${expandedRole === role.id ? '!overflow-visible' : ''}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium">{role.name}</span>
+                  {role.description && (
+                    <span className="text-txt-secondary ml-2 text-sm">{role.description}</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => {
+                      if (expandedRole === role.id) {
+                        setExpandedRole(null);
+                      } else {
+                        setExpandedRole(role.id);
+                        setSelectedUsers((roleAssignments[role.id] || []).map((a) => a.id));
+                        setSelectedAccounts(roleAccountScopes[role.id] || []);
+                        setScopeSearch('');
+                        setApproverSearch('');
+                      }
+                    }}
+                  >
+                    {expandedRole === role.id ? 'Collapse' : 'Configure'}
+                  </button>
+                  <button
+                    className="btn btn-sm btn-secondary text-danger"
+                    onClick={() => handleDeleteRole(role.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              {expandedRole === role.id && (
+                <div className="mt-4 border-t border-border/10 pt-4 space-y-6">
+                  {/* Section 1: Managed Account Scope — which discovered accounts this role covers */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-1">Managed Account Scope</h4>
+                    <p className="text-txt-secondary text-xs mb-2">
+                      Select which managed accounts this role's approvers can approve checkout requests for.
+                      Only accounts that have been discovered and mapped to users are shown.
+                    </p>
+                    {(() => {
+                      const uniqueDns = [...new Set(mappings.map((m) => m.managed_ad_dn))].sort();
+                      if (uniqueDns.length === 0) {
+                        return (
+                          <p className="text-txt-secondary text-xs italic">
+                            No managed accounts found. Map accounts to users in the Account Mappings tab first.
+                          </p>
+                        );
+                      }
+
+                      // Helper: extract CN display name from a DN
+                      const cnFromDn = (dn: string) => {
+                        const m = dn.match(/^CN=((?:\\.|[^,])+)/i);
+                        return m ? m[1].replace(/\\(.)/g, '$1') : dn;
+                      };
+
+                      // Available = not yet selected
+                      const available = uniqueDns.filter((dn) => !selectedAccounts.includes(dn));
+                      const q = scopeSearch.toLowerCase();
+                      const filtered = q
+                        ? available.filter((dn) => dn.toLowerCase().includes(q))
+                        : available;
+
+                      return (
+                        <>
+                          {/* Selected accounts as removable chips */}
+                          {selectedAccounts.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {selectedAccounts.map((dn) => (
+                                <span
+                                  key={dn}
+                                  className="inline-flex items-center gap-1 bg-primary/20 text-primary text-xs rounded-full px-2.5 py-1"
+                                  title={dn}
+                                >
+                                  {cnFromDn(dn)}
+                                  <button
+                                    className="hover:text-red-400 ml-0.5 font-bold leading-none"
+                                    onClick={() => setSelectedAccounts(selectedAccounts.filter((d) => d !== dn))}
+                                    aria-label={`Remove ${cnFromDn(dn)}`}
+                                  >
+                                    &times;
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Search + dropdown to add accounts */}
+                          <div className="relative mb-2">
+                            <input
+                              type="text"
+                              className="input input-sm w-full"
+                              placeholder={`Search ${available.length} available account${available.length !== 1 ? 's' : ''}...`}
+                              value={scopeSearch}
+                              onChange={(e) => setScopeSearch(e.target.value)}
+                            />
+                            {scopeSearch && filtered.length > 0 && (
+                              <div className="absolute z-10 mt-1 w-full rounded-md shadow-lg max-h-64 overflow-y-auto p-1" style={{ background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)' }}>
+                                {filtered.slice(0, 50).map((dn) => (
+                                  <button
+                                    key={dn}
+                                    className="cs-option w-full text-left flex items-center justify-between gap-2"
+                                    onClick={() => {
+                                      setSelectedAccounts([...selectedAccounts, dn]);
+                                      setScopeSearch('');
+                                    }}
+                                  >
+                                    <span style={{ color: 'var(--color-txt-primary)' }}>{cnFromDn(dn)}</span>
+                                    <span className="text-xs truncate" style={{ color: 'var(--color-txt-tertiary)' }}>{dn}</span>
+                                  </button>
+                                ))}
+                                {filtered.length > 50 && (
+                                  <div className="px-3 py-2 text-xs italic" style={{ color: 'var(--color-txt-tertiary)' }}>
+                                    {filtered.length - 50} more — refine your search
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {scopeSearch && filtered.length === 0 && (
+                              <div className="absolute z-10 mt-1 w-full rounded-md shadow-lg px-3 py-2 text-sm italic" style={{ background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)', color: 'var(--color-txt-tertiary)' }}>
+                                No matching accounts
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="btn btn-sm btn-primary"
+                              onClick={() => handleSaveAccounts(role.id)}
+                            >
+                              Save Scope
+                            </button>
+                            <span className="text-txt-secondary text-xs">
+                              {selectedAccounts.length} of {uniqueDns.length} accounts selected
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Section 2: Approvers — Strata users who can approve/deny requests */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-1">Approvers</h4>
+                    <p className="text-txt-secondary text-xs mb-2">
+                      Strata users who can approve or deny checkout requests for the accounts selected above.
+                      These users will see matching requests on their Pending Approvals page.
+                    </p>
+                    {(() => {
+                      const availableUsers = users.filter((u) => !selectedUsers.includes(u.id));
+                      const aq = approverSearch.toLowerCase();
+                      const filteredUsers = aq
+                        ? availableUsers.filter((u) => u.username.toLowerCase().includes(aq) || (u.email && u.email.toLowerCase().includes(aq)))
+                        : availableUsers;
+
+                      return (
+                        <>
+                          {/* Selected approvers as removable chips */}
+                          {selectedUsers.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {selectedUsers.map((uid) => {
+                                const u = users.find((x) => x.id === uid);
+                                return (
+                                  <span
+                                    key={uid}
+                                    className="inline-flex items-center gap-1 bg-primary/20 text-primary text-xs rounded-full px-2.5 py-1"
+                                  >
+                                    {u?.username || uid}
+                                    <button
+                                      className="hover:text-red-400 ml-0.5 font-bold leading-none"
+                                      onClick={() => setSelectedUsers(selectedUsers.filter((id) => id !== uid))}
+                                      aria-label={`Remove ${u?.username || uid}`}
+                                    >
+                                      &times;
+                                    </button>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* Search + dropdown to add approvers */}
+                          <div className="relative mb-2">
+                            <input
+                              type="text"
+                              className="input input-sm w-full"
+                              placeholder={`Search ${availableUsers.length} available user${availableUsers.length !== 1 ? 's' : ''}...`}
+                              value={approverSearch}
+                              onChange={(e) => setApproverSearch(e.target.value)}
+                            />
+                            {approverSearch && filteredUsers.length > 0 && (
+                              <div className="absolute z-10 mt-1 w-full rounded-md shadow-lg max-h-64 overflow-y-auto p-1" style={{ background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)' }}>
+                                {filteredUsers.slice(0, 50).map((u) => (
+                                  <button
+                                    key={u.id}
+                                    className="cs-option w-full text-left flex items-center justify-between gap-2"
+                                    onClick={() => {
+                                      setSelectedUsers([...selectedUsers, u.id]);
+                                      setApproverSearch('');
+                                    }}
+                                  >
+                                    <span style={{ color: 'var(--color-txt-primary)' }}>{u.username}</span>
+                                    {u.email && u.email !== u.username && <span className="text-xs truncate" style={{ color: 'var(--color-txt-tertiary)' }}>{u.email}</span>}
+                                  </button>
+                                ))}
+                                {filteredUsers.length > 50 && (
+                                  <div className="px-3 py-2 text-xs italic" style={{ color: 'var(--color-txt-tertiary)' }}>
+                                    {filteredUsers.length - 50} more — refine your search
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {approverSearch && filteredUsers.length === 0 && (
+                              <div className="absolute z-10 mt-1 w-full rounded-md shadow-lg px-3 py-2 text-sm italic" style={{ background: 'var(--color-surface-elevated)', border: '1px solid var(--color-glass-border)', color: 'var(--color-txt-tertiary)' }}>
+                                No matching users
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="btn btn-sm btn-primary"
+                              onClick={() => handleSaveAssignments(role.id)}
+                            >
+                              Save Approvers
+                            </button>
+                            <span className="text-txt-secondary text-xs">
+                              {selectedUsers.length} of {users.length} users selected
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {roles.length === 0 && (
+            <p className="text-txt-secondary text-sm">No approval roles defined yet.</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Account Mappings ── */}
+      {subTab === 'mappings' && (
+        <div>
+          {pmConfigs.length === 0 ? (
+            <div className="card p-6 text-center">
+              <p className="text-txt-secondary text-sm">No PM-enabled AD Sync sources. Enable Password Management on an AD Sync source first.</p>
+            </div>
+          ) : (
+            <>
+              {/* Create mapping */}
+              <div className="card p-4 mb-4">
+                <h3 className="font-medium mb-3">Create Account Mapping</h3>
+
+                {/* Step 1: Select AD Source */}
+                <div className="grid grid-cols-2 gap-4 mb-3">
+                  <div>
+                    <span className="text-xs font-medium block mb-1">AD Source</span>
+                    <Select
+                      value={newMapping.ad_sync_config_id}
+                      onChange={(configId) => {
+                        setNewMapping({ ...newMapping, ad_sync_config_id: configId, managed_ad_dn: '' });
+                        if (configId) {
+                          setLoadingUnmapped(true);
+                          getUnmappedAccounts(configId).then(setUnmapped).catch(() => setUnmapped([])).finally(() => setLoadingUnmapped(false));
+                        } else {
+                          setUnmapped([]);
+                        }
+                      }}
+                      placeholder="Select PM-enabled AD source..."
+                      options={pmConfigs.map((c) => ({ value: c.id, label: c.label }))}
+                    />
+                  </div>
+
+                  {/* Step 2: Select Strata user */}
+                  <div>
+                    <span className="text-xs font-medium block mb-1">Strata User</span>
+                    <Select
+                      value={newMapping.user_id}
+                      onChange={(val) => setNewMapping({ ...newMapping, user_id: val })}
+                      placeholder="Select user..."
+                      options={users.map((u) => ({ value: u.id, label: u.username }))}
+                    />
+                  </div>
+                </div>
+
+                {/* Step 3: Select discovered AD account */}
+                <div className="mb-3">
+                  <span className="text-xs font-medium block mb-1">
+                    Managed AD Account
+                    {loadingUnmapped && <span className="ml-2 text-txt-secondary">(discovering...)</span>}
+                  </span>
+                  {newMapping.ad_sync_config_id && unmapped.length > 0 ? (
+                    <Select
+                      value={newMapping.managed_ad_dn}
+                      onChange={(val) => setNewMapping({ ...newMapping, managed_ad_dn: val })}
+                      placeholder="Select discovered account..."
+                      options={unmapped.map((a) => ({ value: a.dn, label: `${a.name} — ${a.dn}` }))}
+                    />
+                  ) : (
+                    <input
+                      className="input w-full"
+                      placeholder={newMapping.ad_sync_config_id ? (loadingUnmapped ? 'Discovering accounts...' : 'No unmapped accounts found — type DN manually') : 'Select an AD source first, or type DN manually'}
+                      value={newMapping.managed_ad_dn}
+                      onChange={(e) => setNewMapping({ ...newMapping, managed_ad_dn: e.target.value })}
+                    />
+                  )}
+                </div>
+
+                <div className="flex items-center gap-4 mb-3">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={newMapping.can_self_approve}
+                      onChange={(e) => setNewMapping({ ...newMapping, can_self_approve: e.target.checked })}
+                    />
+                    Can self-approve
+                  </label>
+                </div>
+
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleCreateMapping}
+                  disabled={!newMapping.user_id || !newMapping.managed_ad_dn}
+                >
+                  Create Mapping
+                </button>
+              </div>
+
+              {/* Existing mappings */}
+              <div className="card p-4">
+                <h3 className="font-medium mb-2">Existing Mappings</h3>
+                {mappings.length === 0 ? (
+                  <p className="text-txt-secondary text-sm">No account mappings.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border/10">
+                        <th className="text-left py-1">User</th>
+                        <th className="text-left py-1">Managed AD DN</th>
+                        <th className="text-left py-1">AD Source</th>
+                        <th className="text-left py-1">Self-Approve</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mappings.map((m) => (
+                        <tr key={m.id} className="border-b border-border/5">
+                          <td className="py-1">
+                            {users.find((u) => u.id === m.user_id)?.username || m.user_id}
+                          </td>
+                          <td className="py-1 text-xs">{m.managed_ad_dn}</td>
+                          <td className="py-1 text-xs text-txt-secondary">
+                            {m.ad_sync_config_id
+                              ? adSyncConfigs.find((c) => c.id === m.ad_sync_config_id)?.label || '—'
+                              : '—'}
+                          </td>
+                          <td className="py-1">{m.can_self_approve ? 'Yes' : 'No'}</td>
+                          <td className="py-1">
+                            <button
+                              className="text-danger text-xs"
+                              onClick={() => handleDeleteMapping(m.id)}
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Checkout Requests ── */}
+      {subTab === 'requests' && (
+        <div>
+          <button className="btn btn-sm mb-4" onClick={loadRequests}>
+            Refresh
+          </button>
+          {requests.length === 0 ? (
+            <p className="text-txt-secondary text-sm">No checkout requests.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/10">
+                  <th className="text-left py-1">DN</th>
+                  <th className="text-left py-1">Status</th>
+                  <th className="text-left py-1">Duration</th>
+                  <th className="text-left py-1">Requester</th>
+                  <th className="text-left py-1">Decided By</th>
+                  <th className="text-left py-1">Expires</th>
+                  <th className="text-left py-1">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.map((r) => (
+                  <tr key={r.id} className="border-b border-border/5">
+                    <td className="py-1 text-xs">{r.managed_ad_dn}</td>
+                    <td className="py-1">
+                      <span
+                        className={`text-xs font-medium px-2 py-0.5 rounded ${
+                          r.status === 'Active'
+                            ? 'bg-success/20 text-success'
+                            : r.status === 'Pending'
+                              ? 'bg-warning/20 text-warning'
+                              : r.status === 'Denied'
+                                ? 'bg-danger/20 text-danger'
+                                : 'bg-border/20 text-txt-secondary'
+                        }`}
+                      >
+                        {r.status}
+                      </span>
+                    </td>
+                    <td className="py-1">{r.requested_duration_mins}m</td>
+                    <td className="py-1">
+                      {users.find((u) => u.id === r.requester_user_id)?.username || r.requester_user_id}
+                    </td>
+                    <td className="py-1 text-xs">
+                      {r.approved_by_user_id
+                        ? r.approved_by_user_id === r.requester_user_id
+                          ? 'Self Approved'
+                          : users.find((u) => u.id === r.approved_by_user_id)?.username || r.approved_by_user_id
+                        : '—'}
+                    </td>
+                    <td className="py-1 text-xs">{r.expires_at || '—'}</td>
+                    <td className="py-1 text-xs">{r.created_at}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }

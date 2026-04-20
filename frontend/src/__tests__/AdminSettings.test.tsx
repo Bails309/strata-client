@@ -57,6 +57,19 @@ vi.mock('../api', () => ({
   getAdminConnectionTagsAdmin: vi.fn(),
   setAdminConnectionTags: vi.fn(),
   getDisplaySettings: vi.fn(),
+  getApprovalRoles: vi.fn().mockResolvedValue([]),
+  createApprovalRole: vi.fn(),
+  deleteApprovalRole: vi.fn(),
+  getRoleAssignments: vi.fn().mockResolvedValue([]),
+  setRoleAssignments: vi.fn(),
+  getRoleAccounts: vi.fn().mockResolvedValue([]),
+  setRoleAccounts: vi.fn(),
+  getAccountMappings: vi.fn().mockResolvedValue([]),
+  createAccountMapping: vi.fn(),
+  deleteAccountMapping: vi.fn(),
+  getUnmappedAccounts: vi.fn().mockResolvedValue([]),
+  testRotation: vi.fn(),
+  getCheckoutRequests: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../contexts/SettingsContext', () => ({
@@ -140,6 +153,7 @@ const defaultUser: import('../api').MeResponse = {
   can_create_connection_folders: true,
   can_create_sharing_profiles: true,
   can_view_sessions: true,
+  is_approver: false,
 };
 
 function renderAdmin() {
@@ -174,6 +188,9 @@ function setupDefaults() {
     peak_hours: [],
   });
   vi.mocked(getRecordings).mockResolvedValue([]);
+  vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
+  vi.mocked(getAdminTagsAdmin).mockResolvedValue([]);
+  vi.mocked(getAdminConnectionTagsAdmin).mockResolvedValue({});
 }
 
 describe('AdminSettings', () => {

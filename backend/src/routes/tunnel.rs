@@ -264,12 +264,20 @@ pub async fn ws_tunnel(
     // Parse extra JSONB into a HashMap for guacd params
     let extra = crate::tunnel::json_to_string_map(&extra_json);
 
-    // Attempt to load and decrypt user credentials from credential profiles
+    // Attempt to load and decrypt user credentials from credential profiles.
+    // If the profile is linked to an active checkout, the managed credential's
+    // username (sAMAccountName) and password fully replace the user's own profile
+    // credentials — the user expects to connect AS the managed account.
     let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {
-        let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-            "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
+        // Check if the profile is linked to an active checkout with a managed credential
+        let managed_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+            "SELECT managed.encrypted_password, managed.encrypted_dek, managed.nonce
              FROM credential_mappings cm
              JOIN credential_profiles cp ON cp.id = cm.credential_id
+             JOIN password_checkout_requests pcr
+                    ON pcr.id = cp.checkout_id AND pcr.status = 'Active'
+             JOIN credential_profiles managed
+                    ON managed.id = pcr.vault_credential_id
              WHERE cm.connection_id = $1 AND cp.user_id = $2
                AND cp.expires_at > now()",
         )
@@ -278,20 +286,50 @@ pub async fn ws_tunnel(
         .fetch_optional(&db.pool)
         .await?;
 
-        if let Some((enc_payload, enc_dek, nonce)) = cred {
+        if let Some((enc_payload, enc_dek, nonce)) = managed_cred {
+            // Managed checkout active — use its username and password directly
             let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
             let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-            // Parse the combined JSON payload { "u": username, "p": password }
             let parsed: serde_json::Value = serde_json::from_str(&plain_str)
                 .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
-            let u = parsed["u"].as_str().unwrap_or("").to_string();
-            let p = parsed["p"].as_str().unwrap_or("").to_string();
+            let managed_user = parsed["u"].as_str().unwrap_or("").to_string();
+            let managed_pass = parsed["p"].as_str().unwrap_or("").to_string();
+            tracing::info!(
+                "Tunnel using managed checkout credentials for connection {}, managed username={:?}",
+                connection_id, managed_user
+            );
             (
-                if u.is_empty() { None } else { Some(u) },
-                if p.is_empty() { None } else { Some(p) },
+                if managed_user.is_empty() { None } else { Some(managed_user) },
+                if managed_pass.is_empty() { None } else { Some(managed_pass) },
             )
         } else {
-            (None, None)
+            // No active checkout — fall back to the user's own profile credentials
+            let own_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+                "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
+                 FROM credential_mappings cm
+                 JOIN credential_profiles cp ON cp.id = cm.credential_id
+                 WHERE cm.connection_id = $1 AND cp.user_id = $2
+                   AND cp.expires_at > now()",
+            )
+            .bind(connection_id)
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            if let Some((enc_payload, enc_dek, nonce)) = own_cred {
+                let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+                let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+                let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                    .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+                let u = parsed["u"].as_str().unwrap_or("").to_string();
+                let p = parsed["p"].as_str().unwrap_or("").to_string();
+                (
+                    if u.is_empty() { None } else { Some(u) },
+                    if p.is_empty() { None } else { Some(p) },
+                )
+            } else {
+                (None, None)
+            }
         }
     } else {
         (None, None)
@@ -333,21 +371,56 @@ pub async fn ws_tunnel(
 
     // If the ticket carries a one-off credential_profile_id, decrypt those
     // vault credentials directly (no permanent mapping required).
+    // Same checkout-aware logic: prefer the managed profile's password but keep the profile's username.
     let oneoff_profile_id = ticket_creds.as_ref().and_then(|t| t.credential_profile_id);
     let (oneoff_username, oneoff_password) =
         if let (Some(profile_id), Some(vault_cfg)) = (oneoff_profile_id, &config.vault) {
-            let cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+            // Load the profile's own credentials
+            let own_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
                 "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
-             FROM credential_profiles cp
-             WHERE cp.id = $1 AND cp.user_id = $2
-               AND cp.expires_at > now()",
+                 FROM credential_profiles cp
+                 WHERE cp.id = $1 AND cp.user_id = $2
+                   AND cp.expires_at > now()",
             )
             .bind(profile_id)
             .bind(user.id)
             .fetch_optional(&db.pool)
             .await?;
 
-            if let Some((enc_payload, enc_dek, nonce)) = cred {
+            // Check for managed checkout credential
+            let managed_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+                "SELECT managed.encrypted_password, managed.encrypted_dek, managed.nonce
+                 FROM credential_profiles cp
+                 JOIN password_checkout_requests pcr
+                        ON pcr.id = cp.checkout_id AND pcr.status = 'Active'
+                 JOIN credential_profiles managed
+                        ON managed.id = pcr.vault_credential_id
+                 WHERE cp.id = $1 AND cp.user_id = $2
+                   AND cp.expires_at > now()",
+            )
+            .bind(profile_id)
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await?;
+
+            if let Some((enc_payload, enc_dek, nonce)) = managed_cred {
+                // Managed checkout active — use its username and password directly
+                let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+                let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+                let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                    .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+                let managed_user = parsed["u"].as_str().unwrap_or("").to_string();
+                let managed_pass = parsed["p"].as_str().unwrap_or("").to_string();
+                tracing::info!(
+                    "Tunnel (one-off) using managed checkout credentials, managed username={:?}",
+                    managed_user
+                );
+                (
+                    if managed_user.is_empty() { None } else { Some(managed_user) },
+                    if managed_pass.is_empty() { None } else { Some(managed_pass) },
+                )
+            } else if let Some((enc_payload, enc_dek, nonce)) = own_cred {
+                // No active checkout — fall back to the profile's own credentials
                 let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
                 let plain_str = String::from_utf8(plaintext).unwrap_or_default();
                 let parsed: serde_json::Value = serde_json::from_str(&plain_str)

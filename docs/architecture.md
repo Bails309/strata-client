@@ -55,6 +55,9 @@ Multiple guacd instances can be deployed using the `--profile scale` Docker Comp
 Volumes:
 - `guac-recordings` → `/var/lib/guacamole/recordings` — session recording storage
 - `krb5-config` → `/etc/krb5` — dynamically generated `krb5.conf`
+- `backend-config` → `/app/config` (read-only) — custom `resolv.conf` written by the backend for DNS configuration
+
+**Custom DNS resolution:** The guacd container uses a custom `entrypoint.sh` wrapper that checks for `/app/config/resolv.conf` on startup. If present, it copies the file to `/etc/resolv.conf`, enabling the container to resolve internal hostnames (e.g. `.local`, `.dmz.local` domains). The entrypoint then drops privileges to the `guacd` user via `su-exec` before launching the daemon. DNS servers are configured via the Admin Settings Network tab and written to the shared `backend-config` volume by the backend.
 
 ### 2. Rust Backend
 
@@ -80,6 +83,9 @@ The central orchestrator. Responsibilities:
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
+- **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
+- **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators
+- **DNS configuration** — admin-configurable DNS servers written to a shared Docker volume as `resolv.conf`; guacd containers apply this on startup for internal hostname resolution
 - **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each
 - **Audit** — SHA-256 hash-chained append-only log
 
@@ -103,13 +109,14 @@ The frontend nginx container serves as the primary gateway for all external traf
 
 Pages:
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
-- **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, and group view toggle (flat list or collapsible group headers)
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends.
+- **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes)
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends.
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Login** — unified login portal supporting local credentials and OIDC Single Sign-On; dynamically adjusts based on enabled authentication methods
-- **Admin Settings** — tabbed UI for health, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, access control, connection group management, AD sync sources, session analytics and metrics
+- **Admin Settings** — tabbed UI for health, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, network (DNS configuration), access control, connection group management, AD sync sources (with inline password management configuration: enable toggle, credential source, target filter with preview, password policy, auto-rotation), password management (approval roles with explicit account scoping via searchable dropdown and chip tags, account mappings, checkout requests with decided-by column and self-approval detection), session analytics and metrics
+- **Approvals** — dedicated page for pending password checkout approval decisions, visible only to users assigned to approval roles. Premium card layout with requester avatar, CN-from-DN display, labeled duration and justification sections, and approve/deny action buttons
 - **Audit Logs** — paginated, hash-chained log viewer
 - **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
 - **PWA** — installable Progressive Web App with offline shell caching via service worker; standalone display mode on mobile and tablet
@@ -202,9 +209,14 @@ ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, fi
 ad_sync_runs ─────── per-config sync run history with stats
 recordings ─────── session recording metadata with bandwidth metrics
 active_sessions ── per-user login session tracking (JTI, IP, user agent, expiry)
+approval_roles ──── named approval roles for password management
+approval_role_assignments ── many-to-many user ↔ approval role
+approval_role_accounts ──── explicit scope: approval role ↔ managed AD account DN
+user_account_mappings ───── user ↔ managed AD account (with self-approve flag)
+password_checkout_requests ─ checkout lifecycle tracking (status, timestamps, Vault-sealed password)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `037_audit_logs_set_null.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `046_dns_settings.sql` for the full DDL.
 
 ## Directory Structure
 
@@ -236,6 +248,7 @@ strata-client/
 │           ├── ad_sync.rs     AD LDAP sync engine (multi-base, multi-auth)
 │           ├── audit.rs       Hash-chained audit logging
 │           ├── auth.rs        OIDC token validation
+│           ├── checkouts.rs   Password checkout lifecycle + rotation workers
 │           ├── guacd_pool.rs  Round-robin guacd pool
 │           ├── kerberos.rs    Multi-realm krb5.conf generation
 │           ├── middleware.rs   JWT auth + admin middleware
@@ -257,9 +270,10 @@ strata-client/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
 │       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, QuickShare, SessionTimeoutWarning, ThemeProvider, WhatsNewModal)
-│       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Login, SetupWizard, SharedViewer)
+│       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
 ├── guacd/                 Custom guacd build
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── entrypoint.sh     DNS config + privilege drop wrapper
 ├── certs/                 TLS certificates (mount for HTTPS)
 ├── docker-compose.yml     Full stack orchestration
 ├── CHANGELOG.md

@@ -211,6 +211,7 @@ export interface MeResponse {
   can_create_connection_folders: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
+  is_approver: boolean;
 }
 
 export const getMe = () => request<MeResponse>('/user/me');
@@ -338,6 +339,19 @@ export interface AdSyncConfig {
   krb5_principal?: string;
   ca_cert_pem?: string;
   connection_defaults?: Record<string, string>;
+  // Password management fields
+  pm_enabled?: boolean;
+  pm_bind_user?: string;
+  pm_bind_password?: string;
+  pm_target_filter?: string;
+  pm_pwd_min_length?: number;
+  pm_pwd_require_uppercase?: boolean;
+  pm_pwd_require_lowercase?: boolean;
+  pm_pwd_require_numbers?: boolean;
+  pm_pwd_require_symbols?: boolean;
+  pm_auto_rotate_enabled?: boolean;
+  pm_auto_rotate_interval_days?: number;
+  pm_last_rotated_at?: string;
   created_at: string;
   updated_at: string;
   clone_from?: string;
@@ -373,11 +387,112 @@ export const triggerAdSync = (id: string) =>
 export const testAdSyncConnection = (data: Partial<AdSyncConfig>) =>
   request<{ status: string; message: string; count?: number; sample?: string[] }>('/admin/ad-sync-configs/test', { method: 'POST', body: JSON.stringify(data) });
 
+export const testPmTargetFilter = (data: Partial<AdSyncConfig>) =>
+  request<{ status: string; message: string; hint?: string; count?: number; sample?: { dn: string; name: string; description?: string }[] }>('/admin/ad-sync-configs/test-filter', { method: 'POST', body: JSON.stringify(data) });
+
 export const getAdSyncRuns = (configId: string) =>
   request<AdSyncRun[]>(`/admin/ad-sync-configs/${configId}/runs`);
 
+// ── Password Management ─────────────────────────────────────────────
+
+export interface ApprovalRole {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserAccountMapping {
+  id: string;
+  user_id: string;
+  managed_ad_dn: string;
+  can_self_approve: boolean;
+  ad_sync_config_id?: string;
+  created_at: string;
+}
+
+export interface CheckoutRequest {
+  id: string;
+  requester_user_id: string;
+  managed_ad_dn: string;
+  ad_sync_config_id?: string;
+  status: 'Pending' | 'Approved' | 'Active' | 'Expired' | 'Denied' | 'CheckedIn';
+  requested_duration_mins: number;
+  approved_by_user_id?: string;
+  justification_comment?: string;
+  expires_at?: string;
+  vault_credential_id?: string;
+  created_at: string;
+  updated_at: string;
+  requester_username?: string;
+}
+
+export interface DiscoveredAccount {
+  dn: string;
+  name: string;
+  description?: string;
+}
+
+// Admin: Approval Roles
+export const getApprovalRoles = () => request<ApprovalRole[]>('/admin/approval-roles');
+export const createApprovalRole = (data: { name: string; description?: string }) =>
+  request<{ id: string; status: string }>('/admin/approval-roles', { method: 'POST', body: JSON.stringify(data) });
+export const updateApprovalRole = (id: string, data: { name?: string; description?: string }) =>
+  request<{ status: string }>(`/admin/approval-roles/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteApprovalRole = (id: string) =>
+  request<{ status: string }>(`/admin/approval-roles/${id}`, { method: 'DELETE' });
+
+// Admin: Role assignments
+export const getRoleAssignments = (roleId: string) =>
+  request<{ id: string; username: string }[]>(`/admin/approval-roles/${roleId}/assignments`);
+export const setRoleAssignments = (roleId: string, user_ids: string[]) =>
+  request<{ status: string }>(`/admin/approval-roles/${roleId}/assignments`, { method: 'PUT', body: JSON.stringify({ user_ids }) });
+
+// Admin: Role account scope
+export const getRoleAccounts = (roleId: string) =>
+  request<string[]>(`/admin/approval-roles/${roleId}/accounts`);
+export const setRoleAccounts = (roleId: string, managed_ad_dns: string[]) =>
+  request<{ status: string }>(`/admin/approval-roles/${roleId}/accounts`, { method: 'PUT', body: JSON.stringify({ managed_ad_dns }) });
+
+// Admin: Account mappings
+export const getAccountMappings = () => request<UserAccountMapping[]>('/admin/account-mappings');
+export const createAccountMapping = (data: { user_id: string; managed_ad_dn: string; can_self_approve?: boolean; ad_sync_config_id?: string }) =>
+  request<{ id: string; status: string }>('/admin/account-mappings', { method: 'POST', body: JSON.stringify(data) });
+export const deleteAccountMapping = (id: string) =>
+  request<{ status: string }>(`/admin/account-mappings/${id}`, { method: 'DELETE' });
+
+// Admin: Unmapped accounts
+export const getUnmappedAccounts = (configId: string) =>
+  request<DiscoveredAccount[]>(`/admin/ad-sync-configs/${configId}/unmapped-accounts`);
+
+// Admin: Test rotation
+export const testRotation = (config_id: string) =>
+  request<{ success: boolean; message: string }>('/admin/pm/test-rotation', { method: 'POST', body: JSON.stringify({ config_id }) });
+
+// Admin: All checkout requests
+export const getCheckoutRequests = () => request<CheckoutRequest[]>('/admin/checkout-requests');
+
+// User: Managed accounts & checkouts
+export const getMyManagedAccounts = () => request<UserAccountMapping[]>('/user/managed-accounts');
+export const getMyCheckouts = () => request<CheckoutRequest[]>('/user/checkouts');
+export const requestCheckout = (data: { managed_ad_dn: string; ad_sync_config_id?: string; requested_duration_mins?: number; justification_comment?: string }) =>
+  request<{ id: string; status: string }>('/user/checkouts', { method: 'POST', body: JSON.stringify(data) });
+export const decideCheckout = (id: string, approved: boolean) =>
+  request<{ status: string }>(`/user/checkouts/${id}/decide`, { method: 'POST', body: JSON.stringify({ approved }) });
+export const revealCheckoutPassword = (id: string) =>
+  request<{ password: string; expires_at?: string }>(`/user/checkouts/${id}/reveal`);
+export const retryCheckoutActivation = (id: string) =>
+  request<{ status: string }>(`/user/checkouts/${id}/retry`, { method: 'POST' });
+export const checkinCheckout = (id: string) =>
+  request<{ status: string }>(`/user/checkouts/${id}/checkin`, { method: 'POST' });
+export const getPendingApprovals = () => request<CheckoutRequest[]>('/user/pending-approvals');
+
 export const updateVault = (data: { mode: string; address?: string; token?: string; transit_key?: string }) =>
   request('/admin/settings/vault', { method: 'PUT', body: JSON.stringify(data) });
+
+export const updateDns = (data: { dns_enabled: boolean; dns_servers: string }) =>
+  request<{ status: string; restart_required: boolean; message: string }>('/admin/settings/dns', { method: 'PUT', body: JSON.stringify(data) });
 
 export const updateRecordings = (data: {
   enabled: boolean;
@@ -471,6 +586,8 @@ export interface Connection {
   extra?: Record<string, string>;
   last_accessed?: string;
   watermark?: string;
+  health_status?: 'online' | 'offline' | 'unknown';
+  health_checked_at?: string;
 }
 
 export const getConnections = () => request<Connection[]>('/admin/connections');
@@ -586,6 +703,7 @@ export interface CredentialProfile {
   expires_at: string;
   expired: boolean;
   ttl_hours: number;
+  checkout_id?: string;
 }
 
 export interface CredentialMapping {
@@ -623,6 +741,12 @@ export const setCredentialMapping = (profile_id: string, connection_id: string) 
 
 export const removeCredentialMapping = (connectionId: string) =>
   request<{ status: string }>(`/user/credential-mappings/${connectionId}`, { method: 'DELETE' });
+
+export const linkCheckoutToProfile = (profileId: string, checkoutId: string | null) =>
+  request<{ status: string; checkout_id?: string; managed_ad_dn?: string; expires_at?: string }>(
+    `/user/credential-profiles/${profileId}/link-checkout`,
+    { method: 'POST', body: JSON.stringify({ checkout_id: checkoutId }) },
+  );
 
 // ── Connection info (pre-connect credential check) ──────────────────
 

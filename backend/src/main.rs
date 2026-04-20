@@ -195,6 +195,15 @@ async fn main() -> anyhow::Result<()> {
     // ── Spawn User cleanup background task ──
     services::user_cleanup::spawn_cleanup_task(state.clone());
 
+    // ── Spawn password checkout expiration scrubber (every 60s) ──
+    services::checkouts::spawn_expiration_worker(state.clone());
+
+    // ── Spawn password auto-rotation worker (daily) ──
+    services::checkouts::spawn_auto_rotation_worker(state.clone());
+
+    // ── Spawn connection health-check worker (every 120s) ──
+    services::health_check::spawn_health_check_worker(state.clone());
+
     // ── Spawn active_sessions cleanup background task ──
     {
         let cleanup_pool = db_pool.clone();

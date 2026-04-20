@@ -305,7 +305,27 @@ If your target RDP hosts require Kerberos/NLA authentication:
 
 The `guacd` container reads `KRB5_CONFIG=/etc/krb5/krb5.conf` at runtime. Multiple realms are supported for cross-forest or multi-domain environments.
 
-### 7. Active Directory LDAP Sync
+### 7. DNS Configuration
+
+If your target RDP/SSH hosts use internal DNS names (e.g. `.local`, `.dmz.local`, `.internal`) that Docker's default DNS resolver cannot resolve:
+
+1. Navigate to **Admin → Network**
+2. Enable **Custom DNS**
+3. Enter one or more DNS server IP addresses (comma-separated), e.g. `10.0.0.1, 10.0.0.2`
+4. Click **Save**
+5. Restart guacd containers to apply:
+   ```bash
+   docker compose restart guacd
+   # If using sidecar scaling:
+   docker compose restart guacd guacd-2
+   ```
+
+**How it works:** The backend validates the DNS IPs, saves them to the database, and writes a `resolv.conf` file to the shared `backend-config` Docker volume. On startup, each guacd container's entrypoint copies this file to `/etc/resolv.conf`, enabling hostname resolution for internal domains.
+
+> [!NOTE]
+> DNS changes require a guacd container restart to take effect. Active sessions on the restarted containers will be disconnected.
+
+### 8. Active Directory LDAP Sync
 
 To automatically import computer accounts from Active Directory:
 
@@ -439,12 +459,16 @@ To scale beyond 2 instances, duplicate the `guacd-2` service block in `docker-co
       - guac-recordings:/var/lib/guacamole/recordings
       - guac-drive:/var/lib/guacamole/drive
       - krb5-config:/etc/krb5
+      - backend-config:/app/config:ro
     environment:
       - KRB5_CONFIG=/etc/krb5/krb5.conf
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - SETGID
+      - SETUID
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
       interval: 15s

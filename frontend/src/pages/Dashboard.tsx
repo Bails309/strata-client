@@ -454,6 +454,22 @@ export default function Dashboard() {
                   {/* Card content */}
                   <h3 className="recent-card-title">{conn.name}</h3>
                   <p className="recent-card-detail">
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        marginRight: 6,
+                        verticalAlign: 'middle',
+                        background: conn.health_status === 'online' ? '#22c55e'
+                          : conn.health_status === 'offline' ? '#ef4444'
+                          : '#6b7280',
+                        boxShadow: conn.health_status === 'online' ? '0 0 6px rgba(34,197,94,0.6)'
+                          : conn.health_status === 'offline' ? '0 0 6px rgba(239,68,68,0.6)'
+                          : 'none',
+                      }}
+                    />
                     {conn.protocol.toUpperCase()} - {conn.hostname}:{conn.port}
                   </p>
                   <div className="recent-card-meta">
@@ -607,6 +623,7 @@ export default function Dashboard() {
               </th>
               <th>Connection Name</th>
               <th>Type</th>
+              <th>Status</th>
               <th>Details</th>
               <th>Last Accessed</th>
               <th>Actions</th>
@@ -914,6 +931,23 @@ function ConnectionRow({ conn, checked, onToggleChecked, isFavorite, onToggleFav
             <ProtocolIcon protocol={conn.protocol} />
             <span className="badge badge-accent">{conn.protocol.toUpperCase()}</span>
           </div>
+        </td>
+        <td>
+          <span
+            title={conn.health_checked_at ? `Checked: ${formatDateTime(conn.health_checked_at)}` : 'Not yet checked'}
+            style={{
+              display: 'inline-block',
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: conn.health_status === 'online' ? '#22c55e'
+                : conn.health_status === 'offline' ? '#ef4444'
+                : '#6b7280',
+              boxShadow: conn.health_status === 'online' ? '0 0 6px rgba(34,197,94,0.6)'
+                : conn.health_status === 'offline' ? '0 0 6px rgba(239,68,68,0.6)'
+                : 'none',
+            }}
+          />
         </td>
         <td className="text-[0.8125rem] text-txt-secondary">
           {conn.protocol.toUpperCase()} — {conn.hostname}:{conn.port}

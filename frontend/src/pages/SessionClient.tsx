@@ -100,6 +100,15 @@ export default function SessionClient() {
     }
   }, [connectionId]);
 
+  // ── Update browser tab title with connection name ──
+  useEffect(() => {
+    const name = currentSession?.name || connectionName;
+    if (name) {
+      document.title = `${name} — Strata`;
+    }
+    return () => { document.title = 'Strata Client'; };
+  }, [currentSession?.name, connectionName]);
+
   // ── Phase 1: Check for existing session or fetch connection info ──
   useEffect(() => {
     if (!connectionId) return;

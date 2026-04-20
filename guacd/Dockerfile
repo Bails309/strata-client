@@ -70,7 +70,8 @@ RUN apk add --no-cache \
         krb5 krb5-libs \
         ffmpeg-libs \
         font-misc-misc ttf-dejavu \
-        netcat-openbsd
+        netcat-openbsd \
+        su-exec
 
 COPY --from=builder /build/usr/local /usr/local
 COPY --from=builder /build/usr/lib/freerdp3 /usr/lib/freerdp3
@@ -84,15 +85,18 @@ RUN if [ -f /usr/lib/freerdp3/libguac-common-svc-client.so ]; then \
 RUN ldconfig /usr/local/lib || true
 
 # Recordings & drive volume mount points
-RUN mkdir -p /var/lib/guacamole/recordings /var/lib/guacamole/drive && \
+RUN mkdir -p /var/lib/guacamole/recordings /var/lib/guacamole/drive /app/config && \
     chmod 0750 /var/lib/guacamole/recordings /var/lib/guacamole/drive
 
-# Run as non-root user
+# Non-root user (entrypoint drops to this after applying DNS config)
 RUN addgroup -S guacd && adduser -S guacd -G guacd \
     && chown -R guacd:guacd /var/lib/guacamole
-USER guacd
+
+# Entrypoint wrapper — applies custom DNS then execs guacd as non-root
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 4822
 
-ENTRYPOINT ["/usr/local/sbin/guacd"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["-b", "0.0.0.0", "-L", "info", "-f"]

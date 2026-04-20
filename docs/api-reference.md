@@ -168,6 +168,30 @@ Invalidates the current access token and refresh cookie. The access token JTI is
 { "status": "logged_out" }
 ```
 
+### `GET /api/auth/check`
+
+Hydrate the current user's session state. Always returns 200 — unauthenticated requests return `user: null`. This is the primary endpoint the frontend uses on page load to populate user state (not `/api/user/me`).
+
+**Response** `200 OK`
+```json
+{
+  "user": {
+    "id": "uuid",
+    "username": "jdoe",
+    "role": "user",
+    "can_manage_system": false,
+    "can_manage_users": false,
+    "can_manage_connections": false,
+    "can_view_audit_logs": false,
+    "can_view_sessions": true,
+    "vault_configured": true,
+    "is_approver": true
+  }
+}
+```
+
+`is_approver` is `true` when the user has at least one entry in `approval_role_assignments`. The frontend uses this to conditionally show the "Pending Approvals" sidebar link.
+
 ---
 
 ## Admin Endpoints
@@ -299,6 +323,36 @@ Configure or switch Vault mode.
 | `address` | string | If external | Vault server URL |
 | `token` | string | If external | Vault authentication token |
 | `transit_key` | string | No | Transit key name (default: `guac-master-key`) |
+
+#### `PUT /api/admin/settings/dns`
+
+Configure custom DNS servers for guacd containers. Validated DNS entries are saved to the database and written to a shared Docker volume as `resolv.conf`. Requires a `docker compose restart guacd` to take effect.
+
+**Request Body**
+```json
+{
+  "dns_enabled": true,
+  "dns_servers": "10.0.0.1, 10.0.0.2"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `dns_enabled` | boolean | Yes | Enable or disable custom DNS configuration |
+| `dns_servers` | string | Yes | Comma-separated list of IPv4 DNS server addresses |
+
+**Response** `200 OK`
+```json
+{
+  "status": "ok",
+  "restart_required": true,
+  "message": "DNS configuration saved. Restart guacd containers to apply changes."
+}
+```
+
+**Errors:**
+- `400 Bad Request` — invalid IPv4 address in the DNS servers list
+- `500 Internal Server Error` — failed to write `resolv.conf` to the shared volume
 
 ### Health
 
@@ -627,7 +681,8 @@ Current authenticated user profile, including all role permissions.
   "can_create_connections": false,
   "can_create_connection_folders": false,
   "can_create_sharing_profiles": false,
-  "can_view_sessions": true
+  "can_view_sessions": true,
+  "is_approver": true
 }
 ```
 
@@ -729,10 +784,15 @@ Connections accessible to the authenticated user. Admin users see **all** connec
     "description": "Development environment",
     "group_id": "uuid",
     "group_name": "Dev Servers",
-    "last_accessed": "2026-04-05T10:00:00Z"
+    "last_accessed": "2026-04-05T10:00:00Z",
+    "watermark": "none",
+    "health_status": "online",
+    "health_checked_at": "2026-04-18T10:02:00Z"
   }
 ]
 ```
+
+`health_status` is one of `"online"`, `"offline"`, or `"unknown"` (not yet checked). `health_checked_at` is the timestamp of the last TCP probe (null if never checked).
 
 ### `GET /api/user/connections/:id/info`
 
@@ -1066,6 +1126,12 @@ All errors follow this format:
 | `ad_sync.config_updated` | AD sync source config updated |
 | `ad_sync.config_deleted` | AD sync source config deleted |
 | `ad_sync.completed` | AD sync run finished (includes created/updated/deleted counts) |
+| `checkout.requested` | User requested a password checkout for an AD-managed account |
+| `checkout.approved` | Approver approved a password checkout request |
+| `checkout.denied` | Approver denied a password checkout request |
+| `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
+| `checkout.expired` | Password checkout expired (automatic or manual) |
+| `rotation.completed` | Automatic service account password rotation completed |
 
 ---
 
@@ -1210,6 +1276,27 @@ Test an AD sync connection without persisting. Validates connectivity, bind, and
 }
 ```
 
+### `POST /api/admin/ad-sync-configs/test-filter`
+
+Test the PM target account filter against Active Directory without persisting. Uses the form's current bind credentials (PM-specific or fallback to main bind) to execute the LDAP filter and returns matching accounts.
+
+**Request Body**: Same as the create endpoint (uses `pm_target_filter`, `pm_bind_user`, `pm_bind_password` fields).
+
+**Response** `200 OK`
+```json
+{
+  "status": "success",
+  "message": "Filter matched 156 account(s)",
+  "count": 156,
+  "sample": [
+    { "dn": "CN=John Smith,OU=Users,DC=contoso,DC=com", "name": "jsmith", "description": "IT Department" },
+    { "dn": "CN=Jane Doe,OU=Users,DC=contoso,DC=com", "name": "jdoe", "description": null }
+  ]
+}
+```
+
+`sample` contains up to 25 accounts. Each entry includes `dn`, `name` (sAMAccountName or CN), and optional `description`.
+
 ### `POST /api/admin/ad-sync-configs/:id/sync`
 
 Trigger an immediate sync for a specific source.
@@ -1340,3 +1427,154 @@ Remove the display tag for a connection.
 ```
 
 Returns success even if no display tag was set (idempotent).
+
+---
+
+## Password Management Endpoints
+
+### Admin Endpoints (require `can_manage_system`)
+
+#### `GET /api/admin/approval-roles`
+
+List all approval roles.
+
+#### `POST /api/admin/approval-roles`
+
+Create an approval role.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Role name (1-255 characters) |
+| `description` | string | No | Role description |
+
+#### `PUT /api/admin/approval-roles/:id`
+
+Update an approval role.
+
+#### `DELETE /api/admin/approval-roles/:id`
+
+Delete an approval role and all related assignments and account scopes.
+
+#### `GET /api/admin/approval-roles/:id/assignments`
+
+List users assigned to a role.
+
+#### `PUT /api/admin/approval-roles/:id/assignments`
+
+Replace role assignments. Body: `{ "user_ids": ["uuid", ...] }`
+
+#### `GET /api/admin/approval-roles/:id/accounts`
+
+List managed AD accounts scoped to this approval role. Each entry maps the role to a specific managed account DN.
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "role_id": "uuid",
+    "managed_ad_dn": "CN=John Smith,OU=T1-Accounts,DC=contoso,DC=com",
+    "created_at": "2026-04-18T10:00:00Z"
+  }
+]
+```
+
+#### `POST /api/admin/approval-roles/:id/accounts`
+
+Add a managed AD account to this approval role's scope. Body: `{ "managed_ad_dn": "CN=..." }`
+
+#### `DELETE /api/admin/approval-role-accounts/:id`
+
+Remove a managed account from an approval role's scope.
+
+#### `GET /api/admin/account-mappings`
+
+List all user-to-managed-account mappings.
+
+#### `POST /api/admin/account-mappings`
+
+Create a user-to-managed-account mapping.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user_id` | string (UUID) | Yes | Strata user |
+| `managed_ad_dn` | string | Yes | AD distinguished name of managed account |
+| `can_self_approve` | boolean | No | Allow user to self-approve checkouts (default false) |
+| `ad_sync_config_id` | string (UUID) | No | Link to AD sync config for password policy |
+
+#### `DELETE /api/admin/account-mappings/:id`
+
+Delete an account mapping.
+
+#### `GET /api/admin/ad-sync-configs/:id/unmapped-accounts`
+
+Discover AD accounts matching the PM target filter that are not yet mapped to any user.
+
+#### `POST /api/admin/pm/test-rotation`
+
+Test service account password rotation for a config. Body: `{ "config_id": "uuid" }`
+
+#### `GET /api/admin/checkout-requests`
+
+List all checkout requests (up to 200, most recent first).
+
+### User Endpoints (authenticated)
+
+#### `GET /api/user/managed-accounts`
+
+List managed AD accounts assigned to the current user.
+
+#### `POST /api/user/checkouts`
+
+Request a password checkout.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `managed_ad_dn` | string | Yes | DN of the managed account |
+| `ad_sync_config_id` | string (UUID) | No | AD sync config |
+| `requested_duration_mins` | number | No | Duration in minutes (1-720, default 60) |
+| `justification_comment` | string | No | Reason for checkout |
+
+**Response** `200 OK`
+```json
+{ "id": "uuid", "status": "Pending" }
+```
+
+If the user has `can_self_approve`, status will be `"Approved"` and the checkout is automatically activated.
+
+#### `GET /api/user/checkouts`
+
+List the current user's checkout requests (up to 100, most recent first).
+
+#### `GET /api/user/pending-approvals`
+
+List pending checkout requests that the current user can approve. Returns only requests for managed accounts explicitly assigned to the user's approval roles via `approval_role_accounts`. Includes the requester's username (resolved via LEFT JOIN).
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "requester_user_id": "uuid",
+    "requester_username": "jdoe",
+    "managed_ad_dn": "CN=John Smith,OU=T1-Accounts,DC=contoso,DC=com",
+    "status": "Pending",
+    "requested_duration_mins": 60,
+    "justification_comment": "Emergency production fix",
+    "created_at": "2026-04-18T10:00:00Z"
+  }
+]
+```
+
+#### `POST /api/user/checkouts/:id/decide`
+
+Approve or deny a pending checkout. The approver must have the managed account in their approval role scope. Body: `{ "approved": true }`. Records `approved_by_user_id` on the request.
+
+#### `GET /api/user/checkouts/:id/reveal`
+
+Reveal the active checkout password. Only the requester can call this.
+
+**Response** `200 OK`
+```json
+{ "password": "...", "expires_at": "2025-01-01T12:00:00Z" }
+```

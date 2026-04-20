@@ -18,6 +18,10 @@ vi.mock('../api', () => ({
   removeCredentialMapping: vi.fn(),
   getMyConnections: vi.fn(),
   getServiceHealth: vi.fn(),
+  getMyCheckouts: vi.fn().mockResolvedValue([]),
+  getMyManagedAccounts: vi.fn().mockResolvedValue([]),
+  requestCheckout: vi.fn(),
+  revealCheckoutPassword: vi.fn(),
 }));
 
 vi.mock('../contexts/SettingsContext', () => ({

@@ -32,6 +32,42 @@ pub struct AdSyncConfig {
     pub connection_defaults: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+
+    // ── Password Management fields ─────────────────────────────────
+    #[serde(default)]
+    pub pm_enabled: bool,
+    pub pm_bind_user: Option<String>,
+    pub pm_bind_password: Option<String>,
+    #[serde(default = "default_pm_target_filter")]
+    pub pm_target_filter: String,
+    #[serde(default = "default_pm_pwd_min_length")]
+    pub pm_pwd_min_length: i32,
+    #[serde(default = "default_true")]
+    pub pm_pwd_require_uppercase: bool,
+    #[serde(default = "default_true")]
+    pub pm_pwd_require_lowercase: bool,
+    #[serde(default = "default_true")]
+    pub pm_pwd_require_numbers: bool,
+    #[serde(default = "default_true")]
+    pub pm_pwd_require_symbols: bool,
+    #[serde(default)]
+    pub pm_auto_rotate_enabled: bool,
+    #[serde(default = "default_pm_rotate_interval")]
+    pub pm_auto_rotate_interval_days: i32,
+    pub pm_last_rotated_at: Option<DateTime<Utc>>,
+}
+
+fn default_pm_target_filter() -> String {
+    "(&(objectCategory=person)(objectClass=user))".to_string()
+}
+fn default_pm_pwd_min_length() -> i32 {
+    16
+}
+fn default_pm_rotate_interval() -> i32 {
+    30
+}
+fn default_true() -> bool {
+    true
 }
 
 // ── Sync run row ───────────────────────────────────────────────────────
@@ -293,7 +329,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
 
 // ── Build custom rustls config with CA cert ────────────────────────────
 
-fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::ClientConfig>> {
+pub fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rustls::ClientConfig>> {
     let mut root_store = rustls::RootCertStore::empty();
 
     // Load system root certificates

@@ -705,13 +705,21 @@ fn is_valid_domain(s: &str) -> bool {
 
 /// Parse and validate the comma-separated list of DNS search domains.
 fn parse_and_validate_search_domains(raw: &str) -> Result<Vec<String>, AppError> {
-    let domains: Vec<String> = raw.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+    let domains: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
     if domains.len() > 6 {
-        return Err(AppError::Validation("resolv.conf supports at most 6 search domains".into()));
+        return Err(AppError::Validation(
+            "resolv.conf supports at most 6 search domains".into(),
+        ));
     }
     for domain in &domains {
         if !is_valid_domain(domain) {
-            return Err(AppError::Validation(format!("Invalid DNS search domain: {domain}")));
+            return Err(AppError::Validation(format!(
+                "Invalid DNS search domain: {domain}"
+            )));
         }
     }
     Ok(domains)
@@ -805,7 +813,12 @@ pub async fn update_dns(
     // Save to database
     settings::set(&db.pool, "dns_enabled", &body.dns_enabled.to_string()).await?;
     settings::set(&db.pool, "dns_servers", &body.dns_servers.trim()).await?;
-    settings::set(&db.pool, "dns_search_domains", &body.dns_search_domains.trim()).await?;
+    settings::set(
+        &db.pool,
+        "dns_search_domains",
+        &body.dns_search_domains.trim(),
+    )
+    .await?;
 
     // Write resolv.conf for guacd containers
     if body.dns_enabled && !servers.is_empty() {

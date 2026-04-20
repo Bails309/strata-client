@@ -322,25 +322,28 @@ $TargetOU = "OU=ManagedAccounts,DC=corp,DC=com"   # The OU containing standard a
 $ApplyToProtectedAccounts = $true                 # Set to $true to also delegate for Domain Admins/Protected groups
 # ---------------------
 
-function Delegate-StrataPM($Path) {
+function Delegate-StrataPM($Path, $IsOU = $true) {
     Write-Host "Delegating permissions on: $Path" -ForegroundColor Cyan
+    $Inherit = if ($IsOU) { "/I:S" } else { "" }
+    $Target = if ($IsOU) { ";user" } else { "" }
+
     # 1. Reset Password (Extended Right)
-    dsacls $Path /I:S /G "$($ServiceAccount):CA;Reset Password;user"
+    dsacls $Path $Inherit /G "$($ServiceAccount):CA;Reset Password$Target"
     # 2. Read/Write account restrictions (Property Set)
-    dsacls $Path /I:S /G "$($ServiceAccount):RPWP;account restrictions;user"
+    dsacls $Path $Inherit /G "$($ServiceAccount):RPWP;account restrictions$Target"
     # 3. Read/Write lockoutTime (Individual Property)
-    dsacls $Path /I:S /G "$($ServiceAccount):RPWP;lockoutTime;user"
+    dsacls $Path $Inherit /G "$($ServiceAccount):RPWP;lockoutTime$Target"
 }
 
 # 1. Apply to Standard OU
-Delegate-StrataPM $TargetOU
+Delegate-StrataPM $TargetOU -IsOU $true
 
 # 2. Apply to AdminSDHolder (for Protected Accounts)
 if ($ApplyToProtectedAccounts) {
     $DomainDN = ([ADSI]"").distinguishedName
     $AdminSDHolderPath = "CN=AdminSDHolder,CN=System,$DomainDN"
     Write-Host "`nProtected accounts detected ($ApplyToProtectedAccounts). Applying to AdminSDHolder..." -ForegroundColor Yellow
-    Delegate-StrataPM $AdminSDHolderPath
+    Delegate-StrataPM $AdminSDHolderPath -IsOU $false
     Write-Host "Note: Permission propagation for protected accounts (SDProp) may take up to 60 minutes." -ForegroundColor Gray
 }
 

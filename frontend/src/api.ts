@@ -353,6 +353,7 @@ export interface AdSyncConfig {
   pm_auto_rotate_interval_days?: number;
   pm_last_rotated_at?: string;
   pm_search_bases?: string[];
+  pm_allow_emergency_bypass?: boolean;
   created_at: string;
   updated_at: string;
   clone_from?: string;
@@ -412,6 +413,8 @@ export interface UserAccountMapping {
   can_self_approve: boolean;
   ad_sync_config_id?: string;
   created_at: string;
+  /** Set by /user/managed-accounts — indicates the parent AD sync config allows emergency bypass. */
+  pm_allow_emergency_bypass?: boolean;
 }
 
 export interface CheckoutRequest {
@@ -420,15 +423,17 @@ export interface CheckoutRequest {
   managed_ad_dn: string;
   friendly_name?: string;
   ad_sync_config_id?: string;
-  status: 'Pending' | 'Approved' | 'Active' | 'Expired' | 'Denied' | 'CheckedIn';
+  status: 'Pending' | 'Approved' | 'Scheduled' | 'Active' | 'Expired' | 'Denied' | 'CheckedIn';
   requested_duration_mins: number;
   approved_by_user_id?: string;
   justification_comment?: string;
   expires_at?: string;
+  scheduled_start_at?: string;
   vault_credential_id?: string;
   created_at: string;
   updated_at: string;
   requester_username?: string;
+  emergency_bypass?: boolean;
 }
 
 export interface DiscoveredAccount {
@@ -480,8 +485,8 @@ export const getCheckoutRequests = () => request<CheckoutRequest[]>('/admin/chec
 // User: Managed accounts & checkouts
 export const getMyManagedAccounts = () => request<UserAccountMapping[]>('/user/managed-accounts');
 export const getMyCheckouts = () => request<CheckoutRequest[]>('/user/checkouts');
-export const requestCheckout = (data: { managed_ad_dn: string; ad_sync_config_id?: string; requested_duration_mins?: number; justification_comment?: string }) =>
-  request<{ id: string; status: string }>('/user/checkouts', { method: 'POST', body: JSON.stringify(data) });
+export const requestCheckout = (data: { managed_ad_dn: string; ad_sync_config_id?: string; requested_duration_mins?: number; justification_comment?: string; emergency_bypass?: boolean; scheduled_start_at?: string }) =>
+  request<{ id: string; status: string; scheduled_start_at?: string }>('/user/checkouts', { method: 'POST', body: JSON.stringify(data) });
 export const decideCheckout = (id: string, approved: boolean) =>
   request<{ status: string }>(`/user/checkouts/${id}/decide`, { method: 'POST', body: JSON.stringify({ approved }) });
 export const revealCheckoutPassword = (id: string) =>

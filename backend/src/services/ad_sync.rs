@@ -57,6 +57,11 @@ pub struct AdSyncConfig {
     pub pm_last_rotated_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub pm_search_bases: Vec<String>,
+    /// When true, users who require approval for password checkouts may
+    /// request an Emergency Approval Bypass which releases the password
+    /// immediately without going through the approval workflow.
+    #[serde(default)]
+    pub pm_allow_emergency_bypass: bool,
 }
 
 fn default_pm_target_filter() -> String {
@@ -861,6 +866,7 @@ mod tests {
             pm_auto_rotate_interval_days: default_pm_rotate_interval(),
             pm_last_rotated_at: None,
             pm_search_bases: vec![],
+            pm_allow_emergency_bypass: false,
         }
     }
 

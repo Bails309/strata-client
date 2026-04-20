@@ -50,6 +50,10 @@ pub struct CheckoutRequest {
     #[sqlx(default)]
     pub requester_username: Option<String>,
     pub friendly_name: Option<String>,
+    #[sqlx(default)]
+    pub emergency_bypass: bool,
+    #[sqlx(default)]
+    pub scheduled_start_at: Option<DateTime<Utc>>,
 }
 
 // ── Approval role row ──────────────────────────────────────────────────
@@ -227,7 +231,7 @@ pub async fn activate_checkout(
             .await?
             .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
-    if req.status != "Approved" && req.status != "Active" {
+    if req.status != "Approved" && req.status != "Active" && req.status != "Scheduled" {
         return Err(AppError::Validation(format!(
             "Cannot activate checkout in '{}' state",
             req.status
@@ -1070,6 +1074,24 @@ async fn run_expiration_scrub(state: SharedState) -> anyhow::Result<()> {
         .execute(&db.pool)
         .await?;
         tracing::info!("Stale checkout {checkout_id} marked as Expired (never activated)");
+    }
+
+    // Activate any scheduled checkouts whose start time has arrived
+    let due_scheduled: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM password_checkout_requests
+         WHERE status = 'Scheduled'
+           AND scheduled_start_at IS NOT NULL
+           AND scheduled_start_at <= now()",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    for checkout_id in due_scheduled {
+        if let Err(e) = activate_checkout(&db.pool, &vault_cfg, checkout_id).await {
+            tracing::error!("Failed to activate scheduled checkout {checkout_id}: {e}");
+        } else {
+            tracing::info!("Scheduled checkout {checkout_id} activated");
+        }
     }
 
     Ok(())

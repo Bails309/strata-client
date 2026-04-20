@@ -1143,6 +1143,8 @@ All errors follow this format:
 | `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
 | `checkout.expired` | Password checkout expired (automatic or manual) |
 | `checkout.checked_in` | User voluntarily checked-in (returned) an active checkout early |
+| `checkout.scheduled` | User created a password checkout with a future `scheduled_start_at`; no credential material exists yet |
+| `checkout.emergency_bypass` | User invoked break-glass approval bypass; checkout activated immediately without approver review (requires `pm_allow_emergency_bypass`) |
 | `rotation.completed` | Automatic service account password rotation completed |
 
 ---
@@ -1238,6 +1240,7 @@ Create a new AD sync source.
 | `sync_interval_minutes` | integer | No | 60 | Background sync interval (minimum 5) |
 | `enabled` | boolean | No | true | Enable/disable this source |
 | `pm_search_bases` | string[] | No | `[]` | OU scopes specifically for user discovery. If empty, falls back to `search_bases`. |
+| `pm_allow_emergency_bypass` | boolean | No | false | Enable the break-glass "⚡ Emergency Bypass" option on checkout requests for accounts governed by this config. When true, users can self-activate a checkout with a ≥ 10-character justification, skipping approver review. Each event is audit-logged as `checkout.emergency_bypass`. |
 
 #### Connection Defaults
 
@@ -1521,6 +1524,8 @@ Create a user-to-managed-account mapping.
 
 Delete an account mapping.
 
+Delete an account mapping.
+
 #### `GET /api/admin/ad-sync-configs/:id/unmapped-accounts`
 
 Discover AD accounts matching the PM target filter that are not yet mapped to any user.
@@ -1547,15 +1552,23 @@ Request a password checkout.
 |-------|------|----------|-------------|
 | `managed_ad_dn` | string | Yes | DN of the managed account |
 | `ad_sync_config_id` | string (UUID) | No | AD sync config |
-| `requested_duration_mins` | number | No | Duration in minutes (1-720, default 60) |
-| `justification_comment` | string | No | Reason for checkout |
+| `requested_duration_mins` | number | No | Duration in minutes (1-720, default 60). **Hard-clamped to 30 when `emergency_bypass = true`** — any larger value is silently reduced server-side. |
+| `justification_comment` | string | No | Reason for checkout (required to be ≥ 10 characters when `emergency_bypass = true`) |
+| `emergency_bypass` | boolean | No | Break-glass flag. Only accepted when the account's AD sync config has `pm_allow_emergency_bypass = true`. Activates the checkout immediately without approver review, caps `requested_duration_mins` at 30, and writes a `checkout.emergency_bypass` audit event. Cannot be combined with `scheduled_start_at`. |
+| `scheduled_start_at` | string (ISO 8601, UTC) | No | Schedules the release for a future moment. Must be strictly in the future (> now + 30 s) and ≤ 14 days from now. The checkout is created with status `Scheduled` — no password is generated, no LDAP mutation occurs, and no Vault material is written until the scheduled moment. A 60-second background worker activates due rows. |
 
 **Response** `200 OK`
 ```json
-{ "id": "uuid", "status": "Pending" }
+{ "id": "uuid", "status": "Pending", "scheduled_start_at": null }
 ```
 
-If the user has `can_self_approve`, status will be `"Approved"` and the checkout is automatically activated.
+`status` is one of `Pending`, `Approved`, `Scheduled`, or `Active`. Self-approving users (or emergency-bypass callers) receive `Approved` and the checkout is activated synchronously; scheduled requests return `Scheduled` with the echo of `scheduled_start_at`; approval-required requests return `Pending`.
+
+**Errors:**
+- `400 Validation` — `scheduled_start_at` is in the past / too close / more than 14 days out, or `emergency_bypass` was combined with `scheduled_start_at`
+- `400 Validation` — `emergency_bypass = true` but `justification_comment` is shorter than 10 characters
+- `403 Forbidden` — `emergency_bypass = true` but the AD sync config does not have `pm_allow_emergency_bypass` enabled
+- `409 Conflict` — user already has an open (`Pending`, `Approved`, `Scheduled`, or `Active`) checkout for this account
 
 #### `GET /api/user/checkouts`
 

@@ -2575,6 +2575,7 @@ pub struct CreateAdSyncConfigRequest {
     pub pm_auto_rotate_enabled: Option<bool>,
     pub pm_auto_rotate_interval_days: Option<i32>,
     pub pm_search_bases: Option<Vec<String>>,
+    pub pm_allow_emergency_bypass: Option<bool>,
 }
 
 pub async fn create_ad_sync_config(
@@ -2652,8 +2653,8 @@ pub async fn create_ad_sync_config(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem, connection_defaults, pm_enabled, pm_bind_user, pm_bind_password, pm_target_filter, pm_pwd_min_length, pm_pwd_require_uppercase, pm_pwd_require_lowercase, pm_pwd_require_numbers, pm_pwd_require_symbols, pm_auto_rotate_enabled, pm_auto_rotate_interval_days, pm_search_bases)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) RETURNING id",
+        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem, connection_defaults, pm_enabled, pm_bind_user, pm_bind_password, pm_target_filter, pm_pwd_min_length, pm_pwd_require_uppercase, pm_pwd_require_lowercase, pm_pwd_require_numbers, pm_pwd_require_symbols, pm_auto_rotate_enabled, pm_auto_rotate_interval_days, pm_search_bases, pm_allow_emergency_bypass)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) RETURNING id",
     )
     .bind(&body.label)
     .bind(&body.ldap_url)
@@ -2686,6 +2687,7 @@ pub async fn create_ad_sync_config(
     .bind(body.pm_auto_rotate_enabled.unwrap_or(false))
     .bind(body.pm_auto_rotate_interval_days.unwrap_or(30))
     .bind(body.pm_search_bases.as_ref().unwrap_or(&vec![]))
+    .bind(body.pm_allow_emergency_bypass.unwrap_or(false))
     .fetch_one(&db.pool)
     .await?;
 
@@ -2736,6 +2738,7 @@ pub struct UpdateAdSyncConfigRequest {
     pub pm_auto_rotate_enabled: Option<bool>,
     pub pm_auto_rotate_interval_days: Option<i32>,
     pub pm_search_bases: Option<Vec<String>>,
+    pub pm_allow_emergency_bypass: Option<bool>,
 }
 
 pub async fn update_ad_sync_config(
@@ -3081,6 +3084,16 @@ pub async fn update_ad_sync_config(
         .await?;
     }
 
+    if let Some(v) = body.pm_allow_emergency_bypass {
+        sqlx::query(
+            "UPDATE ad_sync_configs SET pm_allow_emergency_bypass = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     tx.commit().await?;
 
     audit::log(
@@ -3244,6 +3257,7 @@ pub async fn test_ad_sync_connection(
         pm_auto_rotate_interval_days: 90,
         pm_last_rotated_at: None,
         pm_search_bases: body.pm_search_bases.clone().unwrap_or_default(),
+        pm_allow_emergency_bypass: false,
     };
 
     match crate::services::ad_sync::test_connection(&config).await {

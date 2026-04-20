@@ -25,6 +25,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.20.1',
+    subtitle: 'Emergency Bypass — 30-Minute Hard Cap',
+    sections: [
+      {
+        title: 'Exposure Window Tightened',
+        description:
+          'Emergency Approval Bypass checkouts are now hard-capped at 30 minutes, regardless of the duration submitted by the client. The server silently clamps any larger value before the row is written, the checkout form caps the duration input to 30 while the ⚡ Emergency Bypass checkbox is ticked, and an inline warning explains the limit. This reduces the window during which a credential released without approver review is valid.',
+      },
+    ],
+  },
+  {
+    version: '0.20.0',
+    subtitle: 'Scheduled Password Release & Emergency Approval Bypass',
+    sections: [
+      {
+        title: 'Schedule a Future Password Release',
+        description:
+          'Request a password checkout that releases at a future moment (1 minute to 14 days ahead) instead of immediately. Perfect for change windows and planned maintenance. The checkout sits in a new "Scheduled" state with no password, no Vault material and no LDAP mutation until the scheduled moment arrives — at which point the backend automatically generates, resets and seals the credential.',
+      },
+      {
+        title: 'Emergency Approval Bypass (Break-Glass)',
+        description:
+          'Administrators can now enable a per-AD-sync-source "Emergency Approval Bypass" toggle. When an incident needs a credential right now and approvers are unreachable, users can tick the ⚡ Emergency Bypass checkbox, provide a 10-character justification, and activate the checkout immediately. Emergency bypass checkouts are hard-capped at 30 minutes to limit exposure while the approver chain is skipped. Every bypass event is flagged, badged with ⚡ Emergency across the UI, and recorded in the audit log as checkout.emergency_bypass for post-incident review.',
+      },
+      {
+        title: 'Mutually Exclusive Safeguards',
+        description:
+          'The checkout form hides the emergency option while scheduling is enabled — emergency means "immediate", scheduled means "future", and they cannot be combined. The submit button label changes dynamically to "Schedule Checkout", "Emergency Checkout" or "Request Checkout" so you always know which path you are on.',
+      },
+      {
+        title: 'Single Expiration Worker',
+        description:
+          'The existing 60-second checkout expiration worker has been extended to also activate due scheduled checkouts. No new background processes, no additional polling. A partial index on scheduled_start_at keeps the due-scan an indexed lookup.',
+      },
+    ],
+  },
+  {
     version: '0.19.4',
     subtitle: 'Expired Managed Credentials — Inline Renewal & Tunnel Safety',
     sections: [

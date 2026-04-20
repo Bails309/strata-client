@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] — 2026-04-20
+
+### Security
+- **Emergency Bypass 30-Minute Duration Cap**: Emergency Approval Bypass checkouts are now hard-capped at **30 minutes** regardless of the `requested_duration_mins` value submitted. The cap is enforced server-side in `POST /api/user/checkouts` after all existing bypass guards pass — any larger value is silently clamped before the row is written. This tightens the exposure window for credentials released without approver review. The checkout form also caps the duration input's `max` to `30` while the ⚡ Emergency Bypass checkbox is ticked and auto-reduces the current value if the user enables bypass with a larger duration selected; the server-side clamp remains authoritative.
+
+### Changed
+- **Checkout Form**: Duration input label now reads "Duration (minutes, 1–30)" when emergency bypass is active, with an inline warning "Emergency bypass checkouts are capped at 30 minutes."
+
+## [0.20.0] — 2026-04-20
+
+### Added
+- **Scheduled Password Release (Future Start Time)**: Users can now request a password checkout that releases at a future date/time instead of immediately. The checkout form includes an optional "Schedule release for a future time" toggle with a `datetime-local` picker (default now + 15 minutes, minimum now + 1 minute, maximum + 14 days). On submit, the request is created with status `Scheduled` and the password is not generated until the scheduled moment. The existing 60-second expiration worker (`spawn_expiration_worker` / `run_expiration_scrub`) now also scans for due `Scheduled` rows and invokes `activate_checkout` — no new worker, no additional DB polling pattern. Works for both approval-required and self-approving users. Scheduled checkouts display a distinct accent badge and a "🕒 Release scheduled for …" line on the checkout card.
+- **Emergency Approval Bypass (Break-Glass)**: A new per-AD-Sync-Source toggle (`pm_allow_emergency_bypass`) lets administrators permit users to bypass approval-role review during a production incident. When enabled, approval-required users see an "⚡ Emergency Bypass" checkbox on the checkout form. Emergency checkouts require a justification of at least 10 characters, are **capped at a maximum duration of 30 minutes** (enforced server-side and in the UI), and are activated immediately — just like a self-approved request — but are flagged with `emergency_bypass = true` throughout the checkout lifecycle. A distinct audit event (`checkout.emergency_bypass`) is written, and the Credentials / Approvals views display an "⚡ Emergency" badge so auditors and approvers can instantly identify break-glass access. The emergency option is hidden on the form when a scheduled release is active (they are mutually exclusive: emergency = immediate, scheduled = future).
+
+### Changed
+- **Checkout State Machine**: `password_checkout_requests.status` now has seven possible states: `Pending`, `Approved`, `Scheduled`, `Active`, `Expired`, `Denied`, `CheckedIn`. `activate_checkout` accepts any of `Approved`, `Active`, or `Scheduled` as valid source states.
+- **Duplicate-Request Guard**: The "you already have an open checkout" guard in `POST /api/user/checkouts` now treats `Scheduled` rows as open, preventing users from queuing multiple future-dated releases for the same account.
+- **Checkout Form UX**: Dynamic submit button label — reads "Schedule Checkout", "Emergency Checkout", or "Request Checkout" depending on which options are active. Scheduled releases show a distinct flash message: "Checkout scheduled — password will release at the chosen time".
+
+### Database
+- **Migration 051**: Adds `pm_allow_emergency_bypass BOOLEAN NOT NULL DEFAULT FALSE` to `ad_sync_configs`; adds `emergency_bypass BOOLEAN NOT NULL DEFAULT FALSE` to `password_checkout_requests` with a partial index for audit queries.
+- **Migration 052**: Adds `scheduled_start_at TIMESTAMPTZ` to `password_checkout_requests`; drops and recreates `password_checkout_requests_status_check` to include the new `Scheduled` state (full state set: `Pending, Approved, Scheduled, Active, Expired, Denied, CheckedIn`); adds a partial index `idx_password_checkout_requests_scheduled_start_at WHERE status = 'Scheduled'` so the expiration worker's due-scan is an indexed lookup rather than a table scan.
+
+### Security
+- **Emergency Bypass Safeguards**: The `pm_allow_emergency_bypass` toggle is gated behind an AD sync config (admin-only). The backend enforces four checks server-side: (1) the mapping's `ad_sync_config_id` must have `pm_allow_emergency_bypass = true`, (2) the justification comment must be at least 10 characters, (3) emergency bypass cannot be combined with scheduled release, (4) `requested_duration_mins` is hard-clamped to 30 minutes regardless of the value submitted. Every emergency checkout emits a dedicated `checkout.emergency_bypass` audit entry that captures the requester, managed account DN, justification, and (clamped) duration — so break-glass events are reviewable and immutable even though approvers were bypassed.
+- **Scheduled Release Bounds**: The scheduled timestamp is validated server-side to be strictly in the future (> now + 30 s) and no more than 14 days out; values outside this window return `400 Validation`. The row sits idle in the DB with no Vault material, no generated password, and no LDAP mutation until the worker activates it — minimising the window in which a privileged credential exists.
+
 ## [0.19.4] — 2026-04-20
 
 ### Fixed

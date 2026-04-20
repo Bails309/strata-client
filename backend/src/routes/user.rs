@@ -1533,15 +1533,45 @@ use crate::services::checkouts::CheckoutRequest;
 pub async fn my_managed_accounts(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
-) -> Result<Json<Vec<crate::services::checkouts::UserAccountMapping>>, AppError> {
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<crate::services::checkouts::UserAccountMapping> = sqlx::query_as(
-        "SELECT * FROM user_account_mappings WHERE user_id = $1 ORDER BY managed_ad_dn",
+    let rows: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        bool,
+        Option<Uuid>,
+        chrono::DateTime<chrono::Utc>,
+        Option<String>,
+        Option<bool>,
+    )> = sqlx::query_as(
+        "SELECT m.id, m.user_id, m.managed_ad_dn, m.can_self_approve, m.ad_sync_config_id,
+                m.created_at, m.friendly_name, c.pm_allow_emergency_bypass
+         FROM user_account_mappings m
+         LEFT JOIN ad_sync_configs c ON c.id = m.ad_sync_config_id
+         WHERE m.user_id = $1
+         ORDER BY m.managed_ad_dn",
     )
     .bind(user.id)
     .fetch_all(&db.pool)
     .await?;
-    Ok(Json(rows))
+
+    let out: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.0,
+                "user_id": r.1,
+                "managed_ad_dn": r.2,
+                "can_self_approve": r.3,
+                "ad_sync_config_id": r.4,
+                "created_at": r.5,
+                "friendly_name": r.6,
+                "pm_allow_emergency_bypass": r.7.unwrap_or(false),
+            })
+        })
+        .collect();
+    Ok(Json(out))
 }
 
 /// Request a password checkout.
@@ -1552,6 +1582,17 @@ pub struct RequestCheckoutBody {
     pub ad_sync_config_id: Option<Uuid>,
     pub requested_duration_mins: Option<i32>,
     pub justification_comment: Option<String>,
+    /// When true, bypass the approval workflow and release the password
+    /// immediately. Only honoured when the AD sync config has
+    /// `pm_allow_emergency_bypass = true` and a justification is provided.
+    #[serde(default)]
+    pub emergency_bypass: Option<bool>,
+    /// Optional future timestamp. When set and in the future, the checkout
+    /// is held at status = 'Scheduled' until the background worker releases
+    /// the password at or after this time. Ignored when emergency bypass
+    /// is used.
+    #[serde(default)]
+    pub scheduled_start_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub async fn request_checkout(
@@ -1575,12 +1616,11 @@ pub async fn request_checkout(
     .await?;
     let mapping = mapping.ok_or(AppError::Forbidden)?;
 
-    let duration = body.requested_duration_mins.unwrap_or(60).clamp(1, 720);
-
+    let mut duration = body.requested_duration_mins.unwrap_or(60).clamp(1, 720);
     // Check for active/pending checkout on same DN by same user
     let existing: Option<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM password_checkout_requests
-         WHERE requester_user_id = $1 AND managed_ad_dn = $2 AND status IN ('Pending','Active')",
+         WHERE requester_user_id = $1 AND managed_ad_dn = $2 AND status IN ('Pending','Approved','Scheduled','Active')",
     )
     .bind(user.id)
     .bind(dn)
@@ -1593,16 +1633,81 @@ pub async fn request_checkout(
     }
 
     // If self-approve, go straight to Approved
-    let initial_status = if mapping.can_self_approve {
+    let mut initial_status = if mapping.can_self_approve {
         "Approved"
     } else {
         "Pending"
     };
 
+    // Emergency Approval Bypass: lets a user who normally requires approval
+    // release the password immediately. Must be explicitly allowed per AD sync
+    // config, must not be used by self-approvers (it's meaningless), and must
+    // be accompanied by a justification of at least 10 chars.
+    let emergency_bypass = body.emergency_bypass.unwrap_or(false);
+    if emergency_bypass {
+        if mapping.can_self_approve {
+            // No-op for self-approvers; just honour normal flow.
+        } else {
+            let justification = body.justification_comment.as_deref().unwrap_or("").trim();
+            if justification.len() < 10 {
+                return Err(AppError::Validation(
+                    "Emergency Approval Bypass requires a justification of at least 10 characters"
+                        .into(),
+                ));
+            }
+
+            let allow_bypass: Option<bool> = match mapping.ad_sync_config_id {
+                Some(cfg_id) => {
+                    sqlx::query_scalar(
+                        "SELECT pm_allow_emergency_bypass FROM ad_sync_configs WHERE id = $1",
+                    )
+                    .bind(cfg_id)
+                    .fetch_optional(&db.pool)
+                    .await?
+                }
+                None => None,
+            };
+
+            if !allow_bypass.unwrap_or(false) {
+                return Err(AppError::Forbidden);
+            }
+
+            // Hard cap: emergency bypass checkouts cannot exceed 30 minutes.
+            // This limits exposure when the approver chain is bypassed.
+            if duration > 30 {
+                duration = 30;
+            }
+
+            initial_status = "Approved";
+        }
+    }
+
+    // Scheduled start: if the user requested a future start time and the
+    // checkout is in an auto-release state, hold it until the clock catches up.
+    // Emergency bypass overrides scheduling (break-glass is immediate).
+    let now = chrono::Utc::now();
+    let scheduled_start_at = body
+        .scheduled_start_at
+        .filter(|ts| *ts > now + chrono::Duration::seconds(30));
+    // Guard: don't allow scheduling more than 14 days out
+    if let Some(ts) = scheduled_start_at {
+        if ts > now + chrono::Duration::days(14) {
+            return Err(AppError::Validation(
+                "Scheduled start time cannot be more than 14 days in the future".into(),
+            ));
+        }
+    }
+    let use_schedule = scheduled_start_at.is_some()
+        && initial_status == "Approved"
+        && !(emergency_bypass && !mapping.can_self_approve);
+    if use_schedule {
+        initial_status = "Scheduled";
+    }
+
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO password_checkout_requests
-         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment, friendly_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment, friendly_name, emergency_bypass, scheduled_start_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
     )
     .bind(user.id)
     .bind(dn)
@@ -1611,14 +1716,28 @@ pub async fn request_checkout(
     .bind(duration)
     .bind(body.justification_comment.as_deref().unwrap_or(""))
     .bind(mapping.friendly_name)
+    .bind(emergency_bypass && initial_status == "Approved" && !mapping.can_self_approve)
+    .bind(scheduled_start_at)
     .fetch_one(&db.pool)
     .await?;
 
+    let emergency_logged = emergency_bypass && !mapping.can_self_approve;
     crate::services::audit::log(
         &db.pool,
         Some(user.id),
-        "checkout.requested",
-        &json!({ "checkout_id": id, "dn": dn, "status": initial_status }),
+        if emergency_logged {
+            "checkout.emergency_bypass"
+        } else {
+            "checkout.requested"
+        },
+        &json!({
+            "checkout_id": id,
+            "dn": dn,
+            "status": initial_status,
+            "emergency_bypass": emergency_logged,
+            "scheduled_start_at": scheduled_start_at,
+            "justification": body.justification_comment.as_deref().unwrap_or(""),
+        }),
     )
     .await?;
 
@@ -1646,7 +1765,11 @@ pub async fn request_checkout(
         }
     }
 
-    Ok(Json(json!({ "id": id, "status": initial_status })))
+    Ok(Json(json!({
+        "id": id,
+        "status": initial_status,
+        "scheduled_start_at": scheduled_start_at,
+    })))
 }
 
 /// My checkout requests.

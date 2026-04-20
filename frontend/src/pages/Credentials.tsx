@@ -81,6 +81,9 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   const [selectedDn, setSelectedDn] = useState('');
   const [duration, setDuration] = useState(60);
   const [justification, setJustification] = useState('');
+  const [emergencyBypass, setEmergencyBypass] = useState(false);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduledStart, setScheduledStart] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState('');
 
@@ -102,7 +105,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       getMyCheckouts()
         .then((all) => {
           setAllCheckouts(all);
-          setActiveCheckouts(all.filter((c) => !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending')));
+          setActiveCheckouts(all.filter((c) => !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending' || c.status === 'Scheduled')));
         })
         .catch(() => {});
 
@@ -238,18 +241,52 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   // ── Checkout handlers ──
   const handleRequestCheckout = async () => {
     if (!selectedDn) return;
+    const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
+    const isEmergency = emergencyBypass && !!acct && !acct.can_self_approve && !!acct.pm_allow_emergency_bypass;
+    if (isEmergency && justification.trim().length < 10) {
+      flash('Emergency bypass requires a justification of at least 10 characters');
+      return;
+    }
+    const effectiveDuration = isEmergency ? Math.min(duration, 30) : duration;
+    let scheduledIso: string | undefined;
+    if (scheduleEnabled && !isEmergency && scheduledStart) {
+      const when = new Date(scheduledStart);
+      if (Number.isNaN(when.getTime())) {
+        flash('Invalid scheduled start time');
+        return;
+      }
+      if (when.getTime() - Date.now() < 60_000) {
+        flash('Scheduled start must be at least 1 minute in the future');
+        return;
+      }
+      if (when.getTime() - Date.now() > 14 * 24 * 3600 * 1000) {
+        flash('Scheduled start cannot be more than 14 days ahead');
+        return;
+      }
+      scheduledIso = when.toISOString();
+    }
     setSubmitting(true);
     try {
-      const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
       const res = await requestCheckout({
         managed_ad_dn: selectedDn,
         ad_sync_config_id: acct?.ad_sync_config_id || undefined,
-        requested_duration_mins: duration,
+        requested_duration_mins: effectiveDuration,
         justification_comment: justification || undefined,
+        emergency_bypass: isEmergency || undefined,
+        scheduled_start_at: scheduledIso,
       });
-      flash(`Checkout ${res.status === 'Approved' ? 'approved and activated' : 'submitted for approval'}`);
+      flash(
+        isEmergency
+          ? 'Emergency bypass approved — password activated'
+          : res.status === 'Scheduled'
+            ? 'Checkout scheduled — password will release at the chosen time'
+            : `Checkout ${res.status === 'Approved' ? 'approved and activated' : 'submitted for approval'}`
+      );
       setSelectedDn('');
       setJustification('');
+      setEmergencyBypass(false);
+      setScheduleEnabled(false);
+      setScheduledStart('');
       load();
     } catch (e: any) {
       flash(e.message || 'Request failed');
@@ -420,7 +457,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
           {managedAccounts.length === 0 ? (
             <p className="text-txt-secondary">No managed accounts assigned to you. Contact an administrator.</p>
           ) : managedAccounts.every((a) => allCheckouts.some(
-              (c) => c.managed_ad_dn === a.managed_ad_dn && !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending')
+              (c) => c.managed_ad_dn === a.managed_ad_dn && !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending' || c.status === 'Scheduled')
             )) ? (
             <p className="text-txt-secondary">All managed accounts already have active checkouts. Wait for current checkouts to expire before requesting new ones.</p>
           ) : (
@@ -433,7 +470,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                   placeholder="Select account..."
                   options={managedAccounts
                     .filter((a) => !allCheckouts.some(
-                      (c) => c.managed_ad_dn === a.managed_ad_dn && !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending')
+                      (c) => c.managed_ad_dn === a.managed_ad_dn && !isCheckoutExpired(c) && (c.status === 'Active' || c.status === 'Approved' || c.status === 'Pending' || c.status === 'Scheduled')
                     ))
                     .map((a) => ({
                       value: a.managed_ad_dn,
@@ -442,15 +479,22 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                 />
               </div>
               <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Duration (minutes, 1–720)</label>
+                <label className="block text-sm font-medium mb-1">
+                  Duration (minutes, 1–{emergencyBypass ? 30 : 720})
+                </label>
                 <input
                   type="number"
                   className="input w-32"
                   min={1}
-                  max={720}
+                  max={emergencyBypass ? 30 : 720}
                   value={duration}
                   onChange={(e) => setDuration(Number(e.target.value))}
                 />
+                {emergencyBypass && (
+                  <p className="text-xs text-warning mt-1">
+                    Emergency bypass checkouts are capped at 30 minutes.
+                  </p>
+                )}
               </div>
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Justification (optional)</label>
@@ -462,12 +506,88 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                   placeholder="Reason for checkout..."
                 />
               </div>
+              <div className="mb-4">
+                <label className="flex items-center gap-2 cursor-pointer text-sm font-medium mb-1">
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={scheduleEnabled}
+                    onChange={(e) => {
+                      setScheduleEnabled(e.target.checked);
+                      if (e.target.checked && !scheduledStart) {
+                        // Default to 15 minutes from now, rounded to next 5
+                        const d = new Date(Date.now() + 15 * 60 * 1000);
+                        d.setSeconds(0, 0);
+                        // Format as local datetime-local (YYYY-MM-DDTHH:mm)
+                        const pad = (n: number) => n.toString().padStart(2, '0');
+                        setScheduledStart(
+                          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+                        );
+                      }
+                    }}
+                  />
+                  Schedule release for a future time
+                </label>
+                {scheduleEnabled && (
+                  <div className="ml-6 mt-2">
+                    <input
+                      type="datetime-local"
+                      className="input w-64"
+                      value={scheduledStart}
+                      onChange={(e) => setScheduledStart(e.target.value)}
+                      min={(() => {
+                        const d = new Date(Date.now() + 60 * 1000);
+                        const pad = (n: number) => n.toString().padStart(2, '0');
+                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                      })()}
+                    />
+                    <p className="text-xs text-txt-tertiary mt-1">
+                      Password will be held until the chosen time, then released automatically. Max 14 days ahead.
+                    </p>
+                  </div>
+                )}
+              </div>
+              {(() => {
+                const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
+                if (!acct || acct.can_self_approve || !acct.pm_allow_emergency_bypass || scheduleEnabled) return null;
+                return (
+                  <div className="mb-4 p-3 rounded border border-warning/40 bg-warning/5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="checkbox mt-1"
+                        checked={emergencyBypass}
+                        onChange={(e) => {
+                          setEmergencyBypass(e.target.checked);
+                          if (e.target.checked && duration > 30) setDuration(30);
+                        }}
+                      />
+                      <div>
+                        <div className="text-sm font-semibold text-warning">
+                          Emergency Approval Bypass (Break-Glass)
+                        </div>
+                        <div className="text-xs text-txt-secondary mt-0.5">
+                          Skip the approval workflow and release the password immediately.
+                          A justification of at least 10 characters is required, and every use
+                          is recorded in the audit log.
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                );
+              })()}
               <button
-                className="btn btn-primary"
+                className={`btn ${emergencyBypass ? 'btn-warning' : 'btn-primary'}`}
                 onClick={handleRequestCheckout}
-                disabled={!selectedDn || submitting}
+                disabled={!selectedDn || submitting || (scheduleEnabled && !scheduledStart)}
               >
-                {submitting ? 'Submitting...' : 'Request Checkout'}
+                {submitting
+                  ? 'Submitting...'
+                  : emergencyBypass
+                    ? 'Emergency Checkout'
+                    : scheduleEnabled
+                      ? 'Schedule Checkout'
+                      : 'Request Checkout'}
               </button>
             </>
           )}
@@ -489,7 +609,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                     (other) => other.managed_ad_dn === c.managed_ad_dn
                       && other.id !== c.id
                       && !isCheckoutExpired(other)
-                      && (other.status === 'Active' || other.status === 'Approved' || other.status === 'Pending')
+                      && (other.status === 'Active' || other.status === 'Approved' || other.status === 'Pending' || other.status === 'Scheduled')
                       && new Date(other.created_at).getTime() > new Date(c.created_at).getTime()
                   );
                   return !hasNewer;
@@ -499,28 +619,42 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                 <div key={c.id} className="card p-4">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-sm font-medium">{c.friendly_name || c.managed_ad_dn}</div>
-                    <span
-                      className={`text-xs font-medium px-2 py-0.5 rounded ${
-                        c.status === 'CheckedIn'
-                          ? 'bg-accent/20 text-accent'
-                          : isCheckoutExpired(c)
-                            ? 'bg-danger/20 text-danger'
-                            : isCheckoutLive(c)
-                              ? 'bg-success/20 text-success'
-                              : c.status === 'Pending'
-                                ? 'bg-warning/20 text-warning'
-                                : c.status === 'Denied'
-                                  ? 'bg-danger/20 text-danger'
-                                  : 'bg-border/20 text-txt-secondary'
-                      }`}
-                    >
-                      {getEffectiveStatus(c)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {c.emergency_bypass && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-warning/20 text-warning border border-warning/40">
+                          ⚡ Emergency
+                        </span>
+                      )}
+                      <span
+                        className={`text-xs font-medium px-2 py-0.5 rounded ${
+                          c.status === 'CheckedIn'
+                            ? 'bg-accent/20 text-accent'
+                            : isCheckoutExpired(c)
+                              ? 'bg-danger/20 text-danger'
+                              : isCheckoutLive(c)
+                                ? 'bg-success/20 text-success'
+                                : c.status === 'Scheduled'
+                                  ? 'bg-accent/20 text-accent'
+                                  : c.status === 'Pending'
+                                    ? 'bg-warning/20 text-warning'
+                                    : c.status === 'Denied'
+                                      ? 'bg-danger/20 text-danger'
+                                      : 'bg-border/20 text-txt-secondary'
+                        }`}
+                      >
+                        {getEffectiveStatus(c)}
+                      </span>
+                    </div>
                   </div>
                   <div className="text-xs text-txt-secondary mb-2">
                     Duration: {c.requested_duration_mins}m
                     {c.justification_comment && ` · ${c.justification_comment}`}
                   </div>
+                  {c.status === 'Scheduled' && c.scheduled_start_at && (
+                    <div className="text-xs text-accent mb-2">
+                      🕒 Release scheduled for {formatDateTime(c.scheduled_start_at)}
+                    </div>
+                  )}
                   {isCheckoutLive(c) && (
                     <div className={`text-sm font-mono font-semibold mb-2 tabular-nums ${
                       new Date(c.expires_at!).getTime() - Date.now() < 300000 ? 'text-danger' :

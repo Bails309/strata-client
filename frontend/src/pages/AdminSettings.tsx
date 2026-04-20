@@ -4217,6 +4217,25 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
                   </div>
                 )}
               </div>
+
+              {/* Emergency Approval Bypass */}
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider opacity-60 block mb-2">Emergency Approval Bypass (Break-Glass)</span>
+                <p className="text-xs opacity-50 mb-2">
+                  When enabled, users who normally require approval may flag a checkout request as an
+                  emergency to receive the password immediately without waiting for an approver.
+                  Every use is recorded in the audit log and requires a justification.
+                </p>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={editing.pm_allow_emergency_bypass ?? false}
+                    onChange={(e) => setEditing({ ...editing, pm_allow_emergency_bypass: e.target.checked })}
+                  />
+                  Allow emergency bypass on password checkout requests
+                </label>
+              </div>
             </div>
           )}
         </div>

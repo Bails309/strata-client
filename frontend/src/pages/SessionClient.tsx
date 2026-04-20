@@ -56,6 +56,7 @@ export default function SessionClient() {
   const [renewMode, setRenewMode] = useState(false);
   const [renewDuration, setRenewDuration] = useState(60);
   const [renewForm, setRenewForm] = useState({ username: '', password: '' });
+  const [renewJustification, setRenewJustification] = useState('');
   const [renewError, setRenewError] = useState('');
   const [renewLoading, setRenewLoading] = useState(false);
   const pendingCredsRef = useRef<{ username: string; password: string; credential_profile_id?: string }>({ username: '', password: '' });
@@ -145,8 +146,8 @@ export default function SessionClient() {
         if (info.expired_profile) {
           setExpiredProfile(info.expired_profile);
           setRenewMode(true);
-        }
-        if (info.has_credentials) {
+          setPhase('loading'); // Stay in loading/renew mode, DO NOT connect yet
+        } else if (info.has_credentials) {
           setPhase('connected');
         } else if (info.protocol === 'rdp') {
           setPhase('prompt');
@@ -183,16 +184,22 @@ export default function SessionClient() {
 
     try {
       if (expiredProfile.managed_ad_dn && expiredProfile.can_self_approve) {
+        if (!renewJustification.trim()) {
+          setRenewError('Justification is required.');
+          setRenewLoading(false);
+          return;
+        }
+
         // One-click managed renewal sequence
         const checkout = await requestCheckout({
           managed_ad_dn: expiredProfile.managed_ad_dn,
           ad_sync_config_id: expiredProfile.ad_sync_config_id,
           requested_duration_mins: renewDuration,
-          justification_comment: 'Automated renewal for interactive session',
+          justification_comment: renewJustification,
         });
 
         if (checkout.status !== 'Active') {
-            throw new Error(`Checkout requested but status is ${checkout.status}. Ensure your account is healthy.`);
+          throw new Error(`Checkout requested but status is ${checkout.status}. Ensure your account is healthy.`);
         }
 
         await linkCheckoutToProfile(expiredProfile.id, checkout.id);
@@ -1001,20 +1008,33 @@ export default function SessionClient() {
                   <form onSubmit={(e) => { e.preventDefault(); handleRenewAndConnect(); }} className="mt-2">
                     {expiredProfile.managed_ad_dn ? (
                       expiredProfile.can_self_approve ? (
-                        <div className="form-group !mb-3">
-                          <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Checkout Duration</label>
-                          <Select
-                            value={String(renewDuration)}
-                            onChange={(v) => setRenewDuration(parseInt(v))}
-                            options={[
-                              { value: '30', label: '30 Minutes' },
-                              { value: '60', label: '1 Hour' },
-                              { value: '240', label: '4 Hours' },
-                              { value: '480', label: '8 Hours' },
-                              { value: '720', label: '12 Hours' },
-                            ]}
-                          />
-                        </div>
+                        <>
+                          <div className="form-group !mb-3">
+                            <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Checkout Duration</label>
+                            <Select
+                              value={String(renewDuration)}
+                              onChange={(v) => setRenewDuration(parseInt(v))}
+                              options={[
+                                { value: '30', label: '30 Minutes' },
+                                { value: '60', label: '1 Hour' },
+                                { value: '240', label: '4 Hours' },
+                                { value: '480', label: '8 Hours' },
+                                { value: '720', label: '12 Hours' },
+                              ]}
+                            />
+                          </div>
+                          <div className="form-group !mb-3">
+                            <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">Justification / Comment</label>
+                            <textarea
+                              className="w-full text-xs p-2 rounded-md bg-input-bg border border-border"
+                              rows={2}
+                              placeholder="Why do you need this checkout?"
+                              value={renewJustification}
+                              onChange={(e) => setRenewJustification(e.target.value)}
+                              required
+                            />
+                          </div>
+                        </>
                       ) : (
                         <div className="mb-4">
                           <div className="p-3 rounded-lg bg-warning/10 border border-warning/20 text-warning text-xs leading-relaxed">

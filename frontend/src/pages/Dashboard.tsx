@@ -337,12 +337,22 @@ export default function Dashboard() {
 
     const needsCreds: Connection[] = [];
     const ready: Connection[] = [];
+    const expiredNames: string[] = [];
+    
     for (const { conn, info } of infos) {
-      if (info.has_credentials || conn.protocol.toLowerCase() !== 'rdp') {
+      if (info.expired_profile) {
+        expiredNames.push(conn.name);
+      } else if (info.has_credentials || conn.protocol.toLowerCase() !== 'rdp') {
         ready.push(conn);
       } else {
         needsCreds.push(conn);
       }
+    }
+
+    if (expiredNames.length > 0) {
+      window.alert(
+        `The following connections were skipped because their managed credential profiles are expired and require renewal:\n\n${expiredNames.join('\n')}\n\nPlease connect to them individually to renew credentials.`
+      );
     }
 
     if (needsCreds.length > 0) {
@@ -354,7 +364,7 @@ export default function Dashboard() {
         initial[conn.id] = { username: '', password: '' };
       }
       setTiledCreds(initial);
-    } else {
+    } else if (ready.length > 0) {
       // All connections have vault credentials – open immediately
       launchTiled(ready, {});
     }

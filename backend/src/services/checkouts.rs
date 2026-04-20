@@ -272,6 +272,7 @@ pub async fn activate_checkout(
         &new_password,
         config.tls_skip_verify,
         config.ca_cert_pem.as_deref(),
+        false, // NOT a scramble - this is an activation, user needs to be able to login
     )
     .await?;
 
@@ -409,6 +410,7 @@ pub async fn checkin_checkout(
         &scramble_password,
         config.tls_skip_verify,
         config.ca_cert_pem.as_deref(),
+        true, // This IS a scramble - ignore lockouts if reset succeeded
     )
     .await
     .map(|_| ())
@@ -523,6 +525,7 @@ pub async fn expire_checkout(
         &orphan_password,
         config.tls_skip_verify,
         config.ca_cert_pem.as_deref(),
+        true, // This IS a scramble - ignore lockouts
     )
     .await
     .map(|_| ())
@@ -579,6 +582,7 @@ pub async fn ldap_reset_password(
     new_password: &str,
     tls_skip_verify: bool,
     ca_cert_pem: Option<&str>,
+    is_scramble: bool,
 ) -> Result<String, AppError> {
     use ldap3::{LdapConnAsync, LdapConnSettings, Mod};
     use std::collections::HashSet;
@@ -788,14 +792,33 @@ pub async fn ldap_reset_password(
             );
         }
         Ok(ref res) => {
-            tracing::error!(
-                "VERIFICATION BIND FAILED for '{}': rc={}, message='{}' — password may NOT have changed!",
-                target_dn, res.rc, res.text
-            );
-            return Err(AppError::Internal(format!(
-                "Password modify returned rc=0 but verification bind failed (rc={}) for '{}'",
-                res.rc, target_dn
-            )));
+            let is_locked = res.text.contains("data 775");
+            if is_locked {
+                if is_scramble {
+                    tracing::warn!(
+                        "VERIFICATION BIND FAILED for '{}' with DATA 775 (Locked Out) — but proceeding because this is a scramble operation and modify rc=0.",
+                        target_dn
+                    );
+                } else {
+                    tracing::error!(
+                        "VERIFICATION BIND FAILED for '{}': Account is LOCKED OUT (data 775) in Active Directory.",
+                        target_dn
+                    );
+                    return Err(AppError::Validation(format!(
+                        "Account is currently LOCKED OUT in Active Directory (DN: '{}'). Please unlock the account before requesting a checkout.",
+                        target_dn
+                    )));
+                }
+            } else {
+                tracing::error!(
+                    "VERIFICATION BIND FAILED for '{}': rc={}, message='{}' — password may NOT have changed!",
+                    target_dn, res.rc, res.text
+                );
+                return Err(AppError::Internal(format!(
+                    "Password modify returned rc=0 but verification bind failed (rc={}) for '{}': {}",
+                    res.rc, target_dn, res.text
+                )));
+            }
         }
         Err(ref e) => {
             tracing::error!(

@@ -4970,7 +4970,11 @@ function DisplayTab({ settings, onSave }: { settings: Record<string, string>; on
             <div>
               <div className="text-[10px] uppercase font-bold opacity-40 mb-1">Standard Timestamp</div>
               <div className="text-xl font-mono tabular-nums">
-                {formatDateTime(new Date())}
+                {formatDateTime(new Date(), {
+                  display_timezone: timezone,
+                  display_date_format: dateFormat,
+                  display_time_format: timeFormat,
+                })}
               </div>
             </div>
             <div className="text-xs text-txt-secondary flex items-center gap-2">
@@ -5001,6 +5005,7 @@ function PasswordsTab({
   adSyncConfigs: AdSyncConfig[];
   onSave: () => void;
 }) {
+  const { formatDateTime } = useSettings();
   type SubTab = 'roles' | 'mappings' | 'requests';
   const [subTab, setSubTab] = useState<SubTab>('roles');
 
@@ -5632,8 +5637,8 @@ function PasswordsTab({
                           : users.find((u) => u.id === r.approved_by_user_id)?.username || r.approved_by_user_id
                         : '—'}
                     </td>
-                    <td className="py-1 text-xs">{r.expires_at || '—'}</td>
-                    <td className="py-1 text-xs">{r.created_at}</td>
+                    <td className="py-1 text-xs">{r.expires_at ? formatDateTime(r.expires_at) : '—'}</td>
+                    <td className="py-1 text-xs">{r.created_at ? formatDateTime(r.created_at) : '—'}</td>
                   </tr>
                 ))}
               </tbody>

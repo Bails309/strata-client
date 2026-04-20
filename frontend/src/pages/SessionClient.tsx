@@ -163,7 +163,18 @@ export default function SessionClient() {
   useEffect(() => {
     if (phase !== 'prompt') return;
     getCredentialProfiles()
-      .then((profiles) => setVaultProfiles(profiles.filter((p) => !p.expired)))
+      .then((profiles) =>
+        setVaultProfiles(
+          profiles.filter(
+            // Hide expired profiles and internal [managed] placeholder profiles.
+            // [managed] profiles are created by the checkout system and are
+            // always intended to be consumed via a linked user-named profile
+            // (e.g. "CAPITA-ICS SA1"); selecting them directly would send a DN
+            // as the username to the remote host.
+            (p) => !p.expired && !p.label.startsWith('[managed]'),
+          ),
+        ),
+      )
       .catch(() => {}); // Vault may not be configured
   }, [phase]);
 

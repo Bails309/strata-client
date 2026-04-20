@@ -408,6 +408,7 @@ export interface UserAccountMapping {
   id: string;
   user_id: string;
   managed_ad_dn: string;
+  friendly_name?: string;
   can_self_approve: boolean;
   ad_sync_config_id?: string;
   created_at: string;
@@ -417,6 +418,7 @@ export interface CheckoutRequest {
   id: string;
   requester_user_id: string;
   managed_ad_dn: string;
+  friendly_name?: string;
   ad_sync_config_id?: string;
   status: 'Pending' | 'Approved' | 'Active' | 'Expired' | 'Denied' | 'CheckedIn';
   requested_duration_mins: number;
@@ -432,6 +434,7 @@ export interface CheckoutRequest {
 export interface DiscoveredAccount {
   dn: string;
   name: string;
+  friendly_name: string;
   description?: string;
 }
 
@@ -452,13 +455,13 @@ export const setRoleAssignments = (roleId: string, user_ids: string[]) =>
 
 // Admin: Role account scope
 export const getRoleAccounts = (roleId: string) =>
-  request<string[]>(`/admin/approval-roles/${roleId}/accounts`);
-export const setRoleAccounts = (roleId: string, managed_ad_dns: string[]) =>
-  request<{ status: string }>(`/admin/approval-roles/${roleId}/accounts`, { method: 'PUT', body: JSON.stringify({ managed_ad_dns }) });
+  request<UserAccountMapping[]>(`/admin/approval-roles/${roleId}/accounts`);
+export const setRoleAccounts = (roleId: string, managed_accounts: { dn: string; friendly_name?: string }[]) =>
+  request<{ status: string }>(`/admin/approval-roles/${roleId}/accounts`, { method: 'PUT', body: JSON.stringify({ managed_accounts }) });
 
 // Admin: Account mappings
 export const getAccountMappings = () => request<UserAccountMapping[]>('/admin/account-mappings');
-export const createAccountMapping = (data: { user_id: string; managed_ad_dn: string; can_self_approve?: boolean; ad_sync_config_id?: string }) =>
+export const createAccountMapping = (data: { user_id: string; managed_ad_dn: string; friendly_name?: string; can_self_approve?: boolean; ad_sync_config_id?: string }) =>
   request<{ id: string; status: string }>('/admin/account-mappings', { method: 'POST', body: JSON.stringify(data) });
 export const deleteAccountMapping = (id: string) =>
   request<{ status: string }>(`/admin/account-mappings/${id}`, { method: 'DELETE' });

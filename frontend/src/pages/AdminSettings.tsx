@@ -5037,7 +5037,7 @@ function PasswordsTab({
         r.map(async (role) => {
           const [a, accounts] = await Promise.all([getRoleAssignments(role.id), getRoleAccounts(role.id)]);
           assignObj[role.id] = a;
-          acctObj[role.id] = accounts;
+          acctObj[role.id] = accounts.map(acc => acc.managed_ad_dn);
         }),
       );
       setRoleAssignments(assignObj);
@@ -5092,7 +5092,11 @@ function PasswordsTab({
   };
 
   const handleSaveAccounts = async (roleId: string) => {
-    await setRoleAccounts(roleId, selectedAccounts);
+    const payload = selectedAccounts.map(dn => {
+      const mapping = mappings.find(m => m.managed_ad_dn === dn);
+      return { dn, friendly_name: mapping?.friendly_name };
+    });
+    await setRoleAccounts(roleId, payload);
     loadRoles();
     onSave();
   };
@@ -5103,6 +5107,7 @@ function PasswordsTab({
     await createAccountMapping({
       user_id: newMapping.user_id,
       managed_ad_dn: newMapping.managed_ad_dn,
+      friendly_name: unmapped.find(a => a.dn === newMapping.managed_ad_dn)?.friendly_name,
       can_self_approve: newMapping.can_self_approve,
       ad_sync_config_id: configId || undefined,
     });
@@ -5216,6 +5221,8 @@ function PasswordsTab({
                     </p>
                     {(() => {
                       const uniqueDns = [...new Set(mappings.map((m) => m.managed_ad_dn))].sort();
+                      const originalScope = roleAccountScopes[role.id] || [];
+                      const hasScopeChanged = selectedAccounts.length !== originalScope.length || !selectedAccounts.every((d) => originalScope.includes(d));
                       if (uniqueDns.length === 0) {
                         return (
                           <p className="text-txt-secondary text-xs italic">
@@ -5248,7 +5255,10 @@ function PasswordsTab({
                                   className="inline-flex items-center gap-1 bg-primary/20 text-primary text-xs rounded-full px-2.5 py-1"
                                   title={dn}
                                 >
-                                  {cnFromDn(dn)}
+                                  {(() => {
+                                    const m = mappings.find(map => map.managed_ad_dn === dn);
+                                    return m?.friendly_name || cnFromDn(dn);
+                                  })()}
                                   <button
                                     className="hover:text-red-400 ml-0.5 font-bold leading-none"
                                     onClick={() => setSelectedAccounts(selectedAccounts.filter((d) => d !== dn))}
@@ -5281,7 +5291,12 @@ function PasswordsTab({
                                       setScopeSearch('');
                                     }}
                                   >
-                                    <span style={{ color: 'var(--color-txt-primary)' }}>{cnFromDn(dn)}</span>
+                                    <span style={{ color: 'var(--color-txt-primary)' }}>
+                                      {(() => {
+                                        const m = mappings.find(map => map.managed_ad_dn === dn);
+                                        return m?.friendly_name || cnFromDn(dn);
+                                      })()}
+                                    </span>
                                     <span className="text-xs truncate" style={{ color: 'var(--color-txt-tertiary)' }}>{dn}</span>
                                   </button>
                                 ))}
@@ -5301,7 +5316,7 @@ function PasswordsTab({
 
                           <div className="flex items-center gap-2">
                             <button
-                              className="btn btn-sm btn-primary"
+                              className={`btn btn-sm ${hasScopeChanged ? '!bg-warning !text-black !border-warning hover:opacity-90' : 'btn-primary'}`}
                               onClick={() => handleSaveAccounts(role.id)}
                             >
                               Save Scope
@@ -5324,6 +5339,8 @@ function PasswordsTab({
                     </p>
                     {(() => {
                       const availableUsers = users.filter((u) => !selectedUsers.includes(u.id));
+                      const originalUsers = (roleAssignments[role.id] || []).map((a) => a.id);
+                      const hasApproversChanged = selectedUsers.length !== originalUsers.length || !selectedUsers.every((id) => originalUsers.includes(id));
                       const aq = approverSearch.toLowerCase();
                       const filteredUsers = aq
                         ? availableUsers.filter((u) => u.username.toLowerCase().includes(aq) || (u.email && u.email.toLowerCase().includes(aq)))
@@ -5395,7 +5412,7 @@ function PasswordsTab({
 
                           <div className="flex items-center gap-2">
                             <button
-                              className="btn btn-sm btn-primary"
+                              className={`btn btn-sm ${hasApproversChanged ? '!bg-warning !text-black !border-warning hover:opacity-90' : 'btn-primary'}`}
                               onClick={() => handleSaveAssignments(role.id)}
                             >
                               Save Approvers
@@ -5476,7 +5493,7 @@ function PasswordsTab({
                       value={newMapping.managed_ad_dn}
                       onChange={(val) => setNewMapping({ ...newMapping, managed_ad_dn: val })}
                       placeholder="Select discovered account..."
-                      options={unmapped.map((a) => ({ value: a.dn, label: `${a.name} — ${a.dn}` }))}
+                      options={unmapped.map((a) => ({ value: a.dn, label: a.friendly_name || `${a.name} — ${a.dn}` }))}
                       searchable={true}
                     />
                   ) : (
@@ -5532,7 +5549,10 @@ function PasswordsTab({
                           <td className="py-1">
                             {users.find((u) => u.id === m.user_id)?.username || m.user_id}
                           </td>
-                          <td className="py-1 text-xs">{m.managed_ad_dn}</td>
+                          <td className="py-1">
+                            <div className="text-sm font-medium">{m.friendly_name || '—'}</div>
+                            <div className="text-[10px] text-txt-tertiary font-mono truncate max-w-[300px]" title={m.managed_ad_dn}>{m.managed_ad_dn}</div>
+                          </td>
                           <td className="py-1 text-xs text-txt-secondary">
                             {m.ad_sync_config_id
                               ? adSyncConfigs.find((c) => c.id === m.ad_sync_config_id)?.label || '—'
@@ -5582,7 +5602,10 @@ function PasswordsTab({
               <tbody>
                 {requests.map((r) => (
                   <tr key={r.id} className="border-b border-border/5">
-                    <td className="py-1 text-xs">{r.managed_ad_dn}</td>
+                    <td className="py-1">
+                      <div className="text-sm font-medium">{r.friendly_name || '—'}</div>
+                      <div className="text-[10px] text-txt-tertiary font-mono truncate max-w-[200px]" title={r.managed_ad_dn}>{r.managed_ad_dn}</div>
+                    </td>
                     <td className="py-1">
                       <span
                         className={`text-xs font-medium px-2 py-0.5 rounded ${

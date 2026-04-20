@@ -3817,8 +3817,14 @@ pub async fn list_role_accounts(
 }
 
 #[derive(Deserialize)]
+pub struct AccountDnEntry {
+    pub dn: String,
+    pub friendly_name: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct SetRoleAccountsRequest {
-    pub managed_ad_dns: Vec<String>,
+    pub managed_accounts: Vec<AccountDnEntry>,
 }
 
 pub async fn set_role_accounts(
@@ -3834,16 +3840,17 @@ pub async fn set_role_accounts(
         .bind(role_id)
         .execute(&mut *tx)
         .await?;
-    for dn in &body.managed_ad_dns {
-        let dn = dn.trim();
+    for entry in &body.managed_accounts {
+        let dn = entry.dn.trim();
         if dn.is_empty() {
             continue;
         }
         sqlx::query(
-            "INSERT INTO approval_role_accounts (role_id, managed_ad_dn) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            "INSERT INTO approval_role_accounts (role_id, managed_ad_dn, friendly_name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
         )
         .bind(role_id)
         .bind(dn)
+        .bind(&entry.friendly_name)
         .execute(&mut *tx)
         .await?;
     }
@@ -3924,10 +3931,23 @@ pub async fn list_unmapped_accounts(
     let existing_set: std::collections::HashSet<String> = existing_dns.into_iter().collect();
 
     // Return unmapped accounts
+    let domain_label = config.domain_override.as_deref().unwrap_or(&config.label);
     let unmapped: Vec<serde_json::Value> = discovered
         .into_iter()
         .filter(|d| !existing_set.contains(&d.dn))
-        .map(|d| json!({ "dn": d.dn, "name": d.name, "description": d.description }))
+        .map(|d| {
+            let friendly = if !d.sam.is_empty() {
+                format!("{}\\{}", domain_label, d.sam)
+            } else {
+                d.dn.clone()
+            };
+            json!({ 
+                "dn": d.dn, 
+                "name": d.name, 
+                "description": d.description,
+                "friendly_name": friendly
+            })
+        })
         .collect();
 
     Ok(Json(unmapped))
@@ -3936,6 +3956,7 @@ pub async fn list_unmapped_accounts(
 struct DiscoveredUser {
     dn: String,
     name: String,
+    sam: String,
     description: Option<String>,
 }
 
@@ -4003,17 +4024,13 @@ async fn ad_sync_discover_users(
         for entry in results {
             let se = SearchEntry::construct(entry);
             if seen.insert(se.dn.clone()) {
-                let name = se
-                    .attrs
-                    .get("sAMAccountName")
-                    .and_then(|v| v.first())
-                    .or_else(|| se.attrs.get("cn").and_then(|v| v.first()))
-                    .cloned()
-                    .unwrap_or_else(|| se.dn.clone());
+                let sam = se.attrs.get("sAMAccountName").and_then(|v| v.first()).cloned().unwrap_or_default();
+                let name = if !sam.is_empty() { sam.clone() } else { se.attrs.get("cn").and_then(|v| v.first()).cloned().unwrap_or_else(|| se.dn.clone()) };
                 let desc = se.attrs.get("description").and_then(|v| v.first()).cloned();
                 all.push(DiscoveredUser {
                     dn: se.dn,
                     name,
+                    sam,
                     description: desc,
                 });
             }
@@ -4043,6 +4060,7 @@ pub async fn list_account_mappings(
 pub struct CreateAccountMappingRequest {
     pub user_id: Uuid,
     pub managed_ad_dn: String,
+    pub friendly_name: Option<String>,
     pub can_self_approve: Option<bool>,
     pub ad_sync_config_id: Option<Uuid>,
 }
@@ -4055,15 +4073,16 @@ pub async fn create_account_mapping(
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO user_account_mappings (user_id, managed_ad_dn, can_self_approve, ad_sync_config_id)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id, managed_ad_dn) DO UPDATE SET can_self_approve = $3, ad_sync_config_id = $4
+        "INSERT INTO user_account_mappings (user_id, managed_ad_dn, can_self_approve, ad_sync_config_id, friendly_name)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, managed_ad_dn) DO UPDATE SET can_self_approve = $3, ad_sync_config_id = $4, friendly_name = $5
          RETURNING id",
     )
     .bind(body.user_id)
     .bind(&body.managed_ad_dn)
     .bind(body.can_self_approve.unwrap_or(false))
     .bind(body.ad_sync_config_id)
+    .bind(&body.friendly_name)
     .fetch_one(&db.pool)
     .await?;
     audit::log(

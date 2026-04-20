@@ -31,6 +31,8 @@ interface EditingProfile {
   username: string;
   password: string;
   ttl_hours: number;
+  managed_ad_dn?: string;
+  friendly_name?: string;
 }
 
 export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
@@ -496,7 +498,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               }).map((c) => (
                 <div key={c.id} className="card p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="text-sm font-medium">{c.managed_ad_dn}</div>
+                    <div className="text-sm font-medium">{c.friendly_name || c.managed_ad_dn}</div>
                     <span
                       className={`text-xs font-medium px-2 py-0.5 rounded ${
                         c.status === 'CheckedIn'
@@ -594,20 +596,34 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               autoFocus
             />
           </div>
-          {editing.label.startsWith('[managed]') ? (
+          {editing.managed_ad_dn ? (
+            <div className="bg-accent/5 border border-accent/20 rounded-lg px-4 py-3 mb-2">
+              <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">Managed Account</div>
+              <div className="text-sm font-medium text-accent">
+                {editing.friendly_name || editing.managed_ad_dn}
+              </div>
+              <div className="text-xs text-txt-secondary mt-1">
+                This profile is automatically managed by the password checkout system.
+              </div>
+            </div>
+          ) : editing.label.startsWith('[managed]') ? (
             <div className="bg-accent/5 border border-accent/20 rounded-lg px-4 py-3 mb-2">
               <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">Managed Account</div>
               <div className="text-xs text-txt-secondary">
+                Linked to system checkout
+              </div>
+              <div className="text-xs text-txt-secondary mt-1">
                 This profile is automatically managed by the password checkout system. Username, password, and expiry are controlled by the active checkout.
               </div>
             </div>
-          ) : (<>
+          ) : null}
+
           {(() => {
             const currentProfile = editing.id ? profiles.find((p) => p.id === editing.id) : null;
             const editLinkedCheckout = currentProfile?.checkout_id
               ? allCheckouts.find((c) => c.id === currentProfile.checkout_id)
               : null;
-            const hasLinkedCheckout = !!editLinkedCheckout && isCheckoutLive(editLinkedCheckout);
+            const hasLinkedCheckout = !!editLinkedCheckout;
             return hasLinkedCheckout ? (
               <div className="form-group">
                 <div className="bg-success/5 border border-success/20 rounded-lg px-4 py-3">
@@ -615,7 +631,11 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                   <div className="text-sm font-medium">{editLinkedCheckout.managed_ad_dn}</div>
                   <div className="text-xs text-txt-secondary mt-1">
                     Username and password are managed by the checked-out account.
-                    Expires {formatDateTime(editLinkedCheckout.expires_at ?? null)} · {getTimeRemaining(editLinkedCheckout.expires_at)}
+                    {isCheckoutLive(editLinkedCheckout) ? 
+                      ` Expires ${formatDateTime(editLinkedCheckout.expires_at ?? null)} · ${getTimeRemaining(editLinkedCheckout.expires_at)}`
+                      : editLinkedCheckout.status === 'CheckedIn' ? ' Checked in — password scrambled'
+                      : editLinkedCheckout.status === 'Expired' || isCheckoutExpired(editLinkedCheckout) ? ' Checkout expired' : ` ${editLinkedCheckout.status}`
+                    }
                   </div>
                 </div>
               </div>
@@ -670,7 +690,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
             );
           })()}
           {/* Checkout linking */}
-          {editing.id && activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 && (
+          {editing.id && (activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 || profiles.find((p) => p.id === editing.id)?.checkout_id) && (
             <div className="form-group">
               <label>Link Checked-Out Account</label>
               <p className="text-txt-tertiary text-xs mb-2">
@@ -719,7 +739,6 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               })()}
             </div>
           )}
-          </>)}
           <div className="flex items-center gap-3 mt-2">
             <button className="btn-primary" onClick={handleSaveProfile} disabled={saving}>
               {saving ? 'Saving…' : editing.id ? 'Update' : 'Create Profile'}
@@ -804,9 +823,10 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
             const isAddingMapping = mappingProfileId === profile.id;
             const linkedCo = profile.checkout_id ? allCheckouts.find((c) => c.id === profile.checkout_id) : null;
             const linkedActive = linkedCo ? isCheckoutLive(linkedCo) : false;
+            const isEffectivelyExpired = profile.expired || (linkedCo && !linkedActive);
 
             return (
-              <div key={profile.id} className="card !p-0 !overflow-hidden" style={profile.expired && !linkedActive ? { borderColor: 'var(--color-danger)', borderWidth: 1 } : undefined}>
+              <div key={profile.id} className="card !p-0 !overflow-hidden" style={isEffectivelyExpired ? { borderColor: 'var(--color-danger)', borderWidth: 1 } : undefined}>
                 {/* Profile header */}
                 <div
                   className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors duration-150"
@@ -833,6 +853,10 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                           new Date(linkedCo.expires_at).getTime() - Date.now() < 900000 ? 'text-warning' : 'text-success'
                         }`}>
                           ⏱ {getTimeRemaining(linkedCo.expires_at)}
+                        </span>
+                      ) : linkedCo && !linkedActive ? (
+                        <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
+                          {linkedCo.status === 'CheckedIn' ? 'Checked in — password scrambled' : 'Checkout expired'}
                         </span>
                       ) : profile.expired ? (
                         <span className="ml-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-danger-dim text-danger">
@@ -919,7 +943,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                     )}
 
                     {/* Linked checkout badge / link controls */}
-                    {!profile.label.startsWith('[managed]') && activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 && (
+                    {!profile.label.startsWith('[managed]') && (activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 || profile.checkout_id) && (
                       <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--color-border)' }}>
                         <label className="text-xs font-medium text-txt-secondary mb-2 block uppercase tracking-wider">Checked-Out Account</label>
                         {profile.checkout_id ? (() => {

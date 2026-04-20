@@ -49,6 +49,7 @@ pub struct CheckoutRequest {
     pub updated_at: DateTime<Utc>,
     #[sqlx(default)]
     pub requester_username: Option<String>,
+    pub friendly_name: Option<String>,
 }
 
 // ── Approval role row ──────────────────────────────────────────────────
@@ -72,6 +73,7 @@ pub struct UserAccountMapping {
     pub can_self_approve: bool,
     pub ad_sync_config_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub friendly_name: Option<String>,
 }
 
 // ── Generate a password matching the policy ────────────────────────────

@@ -1599,8 +1599,8 @@ pub async fn request_checkout(
 
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO password_checkout_requests
-         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment, friendly_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(user.id)
     .bind(dn)
@@ -1608,6 +1608,7 @@ pub async fn request_checkout(
     .bind(initial_status)
     .bind(duration)
     .bind(body.justification_comment.as_deref().unwrap_or(""))
+    .bind(mapping.friendly_name)
     .fetch_one(&db.pool)
     .await?;
 

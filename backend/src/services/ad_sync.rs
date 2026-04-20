@@ -229,12 +229,18 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
                 soft_deleted_at = NULL,
                 hostname = EXCLUDED.hostname,
                 name = EXCLUDED.name,
+                protocol = EXCLUDED.protocol,
+                port = EXCLUDED.port,
+                folder_id = EXCLUDED.folder_id,
                 description = EXCLUDED.description,
                 domain = EXCLUDED.domain,
                 extra = $10::jsonb,
                 updated_at = now()
             WHERE connections.hostname != EXCLUDED.hostname 
                OR connections.name != EXCLUDED.name 
+               OR connections.protocol != EXCLUDED.protocol
+               OR connections.port != EXCLUDED.port
+               OR connections.folder_id IS DISTINCT FROM EXCLUDED.folder_id
                OR connections.description IS DISTINCT FROM EXCLUDED.description 
                OR connections.domain IS DISTINCT FROM EXCLUDED.domain
                OR connections.soft_deleted_at IS NOT NULL

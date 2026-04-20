@@ -5674,6 +5674,7 @@ function PasswordsTab({
                   <th className="text-left py-1">Duration</th>
                   <th className="text-left py-1">Requester</th>
                   <th className="text-left py-1">Decided By</th>
+                  <th className="text-left py-1">Justification</th>
                   <th className="text-left py-1">Expires</th>
                   <th className="text-left py-1">Created</th>
                 </tr>
@@ -5710,6 +5711,18 @@ function PasswordsTab({
                           ? 'Self Approved'
                           : users.find((u) => u.id === r.approved_by_user_id)?.username || r.approved_by_user_id
                         : '—'}
+                    </td>
+                    <td className="py-1 text-xs max-w-[260px]">
+                      {r.justification_comment ? (
+                        <div
+                          className="truncate text-txt-secondary"
+                          title={r.justification_comment}
+                        >
+                          {r.justification_comment}
+                        </div>
+                      ) : (
+                        <span className="text-txt-tertiary">—</span>
+                      )}
                     </td>
                     <td className="py-1 text-xs">{r.expires_at ? formatDateTime(r.expires_at) : '—'}</td>
                     <td className="py-1 text-xs">{r.created_at ? formatDateTime(r.created_at) : '—'}</td>

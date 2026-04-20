@@ -2574,6 +2574,7 @@ pub struct CreateAdSyncConfigRequest {
     pub pm_pwd_require_symbols: Option<bool>,
     pub pm_auto_rotate_enabled: Option<bool>,
     pub pm_auto_rotate_interval_days: Option<i32>,
+    pub pm_search_bases: Option<Vec<String>>,
 }
 
 pub async fn create_ad_sync_config(
@@ -2651,8 +2652,8 @@ pub async fn create_ad_sync_config(
     };
 
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem, connection_defaults, pm_enabled, pm_bind_user, pm_bind_password, pm_target_filter, pm_pwd_min_length, pm_pwd_require_uppercase, pm_pwd_require_lowercase, pm_pwd_require_numbers, pm_pwd_require_symbols, pm_auto_rotate_enabled, pm_auto_rotate_interval_days)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) RETURNING id",
+        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem, connection_defaults, pm_enabled, pm_bind_user, pm_bind_password, pm_target_filter, pm_pwd_min_length, pm_pwd_require_uppercase, pm_pwd_require_lowercase, pm_pwd_require_numbers, pm_pwd_require_symbols, pm_auto_rotate_enabled, pm_auto_rotate_interval_days, pm_search_bases)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) RETURNING id",
     )
     .bind(&body.label)
     .bind(&body.ldap_url)
@@ -2684,6 +2685,7 @@ pub async fn create_ad_sync_config(
     .bind(body.pm_pwd_require_symbols.unwrap_or(true))
     .bind(body.pm_auto_rotate_enabled.unwrap_or(false))
     .bind(body.pm_auto_rotate_interval_days.unwrap_or(30))
+    .bind(body.pm_search_bases.as_ref().unwrap_or(&vec![]))
     .fetch_one(&db.pool)
     .await?;
 
@@ -2733,6 +2735,7 @@ pub struct UpdateAdSyncConfigRequest {
     pub pm_pwd_require_symbols: Option<bool>,
     pub pm_auto_rotate_enabled: Option<bool>,
     pub pm_auto_rotate_interval_days: Option<i32>,
+    pub pm_search_bases: Option<Vec<String>>,
 }
 
 pub async fn update_ad_sync_config(
@@ -3068,6 +3071,16 @@ pub async fn update_ad_sync_config(
         .await?;
     }
 
+    if let Some(v) = body.pm_search_bases {
+        sqlx::query(
+            "UPDATE ad_sync_configs SET pm_search_bases = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(v)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     tx.commit().await?;
 
     audit::log(
@@ -3230,6 +3243,7 @@ pub async fn test_ad_sync_connection(
         pm_auto_rotate_enabled: false,
         pm_auto_rotate_interval_days: 90,
         pm_last_rotated_at: None,
+        pm_search_bases: body.pm_search_bases.clone().unwrap_or_default(),
     };
 
     match crate::services::ad_sync::test_connection(&config).await {
@@ -3318,11 +3332,17 @@ pub async fn test_pm_target_filter(
         .unwrap_or_else(|| "(&(objectCategory=person)(objectClass=user))".into());
     let tls_skip = body.tls_skip_verify.unwrap_or(false);
 
+    let pm_search_bases = body
+        .pm_search_bases
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&body.search_bases);
+
     match ad_sync_discover_users(
         &body.ldap_url,
         &effective_bind_dn,
         &effective_bind_pw,
-        &body.search_bases,
+        pm_search_bases,
         &filter,
         tls_skip,
         body.ca_cert_pem.as_deref(),
@@ -3876,12 +3896,18 @@ pub async fn list_unmapped_accounts(
         raw_pw.to_string()
     };
 
+    let pm_search_bases = if config.pm_search_bases.is_empty() {
+        &config.search_bases
+    } else {
+        &config.pm_search_bases
+    };
+
     // Query AD for user accounts using pm_target_filter
     let discovered = ad_sync_discover_users(
         &config.ldap_url,
         bind_dn,
         &bind_pw,
-        &config.search_bases,
+        pm_search_bases,
         &config.pm_target_filter,
         config.tls_skip_verify,
         config.ca_cert_pem.as_deref(),
@@ -5847,5 +5873,55 @@ mod tests {
         assert!(parse_and_validate_dns_servers("1.1.1.1:0").is_err()); // port 0
         assert!(parse_and_validate_dns_servers("999.1.1.1").is_err()); // invalid ip
         assert!(parse_and_validate_dns_servers("1.1.1.1:65536").is_err()); // invalid port
+    }
+
+    // ── AdminTag serialization ──────────────────────────────────────
+    #[test]
+    fn admin_tag_serializes() {
+        let tag = AdminTag {
+            id: Uuid::nil(),
+            name: "production".into(),
+            color: "#ff0000".into(),
+            created_at: Utc::now(),
+        };
+        let v = serde_json::to_value(&tag).unwrap();
+        assert_eq!(v["name"], "production");
+        assert_eq!(v["color"], "#ff0000");
+    }
+
+    #[test]
+    fn create_admin_tag_req_deser() {
+        let json = "{\"name\":\"test-tag\",\"color\":\"#00ff00\"}";
+        let r: CreateAdminTagReq = serde_json::from_str(json).unwrap();
+        assert_eq!(r.name, "test-tag");
+        assert_eq!(r.color.unwrap(), "#00ff00");
+    }
+
+    #[test]
+    fn set_admin_connection_tags_req_deser() {
+        let json = r#"{"connection_id":"00000000-0000-0000-0000-000000000000","tag_ids":["00000000-0000-0000-0000-000000000000"]}"#;
+        let r: SetAdminConnectionTagsReq = serde_json::from_str(json).unwrap();
+        assert_eq!(r.tag_ids.len(), 1);
+    }
+
+    #[test]
+    fn test_realm_rows_to_configs() {
+        let rows = vec![KerberosRealmRow {
+            id: Uuid::nil(),
+            realm: "CORP.LOCAL".into(),
+            kdc_servers: "kdc1.corp.local, kdc2.corp.local ".into(),
+            admin_server: Some("admin.corp.local".into()),
+            ticket_lifetime: Some("10h".into()),
+            renew_lifetime: Some("7d".into()),
+            is_default: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }];
+        let configs = realm_rows_to_configs(&rows);
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].realm, "CORP.LOCAL");
+        assert_eq!(configs[0].kdcs, vec!["kdc1.corp.local", "kdc2.corp.local"]);
+        assert_eq!(configs[0].admin_server.as_deref(), Some("admin.corp.local"));
+        assert_eq!(configs[0].ticket_lifetime.as_deref(), Some("10h"));
     }
 }

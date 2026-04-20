@@ -55,6 +55,8 @@ pub struct AdSyncConfig {
     #[serde(default = "default_pm_rotate_interval")]
     pub pm_auto_rotate_interval_days: i32,
     pub pm_last_rotated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub pm_search_bases: Vec<String>,
 }
 
 fn default_pm_target_filter() -> String {
@@ -858,6 +860,7 @@ mod tests {
             pm_auto_rotate_enabled: false,
             pm_auto_rotate_interval_days: default_pm_rotate_interval(),
             pm_last_rotated_at: None,
+            pm_search_bases: vec![],
         }
     }
 

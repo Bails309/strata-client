@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.3] — 2026-04-20
+
+### Added
+- **Separate Search Base OUs for Password Management**: Introduced a dedicated `pm_search_bases` configuration field for Active Directory synchronization. This allows administrators to scope user discovery for password management to specific OUs, separate from the primary device-focused search bases. 
+- **Optional Search Base Fallback**: The system now supports an optional fallback mechanism: if specific PM search bases are not configured, user discovery automatically falls back to the main device search bases, ensuring backward compatibility with existing configurations.
+- **Interactive Search Base UI**: Updated the Admin Settings AD Sync configuration modal with an interactive, multi-entry input for PM Search Base OUs, matching the primary search base pattern.
+
+### Technical Refinements
+- **API Enhancements**: Updated `CreateAdSyncConfigRequest` and `UpdateAdSyncConfigRequest` DTOs to support optional PM search base persistence.
+- **User Discovery Optimization**: Refined `list_unmapped_accounts` and account filter preview logic to prioritize PM-scoped discovery perimeters.
+
+### Database
+- **Migration 049**: Adds `pm_search_bases` (`TEXT[]`) column to the `ad_sync_configs` table.
+
 ## [0.19.2] — 2026-04-20
 
 ### Added

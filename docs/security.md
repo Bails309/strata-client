@@ -250,7 +250,11 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 
 ### Credential Isolation
 
-Password management supports separate bind credentials for PM operations (`pm_bind_user` / `pm_bind_password`), allowing administrators to use a dedicated service account with password-reset permissions rather than granting those privileges to the main AD sync bind account. PM bind passwords are encrypted at rest using the same Vault Transit envelope encryption as all other credentials.
+Password management supports separate bind credentials for PM operations (`pm_bind_user` / `pm_bind_password`) and **separate Search Base OUs for discovery** (`pm_search_bases`). This decoupling allows administrators to:
+1. Use a dedicated service account with password-reset permissions on a specific user subtree.
+2. Restrict the "discovery perimeter" for privileged accounts to only the necessary Organizational Units, preventing the system from identifying or interacting with accounts in other areas of the directory (e.g., standard users or system accounts).
+
+PM bind passwords are encrypted at rest using the same Vault Transit envelope encryption as all other credentials.
 
 ### Password Generation
 

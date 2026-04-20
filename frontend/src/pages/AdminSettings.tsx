@@ -4018,6 +4018,32 @@ function AdSyncTab({ folders, onSave }: { folders: ConnectionFolder[]; onSave: (
                 )}
               </div>
 
+              {/* PM Search Bases */}
+              <div className="block">
+                <span className="text-xs font-semibold uppercase tracking-wider opacity-60 block mb-2">Search Base OUs (Optional)</span>
+                <p className="text-xs opacity-50 mb-2">If specified, user discovery for password management will be restricted to these OUs. Otherwise, the main AD sync search bases are used.</p>
+                {(editing.pm_search_bases || ['']).map((base: string, i: number) => (
+                  <div key={i} className="flex items-center gap-2 mt-1">
+                    <input
+                      className="input flex-1"
+                      value={base}
+                      onChange={(e) => {
+                        const next = [...(editing.pm_search_bases || [''])];
+                        next[i] = e.target.value;
+                        setEditing({ ...editing, pm_search_bases: next });
+                      }}
+                      placeholder="OU=Managed Users,DC=example,DC=local"
+                    />
+                    {(editing.pm_search_bases || ['']).length > 1 && (
+                      <button type="button" className="text-red-400 hover:text-red-300 text-sm px-1 font-bold"
+                        onClick={() => setEditing({ ...editing, pm_search_bases: (editing.pm_search_bases || ['']).filter((_: string, j: number) => j !== i) })}>×</button>
+                    )}
+                  </div>
+                ))}
+                <button type="button" className="text-xs text-blue-400 hover:underline mt-1"
+                  onClick={() => setEditing({ ...editing, pm_search_bases: [...(editing.pm_search_bases || ['']), ''] })}>+ Add PM Search Base</button>
+              </div>
+
               {/* Target filter */}
               <div>
                 <label className="block">

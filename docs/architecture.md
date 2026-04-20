@@ -83,7 +83,7 @@ The central orchestrator. Responsibilities:
 - **Metrics** — per-session bandwidth tracking (bytes in/out) with aggregate metrics endpoint
 - **Config push** — generates `krb5.conf` (multi-realm), toggles recordings, manages SSO settings
 - **AD sync** — scheduled LDAP/LDAPS queries against Active Directory to discover and import computer accounts; supports simple bind and Kerberos keytab auth, custom CA certificates, multiple search bases per source, gMSA/MSA exclusion filters, and configurable connection defaults (RDP performance flags, session recording parameters)
-- **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
+- **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
 - **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators
 - **DNS configuration** — admin-configurable DNS servers and search domains written to a shared Docker volume as `resolv.conf`; guacd containers apply this on startup for internal hostname resolution; Docker's embedded DNS is preserved as fallback
 - **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each
@@ -205,7 +205,7 @@ credential_profiles ─ saved credential profiles with optional TTL expiry and o
 user_favorites ────── user ↔ connection favorites (composite PK)
 connection_shares ── temporary share links with mode (view/control); viewers observe via NVR broadcast
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
-ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, filter, schedule, CA cert, connection_defaults)
+ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, PM search bases, filter, schedule, CA cert, connection_defaults)
 ad_sync_runs ─────── per-config sync run history with stats
 recordings ─────── session recording metadata with bandwidth metrics
 active_sessions ── per-user login session tracking (JTI, IP, user agent, expiry)
@@ -216,7 +216,7 @@ user_account_mappings ───── user ↔ managed AD account (with self-app
 password_checkout_requests ─ checkout lifecycle tracking (Pending/Approved/Active/Expired/Denied/CheckedIn, timestamps, Vault-sealed password)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `048_connection_health_repair.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `049_pm_search_bases.sql` for the full DDL.
 
 ## Directory Structure
 

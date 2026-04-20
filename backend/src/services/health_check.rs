@@ -83,3 +83,21 @@ async fn update_health(
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_probe_tcp_offline() {
+        // Use a port that is unlikely to be open
+        let status = probe_tcp("127.0.0.1", 54321).await;
+        assert_eq!(status, "offline");
+    }
+
+    #[tokio::test]
+    async fn test_probe_tcp_invalid_host() {
+        let status = probe_tcp("invalid-host-name-123", 80).await;
+        assert_eq!(status, "offline");
+    }
+}

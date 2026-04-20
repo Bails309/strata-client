@@ -352,6 +352,7 @@ export interface AdSyncConfig {
   pm_auto_rotate_enabled?: boolean;
   pm_auto_rotate_interval_days?: number;
   pm_last_rotated_at?: string;
+  pm_search_bases?: string[];
   created_at: string;
   updated_at: string;
   clone_from?: string;

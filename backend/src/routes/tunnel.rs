@@ -1022,4 +1022,55 @@ mod tests {
         );
         assert_eq!(u.as_deref(), Some("me"));
     }
+
+    #[test]
+    fn resolve_creds_oneoff_priority() {
+        let oneoff = cred(Some("oneoff"), Some("p1"));
+        let vault = cred(Some("vault"), Some("p2"));
+        let (u, p) = resolve_credentials(&oneoff, &vault, None, &vault, "fb");
+        assert_eq!(u.as_deref(), Some("oneoff"));
+        assert_eq!(p.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn resolve_creds_vault_priority() {
+        let oneoff = cred(None, None);
+        let vault = cred(Some("vault"), Some("p2"));
+        let (u, p) = resolve_credentials(&oneoff, &vault, None, &vault, "fb");
+        assert_eq!(u.as_deref(), Some("vault"));
+        assert_eq!(p.as_deref(), Some("p2"));
+    }
+
+    #[test]
+    fn resolve_creds_ticket_priority() {
+        let none = cred(None, None);
+        let ticket = cred(Some("ticket"), Some("p3"));
+        let (u, p) = resolve_credentials(&none, &none, Some(&ticket), &none, "fb");
+        assert_eq!(u.as_deref(), Some("ticket"));
+        assert_eq!(p.as_deref(), Some("p3"));
+    }
+
+    #[test]
+    fn resolve_creds_fallback_username_for_password_only() {
+        let none = cred(None, None);
+        let query = cred(None, Some("p4"));
+        let (u, p) = resolve_credentials(&none, &none, None, &query, "john");
+        assert_eq!(u.as_deref(), Some("john"));
+        assert_eq!(p.as_deref(), Some("p4"));
+    }
+
+    #[test]
+    fn resolve_creds_none_found() {
+        let none = cred(None, None);
+        let (u, p) = resolve_credentials(&none, &none, None, &none, "john");
+        assert!(u.is_none());
+        assert!(p.is_none());
+    }
+
+    fn cred(u: Option<&str>, p: Option<&str>) -> CredentialSource {
+        CredentialSource {
+            username: u.map(|s| s.to_string()),
+            password: p.map(|s| s.to_string()),
+        }
+    }
 }

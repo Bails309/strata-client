@@ -1173,7 +1173,9 @@ List all AD sync source configurations.
       "create-recording-path": "true"
     },
     "sync_interval_minutes": 60,
-    "enabled": true,
+    "pm_auto_rotate_enabled": false,
+    "pm_auto_rotate_interval_days": 30,
+    "pm_search_bases": ["OU=Admin Users,DC=contoso,DC=com"],
     "created_at": "2026-04-07T10:00:00Z",
     "updated_at": "2026-04-07T10:00:00Z"
   }
@@ -1230,6 +1232,7 @@ Create a new AD sync source.
 | `connection_defaults` | object | No | `{}` | Guacamole connection parameters applied to all synced connections (see below) |
 | `sync_interval_minutes` | integer | No | 60 | Background sync interval (minimum 5) |
 | `enabled` | boolean | No | true | Enable/disable this source |
+| `pm_search_bases` | string[] | No | `[]` | OU scopes specifically for user discovery. If empty, falls back to `search_bases`. |
 
 #### Connection Defaults
 

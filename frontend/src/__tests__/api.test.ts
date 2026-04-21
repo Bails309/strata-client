@@ -1407,3 +1407,194 @@ describe('buildMyRecordingStreamUrl', () => {
     expect(url).not.toContain('token=');
   });
 });
+
+// ── Untested endpoint wrapper coverage ──────────────────────────────
+import {
+  getApprovalRoles,
+  createApprovalRole,
+  updateApprovalRole,
+  deleteApprovalRole,
+  getRoleAssignments,
+  setRoleAssignments,
+  getRoleAccounts,
+  setRoleAccounts,
+  getAccountMappings,
+  createAccountMapping,
+  deleteAccountMapping,
+  getUnmappedAccounts,
+  testRotation,
+  getCheckoutRequests,
+  getMyManagedAccounts,
+  getMyCheckouts,
+  requestCheckout,
+  decideCheckout,
+  revealCheckoutPassword,
+  retryCheckoutActivation,
+  getPendingApprovals,
+  updateDns,
+  getTags,
+  createTag,
+  updateTag,
+  deleteTag,
+  getConnectionTags,
+  setConnectionTags,
+  getDisplayTags,
+  setDisplayTag,
+  removeDisplayTag,
+  getAdminTags,
+  getAdminConnectionTags,
+  getAdminTagsAdmin,
+  createAdminTag,
+  updateAdminTag,
+  deleteAdminTag,
+  getAdminConnectionTagsAdmin,
+  setAdminConnectionTags,
+} from '../api';
+
+describe('endpoint wrapper coverage', () => {
+  const originalFetch = globalThis.fetch;
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  type Row = [name: string, call: () => Promise<unknown>, expectedUrl: string, expectedMethod: string];
+  const rows: Row[] = [
+    // Approval roles
+    ['getApprovalRoles', () => getApprovalRoles(), '/api/admin/approval-roles', 'GET'],
+    ['createApprovalRole', () => createApprovalRole({ name: 'r' }), '/api/admin/approval-roles', 'POST'],
+    ['updateApprovalRole', () => updateApprovalRole('r1', { name: 'r2' }), '/api/admin/approval-roles/r1', 'PUT'],
+    ['deleteApprovalRole', () => deleteApprovalRole('r1'), '/api/admin/approval-roles/r1', 'DELETE'],
+    ['getRoleAssignments', () => getRoleAssignments('r1'), '/api/admin/approval-roles/r1/assignments', 'GET'],
+    ['setRoleAssignments', () => setRoleAssignments('r1', ['u1']), '/api/admin/approval-roles/r1/assignments', 'PUT'],
+    ['getRoleAccounts', () => getRoleAccounts('r1'), '/api/admin/approval-roles/r1/accounts', 'GET'],
+    ['setRoleAccounts', () => setRoleAccounts('r1', [{ dn: 'CN=a' }]), '/api/admin/approval-roles/r1/accounts', 'PUT'],
+    // Account mappings
+    ['getAccountMappings', () => getAccountMappings(), '/api/admin/account-mappings', 'GET'],
+    ['createAccountMapping', () => createAccountMapping({ user_id: 'u1', managed_ad_dn: 'CN=a' }), '/api/admin/account-mappings', 'POST'],
+    ['deleteAccountMapping', () => deleteAccountMapping('m1'), '/api/admin/account-mappings/m1', 'DELETE'],
+    ['getUnmappedAccounts', () => getUnmappedAccounts('cfg1'), '/api/admin/ad-sync-configs/cfg1/unmapped-accounts', 'GET'],
+    ['testRotation', () => testRotation('cfg1'), '/api/admin/pm/test-rotation', 'POST'],
+    // Checkouts
+    ['getCheckoutRequests', () => getCheckoutRequests(), '/api/admin/checkout-requests', 'GET'],
+    ['getMyManagedAccounts', () => getMyManagedAccounts(), '/api/user/managed-accounts', 'GET'],
+    ['getMyCheckouts', () => getMyCheckouts(), '/api/user/checkouts', 'GET'],
+    ['requestCheckout', () => requestCheckout({ managed_ad_dn: 'CN=a' }), '/api/user/checkouts', 'POST'],
+    ['decideCheckout', () => decideCheckout('co1', true), '/api/user/checkouts/co1/decide', 'POST'],
+    ['revealCheckoutPassword', () => revealCheckoutPassword('co1'), '/api/user/checkouts/co1/reveal', 'GET'],
+    ['retryCheckoutActivation', () => retryCheckoutActivation('co1'), '/api/user/checkouts/co1/retry', 'POST'],
+    ['getPendingApprovals', () => getPendingApprovals(), '/api/user/pending-approvals', 'GET'],
+    ['updateDns', () => updateDns({ dns_enabled: true, dns_servers: '1.1.1.1', dns_search_domains: 'a.b' }), '/api/admin/settings/dns', 'PUT'],
+    // Tags
+    ['getTags', () => getTags(), '/api/user/tags', 'GET'],
+    ['createTag', () => createTag('t', '#fff'), '/api/user/tags', 'POST'],
+    ['updateTag', () => updateTag('t1', { name: 'x' }), '/api/user/tags/t1', 'PUT'],
+    ['deleteTag', () => deleteTag('t1'), '/api/user/tags/t1', 'DELETE'],
+    ['getConnectionTags', () => getConnectionTags(), '/api/user/connection-tags', 'GET'],
+    ['setConnectionTags', () => setConnectionTags('c1', ['t1']), '/api/user/connection-tags', 'POST'],
+    ['getDisplayTags', () => getDisplayTags(), '/api/user/display-tags', 'GET'],
+    ['setDisplayTag', () => setDisplayTag('c1', 't1'), '/api/user/display-tags', 'POST'],
+    ['removeDisplayTag', () => removeDisplayTag('c1'), '/api/user/display-tags/c1', 'DELETE'],
+    ['getAdminTags', () => getAdminTags(), '/api/user/admin-tags', 'GET'],
+    ['getAdminConnectionTags', () => getAdminConnectionTags(), '/api/user/admin-connection-tags', 'GET'],
+    ['getAdminTagsAdmin', () => getAdminTagsAdmin(), '/api/admin/tags', 'GET'],
+    ['createAdminTag', () => createAdminTag('t'), '/api/admin/tags', 'POST'],
+    ['updateAdminTag', () => updateAdminTag('t1', { color: '#000' }), '/api/admin/tags/t1', 'PUT'],
+    ['deleteAdminTag', () => deleteAdminTag('t1'), '/api/admin/tags/t1', 'DELETE'],
+    ['getAdminConnectionTagsAdmin', () => getAdminConnectionTagsAdmin(), '/api/admin/connection-tags', 'GET'],
+    ['setAdminConnectionTags', () => setAdminConnectionTags('c1', ['t1']), '/api/admin/connection-tags', 'POST'],
+  ];
+
+  it.each(rows)('%s hits %s %s', async (_name, call, expectedUrl, expectedMethod) => {
+    const fn = mockFetch({});
+    await call();
+    const c = lastCall(fn);
+    expect(c.url).toBe(expectedUrl);
+    expect(c.method).toBe(expectedMethod);
+  });
+});
+
+// ── Remaining uncovered single-liners ───────────────────────────────
+import {
+  acceptTerms,
+  checkAuthStatus,
+  testPmTargetFilter,
+  updateUser,
+  linkCheckoutToProfile,
+} from '../api';
+
+describe('remaining uncovered wrappers', () => {
+  const originalFetch = globalThis.fetch;
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('acceptTerms POSTs version', async () => {
+    const fn = mockFetch({ ok: true });
+    await acceptTerms(3);
+    const c = lastCall(fn);
+    expect(c.url).toBe('/api/user/accept-terms');
+    expect(c.method).toBe('POST');
+    expect(JSON.parse(c.body!)).toEqual({ version: 3 });
+  });
+
+  it('testPmTargetFilter POSTs /api/admin/ad-sync-configs/test-filter', async () => {
+    const fn = mockFetch({ status: 'ok', message: 'ok' });
+    await testPmTargetFilter({ name: 'x' } as any);
+    const c = lastCall(fn);
+    expect(c.url).toBe('/api/admin/ad-sync-configs/test-filter');
+    expect(c.method).toBe('POST');
+  });
+
+  it('updateUser PUTs /api/admin/users/:id', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await updateUser('u1', { role_id: 'r1' });
+    const c = lastCall(fn);
+    expect(c.url).toBe('/api/admin/users/u1');
+    expect(c.method).toBe('PUT');
+  });
+
+  it('linkCheckoutToProfile POSTs with null checkout_id to unlink', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await linkCheckoutToProfile('p1', null);
+    const c = lastCall(fn);
+    expect(c.url).toBe('/api/user/credential-profiles/p1/link-checkout');
+    expect(c.method).toBe('POST');
+    expect(JSON.parse(c.body!)).toEqual({ checkout_id: null });
+  });
+
+  it('linkCheckoutToProfile POSTs with checkout id', async () => {
+    const fn = mockFetch({ status: 'ok' });
+    await linkCheckoutToProfile('p1', 'co1');
+    expect(JSON.parse(lastCall(fn).body!)).toEqual({ checkout_id: 'co1' });
+  });
+
+  it('checkAuthStatus returns authenticated when ok', async () => {
+    localStorage.setItem('access_token', 'tok');
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ authenticated: true, user: { id: 'u1' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ) as unknown as typeof fetch;
+    const res = await checkAuthStatus();
+    expect(res.authenticated).toBe(true);
+  });
+
+  it('checkAuthStatus returns not-authenticated on non-ok', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response('', { status: 401 }),
+    ) as unknown as typeof fetch;
+    const res = await checkAuthStatus();
+    expect(res.authenticated).toBe(false);
+  });
+
+  it('checkAuthStatus swallows fetch errors', async () => {
+    globalThis.fetch = vi.fn(async () => { throw new Error('network'); }) as unknown as typeof fetch;
+    const res = await checkAuthStatus();
+    expect(res.authenticated).toBe(false);
+  });
+});

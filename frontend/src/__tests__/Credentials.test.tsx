@@ -1368,6 +1368,153 @@ describe('Credentials', () => {
     });
   });
 
+  // ── Emergency bypass / justification / scheduling branch coverage ──
+
+  async function openRequestFormWithAccount(account: any) {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([]);
+    vi.mocked(getMyManagedAccounts).mockResolvedValue([account]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText('Work Profile');
+    await user.click(screen.getByText('Request Checkout'));
+    await screen.findByText('Request Password Checkout');
+    // Open the Select and pick the account option
+    await user.click(screen.getByText(/Select account/));
+    const opt = await screen.findByRole('option', { name: new RegExp(account.managed_ad_dn) });
+    await user.click(opt);
+    return user;
+  }
+
+  it('shows emergency bypass checkbox when account allows it and cannot self-approve', async () => {
+    await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: false,
+      pm_allow_emergency_bypass: true,
+      created_at: '',
+    });
+    expect(await screen.findByText(/Emergency Approval Bypass/)).toBeInTheDocument();
+  });
+
+  it('hides emergency bypass when pm_allow_emergency_bypass is false', async () => {
+    await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: false,
+      pm_allow_emergency_bypass: false,
+      created_at: '',
+    });
+    expect(screen.queryByText(/Emergency Approval Bypass/)).not.toBeInTheDocument();
+  });
+
+  it('hides emergency bypass when user can self-approve', async () => {
+    await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: true,
+      pm_allow_emergency_bypass: true,
+      created_at: '',
+    });
+    expect(screen.queryByText(/Emergency Approval Bypass/)).not.toBeInTheDocument();
+  });
+
+  it('caps duration at 30 when emergency bypass is enabled', async () => {
+    const user = await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: false,
+      pm_allow_emergency_bypass: true,
+      created_at: '',
+    });
+    // Default duration is 60; tick the emergency bypass checkbox
+    const emergencyCb = screen.getByRole('checkbox', { name: /Emergency Approval Bypass/i });
+    await user.click(emergencyCb);
+    await waitFor(() => {
+      const durationInput = screen.getByRole('spinbutton') as HTMLInputElement;
+      expect(Number(durationInput.value)).toBeLessThanOrEqual(30);
+    });
+    expect(screen.getByText(/capped at 30 minutes/i)).toBeInTheDocument();
+    expect(screen.getByText(/Duration \(minutes, 1–30\)/)).toBeInTheDocument();
+  });
+
+  it('shows "required, min 10 characters" for approval-required account', async () => {
+    await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: false,
+      pm_allow_emergency_bypass: false,
+      created_at: '',
+    });
+    expect(await screen.findByText(/required, min 10 characters/i)).toBeInTheDocument();
+    // Helper message visible when field empty
+    expect(screen.getByText(/need a justification of at least 10 characters/i)).toBeInTheDocument();
+  });
+
+  it('disables submit when justification is under 10 chars and approval is required', async () => {
+    const user = await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: false,
+      pm_allow_emergency_bypass: false,
+      created_at: '',
+    });
+    // Two buttons named "Request Checkout" exist: the tab and the submit.
+    // The submit is the last in DOM order.
+    const findSubmit = () => {
+      const all = screen.getAllByRole('button', { name: /^Request Checkout$/ });
+      return all[all.length - 1];
+    };
+    await waitFor(() => expect(findSubmit()).toBeDisabled());
+    // Type < 10 chars → still disabled
+    const ta = screen.getByRole('textbox');
+    await user.type(ta, 'short');
+    expect(findSubmit()).toBeDisabled();
+    // Type enough → enabled
+    await user.type(ta, ' reason here');
+    await waitFor(() => expect(findSubmit()).not.toBeDisabled());
+  });
+
+  it('decrement button clamps duration at 1 and is disabled there', async () => {
+    const user = await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: true,
+      pm_allow_emergency_bypass: false,
+      created_at: '',
+    });
+    const dec = screen.getByLabelText('Decrease duration');
+    // Default 60 → hammer it down past 1
+    for (let i = 0; i < 25; i++) {
+      if (!(dec as HTMLButtonElement).disabled) await user.click(dec);
+    }
+    const durationInput = screen.getByRole('spinbutton') as HTMLInputElement;
+    await waitFor(() => expect(Number(durationInput.value)).toBe(1));
+    expect(dec).toBeDisabled();
+  });
+
+  it('shows scheduled-start datetime input when Schedule checkbox toggled', async () => {
+    const user = await openRequestFormWithAccount({
+      id: 'm1', user_id: 'u1',
+      managed_ad_dn: 'CN=svc,DC=corp',
+      can_self_approve: true,
+      pm_allow_emergency_bypass: false,
+      created_at: '',
+    });
+    const scheduleCb = screen.getByRole('checkbox', { name: /Schedule release for a future time/i });
+    await user.click(scheduleCb);
+    // datetime-local input appears
+    await waitFor(() => {
+      const dtInput = document.querySelector('input[type="datetime-local"]') as HTMLInputElement | null;
+      expect(dtInput).not.toBeNull();
+      // Pre-filled with a value ~15min from now
+      expect(dtInput!.value).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+    });
+    expect(screen.getByText(/Max 14 days ahead/)).toBeInTheDocument();
+    // Submit button label flips to "Schedule Checkout"
+    expect(screen.getByRole('button', { name: /^Schedule Checkout$/ })).toBeInTheDocument();
+  });
+
   it('shows Retry Activation for approved but not live checkout', async () => {
     setupDefaults();
     vi.mocked(getMyManagedAccounts).mockResolvedValue([]);

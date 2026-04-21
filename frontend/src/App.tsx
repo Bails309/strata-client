@@ -113,7 +113,7 @@ export default function App() {
                 <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
                 <Route path="/sessions" element={(user?.can_view_sessions || user?.can_manage_system || user?.can_view_audit_logs) ? <Sessions user={user} /> : <Navigate to="/" replace />} />
                 <Route path="/approvals" element={user?.vault_configured ? <Approvals user={user} /> : <Navigate to="/" replace />} />
-                <Route path="/docs" element={<Documentation />} />
+                <Route path="/docs" element={<Documentation user={user} />} />
               </Route>
               <Route path="/shared/:shareToken" element={<SharedViewer />} />
               <Route path="/login" element={<Navigate to="/" replace />} />

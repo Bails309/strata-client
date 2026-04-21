@@ -1235,7 +1235,13 @@ pub async fn connection_info(
     .await?
     .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
-    // Check if a credential profile is mapped to this user+connection
+    // Check if a credential profile is mapped to this user+connection.
+    // A profile is considered "live" when:
+    //   - its TTL has not expired, AND
+    //   - if it is backed by a managed-account checkout, that checkout is
+    //     still Active (not CheckedIn / Expired / Denied / Cancelled /
+    //     Scheduled / Pending). A CheckedIn checkout has had its password
+    //     scrambled in vault; attempting to use it would cause an AD lockout.
     let has_vault_creds: bool = if !has_vault {
         false
     } else {
@@ -1243,8 +1249,13 @@ pub async fn connection_info(
             "SELECT EXISTS(
                 SELECT 1 FROM credential_mappings cm
                 JOIN credential_profiles cp ON cp.id = cm.credential_id
+                LEFT JOIN password_checkout_requests pcr ON pcr.id = cp.checkout_id
                 WHERE cm.connection_id = $1 AND cp.user_id = $2
                   AND cp.expires_at > now()
+                  AND (
+                        cp.checkout_id IS NULL
+                     OR (pcr.status = 'Active' AND (pcr.expires_at IS NULL OR pcr.expires_at > now()))
+                  )
             )",
         )
         .bind(connection_id)
@@ -1254,7 +1265,10 @@ pub async fn connection_info(
         .unwrap_or(false)
     };
 
-    // If no active credentials, check for an expired profile mapped to this connection.
+    // If no active credentials, check for an expired-or-stale profile mapped
+    // to this connection. This includes both TTL-expired profiles and
+    // profiles whose backing checkout is no longer live (CheckedIn, Expired,
+    // Denied, Cancelled, etc.) so the user can re-request / re-enter creds.
     // Also check if it's a managed account with self-approval rights.
     #[allow(clippy::type_complexity)]
     let expired_profile: Option<(String, String, i32, Option<String>, Option<Uuid>, bool)> =
@@ -1272,7 +1286,12 @@ pub async fn connection_info(
              LEFT JOIN password_checkout_requests pcr ON pcr.id = cp.checkout_id
              LEFT JOIN user_account_mappings uam ON uam.user_id = cp.user_id AND uam.managed_ad_dn = pcr.managed_ad_dn
              WHERE cm.connection_id = $1 AND cp.user_id = $2
-               AND cp.expires_at <= now()
+               AND (
+                     cp.expires_at <= now()
+                  OR (cp.checkout_id IS NOT NULL
+                      AND (pcr.status <> 'Active'
+                           OR (pcr.expires_at IS NOT NULL AND pcr.expires_at <= now())))
+               )
              LIMIT 1",
         )
         .bind(connection_id)
@@ -1529,22 +1548,27 @@ pub async fn my_recording_stream(
 
 use crate::services::checkouts::CheckoutRequest;
 
+/// Row shape for `my_managed_accounts` query.
+/// (id, user_id, managed_ad_dn, can_self_approve, ad_sync_config_id,
+///  created_at, friendly_name, pm_allow_emergency_bypass)
+type ManagedAccountRow = (
+    Uuid,
+    Uuid,
+    String,
+    bool,
+    Option<Uuid>,
+    chrono::DateTime<chrono::Utc>,
+    Option<String>,
+    Option<bool>,
+);
+
 /// My managed account mappings (accounts I can request checkout for).
 pub async fn my_managed_accounts(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<(
-        Uuid,
-        Uuid,
-        String,
-        bool,
-        Option<Uuid>,
-        chrono::DateTime<chrono::Utc>,
-        Option<String>,
-        Option<bool>,
-    )> = sqlx::query_as(
+    let rows: Vec<ManagedAccountRow> = sqlx::query_as(
         "SELECT m.id, m.user_id, m.managed_ad_dn, m.can_self_approve, m.ad_sync_config_id,
                 m.created_at, m.friendly_name, c.pm_allow_emergency_bypass
          FROM user_account_mappings m
@@ -1712,7 +1736,7 @@ pub async fn request_checkout(
     }
     let use_schedule = scheduled_start_at.is_some()
         && initial_status == "Approved"
-        && !(emergency_bypass && !mapping.can_self_approve);
+        && (!emergency_bypass || mapping.can_self_approve);
     if use_schedule {
         initial_status = "Scheduled";
     }

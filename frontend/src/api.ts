@@ -221,6 +221,19 @@ export const acceptTerms = (version: number) =>
     body: JSON.stringify({ version }),
   });
 
+// ── Roadmap status overrides ────────────────────────────────────────
+
+export type RoadmapStatus = 'Proposed' | 'Researching' | 'In Progress' | 'Shipped';
+
+export const getRoadmapStatuses = () =>
+  request<{ statuses: Record<string, RoadmapStatus> }>('/roadmap');
+
+export const setRoadmapStatus = (itemId: string, status: RoadmapStatus) =>
+  request<{ ok: boolean; item_id: string; status: RoadmapStatus }>(
+    `/admin/roadmap/${encodeURIComponent(itemId)}`,
+    { method: 'PUT', body: JSON.stringify({ status }) },
+  );
+
 /** Auth probe that always returns 200 (never 401) — used for initial page-load
  *  auth checks so the browser console stays clean. Returns the full user
  *  profile when authenticated. */

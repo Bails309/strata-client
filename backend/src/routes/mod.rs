@@ -2,6 +2,7 @@ pub mod admin;
 pub mod auth;
 pub mod files;
 pub mod health;
+pub mod roadmap;
 pub mod setup;
 pub mod share;
 pub mod tunnel;
@@ -224,6 +225,7 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_checkout_requests),
         )
         .route("/api/recordings/:filename", get(user::get_recording))
+        .route("/api/admin/roadmap/:item_id", put(roadmap::set_status))
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
@@ -232,6 +234,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/password", put(auth::change_password))
         .route("/api/user/me", get(user::me))
         .route("/api/user/accept-terms", post(user::accept_terms))
+        .route("/api/roadmap", get(roadmap::get_statuses))
         .route("/api/user/connections", get(user::my_connections))
         .route("/api/user/credentials", put(user::update_credential))
         .route(

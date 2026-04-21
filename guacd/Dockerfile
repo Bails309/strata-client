@@ -13,7 +13,7 @@
 # ── Builder stage ─────────────────────────────────────────────────────
 # Pinned base image (W1-7): digest refreshed automatically by Renovate /
 # Dependabot (see [.github/dependabot.yml](.github/dependabot.yml) docker ecosystem).
-FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d AS builder
+FROM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS builder
 # tag: alpine:3.21
 
 # Add Alpine edge repos for FreeRDP 3 (required for Kerberos/NLA)
@@ -58,7 +58,7 @@ RUN autoreconf -fi && \
     make DESTDIR=/build install
 
 # ── Runtime stage ─────────────────────────────────────────────────────
-FROM alpine:3.21
+FROM alpine:3.23
 
 # Add Alpine edge repos for FreeRDP 3 runtime libs (required for Kerberos/NLA)
 RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories && \

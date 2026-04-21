@@ -73,6 +73,38 @@ Open `http://127.0.0.1` and complete the setup wizard. The bundled PostgreSQL an
 > [!TIP]
 > **New to Strata Client?** For a comprehensive host-level guide, see our [Ubuntu VM Deployment Guide](ubuntu-vm-deployment.md).
 
+### Supply-chain verification (required before every rollout)
+
+Every image built by the [release workflow](../.github/workflows/release.yml)
+is signed keyless with Cosign, carries a CycloneDX SBOM attestation, and
+ships SLSA Level 3 build provenance. Any deployment pipeline — manual or
+automated — **must** verify the image digest it is about to pull before
+rolling it out. The repository ships [`scripts/verify-image.sh`](../scripts/verify-image.sh)
+for exactly this purpose:
+
+```bash
+# Backend
+./scripts/verify-image.sh \
+  ghcr.io/your-org/strata-client/backend@sha256:<digest>
+
+# Frontend
+./scripts/verify-image.sh \
+  ghcr.io/your-org/strata-client/frontend@sha256:<digest>
+```
+
+The script runs:
+
+1. `cosign verify` — confirms the digest was signed by the expected GitHub
+   Actions release workflow identity via Sigstore Fulcio + Rekor.
+2. `cosign verify-attestation --type cyclonedx` — confirms the CycloneDX
+   SBOM attestation is present and signed by the same identity.
+3. `slsa-verifier verify-image` — confirms SLSA L3 build provenance and
+   that the image was built from this repository.
+
+Requirements: `cosign >= 2.2` and `slsa-verifier >= 2.5` in `PATH`.
+
+**Rollout MUST abort** if this script exits non-zero.
+
 ### 1. Environment Configuration
 
 Edit `.env` or set environment variables:

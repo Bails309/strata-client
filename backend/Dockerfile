@@ -1,5 +1,10 @@
 # ── Build stage ────────────────────────────────────────────────────────
-FROM rust:1.94-alpine AS builder
+# Pinned base images (W1-5): digests refreshed automatically by Renovate /
+# Dependabot (see [.github/dependabot.yml](.github/dependabot.yml) docker ecosystem).
+# Update the `# tag:` comment on the same line so humans still know which
+# upstream version the digest corresponds to.
+FROM rust:1.94-alpine@sha256:77237dd363a0b127bb5ef532c2d64c0deb380b738e43a9c4bdac73398d6d0a08 AS builder
+# tag: rust:1.94-alpine
 
 RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static
 
@@ -15,7 +20,8 @@ COPY backend/ .
 RUN touch src/main.rs && cargo build --release
 
 # ── Runtime stage ─────────────────────────────────────────────────────
-FROM alpine:3.19
+FROM alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1
+# tag: alpine:3.19
 
 RUN apk add --no-cache ca-certificates krb5 openldap-clients cyrus-sasl-gssapiv2 su-exec
 

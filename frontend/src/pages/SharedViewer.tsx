@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useParams, useSearchParams } from 'react-router-dom';
-import Guacamole from 'guacamole-common-js';
-import { createWinKeyProxy } from '../utils/winKeyProxy';
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useParams, useSearchParams } from "react-router-dom";
+import Guacamole from "guacamole-common-js";
+import { createWinKeyProxy } from "../utils/winKeyProxy";
 
 /**
  * Shared session viewer. Accessible without authentication
@@ -14,19 +14,19 @@ export default function SharedViewer() {
   const [searchParams] = useSearchParams();
   const containerRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<Guacamole.Client | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
-  const [mode, setMode] = useState<'view' | 'control'>('view');
+  const [mode, setMode] = useState<"view" | "control">("view");
 
   useEffect(() => {
-    const urlMode = searchParams.get('mode');
-    if (urlMode === 'control') setMode('control');
+    const urlMode = searchParams.get("mode");
+    if (urlMode === "control") setMode("control");
   }, [searchParams]);
 
   useEffect(() => {
     if (!shareToken || !containerRef.current) return;
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const container = containerRef.current;
     const dpr = window.devicePixelRatio || 1;
 
@@ -37,22 +37,26 @@ export default function SharedViewer() {
 
     const display = client.getDisplay();
     const displayEl = display.getElement();
-    displayEl.style.background = '#000';
+    displayEl.style.background = "#000";
     container.appendChild(displayEl);
 
     // Mouse (view-only still lets the viewer see cursor position)
     const mouse = new Guacamole.Mouse(displayEl);
-    mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+    mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       client.sendMouseState(e.state, true);
     });
 
     // Keyboard — only attached in control mode
-    const urlMode = searchParams.get('mode');
-    if (urlMode === 'control') {
+    const urlMode = searchParams.get("mode");
+    if (urlMode === "control") {
       const keyboard = new Guacamole.Keyboard(document);
       const winProxy = createWinKeyProxy((p, k) => client.sendKeyEvent(p, k));
-      keyboard.onkeydown = (keysym: number) => { return winProxy.onkeydown(keysym); };
-      keyboard.onkeyup = (keysym: number) => { winProxy.onkeyup(keysym); };
+      keyboard.onkeydown = (keysym: number) => {
+        return winProxy.onkeydown(keysym);
+      };
+      keyboard.onkeyup = (keysym: number) => {
+        winProxy.onkeyup(keysym);
+      };
     }
 
     display.onresize = () => {
@@ -66,10 +70,10 @@ export default function SharedViewer() {
     };
 
     tunnel.onerror = (status: Guacamole.Status) => {
-      setError(status.message || 'Connection failed');
+      setError(status.message || "Connection failed");
     };
     client.onerror = (status: Guacamole.Status) => {
-      setError(status.message || 'Connection failed');
+      setError(status.message || "Connection failed");
     };
 
     client.onstatechange = (state: number) => {
@@ -88,9 +92,9 @@ export default function SharedViewer() {
     };
 
     const connectParams = new URLSearchParams();
-    connectParams.set('width', String(container.clientWidth));
-    connectParams.set('height', String(container.clientHeight));
-    connectParams.set('dpi', String(Math.round(96 * dpr)));
+    connectParams.set("width", String(container.clientWidth));
+    connectParams.set("height", String(container.clientHeight));
+    connectParams.set("dpi", String(Math.round(96 * dpr)));
 
     client.connect(connectParams.toString());
 
@@ -104,63 +108,69 @@ export default function SharedViewer() {
       }
       client.sendSize(cw, ch);
     };
-    window.addEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      try { client.disconnect(); } catch { /* ignore */ }
+      window.removeEventListener("resize", handleResize);
+      try {
+        client.disconnect();
+      } catch {
+        /* ignore */
+      }
     };
   }, [shareToken]);
 
   return createPortal(
-    <div style={{ position: 'fixed', inset: 0, zIndex: 5, background: '#000' }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 5, background: "#000" }}>
       {/* Banner */}
       <div
         style={{
-          position: 'absolute',
+          position: "absolute",
           top: 0,
           left: 0,
           right: 0,
           zIndex: 10,
-          padding: '6px 16px',
-          background: 'rgba(0,0,0,0.7)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontSize: '0.75rem',
-          color: '#ccc',
+          padding: "6px 16px",
+          background: "rgba(0,0,0,0.7)",
+          backdropFilter: "blur(8px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          fontSize: "0.75rem",
+          color: "#ccc",
         }}
       >
         <span>
-          <strong>Shared Session</strong> — {connected
-            ? (mode === 'control' ? 'Control mode' : 'Read-only view')
-            : 'Connecting…'}
+          <strong>Shared Session</strong> —{" "}
+          {connected ? (mode === "control" ? "Control mode" : "Read-only view") : "Connecting…"}
         </span>
       </div>
 
       <div
         ref={containerRef}
         style={{
-          width: '100%',
-          height: '100%',
-          overflow: 'hidden',
+          width: "100%",
+          height: "100%",
+          overflow: "hidden",
         }}
       />
 
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center z-20" style={{ background: 'rgba(0,0,0,0.85)' }}>
-          <div style={{ textAlign: 'center', color: '#fff', maxWidth: 400, padding: 32 }}>
-            <div style={{ fontSize: '2rem', marginBottom: 8 }}>⚠</div>
-            <div style={{ color: '#f87171', marginBottom: 16 }}>{error}</div>
-            <p style={{ fontSize: '0.8rem', color: '#999' }}>
-              This share link may have expired, been revoked by the owner,
-              or the owner may not be actively connected.
+        <div
+          className="absolute inset-0 flex items-center justify-center z-20"
+          style={{ background: "rgba(0,0,0,0.85)" }}
+        >
+          <div style={{ textAlign: "center", color: "#fff", maxWidth: 400, padding: 32 }}>
+            <div style={{ fontSize: "2rem", marginBottom: 8 }}>⚠</div>
+            <div style={{ color: "#f87171", marginBottom: 16 }}>{error}</div>
+            <p style={{ fontSize: "0.8rem", color: "#999" }}>
+              This share link may have expired, been revoked by the owner, or the owner may not be
+              actively connected.
             </p>
           </div>
         </div>
       )}
     </div>,
-    document.getElementById('root')!,
+    document.getElementById("root")!
   );
 }

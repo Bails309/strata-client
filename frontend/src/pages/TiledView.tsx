@@ -1,11 +1,11 @@
-import { useEffect, useRef, useMemo, useCallback, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
-import Guacamole from 'guacamole-common-js';
-import { useSessionManager, GuacSession } from '../components/SessionManager';
-import { useSidebarWidth } from '../components/Layout';
-import SessionWatermark from '../components/SessionWatermark';
-import { createWinKeyProxy } from '../utils/winKeyProxy';
+import { useEffect, useRef, useMemo, useCallback, useState } from "react";
+import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
+import Guacamole from "guacamole-common-js";
+import { useSessionManager, GuacSession } from "../components/SessionManager";
+import { useSidebarWidth } from "../components/Layout";
+import SessionWatermark from "../components/SessionWatermark";
+import { createWinKeyProxy } from "../utils/winKeyProxy";
 
 /**
  * Computes a grid layout (cols × rows) to best fill the available space
@@ -35,18 +35,18 @@ export default function TiledView() {
 
   // The sessions that are currently tiled
   const tiledSessions = useMemo(
-    () => tiledSessionIds
-      .map((id) => sessions.find((s) => s.id === id))
-      .filter(Boolean) as GuacSession[],
-    [tiledSessionIds, sessions],
+    () =>
+      tiledSessionIds
+        .map((id) => sessions.find((s) => s.id === id))
+        .filter(Boolean) as GuacSession[],
+    [tiledSessionIds, sessions]
   );
 
   const { cols, rows } = useMemo(() => computeGrid(tiledSessions.length), [tiledSessions.length]);
 
-
   // If no tiled sessions, go home
   useEffect(() => {
-    if (tiledSessions.length === 0) navigate('/');
+    if (tiledSessions.length === 0) navigate("/");
   }, [tiledSessions.length, navigate]);
 
   // Listen for onrequired on each tiled session (guacd asking for credentials)
@@ -64,23 +64,26 @@ export default function TiledView() {
   }, [tiledSessions]);
 
   // Submit credentials for a tile
-  const submitTileCreds = useCallback((sessionId: string, creds: Record<string, string>) => {
-    const session = sessions.find((s) => s.id === sessionId);
-    if (!session) return;
-    const params = requiredCreds[sessionId] || [];
-    for (const param of params) {
-      const value = creds[param] || '';
-      const stream = session.client.createArgumentValueStream('text/plain', param);
-      const writer = new Guacamole.StringWriter(stream);
-      writer.sendText(value);
-      writer.sendEnd();
-    }
-    setRequiredCreds((prev) => {
-      const next = { ...prev };
-      delete next[sessionId];
-      return next;
-    });
-  }, [sessions, requiredCreds]);
+  const submitTileCreds = useCallback(
+    (sessionId: string, creds: Record<string, string>) => {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const params = requiredCreds[sessionId] || [];
+      for (const param of params) {
+        const value = creds[param] || "";
+        const stream = session.client.createArgumentValueStream("text/plain", param);
+        const writer = new Guacamole.StringWriter(stream);
+        writer.sendText(value);
+        writer.sendEnd();
+      }
+      setRequiredCreds((prev) => {
+        const next = { ...prev };
+        delete next[sessionId];
+        return next;
+      });
+    },
+    [sessions, requiredCreds]
+  );
 
   // Keyboard management — broadcast to all focused sessions
   useEffect(() => {
@@ -108,16 +111,16 @@ export default function TiledView() {
     // Capture-phase trap — only prevent default when there are focused tiles
     const trapKeyDown = (e: KeyboardEvent) => {
       if (focusedSessions.length === 0) return;
-      if (e.key === 'F12') return;
-      if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) return;
+      if (e.key === "F12") return;
+      if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
       // Allow Ctrl+click modifiers to pass through for multi-focus
-      if (e.key === 'Control' || e.key === 'Shift') return;
+      if (e.key === "Control" || e.key === "Shift") return;
       e.preventDefault();
     };
-    document.addEventListener('keydown', trapKeyDown, true);
+    document.addEventListener("keydown", trapKeyDown, true);
 
     return () => {
-      document.removeEventListener('keydown', trapKeyDown, true);
+      document.removeEventListener("keydown", trapKeyDown, true);
       for (const s of focusedSessions) {
         s.keyboard.onkeydown = null;
         s.keyboard.onkeyup = null;
@@ -126,43 +129,50 @@ export default function TiledView() {
   }, [focusedSessionIds, sessions]);
 
   // Handle closing a tile
-  const handleCloseTile = useCallback((sessionId: string) => {
-    closeSession(sessionId);
-  }, [closeSession]);
+  const handleCloseTile = useCallback(
+    (sessionId: string) => {
+      closeSession(sessionId);
+    },
+    [closeSession]
+  );
 
   // Handle tile click for focus management
-  const handleTileClick = useCallback((sessionId: string, e: React.MouseEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      // Ctrl+click: toggle this tile in/out of focus set
-      setFocusedSessionIds(
-        focusedSessionIds.includes(sessionId)
-          ? focusedSessionIds.filter((id) => id !== sessionId)
-          : [...focusedSessionIds, sessionId],
-      );
-    } else {
-      // Normal click: focus only this tile
-      setFocusedSessionIds([sessionId]);
-      setActiveSessionId(sessionId);
-    }
-  }, [focusedSessionIds, setFocusedSessionIds, setActiveSessionId]);
+  const handleTileClick = useCallback(
+    (sessionId: string, e: React.MouseEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl+click: toggle this tile in/out of focus set
+        setFocusedSessionIds(
+          focusedSessionIds.includes(sessionId)
+            ? focusedSessionIds.filter((id) => id !== sessionId)
+            : [...focusedSessionIds, sessionId]
+        );
+      } else {
+        // Normal click: focus only this tile
+        setFocusedSessionIds([sessionId]);
+        setActiveSessionId(sessionId);
+      }
+    },
+    [focusedSessionIds, setFocusedSessionIds, setActiveSessionId]
+  );
 
   if (tiledSessions.length === 0) return null;
 
   return createPortal(
     <div
       style={{
-        position: 'fixed',
+        position: "fixed",
         top: 0,
         left: sidebarWidth,
         right: barWidth,
         bottom: 0,
         zIndex: 5,
-        display: 'grid',
+        display: "grid",
         gridTemplateColumns: `repeat(${cols}, 1fr)`,
         gridTemplateRows: `repeat(${rows}, 1fr)`,
         gap: 2,
-        background: '#000',
-        transition: 'left 0.2s cubic-bezier(0.4, 0, 0.2, 1), right 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+        background: "#000",
+        transition:
+          "left 0.2s cubic-bezier(0.4, 0, 0.2, 1), right 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
       }}
     >
       {tiledSessions.map((session) => (
@@ -178,7 +188,7 @@ export default function TiledView() {
       ))}
       <SessionWatermark />
     </div>,
-    document.getElementById('root')!,
+    document.getElementById("root")!
   );
 }
 
@@ -236,56 +246,61 @@ function TiledTile({
   return (
     <div
       style={{
-        position: 'relative',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        border: isFocused ? '2px solid var(--color-accent)' : '2px solid transparent',
+        position: "relative",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        border: isFocused ? "2px solid var(--color-accent)" : "2px solid transparent",
         borderRadius: 2,
-        transition: 'border-color 0.15s',
+        transition: "border-color 0.15s",
       }}
       onMouseDown={onClick}
     >
       {/* Title bar */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '3px 8px',
-          background: isFocused ? 'var(--color-accent)' : 'var(--color-surface-tertiary)',
-          color: isFocused ? '#fff' : 'var(--color-txt-secondary)',
-          fontSize: '0.7rem',
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "3px 8px",
+          background: isFocused ? "var(--color-accent)" : "var(--color-surface-tertiary)",
+          color: isFocused ? "#fff" : "var(--color-txt-secondary)",
+          fontSize: "0.7rem",
           fontWeight: 600,
-          letterSpacing: '0.01em',
-          userSelect: 'none',
+          letterSpacing: "0.01em",
+          userSelect: "none",
           flexShrink: 0,
-          transition: 'background 0.15s, color 0.15s',
+          transition: "background 0.15s, color 0.15s",
         }}
       >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-          <span style={{
-            fontSize: '0.6rem',
-            fontWeight: 700,
-            padding: '1px 5px',
-            borderRadius: 3,
-            background: isFocused ? 'rgba(255,255,255,0.2)' : 'var(--color-accent-dim)',
-            color: isFocused ? '#fff' : 'var(--color-accent-light)',
-          }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
+          <span
+            style={{
+              fontSize: "0.6rem",
+              fontWeight: 700,
+              padding: "1px 5px",
+              borderRadius: 3,
+              background: isFocused ? "rgba(255,255,255,0.2)" : "var(--color-accent-dim)",
+              color: isFocused ? "#fff" : "var(--color-accent-light)",
+            }}
+          >
             {session.protocol.toUpperCase()}
           </span>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {session.name}
           </span>
         </span>
         <button
-          onMouseDown={(e) => { e.stopPropagation(); onClose(); }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
           style={{
-            background: 'none',
-            border: 'none',
-            color: 'inherit',
-            cursor: 'pointer',
-            padding: '2px',
+            background: "none",
+            border: "none",
+            color: "inherit",
+            cursor: "pointer",
+            padding: "2px",
             lineHeight: 0,
             opacity: 0.7,
             flexShrink: 0,
@@ -293,7 +308,12 @@ function TiledTile({
           title="Disconnect"
         >
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-            <path d="M2 2L10 10M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path
+              d="M2 2L10 10M10 2L2 10"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
           </svg>
         </button>
       </div>
@@ -303,9 +323,9 @@ function TiledTile({
         ref={tileRef}
         style={{
           flex: 1,
-          overflow: 'hidden',
-          background: '#000',
-          cursor: requiredParams ? 'default' : 'none',
+          overflow: "hidden",
+          background: "#000",
+          cursor: requiredParams ? "default" : "none",
         }}
       />
 
@@ -314,13 +334,13 @@ function TiledTile({
         <div
           onMouseDown={(e) => e.stopPropagation()}
           style={{
-            position: 'absolute',
+            position: "absolute",
             inset: 0,
             top: 24, // below title bar
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,0.85)',
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.85)",
             zIndex: 2,
             padding: 12,
           }}
@@ -332,39 +352,39 @@ function TiledTile({
               setCredForm({});
             }}
             style={{
-              width: '100%',
+              width: "100%",
               maxWidth: 260,
-              display: 'flex',
-              flexDirection: 'column',
+              display: "flex",
+              flexDirection: "column",
               gap: 8,
             }}
           >
-            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#fff', marginBottom: 2 }}>
+            <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "#fff", marginBottom: 2 }}>
               Credentials Required
             </div>
             {requiredParams.map((param) => (
               <input
                 key={param}
-                type={param === 'password' ? 'password' : 'text'}
+                type={param === "password" ? "password" : "text"}
                 placeholder={param.charAt(0).toUpperCase() + param.slice(1)}
-                value={credForm[param] || ''}
+                value={credForm[param] || ""}
                 onChange={(e) => setCredForm((prev) => ({ ...prev, [param]: e.target.value }))}
                 autoFocus={param === requiredParams[0]}
                 style={{
-                  width: '100%',
-                  padding: '6px 10px',
-                  fontSize: '0.75rem',
+                  width: "100%",
+                  padding: "6px 10px",
+                  fontSize: "0.75rem",
                   borderRadius: 4,
-                  border: '1px solid var(--color-border)',
-                  background: 'var(--color-input-bg)',
-                  color: 'var(--color-txt-primary)',
+                  border: "1px solid var(--color-border)",
+                  background: "var(--color-input-bg)",
+                  color: "var(--color-txt-primary)",
                 }}
               />
             ))}
             <button
               type="submit"
               className="btn-sm-primary"
-              style={{ justifyContent: 'center', width: '100%' }}
+              style={{ justifyContent: "center", width: "100%" }}
             >
               Connect
             </button>
@@ -373,19 +393,21 @@ function TiledTile({
       )}
 
       {session.error && !requiredParams && (
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'rgba(0,0,0,0.8)',
-          color: 'var(--color-danger)',
-          fontSize: '0.75rem',
-          fontWeight: 500,
-          padding: 16,
-          textAlign: 'center',
-        }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.8)",
+            color: "var(--color-danger)",
+            fontSize: "0.75rem",
+            fontWeight: 500,
+            padding: 16,
+            textAlign: "center",
+          }}
+        >
           {session.error}
         </div>
       )}

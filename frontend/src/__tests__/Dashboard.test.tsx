@@ -1,24 +1,24 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { BrowserRouter } from 'react-router-dom';
-import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { BrowserRouter } from "react-router-dom";
+import React from "react";
 
 // Mock SessionManager
-vi.mock('../components/SessionManager', () => ({
+vi.mock("../components/SessionManager", () => ({
   useSessionManager: () => ({
     createSession: vi.fn(({ connectionId, name, protocol }: any) => ({
       id: `sess-${connectionId}`,
       connectionId,
       name,
       protocol,
-      client: { getDisplay: () => ({ getElement: () => document.createElement('div') }) },
+      client: { getDisplay: () => ({ getElement: () => document.createElement("div") }) },
       tunnel: {},
-      displayEl: document.createElement('div'),
+      displayEl: document.createElement("div"),
       keyboard: { onkeydown: null, onkeyup: null, reset: vi.fn() },
       createdAt: Date.now(),
       filesystems: [],
-      remoteClipboard: '',
+      remoteClipboard: "",
     })),
     setTiledSessionIds: vi.fn(),
     setFocusedSessionIds: vi.fn(),
@@ -29,12 +29,12 @@ vi.mock('../components/SessionManager', () => ({
   SessionManagerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('../components/ThemeProvider', () => ({
-  useTheme: () => ({ theme: 'dark', setTheme: vi.fn() }),
+vi.mock("../components/ThemeProvider", () => ({
+  useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('../api', () => ({
+vi.mock("../api", () => ({
   getMyConnections: vi.fn(),
   getConnectionInfo: vi.fn(),
   getFavorites: vi.fn(),
@@ -54,35 +54,45 @@ vi.mock('../api', () => ({
   getAdminConnectionTags: vi.fn(),
 }));
 
-vi.mock('../contexts/SettingsContext', () => ({
+vi.mock("../contexts/SettingsContext", () => ({
   useSettings: () => ({
     settings: {},
     timeSettings: {
-      display_timezone: 'UTC',
-      display_time_format: 'HH:mm:ss',
-      display_date_format: 'YYYY-MM-DD',
+      display_timezone: "UTC",
+      display_time_format: "HH:mm:ss",
+      display_date_format: "YYYY-MM-DD",
     },
     loading: false,
     refreshSettings: vi.fn(),
     updateSettings: vi.fn(),
     formatDateTime: (date: any) => {
-      if (!date) return '—';
+      if (!date) return "—";
       return new Date(date).toISOString();
     },
   }),
   SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import Dashboard from '../pages/Dashboard';
+import Dashboard from "../pages/Dashboard";
 import {
-  getMyConnections, getFavorites, getCredentialProfiles, getStatus,
-  getProfileMappings, toggleFavorite, setCredentialMapping,
-  removeCredentialMapping, getConnectionInfo, createTunnelTicket,
-  getTags, getConnectionTags, getAdminTags, getAdminConnectionTags,
-} from '../api';
+  getMyConnections,
+  getFavorites,
+  getCredentialProfiles,
+  getStatus,
+  getProfileMappings,
+  toggleFavorite,
+  setCredentialMapping,
+  removeCredentialMapping,
+  getConnectionInfo,
+  createTunnelTicket,
+  getTags,
+  getConnectionTags,
+  getAdminTags,
+  getAdminConnectionTags,
+} from "../api";
 
 const baseStatus = {
-  phase: 'running' as const,
+  phase: "running" as const,
   sso_enabled: false,
   local_auth_enabled: true,
   vault_configured: false,
@@ -92,23 +102,71 @@ function renderDashboard() {
   return render(
     <BrowserRouter>
       <Dashboard />
-    </BrowserRouter>,
+    </BrowserRouter>
   );
 }
 
 const mockConnections = [
-  { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: 'Production RDP' },
-  { id: '2', name: 'Server Beta', protocol: 'ssh', hostname: '10.0.0.2', port: 22, description: 'Dev SSH' },
-  { id: '3', name: 'DB Server', protocol: 'db', hostname: '10.0.0.3', port: 5432, description: 'PostgreSQL' },
+  {
+    id: "1",
+    name: "Server Alpha",
+    protocol: "rdp",
+    hostname: "10.0.0.1",
+    port: 3389,
+    description: "Production RDP",
+  },
+  {
+    id: "2",
+    name: "Server Beta",
+    protocol: "ssh",
+    hostname: "10.0.0.2",
+    port: 22,
+    description: "Dev SSH",
+  },
+  {
+    id: "3",
+    name: "DB Server",
+    protocol: "db",
+    hostname: "10.0.0.3",
+    port: 5432,
+    description: "PostgreSQL",
+  },
 ];
 
 const mockGroupedConnections = [
-  { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', folder_id: 'g1', folder_name: 'Production' },
-  { id: '2', name: 'Server Beta', protocol: 'ssh', hostname: '10.0.0.2', port: 22, description: '', folder_id: 'g1', folder_name: 'Production' },
-  { id: '3', name: 'DB Server', protocol: 'db', hostname: '10.0.0.3', port: 5432, description: '', folder_id: undefined, folder_name: undefined },
+  {
+    id: "1",
+    name: "Server Alpha",
+    protocol: "rdp",
+    hostname: "10.0.0.1",
+    port: 3389,
+    description: "",
+    folder_id: "g1",
+    folder_name: "Production",
+  },
+  {
+    id: "2",
+    name: "Server Beta",
+    protocol: "ssh",
+    hostname: "10.0.0.2",
+    port: 22,
+    description: "",
+    folder_id: "g1",
+    folder_name: "Production",
+  },
+  {
+    id: "3",
+    name: "DB Server",
+    protocol: "db",
+    hostname: "10.0.0.3",
+    port: 5432,
+    description: "",
+    folder_id: undefined,
+    folder_name: undefined,
+  },
 ];
 
-describe('Dashboard', () => {
+describe("Dashboard", () => {
   beforeEach(() => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
     vi.mocked(getFavorites).mockResolvedValue([]);
@@ -125,69 +183,69 @@ describe('Dashboard', () => {
     localStorage.clear();
   });
 
-  it('renders connection list', async () => {
+  it("renders connection list", async () => {
     renderDashboard();
     // Wait for async initialization
-    expect(await screen.findByText('Server Alpha')).toBeInTheDocument();
-    expect(screen.getByText('Server Beta')).toBeInTheDocument();
-    expect(screen.getByText('DB Server')).toBeInTheDocument();
+    expect(await screen.findByText("Server Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Server Beta")).toBeInTheDocument();
+    expect(screen.getByText("DB Server")).toBeInTheDocument();
   });
 
-  it('renders protocol labels', async () => {
+  it("renders protocol labels", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    expect(screen.getByText('RDP')).toBeInTheDocument();
-    expect(screen.getByText('SSH')).toBeInTheDocument();
+    await screen.findByText("Server Alpha");
+    expect(screen.getByText("RDP")).toBeInTheDocument();
+    expect(screen.getByText("SSH")).toBeInTheDocument();
   });
 
-  it('displays hostname for each connection', async () => {
+  it("displays hostname for each connection", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const cells = document.querySelectorAll('td');
-    const cellTexts = Array.from(cells).map((c) => c.textContent || '');
-    expect(cellTexts.some((t) => t.includes('10.0.0.1'))).toBe(true);
-    expect(cellTexts.some((t) => t.includes('10.0.0.2'))).toBe(true);
+    await screen.findByText("Server Alpha");
+    const cells = document.querySelectorAll("td");
+    const cellTexts = Array.from(cells).map((c) => c.textContent || "");
+    expect(cellTexts.some((t) => t.includes("10.0.0.1"))).toBe(true);
+    expect(cellTexts.some((t) => t.includes("10.0.0.2"))).toBe(true);
   });
 
-  it('filters connections by search', async () => {
+  it("filters connections by search", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
 
     const searchInput = screen.getByPlaceholderText(/search/i);
-    await userEvent.type(searchInput, 'Beta');
+    await userEvent.type(searchInput, "Beta");
 
-    expect(screen.getByText('Server Beta')).toBeInTheDocument();
-    expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
-    expect(screen.queryByText('DB Server')).not.toBeInTheDocument();
+    expect(screen.getByText("Server Beta")).toBeInTheDocument();
+    expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
+    expect(screen.queryByText("DB Server")).not.toBeInTheDocument();
   });
 
-  it('filters by description text', async () => {
+  it("filters by description text", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
 
     const searchInput = screen.getByPlaceholderText(/search/i);
-    await userEvent.type(searchInput, 'PostgreSQL');
+    await userEvent.type(searchInput, "PostgreSQL");
 
-    expect(screen.getByText('DB Server')).toBeInTheDocument();
-    expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+    expect(screen.getByText("DB Server")).toBeInTheDocument();
+    expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
   });
 
-  it('shows empty state when no connections', async () => {
+  it("shows empty state when no connections", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([]);
     renderDashboard();
     expect(await screen.findByText(/no connections/i)).toBeInTheDocument();
   });
 
-  it('renders checkbox for each connection', async () => {
+  it("renders checkbox for each connection", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     // At least one per connection + the select-all
     expect(checkboxes.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('handles API error gracefully', async () => {
-    vi.mocked(getMyConnections).mockRejectedValue(new Error('fail'));
+  it("handles API error gracefully", async () => {
+    vi.mocked(getMyConnections).mockRejectedValue(new Error("fail"));
     await act(async () => {
       renderDashboard();
     });
@@ -197,194 +255,230 @@ describe('Dashboard', () => {
     });
   });
 
-  it('shows vault not configured state', async () => {
+  it("shows vault not configured state", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // vault not configured = no profile selectors shown
     expect(screen.queryByText(/credential profile/i)).not.toBeInTheDocument();
   });
 
-  it('shows vault configured state with profile selector', async () => {
+  it("shows vault configured state with profile selector", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
-      { id: 'prof1', label: 'Admin creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', expired: false, ttl_hours: 12 },
+      {
+        id: "prof1",
+        label: "Admin creds",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        expires_at: "2024-12-31T00:00:00Z",
+        expired: false,
+        ttl_hours: 12,
+      },
     ]);
     vi.mocked(getProfileMappings).mockResolvedValue([]);
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Profile selector should appear per-row when vault is configured - shows "None" as default
     await waitFor(() => {
-      expect(screen.getAllByText('None').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("None").length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('renders favorites toggle', async () => {
+  it("renders favorites toggle", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const favBtn = screen.getByTitle('Show favorites only');
+    await screen.findByText("Server Alpha");
+    const favBtn = screen.getByTitle("Show favorites only");
     expect(favBtn).toBeInTheDocument();
   });
 
-  it('shows no matches message when search has no results', async () => {
+  it("shows no matches message when search has no results", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     const searchInput = screen.getByPlaceholderText(/search/i);
-    await userEvent.type(searchInput, 'NONEXISTENT');
-    expect(screen.getByText('No connections match your filters.')).toBeInTheDocument();
+    await userEvent.type(searchInput, "NONEXISTENT");
+    expect(screen.getByText("No connections match your filters.")).toBeInTheDocument();
   });
 
-  it('renders connection descriptions', async () => {
+  it("renders connection descriptions", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    expect(screen.getByText('Production RDP')).toBeInTheDocument();
-    expect(screen.getByText('Dev SSH')).toBeInTheDocument();
+    await screen.findByText("Server Alpha");
+    expect(screen.getByText("Production RDP")).toBeInTheDocument();
+    expect(screen.getByText("Dev SSH")).toBeInTheDocument();
   });
 
-  it('toggles favorite for a connection', async () => {
+  it("toggles favorite for a connection", async () => {
     vi.mocked(toggleFavorite).mockResolvedValue({ favorited: true });
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const favButtons = screen.getAllByTitle('Add to favorites');
+    await screen.findByText("Server Alpha");
+    const favButtons = screen.getAllByTitle("Add to favorites");
     await userEvent.click(favButtons[0]);
-    expect(toggleFavorite).toHaveBeenCalledWith('1');
+    expect(toggleFavorite).toHaveBeenCalledWith("1");
   });
 
-  it('loads initial favorites from API', async () => {
-    vi.mocked(getFavorites).mockResolvedValue(['1']);
+  it("loads initial favorites from API", async () => {
+    vi.mocked(getFavorites).mockResolvedValue(["1"]);
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // One connection should show "Remove from favorites" title
     await waitFor(() => {
-      expect(screen.getByTitle('Remove from favorites')).toBeInTheDocument();
+      expect(screen.getByTitle("Remove from favorites")).toBeInTheDocument();
     });
   });
 
-  it('filters to show only favorites', async () => {
-    vi.mocked(getFavorites).mockResolvedValue(['1']);
+  it("filters to show only favorites", async () => {
+    vi.mocked(getFavorites).mockResolvedValue(["1"]);
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Click favorites toggle
-    await userEvent.click(screen.getByTitle('Show favorites only'));
+    await userEvent.click(screen.getByTitle("Show favorites only"));
     // Should only show Server Alpha (favorite) and not the others
     await waitFor(() => {
-      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
-      expect(screen.queryByText('Server Beta')).not.toBeInTheDocument();
+      expect(screen.getByText("Server Alpha")).toBeInTheDocument();
+      expect(screen.queryByText("Server Beta")).not.toBeInTheDocument();
     });
   });
 
-  it('select all checkbox toggles all connection checkboxes', async () => {
+  it("select all checkbox toggles all connection checkboxes", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     const selectAll = checkboxes[0]; // the select-all checkbox
     await userEvent.click(selectAll);
     // All should be checked
-    const updated = screen.getAllByRole('checkbox');
+    const updated = screen.getAllByRole("checkbox");
     const checkedCount = updated.filter((cb) => (cb as HTMLInputElement).checked).length;
     expect(checkedCount).toBeGreaterThanOrEqual(3);
   });
 
-  it('shows Open Tiled button when 2+ connections selected', async () => {
+  it("shows Open Tiled button when 2+ connections selected", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     // Click 2 individual connection checkboxes (skip select-all at index 0)
     await userEvent.click(checkboxes[1]);
     await userEvent.click(checkboxes[2]);
     expect(screen.getByText(/Open Tiled/)).toBeInTheDocument();
   });
 
-  it('toggles folder view', async () => {
+  it("toggles folder view", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
     // Folder view should auto-enable since connections have folders
     await waitFor(() => {
-      expect(screen.getByText('Production')).toBeInTheDocument();
-      expect(screen.getByText('Ungrouped')).toBeInTheDocument();
+      expect(screen.getByText("Production")).toBeInTheDocument();
+      expect(screen.getByText("Ungrouped")).toBeInTheDocument();
     });
     // Clicking Folders should toggle it OFF
-    await userEvent.click(screen.getByText('Folders'));
+    await userEvent.click(screen.getByText("Folders"));
     await waitFor(() => {
-      expect(screen.queryByText('Ungrouped')).not.toBeInTheDocument();
+      expect(screen.queryByText("Ungrouped")).not.toBeInTheDocument();
     });
   });
 
-  it('collapses and expands folders', async () => {
+  it("collapses and expands folders", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
     // Folder view auto-enabled; folders start collapsed
-    await waitFor(() => expect(screen.getByText('Production')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Production")).toBeInTheDocument());
     // Connections should be hidden while collapsed
-    expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
     // Expand Production folder by clicking its header
-    await userEvent.click(screen.getByText('Production'));
+    await userEvent.click(screen.getByText("Production"));
     // Connections inside should now be visible
     await waitFor(() => {
-      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
+      expect(screen.getByText("Server Alpha")).toBeInTheDocument();
     });
   });
 
-  it('shows recent connections cards when last_accessed exists', async () => {
+  it("shows recent connections cards when last_accessed exists", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { ...mockConnections[0], last_accessed: '2024-06-15T10:00:00Z' },
-      { ...mockConnections[1], last_accessed: '2024-06-14T09:00:00Z' },
+      { ...mockConnections[0], last_accessed: "2024-06-15T10:00:00Z" },
+      { ...mockConnections[1], last_accessed: "2024-06-14T09:00:00Z" },
       mockConnections[2],
     ]);
     renderDashboard();
     // Wait for connections to load
     await waitFor(() => {
-      const cards = document.querySelectorAll('.recent-card');
+      const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
     // Recent cards section should exist
-    expect(document.querySelector('.recent-cards-section')).toBeTruthy();
+    expect(document.querySelector(".recent-cards-section")).toBeTruthy();
   });
 
-  it('resets page to 1 when search changes', async () => {
+  it("resets page to 1 when search changes", async () => {
     // Create more than 50 connections to trigger pagination
     const manyConnections = Array.from({ length: 55 }, (_, i) => ({
-      id: `c${i}`, name: `Conn ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, description: `desc ${i}`,
+      id: `c${i}`,
+      name: `Conn ${i}`,
+      protocol: "rdp",
+      hostname: `10.0.0.${i}`,
+      port: 3389,
+      description: `desc ${i}`,
     }));
     vi.mocked(getMyConnections).mockResolvedValue(manyConnections);
     renderDashboard();
-    await screen.findByText('Conn 0');
+    await screen.findByText("Conn 0");
     // Pagination should be shown
     expect(screen.getByText(/Showing/)).toBeInTheDocument();
     // Filter down
-    await userEvent.type(screen.getByPlaceholderText(/search/i), 'Conn 5');
+    await userEvent.type(screen.getByPlaceholderText(/search/i), "Conn 5");
     // Page should reset to 1 showing filtered results
     await waitFor(() => {
-      expect(screen.getByText('Conn 5')).toBeInTheDocument();
+      expect(screen.getByText("Conn 5")).toBeInTheDocument();
     });
   });
 
-  it('handles profile change for a connection', async () => {
+  it("handles profile change for a connection", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
-      { id: 'prof1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
+      {
+        id: "prof1",
+        label: "Admin",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        expires_at: "2024-12-31T00:00:00Z",
+        ttl_hours: 12,
+        expired: false,
+      },
     ]);
     vi.mocked(getProfileMappings).mockResolvedValue([]);
-    vi.mocked(setCredentialMapping).mockResolvedValue({ status: 'success' });
+    vi.mocked(setCredentialMapping).mockResolvedValue({ status: "success" });
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Profile selectors should show None as default
     await waitFor(() => {
-      expect(screen.getAllByText('None').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("None").length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('shows dash for connections without last_accessed', async () => {
+  it("shows dash for connections without last_accessed", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'No Access', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '' },
+      {
+        id: "1",
+        name: "No Access",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        description: "",
+      },
     ]);
     renderDashboard();
-    await screen.findByText('No Access');
-    expect(document.body.textContent).toContain('—');
+    await screen.findByText("No Access");
+    expect(document.body.textContent).toContain("—");
   });
 
-  it('shows last accessed date for connection with timestamp', async () => {
+  it("shows last accessed date for connection with timestamp", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Recent', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', last_accessed: '2024-06-15T10:30:00Z' },
+      {
+        id: "1",
+        name: "Recent",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        description: "",
+        last_accessed: "2024-06-15T10:30:00Z",
+      },
     ]);
     renderDashboard();
     await screen.findByText(/My Connections/i);
@@ -393,261 +487,335 @@ describe('Dashboard', () => {
       expect(elements.length).toBeGreaterThan(0);
     });
     // The date should be formatted (not a dash) — check for year
-    expect(document.body.textContent).toContain('2024');
+    expect(document.body.textContent).toContain("2024");
   });
 
-  it('shows connect button for each connection', async () => {
+  it("shows connect button for each connection", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const connectBtns = screen.getAllByText('Connect');
+    await screen.findByText("Server Alpha");
+    const connectBtns = screen.getAllByText("Connect");
     expect(connectBtns.length).toBe(3);
   });
 
-  it('renders VNC protocol icon', async () => {
+  it("renders VNC protocol icon", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'VNC Server', protocol: 'vnc', hostname: '10.0.0.1', port: 5900, description: '' },
+      {
+        id: "1",
+        name: "VNC Server",
+        protocol: "vnc",
+        hostname: "10.0.0.1",
+        port: 5900,
+        description: "",
+      },
     ]);
     renderDashboard();
-    await screen.findByText('VNC Server');
-    expect(screen.getByText('VNC')).toBeInTheDocument();
+    await screen.findByText("VNC Server");
+    expect(screen.getByText("VNC")).toBeInTheDocument();
   });
 
-  it('shows no connections message when empty', async () => {
+  it("shows no connections message when empty", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([]);
     renderDashboard();
     expect(await screen.findByText(/no connections available/i)).toBeInTheDocument();
   });
 
-  it('toggles unfavorite for a favorited connection', async () => {
-    vi.mocked(getFavorites).mockResolvedValue(['1']);
+  it("toggles unfavorite for a favorited connection", async () => {
+    vi.mocked(getFavorites).mockResolvedValue(["1"]);
     vi.mocked(toggleFavorite).mockResolvedValue({ favorited: false });
     renderDashboard();
     await waitFor(() => {
-      expect(screen.getByTitle('Remove from favorites')).toBeInTheDocument();
+      expect(screen.getByTitle("Remove from favorites")).toBeInTheDocument();
     });
-    await userEvent.click(screen.getByTitle('Remove from favorites'));
-    expect(toggleFavorite).toHaveBeenCalledWith('1');
+    await userEvent.click(screen.getByTitle("Remove from favorites"));
+    expect(toggleFavorite).toHaveBeenCalledWith("1");
   });
 
-  it('shows favorites count in button when favorites exist', async () => {
-    vi.mocked(getFavorites).mockResolvedValue(['1', '2']);
+  it("shows favorites count in button when favorites exist", async () => {
+    vi.mocked(getFavorites).mockResolvedValue(["1", "2"]);
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     await waitFor(() => {
       expect(screen.getByText(/Favorites \(2\)/)).toBeInTheDocument();
     });
   });
 
-  it('groups connections in folder view with counts', async () => {
+  it("groups connections in folder view with counts", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
     // Folder view auto-enabled since connections have folders; counts visible in headers
     await waitFor(() => {
-      expect(screen.getByText('(2)')).toBeInTheDocument(); // Production has 2
-      expect(screen.getByText('(1)')).toBeInTheDocument(); // Ungrouped has 1
+      expect(screen.getByText("(2)")).toBeInTheDocument(); // Production has 2
+      expect(screen.getByText("(1)")).toBeInTheDocument(); // Ungrouped has 1
     });
   });
 
-  it('recent cards show protocol and hostname', async () => {
+  it("recent cards show protocol and hostname", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', last_accessed: '2024-06-15T10:00:00Z' },
+      {
+        id: "1",
+        name: "Server Alpha",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        description: "",
+        last_accessed: "2024-06-15T10:00:00Z",
+      },
     ]);
     renderDashboard();
     await waitFor(() => {
-      const cards = document.querySelectorAll('.recent-card');
+      const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
-    expect(document.body.textContent).toContain('RDP - 10.0.0.1:3389');
+    expect(document.body.textContent).toContain("RDP - 10.0.0.1:3389");
   });
 
-  it('recent cards show credential status badges', async () => {
+  it("recent cards show credential status badges", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
-      { id: 'p1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
+      {
+        id: "p1",
+        label: "Admin",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        expires_at: "2024-12-31T00:00:00Z",
+        ttl_hours: 12,
+        expired: false,
+      },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([{ connection_id: '1', connection_name: 'Server Alpha', protocol: 'rdp' }]);
+    vi.mocked(getProfileMappings).mockResolvedValue([
+      { connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
+    ]);
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', last_accessed: '2024-06-15T10:00:00Z' },
+      {
+        id: "1",
+        name: "Server Alpha",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        description: "",
+        last_accessed: "2024-06-15T10:00:00Z",
+      },
     ]);
     renderDashboard();
     await waitFor(() => {
-      const cards = document.querySelectorAll('.recent-card');
+      const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
     // Should show "active" status
     await waitFor(() => {
-      expect(document.body.textContent).toContain('active');
+      expect(document.body.textContent).toContain("active");
     });
   });
 
   it('recent cards show "no profile" for unmapped connections', async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', last_accessed: '2024-06-15T10:00:00Z' },
+      {
+        id: "1",
+        name: "Server Alpha",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        description: "",
+        last_accessed: "2024-06-15T10:00:00Z",
+      },
     ]);
     renderDashboard();
     await waitFor(() => {
-      const cards = document.querySelectorAll('.recent-card');
+      const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
-    expect(document.body.textContent).toContain('no profile');
+    expect(document.body.textContent).toContain("no profile");
   });
 
-  it('shows expired status for expired profile', async () => {
+  it("shows expired status for expired profile", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
-      { id: 'p1', label: 'Expired Creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2023-01-01T00:00:00Z', ttl_hours: 12, expired: true },
+      {
+        id: "p1",
+        label: "Expired Creds",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        expires_at: "2023-01-01T00:00:00Z",
+        ttl_hours: 12,
+        expired: true,
+      },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([{ connection_id: '1', connection_name: 'Server Alpha', protocol: 'rdp' }]);
+    vi.mocked(getProfileMappings).mockResolvedValue([
+      { connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
+    ]);
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, description: '', last_accessed: '2024-06-15T10:00:00Z' },
+      {
+        id: "1",
+        name: "Server Alpha",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        description: "",
+        last_accessed: "2024-06-15T10:00:00Z",
+      },
     ]);
     renderDashboard();
     await waitFor(() => {
-      const cards = document.querySelectorAll('.recent-card');
+      const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
     await waitFor(() => {
-      expect(document.body.textContent).toContain('expired');
+      expect(document.body.textContent).toContain("expired");
     });
   });
 
-  it('shows pagination Previous and Next buttons', async () => {
+  it("shows pagination Previous and Next buttons", async () => {
     const many = Array.from({ length: 55 }, (_, i) => ({
-      id: `c${i}`, name: `Conn ${i}`, protocol: 'rdp', hostname: `10.0.${i}.1`, port: 3389, description: '',
+      id: `c${i}`,
+      name: `Conn ${i}`,
+      protocol: "rdp",
+      hostname: `10.0.${i}.1`,
+      port: 3389,
+      description: "",
     }));
     vi.mocked(getMyConnections).mockResolvedValue(many);
     renderDashboard();
-    await screen.findByText('Conn 0');
-    expect(screen.getByText('Previous')).toBeInTheDocument();
-    expect(screen.getByText('Next')).toBeInTheDocument();
+    await screen.findByText("Conn 0");
+    expect(screen.getByText("Previous")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
   });
 
-  it('navigates to next page', async () => {
+  it("navigates to next page", async () => {
     const many = Array.from({ length: 55 }, (_, i) => ({
-      id: `c${i}`, name: `Conn ${i}`, protocol: 'rdp', hostname: `10.0.${i}.1`, port: 3389, description: '',
+      id: `c${i}`,
+      name: `Conn ${i}`,
+      protocol: "rdp",
+      hostname: `10.0.${i}.1`,
+      port: 3389,
+      description: "",
     }));
     vi.mocked(getMyConnections).mockResolvedValue(many);
     renderDashboard();
-    await screen.findByText('Conn 0');
-    await userEvent.click(screen.getByText('Next'));
+    await screen.findByText("Conn 0");
+    await userEvent.click(screen.getByText("Next"));
     await waitFor(() => {
-      expect(screen.getByText('Conn 50')).toBeInTheDocument();
+      expect(screen.getByText("Conn 50")).toBeInTheDocument();
     });
   });
 
-  it('navigates back to previous page', async () => {
+  it("navigates back to previous page", async () => {
     const many = Array.from({ length: 55 }, (_, i) => ({
-      id: `c${i}`, name: `Conn ${i}`, protocol: 'rdp', hostname: `10.0.${i}.1`, port: 3389, description: '',
+      id: `c${i}`,
+      name: `Conn ${i}`,
+      protocol: "rdp",
+      hostname: `10.0.${i}.1`,
+      port: 3389,
+      description: "",
     }));
     vi.mocked(getMyConnections).mockResolvedValue(many);
     renderDashboard();
-    await screen.findByText('Conn 0');
-    await userEvent.click(screen.getByText('Next'));
+    await screen.findByText("Conn 0");
+    await userEvent.click(screen.getByText("Next"));
     await waitFor(() => {
-      expect(screen.getByText('Conn 50')).toBeInTheDocument();
+      expect(screen.getByText("Conn 50")).toBeInTheDocument();
     });
-    await userEvent.click(screen.getByText('Previous'));
+    await userEvent.click(screen.getByText("Previous"));
     await waitFor(() => {
-      expect(screen.getByText('Conn 0')).toBeInTheDocument();
+      expect(screen.getByText("Conn 0")).toBeInTheDocument();
     });
   });
 
-  it('deselects all when select-all toggled off', async () => {
+  it("deselects all when select-all toggled off", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     // Select all
     await userEvent.click(checkboxes[0]);
     // Deselect all
     await userEvent.click(checkboxes[0]);
-    const updated = screen.getAllByRole('checkbox');
+    const updated = screen.getAllByRole("checkbox");
     const checkedCount = updated.filter((cb) => (cb as HTMLInputElement).checked).length;
     expect(checkedCount).toBe(0);
   });
 
-  it('filters by hostname as well as name', async () => {
+  it("filters by hostname as well as name", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    await userEvent.type(screen.getByPlaceholderText(/search/i), '10.0.0.2');
+    await screen.findByText("Server Alpha");
+    await userEvent.type(screen.getByPlaceholderText(/search/i), "10.0.0.2");
     await waitFor(() => {
-      expect(screen.getByText('Server Beta')).toBeInTheDocument();
-      expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+      expect(screen.getByText("Server Beta")).toBeInTheDocument();
+      expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
     });
   });
 
-  it('filters connections by protocol type selector', async () => {
+  it("filters connections by protocol type selector", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Open the type dropdown and select SSH
-    const typeTrigger = screen.getByText('All');
+    const typeTrigger = screen.getByText("All");
     await userEvent.click(typeTrigger);
-    await userEvent.click(screen.getByRole('option', { name: 'SSH' }));
+    await userEvent.click(screen.getByRole("option", { name: "SSH" }));
     await waitFor(() => {
-      expect(screen.getByText('Server Beta')).toBeInTheDocument();
-      expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+      expect(screen.getByText("Server Beta")).toBeInTheDocument();
+      expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
     });
   });
 
-  it('shows tiled credential prompt when opening tiled with credless RDP connections', async () => {
+  it("shows tiled credential prompt when opening tiled with credless RDP connections", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: "rdp", has_credentials: false });
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[1]); // connection 1
     await userEvent.click(checkboxes[2]); // connection 2
     await userEvent.click(screen.getByText(/Open Tiled/));
     await waitFor(() => {
-      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+      expect(screen.getByText("Enter Credentials")).toBeInTheDocument();
     });
   });
 
-  it('submits tiled credential form', async () => {
+  it("submits tiled credential form", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
-    vi.mocked(createTunnelTicket).mockResolvedValue({ ticket: 'tkt-1' });
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: "rdp", has_credentials: false });
+    vi.mocked(createTunnelTicket).mockResolvedValue({ ticket: "tkt-1" });
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[1]);
     await userEvent.click(checkboxes[2]);
     await userEvent.click(screen.getByText(/Open Tiled/));
     await waitFor(() => {
-      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+      expect(screen.getByText("Enter Credentials")).toBeInTheDocument();
     });
     // Fill creds
-    const userInputs = screen.getAllByPlaceholderText('Username');
-    const passInputs = screen.getAllByPlaceholderText('Password');
-    await userEvent.type(userInputs[0], 'admin');
-    await userEvent.type(passInputs[0], 'secret');
+    const userInputs = screen.getAllByPlaceholderText("Username");
+    const passInputs = screen.getAllByPlaceholderText("Password");
+    await userEvent.type(userInputs[0], "admin");
+    await userEvent.type(passInputs[0], "secret");
     // Submit
     await userEvent.click(screen.getByText(/Connect All/));
     expect(createTunnelTicket).toHaveBeenCalled();
   });
 
-  it('cancels tiled credential prompt', async () => {
+  it("cancels tiled credential prompt", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: false });
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: "rdp", has_credentials: false });
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[1]);
     await userEvent.click(checkboxes[2]);
     await userEvent.click(screen.getByText(/Open Tiled/));
     await waitFor(() => {
-      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+      expect(screen.getByText("Enter Credentials")).toBeInTheDocument();
     });
-    await userEvent.click(screen.getByText('Cancel'));
-    expect(screen.queryByText('Enter Credentials')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText("Cancel"));
+    expect(screen.queryByText("Enter Credentials")).not.toBeInTheDocument();
   });
 
-  it('opens tiled immediately when connections have vault credentials', async () => {
+  it("opens tiled immediately when connections have vault credentials", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: true });
-    vi.mocked(createTunnelTicket).mockResolvedValue({ ticket: 'tkt-1' });
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: "rdp", has_credentials: true });
+    vi.mocked(createTunnelTicket).mockResolvedValue({ ticket: "tkt-1" });
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[1]);
     await userEvent.click(checkboxes[2]);
     await userEvent.click(screen.getByText(/Open Tiled/));
@@ -655,94 +823,120 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(createTunnelTicket).toHaveBeenCalled();
     });
-    expect(screen.queryByText('Enter Credentials')).not.toBeInTheDocument();
+    expect(screen.queryByText("Enter Credentials")).not.toBeInTheDocument();
   });
 
-  it('removes a credential mapping when profile set to empty', async () => {
+  it("removes a credential mapping when profile set to empty", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
-      { id: 'prof1', label: 'Admin', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2024-12-31T00:00:00Z', ttl_hours: 12, expired: false },
+      {
+        id: "prof1",
+        label: "Admin",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        expires_at: "2024-12-31T00:00:00Z",
+        ttl_hours: 12,
+        expired: false,
+      },
     ]);
-    vi.mocked(getProfileMappings).mockResolvedValue([{ connection_id: '1', connection_name: 'Server Alpha', protocol: 'rdp' }]);
-    vi.mocked(removeCredentialMapping).mockResolvedValue({ status: 'ok' });
+    vi.mocked(getProfileMappings).mockResolvedValue([
+      { connection_id: "1", connection_name: "Server Alpha", protocol: "rdp" },
+    ]);
+    vi.mocked(removeCredentialMapping).mockResolvedValue({ status: "ok" });
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Wait for profile to load and show "Admin" option assigned
     await waitFor(() => {
-      expect(screen.getAllByText('Admin').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("Admin").length).toBeGreaterThanOrEqual(1);
     });
     // Click the Admin option to open dropdown for first connection, select None
-    const adminOptions = screen.getAllByText('Admin');
+    const adminOptions = screen.getAllByText("Admin");
     await userEvent.click(adminOptions[0]);
     // Select None from dropdown
-    const noneOption = screen.getByRole('option', { name: 'None' });
+    const noneOption = screen.getByRole("option", { name: "None" });
     await userEvent.click(noneOption);
     await waitFor(() => {
-      expect(removeCredentialMapping).toHaveBeenCalledWith('1');
+      expect(removeCredentialMapping).toHaveBeenCalledWith("1");
     });
   });
 
-  it('shows domain label on recent cards for non-IP hostname', async () => {
+  it("shows domain label on recent cards for non-IP hostname", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Server Alpha', protocol: 'rdp', hostname: 'server.example.com', port: 3389, description: '', last_accessed: '2024-06-15T10:00:00Z' },
+      {
+        id: "1",
+        name: "Server Alpha",
+        protocol: "rdp",
+        hostname: "server.example.com",
+        port: 3389,
+        description: "",
+        last_accessed: "2024-06-15T10:00:00Z",
+      },
     ]);
     renderDashboard();
     await waitFor(() => {
-      const cards = document.querySelectorAll('.recent-card');
+      const cards = document.querySelectorAll(".recent-card");
       expect(cards.length).toBeGreaterThanOrEqual(1);
     });
-    expect(document.body.textContent).toContain('example.com');
+    expect(document.body.textContent).toContain("example.com");
   });
 
-  it('shows expired label in profile selector', async () => {
+  it("shows expired label in profile selector", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
     vi.mocked(getCredentialProfiles).mockResolvedValue([
-      { id: 'p1', label: 'Old Creds', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z', expires_at: '2023-01-01T00:00:00Z', ttl_hours: 12, expired: true },
+      {
+        id: "p1",
+        label: "Old Creds",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        expires_at: "2023-01-01T00:00:00Z",
+        ttl_hours: 12,
+        expired: true,
+      },
     ]);
     vi.mocked(getProfileMappings).mockResolvedValue([]);
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Open profile selector
-    const noneOptions = screen.getAllByText('None');
+    const noneOptions = screen.getAllByText("None");
     await userEvent.click(noneOptions[0]);
     await waitFor(() => {
-      expect(screen.getByText('Old Creds (expired)')).toBeInTheDocument();
+      expect(screen.getByText("Old Creds (expired)")).toBeInTheDocument();
     });
   });
 
-  it('renders default icon for unknown protocol', async () => {
+  it("renders default icon for unknown protocol", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'Other', protocol: 'telnet', hostname: 'host', port: 23, description: '' },
+      { id: "1", name: "Other", protocol: "telnet", hostname: "host", port: 23, description: "" },
     ]);
     renderDashboard();
-    await screen.findByText('Other');
-    // The default icon is a generic computer monitor rect. 
+    await screen.findByText("Other");
+    // The default icon is a generic computer monitor rect.
     // We just check it renders without crashing and shows the label.
-    expect(screen.getByText('TELNET')).toBeInTheDocument();
+    expect(screen.getByText("TELNET")).toBeInTheDocument();
   });
 
-  it('handles getConnectionInfo failure in openTiled', async () => {
+  it("handles getConnectionInfo failure in openTiled", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    vi.mocked(getConnectionInfo).mockRejectedValue(new Error('api fail'));
+    vi.mocked(getConnectionInfo).mockRejectedValue(new Error("api fail"));
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[1]);
     await userEvent.click(checkboxes[2]);
     await userEvent.click(screen.getByText(/Open Tiled/));
     // Should default to needs creds if it fails to check
     await waitFor(() => {
-      expect(screen.getByText('Enter Credentials')).toBeInTheDocument();
+      expect(screen.getByText("Enter Credentials")).toBeInTheDocument();
     });
   });
 
-  it('skips connection in launchTiled if ticket generation fails', async () => {
+  it("skips connection in launchTiled if ticket generation fails", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockConnections);
-    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: 'rdp', has_credentials: true });
-    vi.mocked(createTunnelTicket).mockRejectedValue(new Error('ticket fail'));
+    vi.mocked(getConnectionInfo).mockResolvedValue({ protocol: "rdp", has_credentials: true });
+    vi.mocked(createTunnelTicket).mockRejectedValue(new Error("ticket fail"));
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[1]);
     await userEvent.click(checkboxes[2]);
     await userEvent.click(screen.getByText(/Open Tiled/));
@@ -752,131 +946,146 @@ describe('Dashboard', () => {
     });
   });
 
-  it('handles profile mapping API failures gracefully', async () => {
+  it("handles profile mapping API failures gracefully", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
-    vi.mocked(getCredentialProfiles).mockResolvedValue([{ id: 'p1', label: 'Admin', expired: false } as any]);
-    vi.mocked(getProfileMappings).mockRejectedValue(new Error('fail'));
+    vi.mocked(getCredentialProfiles).mockResolvedValue([
+      { id: "p1", label: "Admin", expired: false } as any,
+    ]);
+    vi.mocked(getProfileMappings).mockRejectedValue(new Error("fail"));
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Should just show "None" for all profiles
     await waitFor(() => {
-      expect(screen.getAllByText('None').length).toBeGreaterThan(0);
+      expect(screen.getAllByText("None").length).toBeGreaterThan(0);
     });
   });
 
-  it('handles setCredentialMapping failure', async () => {
+  it("handles setCredentialMapping failure", async () => {
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus, vault_configured: true });
-    vi.mocked(getCredentialProfiles).mockResolvedValue([{ id: 'p1', label: 'Admin', expired: false } as any]);
+    vi.mocked(getCredentialProfiles).mockResolvedValue([
+      { id: "p1", label: "Admin", expired: false } as any,
+    ]);
     vi.mocked(getProfileMappings).mockResolvedValue([]);
-    vi.mocked(setCredentialMapping).mockRejectedValue(new Error('fail'));
+    vi.mocked(setCredentialMapping).mockRejectedValue(new Error("fail"));
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const noneOptions = screen.getAllByText('None');
+    await screen.findByText("Server Alpha");
+    const noneOptions = screen.getAllByText("None");
     await userEvent.click(noneOptions[0]);
-    await userEvent.click(screen.getByRole('option', { name: 'Admin' }));
+    await userEvent.click(screen.getByRole("option", { name: "Admin" }));
     await waitFor(() => expect(setCredentialMapping).toHaveBeenCalled());
   });
 
-  it('initializes expandedFolders from localStorage and handles corrupt data', () => {
-    localStorage.setItem('strata-expanded-folders', 'invalid-json');
+  it("initializes expandedFolders from localStorage and handles corrupt data", () => {
+    localStorage.setItem("strata-expanded-folders", "invalid-json");
     renderDashboard();
     // Should not crash and should show no folders expanded (default empty Set)
-    expect(screen.queryByText('Server Alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText("Server Alpha")).not.toBeInTheDocument();
   });
 
-  it('toggles folder view and persists to localStorage', async () => {
+  it("toggles folder view and persists to localStorage", async () => {
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
-    await screen.findByText('Production');
-    const folderBtn = screen.getByText('Folders');
+    await screen.findByText("Production");
+    const folderBtn = screen.getByText("Folders");
     await userEvent.click(folderBtn); // Toggle off
-    expect(localStorage.getItem('strata-folder-view')).toBe('false');
+    expect(localStorage.getItem("strata-folder-view")).toBe("false");
     await userEvent.click(folderBtn); // Toggle on
-    expect(localStorage.getItem('strata-folder-view')).toBe('true');
+    expect(localStorage.getItem("strata-folder-view")).toBe("true");
   });
 
-  it('renders recent card for connection with domain explicitly set', async () => {
+  it("renders recent card for connection with domain explicitly set", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'D1', protocol: 'rdp', hostname: '1.2.3.4', port: 3389, last_accessed: '2024-01-01T00:00:00Z', domain: 'EXTRA' },
+      {
+        id: "1",
+        name: "D1",
+        protocol: "rdp",
+        hostname: "1.2.3.4",
+        port: 3389,
+        last_accessed: "2024-01-01T00:00:00Z",
+        domain: "EXTRA",
+      },
     ]);
     renderDashboard();
     await waitFor(() => expect(screen.getByText(/EXTRA/)).toBeInTheDocument());
   });
 
-  it('hero cards handle click to navigate', async () => {
+  it("hero cards handle click to navigate", async () => {
     vi.mocked(getMyConnections).mockResolvedValue([
-      { id: '1', name: 'HeroConn', protocol: 'rdp', hostname: 'host', port: 3389, last_accessed: '2024-01-01T00:00:00Z' },
+      {
+        id: "1",
+        name: "HeroConn",
+        protocol: "rdp",
+        hostname: "host",
+        port: 3389,
+        last_accessed: "2024-01-01T00:00:00Z",
+      },
     ]);
     renderDashboard();
-    const cards = await screen.findAllByText('HeroConn');
+    const cards = await screen.findAllByText("HeroConn");
     await userEvent.click(cards[0].parentElement!);
     // Check if URL changed? (BrowserRouter context)
   });
 
-  it('filters connections by tag', async () => {
+  it("filters connections by tag", async () => {
     vi.mocked(getTags).mockResolvedValue([
-      { id: 'tag1', name: 'Important', color: '#ff0000' },
-      { id: 'tag2', name: 'Dev', color: '#00ff00' },
+      { id: "tag1", name: "Important", color: "#ff0000" },
+      { id: "tag2", name: "Dev", color: "#00ff00" },
     ]);
-    vi.mocked(getConnectionTags).mockResolvedValue({ '1': ['tag1'], '2': ['tag2'] });
+    vi.mocked(getConnectionTags).mockResolvedValue({ "1": ["tag1"], "2": ["tag2"] });
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // The "Tags" label appears before the filter buttons
-    const tagsLabel = screen.getByText('Tags');
+    const tagsLabel = screen.getByText("Tags");
     // Click the first filter button after the Tags label (which is "Important")
-    const filterButton = tagsLabel.parentElement!.querySelector('button')!;
+    const filterButton = tagsLabel.parentElement!.querySelector("button")!;
     await userEvent.click(filterButton);
     await waitFor(() => {
-      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
-      expect(screen.queryByText('DB Server')).not.toBeInTheDocument();
+      expect(screen.getByText("Server Alpha")).toBeInTheDocument();
+      expect(screen.queryByText("DB Server")).not.toBeInTheDocument();
     });
   });
 
-  it('merges admin tags with user tags in filter bar', async () => {
+  it("merges admin tags with user tags in filter bar", async () => {
     vi.mocked(getAdminTags).mockResolvedValue([
-      { id: 'admin-tag', name: 'Admin Tag', color: '#0000ff' },
+      { id: "admin-tag", name: "Admin Tag", color: "#0000ff" },
     ]);
-    vi.mocked(getTags).mockResolvedValue([
-      { id: 'user-tag', name: 'My Tag', color: '#ff0000' },
-    ]);
-    vi.mocked(getAdminConnectionTags).mockResolvedValue({ '1': ['admin-tag'] });
-    vi.mocked(getConnectionTags).mockResolvedValue({ '2': ['user-tag'] });
+    vi.mocked(getTags).mockResolvedValue([{ id: "user-tag", name: "My Tag", color: "#ff0000" }]);
+    vi.mocked(getAdminConnectionTags).mockResolvedValue({ "1": ["admin-tag"] });
+    vi.mocked(getConnectionTags).mockResolvedValue({ "2": ["user-tag"] });
     renderDashboard();
-    await screen.findByText('Server Alpha');
+    await screen.findByText("Server Alpha");
     // Both tags should be visible in the filter bar
-    const tagsLabel = screen.getByText('Tags');
+    const tagsLabel = screen.getByText("Tags");
     const filterBar = tagsLabel.parentElement!;
-    expect(filterBar.textContent).toContain('Admin Tag');
-    expect(filterBar.textContent).toContain('My Tag');
+    expect(filterBar.textContent).toContain("Admin Tag");
+    expect(filterBar.textContent).toContain("My Tag");
   });
 
-  it('restores tag filters from localStorage', async () => {
-    vi.mocked(getTags).mockResolvedValue([
-      { id: 'tag1', name: 'Important', color: '#ff0000' },
-    ]);
-    vi.mocked(getConnectionTags).mockResolvedValue({ '1': ['tag1'] });
-    localStorage.setItem('strata-tag-filters', JSON.stringify(['tag1']));
+  it("restores tag filters from localStorage", async () => {
+    vi.mocked(getTags).mockResolvedValue([{ id: "tag1", name: "Important", color: "#ff0000" }]);
+    vi.mocked(getConnectionTags).mockResolvedValue({ "1": ["tag1"] });
+    localStorage.setItem("strata-tag-filters", JSON.stringify(["tag1"]));
     renderDashboard();
     await waitFor(() => {
       // Should only show Server Alpha (has tag1), not Server Beta or DB Server
-      expect(screen.getByText('Server Alpha')).toBeInTheDocument();
-      expect(screen.queryByText('DB Server')).not.toBeInTheDocument();
+      expect(screen.getByText("Server Alpha")).toBeInTheDocument();
+      expect(screen.queryByText("DB Server")).not.toBeInTheDocument();
     });
   });
 
-  it('auto-enables folder view when connections have folders', async () => {
-    localStorage.removeItem('strata-folder-view');
+  it("auto-enables folder view when connections have folders", async () => {
+    localStorage.removeItem("strata-folder-view");
     vi.mocked(getMyConnections).mockResolvedValue(mockGroupedConnections);
     renderDashboard();
-    await screen.findByText('Production');
+    await screen.findByText("Production");
     // Folder view should be auto-enabled
-    expect(localStorage.getItem('strata-folder-view')).toBe('true');
+    expect(localStorage.getItem("strata-folder-view")).toBe("true");
   });
 
-  it('select-all indeterminate state when some selected', async () => {
+  it("select-all indeterminate state when some selected", async () => {
     renderDashboard();
-    await screen.findByText('Server Alpha');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await screen.findByText("Server Alpha");
+    const checkboxes = screen.getAllByRole("checkbox");
     // Click only the first data checkbox (index 1; index 0 is select-all)
     await userEvent.click(checkboxes[1]);
     // Select-all should be indeterminate

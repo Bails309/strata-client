@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import Guacamole from 'guacamole-common-js';
-import { GuacSession } from './SessionManager';
-import { createWinKeyProxy } from '../utils/winKeyProxy';
-import { installShortcutProxy } from '../utils/shortcutProxy';
-import { installKeyboardLock, requestFullscreenWithLock } from '../utils/keyboardLock';
+import { useCallback, useEffect, useRef, useState } from "react";
+import Guacamole from "guacamole-common-js";
+import { GuacSession } from "./SessionManager";
+import { createWinKeyProxy } from "../utils/winKeyProxy";
+import { installShortcutProxy } from "../utils/shortcutProxy";
+import { installKeyboardLock, requestFullscreenWithLock } from "../utils/keyboardLock";
 
 /**
  * Browser-based multi-monitor support via canvas slicing.
@@ -85,8 +85,8 @@ function mapScreenDetails(details: any): ScreenInfo[] {
   return details.screens.map((s: any) => ({
     left: s.availLeft ?? 0,
     top: s.availTop ?? 0,
-    width: (s.availWidth > 0 ? s.availWidth : fallbackW),
-    height: (s.availHeight > 0 ? s.availHeight : fallbackH),
+    width: s.availWidth > 0 ? s.availWidth : fallbackW,
+    height: s.availHeight > 0 ? s.availHeight : fallbackH,
     isPrimary: !!s.isPrimary,
   }));
 }
@@ -143,7 +143,7 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
 
   // Cap aggregate height to the primary monitor's height so the remote
   // taskbar sits within the primary slice's visible area.
-  const aggregateWidth  = cursorX;
+  const aggregateWidth = cursorX;
   const aggregateHeight = primary.height;
 
   return { screens, tiles, primary, primaryTile: primaryTile!, aggregateWidth, aggregateHeight };
@@ -151,12 +151,10 @@ function buildLayout(screens: ScreenInfo[]): MonitorLayout | null {
 
 export function useMultiMonitor(
   session: GuacSession | undefined,
-  containerRef: React.RefObject<HTMLDivElement | null>,
+  containerRef: React.RefObject<HTMLDivElement | null>
 ) {
   // Derive initial state from the session (survives route changes)
-  const [isMultiMonitor, setIsMultiMonitor] = useState(
-    () => !!session?._multiMonitor,
-  );
+  const [isMultiMonitor, setIsMultiMonitor] = useState(() => !!session?._multiMonitor);
   const [canMultiMonitor, setCanMultiMonitor] = useState(false);
   const [screenCount, setScreenCount] = useState(0);
 
@@ -174,7 +172,7 @@ export function useMultiMonitor(
   // We also listen for `screenschange` on the live ScreenDetails object
   // so that the cache stays current when monitors are plugged in/out.
   useEffect(() => {
-    if (!('getScreenDetails' in window)) return;
+    if (!("getScreenDetails" in window)) return;
     setCanMultiMonitor(true);
 
     function refreshCache() {
@@ -191,13 +189,15 @@ export function useMultiMonitor(
       try {
         liveScreenDetails = await (window as any).getScreenDetails();
         refreshCache();
-        liveScreenDetails.addEventListener('screenschange', refreshCache);
-      } catch { /* permission denied or no user gesture — will retry on click */ }
+        liveScreenDetails.addEventListener("screenschange", refreshCache);
+      } catch {
+        /* permission denied or no user gesture — will retry on click */
+      }
     })();
 
     return () => {
       if (liveScreenDetails) {
-        liveScreenDetails.removeEventListener('screenschange', refreshCache);
+        liveScreenDetails.removeEventListener("screenschange", refreshCache);
       }
     };
   }, []);
@@ -235,7 +235,7 @@ export function useMultiMonitor(
     setScreenCount(screens.length);
 
     // Attach screenschange listener (idempotent — listener is a no-op if already attached)
-    details.addEventListener('screenschange', () => {
+    details.addEventListener("screenschange", () => {
       if (liveScreenDetails === details) {
         const s = mapScreenDetails(details);
         setScreenCount(s.length);
@@ -256,7 +256,7 @@ export function useMultiMonitor(
     const ch = container.clientHeight;
     const origPrimary = freshLayout.primary;
     const adjustedScreens: ScreenInfo[] = freshLayout.screens.map((s) =>
-      s === origPrimary ? { ...s, width: cw, height: ch } : s,
+      s === origPrimary ? { ...s, width: cw, height: ch } : s
     );
     const adjustedLayout = buildLayout(adjustedScreens);
     if (!adjustedLayout) return;
@@ -277,8 +277,8 @@ export function useMultiMonitor(
     // left=0 and top=0, Brave (or similar) has zeroed them out. In that
     // case, estimate placement from cumulative tile offsets.
     const nonPrimary = layout.screens.filter((s) => s !== layout.primary);
-    const positionsFingerprinted = nonPrimary.length > 0 &&
-      nonPrimary.every((s) => s.left === 0 && s.top === 0);
+    const positionsFingerprinted =
+      nonPrimary.length > 0 && nonPrimary.every((s) => s.left === 0 && s.top === 0);
 
     for (const tile of secondaryTiles) {
       const screen = tile.screen;
@@ -290,16 +290,18 @@ export function useMultiMonitor(
         `top=${popupTop}`,
         `width=${screen.width}`,
         `height=${screen.height}`,
-        'menubar=no',
-        'toolbar=no',
-        'location=no',
-        'status=no',
-      ].join(',');
+        "menubar=no",
+        "toolbar=no",
+        "location=no",
+        "status=no",
+      ].join(",");
 
       const idx = layout.tiles.indexOf(tile) + 1;
-      const popup = window.open('about:blank', `strata-multimon-${sess.id}-${idx}`, features);
+      const popup = window.open("about:blank", `strata-multimon-${sess.id}-${idx}`, features);
       if (!popup) {
-        console.warn(`[MultiMon] Popup ${idx} blocked by browser. Try allowing popups for this site.`);
+        console.warn(
+          `[MultiMon] Popup ${idx} blocked by browser. Try allowing popups for this site.`
+        );
         continue;
       }
       popups.push({ popup, tile });
@@ -311,8 +313,8 @@ export function useMultiMonitor(
     if (popups.length < secondaryTiles.length) {
       console.warn(
         `[MultiMon] Only ${popups.length} of ${secondaryTiles.length} popups opened. ` +
-        `${secondaryTiles.length - popups.length} blocked by browser. ` +
-        `Allow popups for this site in browser settings, then try again.`
+          `${secondaryTiles.length - popups.length} blocked by browser. ` +
+          `Allow popups for this site in browser settings, then try again.`
       );
     }
 
@@ -326,7 +328,7 @@ export function useMultiMonitor(
     // fire asynchronously after the server responds).
     const scale = Math.min(
       containerRef.current!.clientWidth / layout.primary.width,
-      containerRef.current!.clientHeight / layout.primary.height,
+      containerRef.current!.clientHeight / layout.primary.height
     );
     display.scale(scale);
     displayEl.style.marginLeft = `-${layout.primaryTile.sliceX * scale}px`;
@@ -340,10 +342,10 @@ export function useMultiMonitor(
       const idx = layout.tiles.indexOf(tile) + 1;
       popup.document.title = `${sess.name} — Monitor ${idx}`;
       const body = popup.document.body;
-      body.style.margin = '0';
-      body.style.padding = '0';
-      body.style.overflow = 'hidden';
-      body.style.background = '#000';
+      body.style.margin = "0";
+      body.style.padding = "0";
+      body.style.overflow = "hidden";
+      body.style.background = "#000";
 
       // Maximize the popup to fill the target screen.  window.open()
       // dimensions include browser chrome, so the inner area is smaller.
@@ -354,24 +356,28 @@ export function useMultiMonitor(
       try {
         popup.moveTo(popupLeft, popupTop);
         popup.resizeTo(screen.width, screen.height);
-      } catch { /* cross-origin or restricted */ }
+      } catch {
+        /* cross-origin or restricted */
+      }
 
       // Try fullscreen (removes title bar + address bar entirely).
       // This can fail if the user-activation has expired — that's fine,
       // the popup still covers most of the screen.
       try {
         requestFullscreenWithLock(popup.document.documentElement).catch(() => {});
-      } catch { /* Fullscreen API unavailable */ }
+      } catch {
+        /* Fullscreen API unavailable */
+      }
 
-      const canvas = popup.document.createElement('canvas');
+      const canvas = popup.document.createElement("canvas");
       canvas.width = popup.innerWidth || screen.width;
       canvas.height = popup.innerHeight || screen.height;
-      canvas.style.display = 'block';
-      canvas.style.width = '100%';
-      canvas.style.height = '100%';
+      canvas.style.display = "block";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
       body.appendChild(canvas);
 
-      const ctx = canvas.getContext('2d')!;
+      const ctx = canvas.getContext("2d")!;
 
       // Resize the canvas backing store when the popup window is resized.
       // The slice coordinates (remote pixels) stay the same — only the
@@ -384,10 +390,10 @@ export function useMultiMonitor(
           canvas.height = h;
         }
       }
-      popup.addEventListener('resize', syncCanvasSize);
+      popup.addEventListener("resize", syncCanvasSize);
 
       // Sync canvas on fullscreen change (entering/exiting fullscreen resizes the window)
-      popup.document.addEventListener('fullscreenchange', syncCanvasSize);
+      popup.document.addEventListener("fullscreenchange", syncCanvasSize);
 
       // ── Mouse input with coordinate offset ──
       // Guacamole.Mouse reports CSS pixel coordinates relative to the
@@ -399,49 +405,56 @@ export function useMultiMonitor(
       const sliceW = screen.width;
       const sliceH = Math.min(screen.height, layout.aggregateHeight);
       const mouse = new Guacamole.Mouse(canvas);
-      mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+      mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
         const st = e.state;
         const cssW = canvas.clientWidth || sliceW;
         const cssH = canvas.clientHeight || sliceH;
         const remoteY = Math.min(
-          Math.round(st.y * sliceH / cssH) + sourceY,
-          layout.aggregateHeight - 1,
+          Math.round((st.y * sliceH) / cssH) + sourceY,
+          layout.aggregateHeight - 1
         );
         const remoteState = new Guacamole.Mouse.State(
-          Math.round(st.x * sliceW / cssW) + sourceX,
+          Math.round((st.x * sliceW) / cssW) + sourceX,
           remoteY,
-          st.left, st.middle, st.right, st.up, st.down,
+          st.left,
+          st.middle,
+          st.right,
+          st.up,
+          st.down
         );
         client.sendMouseState(remoteState, false);
       });
 
       // ── Keyboard input ──
       const keyboard = new Guacamole.Keyboard(popup.document);
-      const winProxy = createWinKeyProxy(
-        (pressed, keysym) => client.sendKeyEvent(pressed, keysym),
-      );
+      const winProxy = createWinKeyProxy((pressed, keysym) => client.sendKeyEvent(pressed, keysym));
       keyboard.onkeydown = (keysym: number) => winProxy.onkeydown(keysym);
-      keyboard.onkeyup = (keysym: number) => { winProxy.onkeyup(keysym); };
+      keyboard.onkeyup = (keysym: number) => {
+        winProxy.onkeyup(keysym);
+      };
 
       // Key trap — prevent browser shortcuts in the secondary window
-      popup.document.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key === 'F12') return;
-        if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) return;
-        // Ctrl+K → relay to main window to open command palette
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      popup.document.addEventListener(
+        "keydown",
+        (e: KeyboardEvent) => {
+          if (e.key === "F12") return;
+          if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
+          // Ctrl+K → relay to main window to open command palette
+          if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            keyboard.reset();
+            window.postMessage({ type: "strata:open-command-palette" }, "*");
+            return;
+          }
           e.preventDefault();
-          e.stopImmediatePropagation();
-          keyboard.reset();
-          window.postMessage({ type: 'strata:open-command-palette' }, '*');
-          return;
-        }
-        e.preventDefault();
-      }, true);
+        },
+        true
+      );
 
       // Shortcut proxy: Ctrl+Alt+Tab → Alt+Tab, Ctrl+Alt+` → Win+Tab
-      const removeShortcutProxy = installShortcutProxy(
-        popup.document,
-        (pressed, keysym) => client.sendKeyEvent(pressed, keysym),
+      const removeShortcutProxy = installShortcutProxy(popup.document, (pressed, keysym) =>
+        client.sendKeyEvent(pressed, keysym)
       );
 
       // Keyboard Lock: capture OS-level shortcuts in fullscreen popups
@@ -492,8 +505,14 @@ export function useMultiMonitor(
         try {
           sw.ctx.drawImage(
             srcCanvas,
-            sw.sourceX, sw.sourceY, sw.sliceW, sw.sliceH,
-            0, 0, sw.canvas.width, sw.canvas.height,
+            sw.sourceX,
+            sw.sourceY,
+            sw.sliceW,
+            sw.sliceH,
+            0,
+            0,
+            sw.canvas.width,
+            sw.canvas.height
           );
         } catch {
           // Canvas tainted or window closed — skip this frame
@@ -521,7 +540,7 @@ export function useMultiMonitor(
     syncCursor();
     // Watch for style attribute changes (Guacamole updates cursor via style.cursor)
     const cursorObserver = new MutationObserver(syncCursor);
-    cursorObserver.observe(displayElement, { attributes: true, attributeFilter: ['style'] });
+    cursorObserver.observe(displayElement, { attributes: true, attributeFilter: ["style"] });
 
     // ── Store state (survives unmount/remount) ──
     const cleanup = () => {
@@ -540,13 +559,17 @@ export function useMultiMonitor(
         sw.removeShortcutProxy();
         sw.removeKeyboardLock();
         if (!sw.win.closed) {
-          try { sw.win.close(); } catch { /* ignore */ }
+          try {
+            sw.win.close();
+          } catch {
+            /* ignore */
+          }
         }
       }
       secondaryWindowsRef.current = [];
       // Reset display element offset
-      displayEl.style.marginLeft = '';
-      displayEl.style.marginTop = '';
+      displayEl.style.marginLeft = "";
+      displayEl.style.marginTop = "";
     };
 
     sess._multiMonitor = {
@@ -555,7 +578,7 @@ export function useMultiMonitor(
     };
     sess.isMultiMonitor = true;
     setIsMultiMonitor(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, containerRef, isMultiMonitor]);
 
   // ── Disable multi-monitor ─────────────────────────────────────────────
@@ -587,26 +610,27 @@ export function useMultiMonitor(
   // Recalculate layout when the container resizes (e.g. sidebar collapse).
   // Updates the primary tile dimensions to match the new container size,
   // recomputes the aggregate, and sends the new size to the server.
-  const updatePrimarySize = useCallback((newW: number, newH: number) => {
-    const layout = layoutRef.current;
-    if (!layout || !session) return;
+  const updatePrimarySize = useCallback(
+    (newW: number, newH: number) => {
+      const layout = layoutRef.current;
+      if (!layout || !session) return;
 
-    const oldPW = layout.primary.width;
-    const oldPH = layout.primary.height;
-    // Skip if the primary dimensions haven't changed meaningfully (< 2px)
-    if (Math.abs(newW - oldPW) < 2 && Math.abs(newH - oldPH) < 2) return;
+      const oldPW = layout.primary.width;
+      const oldPH = layout.primary.height;
+      // Skip if the primary dimensions haven't changed meaningfully (< 2px)
+      if (Math.abs(newW - oldPW) < 2 && Math.abs(newH - oldPH) < 2) return;
 
-    const origPrimary = layout.primary;
-    const adjusted = buildLayout(
-      layout.screens.map((s) =>
-        s === origPrimary ? { ...s, width: newW, height: newH } : s,
-      ),
-    );
-    if (!adjusted) return;
+      const origPrimary = layout.primary;
+      const adjusted = buildLayout(
+        layout.screens.map((s) => (s === origPrimary ? { ...s, width: newW, height: newH } : s))
+      );
+      if (!adjusted) return;
 
-    layoutRef.current = adjusted;
-    session.client.sendSize(adjusted.aggregateWidth, adjusted.aggregateHeight);
-  }, [session]);
+      layoutRef.current = adjusted;
+      session.client.sendSize(adjusted.aggregateWidth, adjusted.aggregateHeight);
+    },
+    [session]
+  );
 
   return {
     isMultiMonitor,

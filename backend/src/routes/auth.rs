@@ -56,10 +56,7 @@ async fn fetch_oidc_discovery(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| AppError::Auth(format!("HTTP client error: {e}")))?;
+    let client = crate::services::http_client::oidc_client();
     let discovery_url = format!(
         "{}/.well-known/openid-configuration",
         issuer_url.trim_end_matches('/')
@@ -1125,7 +1122,7 @@ pub async fn sso_callback(
 
     // Discovery for token endpoint (cached)
     let discovery = fetch_oidc_discovery(&issuer_url).await?;
-    let client = reqwest::Client::new();
+    let client = crate::services::http_client::oidc_client();
 
     let base_url = get_base_url(&headers);
     let redirect_uri = format!("{}/api/auth/sso/callback", base_url);

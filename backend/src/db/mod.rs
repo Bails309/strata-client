@@ -3,6 +3,7 @@ pub mod pool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{Pool, Postgres};
 use std::str::FromStr;
+use std::time::Duration;
 
 /// Parse a string SSL mode into the corresponding `PgSslMode` enum value.
 ///
@@ -56,8 +57,48 @@ impl Database {
             .and_then(|s| s.parse().ok())
             .unwrap_or(20);
 
+        // Coding Standards §15.4 — bounded pool lifetimes and per-connection
+        // statement_timeout. The defaults below are:
+        //   acquire_timeout    30s   (fail fast if the pool is exhausted)
+        //   idle_timeout      300s   (recycle idle conns so middleboxes do not silently drop them)
+        //   max_lifetime     3600s   (force periodic reconnect; prevents indefinitely-stale TCP state)
+        //   statement_timeout 30s   (kill runaway queries at the Postgres side)
+        // All four are configurable via environment variables. The per-connection
+        // statement_timeout is applied in an `after_connect` hook so that any
+        // future batch/analytics session (e.g. a tarpaulin run or a long report
+        // generator) can opt into a longer value without touching this code path.
+        let acquire_timeout_secs: u64 = std::env::var("DATABASE_ACQUIRE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        let idle_timeout_secs: u64 = std::env::var("DATABASE_IDLE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+        let max_lifetime_secs: u64 = std::env::var("DATABASE_MAX_LIFETIME_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+        let statement_timeout_ms: u64 = std::env::var("DATABASE_STATEMENT_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30_000);
+
         let pool = PgPoolOptions::new()
             .max_connections(max_conns)
+            .acquire_timeout(Duration::from_secs(acquire_timeout_secs))
+            .idle_timeout(Some(Duration::from_secs(idle_timeout_secs)))
+            .max_lifetime(Some(Duration::from_secs(max_lifetime_secs)))
+            .after_connect(move |conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query(&format!(
+                        "SET statement_timeout = {statement_timeout_ms}"
+                    ))
+                    .execute(&mut *conn)
+                    .await?;
+                    Ok(())
+                })
+            })
             .connect_with(opts)
             .await?;
         Ok(Self { pool })

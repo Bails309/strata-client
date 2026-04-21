@@ -1,9 +1,13 @@
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::Extension;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
@@ -14,6 +18,17 @@ use crate::services::middleware::AuthUser;
 use crate::services::{audit, kerberos, settings};
 
 pub mod recordings;
+
+// ── Rate limiter: admin password reset (W3-7) ──────────────────────────
+
+/// Per-(ip, target-user) sliding window rate limiter shared across every
+/// call to `reset_user_password`. Bucket keys look like `"1.2.3.4|<uuid>"`.
+static RESET_PW_RATE_LIMIT: LazyLock<Mutex<HashMap<String, Vec<Instant>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const RESET_PW_MAX_ATTEMPTS: usize = 3;
+const RESET_PW_WINDOW_SECS: u64 = 3600;
+/// OOM guard on the bucket map — far more than any legitimate admin fleet.
+const RESET_PW_MAX_ENTRIES: usize = 10_000;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -331,9 +346,7 @@ pub async fn test_sso_connection(
         }
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+    let client = crate::services::http_client::oidc_client();
 
     let discovery_url = build_oidc_discovery_url(&body.issuer_url);
 
@@ -1887,13 +1900,49 @@ pub async fn create_user(
 }
 
 /// POST /api/admin/users/:id/reset-password – generate a new password for a local user.
+///
+/// W3-7 — rate-limited to 3 attempts/hour keyed by **client IP** and
+/// **target user id**. A compromised admin token should not be able to
+/// repeatedly reset the same user's password (enabling a slow-burn
+/// takeover) nor to fan-out resets across many users from the same IP.
+/// The limiter is in-process; see ADR-0001 for the deployment-boundary
+/// caveats.
 pub async fn reset_user_password(
     State(state): State<SharedState>,
     Extension(admin): Extension<AuthUser>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&admin)?;
     let db = require_running(&state).await?;
+
+    // Rate-limit before touching the DB so enumeration of non-existent
+    // user ids is equally throttled.
+    let client_ip = auth::extract_client_ip(&headers);
+    let key = format!("{client_ip}|{id}");
+    {
+        let mut map = RESET_PW_RATE_LIMIT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if auth::check_rate_limit(
+            &mut map,
+            &key,
+            RESET_PW_MAX_ATTEMPTS,
+            RESET_PW_WINDOW_SECS,
+            RESET_PW_MAX_ENTRIES,
+        ) {
+            tracing::warn!(
+                ip = %client_ip,
+                target = %id,
+                admin = %admin.username,
+                "reset_user_password rate limit triggered",
+            );
+            return Err(AppError::Validation(
+                "Too many password reset attempts for this user. Try again later.".into(),
+            ));
+        }
+        map.entry(key).or_default().push(Instant::now());
+    }
 
     // Verify user exists and is a local account
     let auth_type: Option<String> =

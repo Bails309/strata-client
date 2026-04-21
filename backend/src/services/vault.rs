@@ -2,17 +2,30 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 use rand::Rng;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 use crate::config::VaultConfig;
 use crate::error::AppError;
+use crate::services::circuit_breaker::{CircuitBreaker, CircuitError, Config as BreakerConfig};
+use crate::services::request_id::RequestIdExt;
 
 /// Maximum number of retry attempts for Vault API calls.
 const VAULT_MAX_RETRIES: u32 = 3;
 /// Base delay between retries (doubles each attempt).
 const VAULT_RETRY_BASE_MS: u64 = 200;
+
+/// W3-5 — circuit breaker around the Vault Transit API.
+///
+/// Five consecutive failures (not transient retries — whole-operation
+/// failures after the retry wrapper gives up) open the circuit for 30s.
+/// The half-open probe model lets us detect recovery without storming
+/// Vault with concurrent calls on re-open.
+static VAULT_BREAKER: CircuitBreaker = CircuitBreaker::new(BreakerConfig::new(
+    "vault",
+    5,
+    std::time::Duration::from_secs(30),
+));
 
 /// Result of encrypting a credential using envelope encryption.
 pub struct SealedCredential {
@@ -53,17 +66,47 @@ struct VaultDecryptData {
 
 /// Send a POST request to Vault with retry and exponential backoff.
 /// Retries on network errors and 5xx responses; does not retry on 4xx.
+///
+/// W3-1 — uses the shared `http_client::default_client()` (30s overall,
+/// 5s connect) instead of a fresh `reqwest::Client` with no timeout.
+/// W3-5 — the whole operation (after internal retries) is gated by the
+/// module-local `VAULT_BREAKER` so sustained Vault outages short-circuit
+/// instead of queueing callers behind a dead dependency.
 async fn vault_post_with_retry<T: Serialize>(
     url: &str,
     token: &str,
     body: &T,
 ) -> Result<reqwest::Response, AppError> {
-    let client = Client::new();
+    match VAULT_BREAKER
+        .call(|| vault_post_with_retry_inner(url, token, body))
+        .await
+    {
+        Ok(resp) => Ok(resp),
+        Err(CircuitError::Open) => Err(AppError::Vault(
+            "Vault circuit breaker is open (temporary outage)".into(),
+        )),
+        Err(CircuitError::Inner(e)) => Err(e),
+    }
+}
+
+async fn vault_post_with_retry_inner<T: Serialize>(
+    url: &str,
+    token: &str,
+    body: &T,
+) -> Result<reqwest::Response, AppError> {
+    let client = crate::services::http_client::default_client();
     let mut last_err = None;
 
     for attempt in 0..=VAULT_MAX_RETRIES {
         if attempt > 0 {
-            let delay = VAULT_RETRY_BASE_MS * 2u64.pow(attempt - 1);
+            // Full-jitter exponential backoff (§3.3). Without jitter, concurrent
+            // requests that fail together retry in lockstep and re-collide,
+            // amplifying load on a Vault that is already stressed. Multiply the
+            // exponential base by a uniform [0.5, 1.0) factor so each caller
+            // waits a slightly different amount of time.
+            let base = VAULT_RETRY_BASE_MS * 2u64.pow(attempt - 1);
+            let jitter: f64 = 0.5 + rand::rng().random::<f64>() * 0.5;
+            let delay = (base as f64 * jitter) as u64;
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
 
@@ -71,6 +114,9 @@ async fn vault_post_with_retry<T: Serialize>(
             .post(url)
             .header("X-Vault-Token", token)
             .json(body)
+            // W3-11 — stamp the current inbound request id onto outbound
+            // vault calls so distributed logs can correlate end-to-end.
+            .with_request_id()
             .send()
             .await
         {

@@ -11,8 +11,8 @@
  *   Tap Right Ctrl alone           → sends a Super tap        (Start menu)
  */
 
-const CTRL_R  = 0xFFE4; // Right Control keysym
-const SUPER_L = 0xFFEB; // Left Super (Win) keysym
+const CTRL_R = 0xffe4; // Right Control keysym
+const SUPER_L = 0xffeb; // Left Super (Win) keysym
 
 type SendKey = (pressed: 0 | 1, keysym: number) => void;
 
@@ -24,14 +24,14 @@ export interface WinKeyProxy {
 }
 
 export function createWinKeyProxy(sendKey: SendKey): WinKeyProxy {
-  let active    = false;
+  let active = false;
   let superSent = false;
 
   return {
     onkeydown(keysym: number): boolean {
       if (keysym === CTRL_R) {
         if (!active) {
-          active    = true;
+          active = true;
           superSent = false;
         }
         return true; // swallow — don't forward Control_R
@@ -59,7 +59,7 @@ export function createWinKeyProxy(sendKey: SendKey): WinKeyProxy {
         } else {
           sendKey(0, SUPER_L);
         }
-        active    = false;
+        active = false;
         superSent = false;
         return;
       }
@@ -68,7 +68,7 @@ export function createWinKeyProxy(sendKey: SendKey): WinKeyProxy {
     },
 
     reset(): void {
-      active    = false;
+      active = false;
       superSent = false;
     },
   };

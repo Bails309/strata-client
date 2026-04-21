@@ -1,31 +1,31 @@
-import { useState } from 'react';
-import { initialize, InitRequest } from '../api';
+import { useState } from "react";
+import { initialize, InitRequest } from "../api";
 
 interface Props {
   onComplete: () => void;
 }
 
-type VaultMode = 'local' | 'external' | 'skip';
+type VaultMode = "local" | "external" | "skip";
 
 export default function SetupWizard({ onComplete }: Props) {
-  const [vaultMode, setVaultMode] = useState<VaultMode>('local');
-  const [vaultAddr, setVaultAddr] = useState('');
-  const [vaultToken, setVaultToken] = useState('');
-  const [vaultKey, setVaultKey] = useState('guac-master-key');
-  const [error, setError] = useState('');
+  const [vaultMode, setVaultMode] = useState<VaultMode>("local");
+  const [vaultAddr, setVaultAddr] = useState("");
+  const [vaultToken, setVaultToken] = useState("");
+  const [vaultKey, setVaultKey] = useState("guac-master-key");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit() {
     setLoading(true);
-    setError('');
+    setError("");
 
     const req: InitRequest = {};
 
-    if (vaultMode === 'local') {
-      req.vault_mode = 'local';
+    if (vaultMode === "local") {
+      req.vault_mode = "local";
       req.vault_transit_key = vaultKey || undefined;
-    } else if (vaultMode === 'external') {
-      req.vault_mode = 'external';
+    } else if (vaultMode === "external") {
+      req.vault_mode = "external";
       req.vault_address = vaultAddr || undefined;
       req.vault_token = vaultToken || undefined;
       req.vault_transit_key = vaultKey || undefined;
@@ -35,7 +35,7 @@ export default function SetupWizard({ onComplete }: Props) {
       await initialize(req);
       onComplete();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Initialization failed');
+      setError(e instanceof Error ? e.message : "Initialization failed");
     } finally {
       setLoading(false);
     }
@@ -46,30 +46,40 @@ export default function SetupWizard({ onComplete }: Props) {
       <div className="card w-full max-w-[520px]">
         <h1>Strata Client Setup</h1>
         <p className="text-txt-secondary mb-6">
-          The database is configured automatically via environment variables.
-          Configure Vault for credential encryption below.
+          The database is configured automatically via environment variables. Configure Vault for
+          credential encryption below.
         </p>
 
         {error && (
-          <div className="rounded-md mb-4 px-4 py-2 bg-danger-dim text-danger">
-            {error}
-          </div>
+          <div className="rounded-md mb-4 px-4 py-2 bg-danger-dim text-danger">{error}</div>
         )}
 
         <div className="form-group">
           <label className="text-sm font-medium mb-2 block">Vault Mode</label>
           <div className="grid gap-2">
-            {([
-              { value: 'local' as VaultMode, label: 'Bundled Vault', desc: 'Auto-configured container — no setup required' },
-              { value: 'external' as VaultMode, label: 'External Vault', desc: 'Connect to your own HashiCorp Vault instance' },
-              { value: 'skip' as VaultMode, label: 'Skip for Now', desc: 'Use local encryption only — configure Vault later' },
-            ]).map((opt) => (
+            {[
+              {
+                value: "local" as VaultMode,
+                label: "Bundled Vault",
+                desc: "Auto-configured container — no setup required",
+              },
+              {
+                value: "external" as VaultMode,
+                label: "External Vault",
+                desc: "Connect to your own HashiCorp Vault instance",
+              },
+              {
+                value: "skip" as VaultMode,
+                label: "Skip for Now",
+                desc: "Use local encryption only — configure Vault later",
+              },
+            ].map((opt) => (
               <label
                 key={opt.value}
                 className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
                   vaultMode === opt.value
-                    ? 'border-accent bg-accent/5'
-                    : 'border-border hover:border-border-hover'
+                    ? "border-accent bg-accent/5"
+                    : "border-border hover:border-border-hover"
                 }`}
               >
                 <input
@@ -89,7 +99,7 @@ export default function SetupWizard({ onComplete }: Props) {
           </div>
         </div>
 
-        {vaultMode === 'external' && (
+        {vaultMode === "external" && (
           <>
             <div className="form-group">
               <label>Vault URL</label>
@@ -113,19 +123,15 @@ export default function SetupWizard({ onComplete }: Props) {
           </>
         )}
 
-        {vaultMode !== 'skip' && (
+        {vaultMode !== "skip" && (
           <div className="form-group">
             <label>Transit Key Name</label>
-            <input
-              type="text"
-              value={vaultKey}
-              onChange={(e) => setVaultKey(e.target.value)}
-            />
+            <input type="text" value={vaultKey} onChange={(e) => setVaultKey(e.target.value)} />
           </div>
         )}
 
         <button className="btn-primary" onClick={handleSubmit} disabled={loading}>
-          {loading ? 'Initializing…' : 'Complete Setup'}
+          {loading ? "Initializing…" : "Complete Setup"}
         </button>
       </div>
     </div>

@@ -1,0 +1,12 @@
+{
+  "frontend/**/*.{ts,tsx,js,jsx}": [
+    "bash -c 'cd frontend && npx eslint --fix'",
+    "bash -c 'cd frontend && npx prettier --write'"
+  ],
+  "frontend/**/*.{json,css,md}": [
+    "bash -c 'cd frontend && npx prettier --write'"
+  ],
+  "backend/**/*.rs": [
+    "bash -c 'cd backend && cargo fmt --'"
+  ]
+}

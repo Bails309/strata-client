@@ -396,10 +396,25 @@ pub async fn ldap_query(config: &AdSyncConfig) -> anyhow::Result<Vec<DiscoveredC
     let mut seen_dns = std::collections::HashSet::new();
 
     for base in &bases {
-        let results = match config.auth_method.as_str() {
-            "kerberos" => ldap_query_kerberos(config, base).await?,
-            _ => ldap_query_simple(config, base).await?,
-        };
+        // §3.3 / W3-3 — retry each base's lookup with full-jitter exponential
+        // backoff, but only on transient I/O / timeout errors. Terminal
+        // LDAP errors (bad creds, locked account, expired password, …) are
+        // returned immediately by `is_ldap_transient` so a retry cannot
+        // lock out the bind account or mask a real problem.
+        let results = crate::services::retry::retry_transient_with_jitter(
+            &format!("ldap_query(base={base})"),
+            || async {
+                match config.auth_method.as_str() {
+                    "kerberos" => ldap_query_kerberos(config, base).await,
+                    _ => ldap_query_simple(config, base).await,
+                }
+            },
+            crate::services::retry::is_ldap_transient,
+            3,
+            std::time::Duration::from_millis(250),
+        )
+        .await?;
+
         for c in results {
             if seen_dns.insert(c.dn.clone()) {
                 all.push(c);
@@ -730,28 +745,41 @@ pub async fn test_connection(config: &AdSyncConfig) -> anyhow::Result<(usize, Ve
 
 // ── Scheduled Background Sync ──────────────────────────────────────────
 
-pub fn spawn_sync_scheduler(state: crate::services::app_state::SharedState) {
-    tokio::spawn(async move {
-        // Wait 30s after boot before first check
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            let (pool, vault) = {
-                let s = state.read().await;
-                let pool = match s.db.as_ref() {
-                    Some(db) => db.pool.clone(),
-                    None => continue,
+/// W2-4 / W2-7 — uses the shared worker harness so the AD sync scheduler
+/// cooperates with graceful shutdown, bounds each pass, and backs off with
+/// jitter after an error.
+pub fn spawn_sync_scheduler(
+    state: crate::services::app_state::SharedState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    spawn_periodic(
+        PeriodicConfig {
+            label: "ad_sync_scheduler",
+            initial_delay: std::time::Duration::from_secs(30),
+            interval: std::time::Duration::from_secs(60),
+            // A scheduler tick may launch several LDAP lookups; cap the whole
+            // pass at 10 minutes.
+            iteration_timeout: std::time::Duration::from_secs(10 * 60),
+            error_backoff_base: std::time::Duration::from_secs(15),
+        },
+        shutdown,
+        move || {
+            let state = state.clone();
+            async move {
+                let (pool, vault) = {
+                    let s = state.read().await;
+                    let pool = match s.db.as_ref() {
+                        Some(db) => db.pool.clone(),
+                        None => return Ok(()),
+                    };
+                    let vault = s.config.as_ref().and_then(|c| c.vault.clone());
+                    (pool, vault)
                 };
-                let vault = s.config.as_ref().and_then(|c| c.vault.clone());
-                (pool, vault)
-            };
-            if let Err(e) = scheduler_tick(&pool, vault.as_ref()).await {
-                tracing::warn!("AD sync scheduler error: {e}");
+                scheduler_tick(&pool, vault.as_ref()).await
             }
-        }
-    });
+        },
+    )
 }
 
 async fn scheduler_tick(
@@ -1250,5 +1278,66 @@ mod tests {
         assert_eq!(v["status"], "error");
         assert_eq!(v["error_message"], "LDAP bind failed");
         assert!(v["finished_at"].is_null());
+    }
+
+    // ── W4-7 additions ────────────────────────────────────────────
+
+    #[test]
+    fn default_pm_functions_return_sensible_values() {
+        // Defaults must keep working irrespective of caller code; lock them in.
+        assert!(!default_pm_target_filter().is_empty());
+        assert!(default_pm_pwd_min_length() >= 12);
+        assert!(default_pm_rotate_interval() > 0);
+    }
+
+    #[test]
+    fn sample_config_roundtrips_through_serde_json() {
+        // Full-fat round trip — guards against accidental #[serde(rename)] drift.
+        let config = sample_config();
+        let v = serde_json::to_value(&config).unwrap();
+        let back: AdSyncConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(back.label, config.label);
+        assert_eq!(back.search_bases, config.search_bases);
+        assert_eq!(back.auth_method, config.auth_method);
+        assert_eq!(back.pm_enabled, config.pm_enabled);
+        assert_eq!(
+            back.pm_auto_rotate_interval_days,
+            config.pm_auto_rotate_interval_days
+        );
+    }
+
+    #[test]
+    fn build_tls_config_rejects_non_pem_input() {
+        // W4-8 negative — malformed CA PEM must error cleanly, not panic.
+        let err = build_tls_config_with_ca("this is not a PEM file").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.to_lowercase().contains("pem")
+                || msg.to_lowercase().contains("cert")
+                || msg.to_lowercase().contains("parse"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_tls_config_rejects_empty_input() {
+        let err = build_tls_config_with_ca("").unwrap_err();
+        assert!(!format!("{err:#}").is_empty());
+    }
+
+    #[test]
+    fn discovered_computer_serde_roundtrip() {
+        // DiscoveredComputer is an internal struct without derive(Serialize);
+        // we just pin field equality via Debug to catch accidental renames.
+        let dc = DiscoveredComputer {
+            dn: "CN=PC1,DC=test".to_string(),
+            name: "PC1".to_string(),
+            dns_host_name: Some("pc1.test.local".to_string()),
+            description: Some("Test host".to_string()),
+        };
+        let repr = format!("{dc:?}");
+        assert!(repr.contains("PC1"));
+        assert!(repr.contains("pc1.test.local"));
+        assert!(repr.contains("Test host"));
     }
 }

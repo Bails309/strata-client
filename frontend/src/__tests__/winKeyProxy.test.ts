@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { createWinKeyProxy } from '../utils/winKeyProxy';
+import { describe, it, expect, vi } from "vitest";
+import { createWinKeyProxy } from "../utils/winKeyProxy";
 
-const CTRL_R  = 0xFFE4;
-const SUPER_L = 0xFFEB;
+const CTRL_R = 0xffe4;
+const SUPER_L = 0xffeb;
 
-describe('createWinKeyProxy', () => {
-  it('passes normal key presses through unchanged', () => {
+describe("createWinKeyProxy", () => {
+  it("passes normal key presses through unchanged", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
@@ -17,7 +17,7 @@ describe('createWinKeyProxy', () => {
     expect(sendKey).toHaveBeenCalledTimes(2);
   });
 
-  it('swallows Right Ctrl down (does not send Control_R)', () => {
+  it("swallows Right Ctrl down (does not send Control_R)", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
@@ -26,7 +26,7 @@ describe('createWinKeyProxy', () => {
     expect(sendKey).not.toHaveBeenCalled();
   });
 
-  it('sends Super tap when Right Ctrl is tapped alone', () => {
+  it("sends Super tap when Right Ctrl is tapped alone", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
@@ -38,7 +38,7 @@ describe('createWinKeyProxy', () => {
     expect(sendKey).toHaveBeenNthCalledWith(2, 0, SUPER_L); // release
   });
 
-  it('sends Super+key combo when Right Ctrl is held with another key', () => {
+  it("sends Super+key combo when Right Ctrl is held with another key", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
@@ -56,21 +56,19 @@ describe('createWinKeyProxy', () => {
     expect(sendKey).toHaveBeenCalledTimes(4);
   });
 
-  it('sends Super_L down only once for multi-key combos', () => {
+  it("sends Super_L down only once for multi-key combos", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
     proxy.onkeydown(CTRL_R);
-    proxy.onkeydown(0xFFE1); // Shift
-    proxy.onkeydown(0x73);   // 's'
+    proxy.onkeydown(0xffe1); // Shift
+    proxy.onkeydown(0x73); // 's'
 
-    const superDownCalls = sendKey.mock.calls.filter(
-      (c) => c[0] === 1 && c[1] === SUPER_L,
-    );
+    const superDownCalls = sendKey.mock.calls.filter((c) => c[0] === 1 && c[1] === SUPER_L);
     expect(superDownCalls).toHaveLength(1);
   });
 
-  it('handles key repeat on Right Ctrl gracefully', () => {
+  it("handles key repeat on Right Ctrl gracefully", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
@@ -87,7 +85,7 @@ describe('createWinKeyProxy', () => {
     expect(sendKey).toHaveBeenNthCalledWith(2, 0, SUPER_L);
   });
 
-  it('reset() clears proxy state so next keys are normal', () => {
+  it("reset() clears proxy state so next keys are normal", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 
@@ -102,7 +100,7 @@ describe('createWinKeyProxy', () => {
     expect(superCalls).toHaveLength(0);
   });
 
-  it('works correctly across multiple separate combos', () => {
+  it("works correctly across multiple separate combos", () => {
     const sendKey = vi.fn();
     const proxy = createWinKeyProxy(sendKey);
 

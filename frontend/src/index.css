@@ -3,7 +3,7 @@
 /* ── Tailwind v4 Theme ─────────────────────────────────────── */
 @theme {
   /* Font */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   /* Surfaces — layered charcoal */
   --color-surface: #111114;
@@ -82,7 +82,9 @@
 }
 
 /* ── Utility Classes ────────────────────────────────────────── */
-.animate-fade-up { animation: fadeUp 0.4s var(--ease-out) forwards; }
+.animate-fade-up {
+  animation: fadeUp 0.4s var(--ease-out) forwards;
+}
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
 }
@@ -103,15 +105,22 @@
 .animate-pop-in {
   animation: popIn 0.3s var(--ease-spring) both;
 }
-.animate-fade-in { animation: fadeIn 0.25s var(--ease-out) forwards; }
-.scale-in { animation: selectSlideIn 0.3s var(--ease-out) forwards; }
-.animate-spin { animation: spin 1s linear infinite; }
+.animate-fade-in {
+  animation: fadeIn 0.25s var(--ease-out) forwards;
+}
+.scale-in {
+  animation: selectSlideIn 0.3s var(--ease-out) forwards;
+}
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
 
 .mesh-gradient {
-  background: radial-gradient(at 0% 0%, var(--color-accent) 0, transparent 50%),
-              radial-gradient(at 100% 0%, #db2777 0, transparent 50%),
-              radial-gradient(at 100% 100%, #2563eb 0, transparent 50%),
-              radial-gradient(at 0% 100%, #10b981 0, transparent 50%);
+  background:
+    radial-gradient(at 0% 0%, var(--color-accent) 0, transparent 50%),
+    radial-gradient(at 100% 0%, #db2777 0, transparent 50%),
+    radial-gradient(at 100% 100%, #2563eb 0, transparent 50%),
+    radial-gradient(at 0% 100%, #10b981 0, transparent 50%);
   background-size: 200% 200%;
   animation: mesh-flow 15s ease infinite;
 }
@@ -127,9 +136,15 @@
 }
 
 @keyframes mesh-flow {
-  0% { background-position: 0% 0%; }
-  50% { background-position: 100% 100%; }
-  100% { background-position: 0% 0%; }
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
 }
 
 /* ── Dark Mode (class-based, default) ── */
@@ -151,7 +166,7 @@ html.light {
   --color-txt-tertiary: #a1a1aa;
 
   --color-accent-dim: rgba(139, 92, 246, 0.06);
-  --color-accent-glow: rgba(139, 92, 246, 0.10);
+  --color-accent-glow: rgba(139, 92, 246, 0.1);
 
   --color-danger: #dc2626;
   --color-danger-dim: rgba(220, 38, 38, 0.06);
@@ -177,7 +192,7 @@ html.light {
   --color-row-hover: rgba(139, 92, 246, 0.03);
   --color-tabs-bg: #f4f4f5;
   --color-tab-hover-bg: rgba(0, 0, 0, 0.04);
-  --color-nav-bg: rgba(255, 255, 255, 0.90);
+  --color-nav-bg: rgba(255, 255, 255, 0.9);
   --color-nav-border: rgba(0, 0, 0, 0.06);
   --color-nav-link-hover: rgba(0, 0, 0, 0.04);
   --color-card-hover-border: rgba(0, 0, 0, 0.14);
@@ -192,11 +207,7 @@ html.light {
 
 /* ── Light Theme: Recent Card Overrides ── */
 html.light .recent-card {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.95) 0%,
-    rgba(244, 244, 245, 0.90) 100%
-  );
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(244, 244, 245, 0.9) 100%);
   border-color: rgba(0, 0, 0, 0.08);
   box-shadow:
     0 4px 24px rgba(0, 0, 0, 0.07),
@@ -204,23 +215,19 @@ html.light .recent-card {
 }
 
 html.light .recent-card::before {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.6) 0%,
-    transparent 50%
-  );
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.6) 0%, transparent 50%);
 }
 
 html.light .recent-card:hover {
   border-color: rgba(0, 0, 0, 0.14);
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.10),
+    0 8px 32px rgba(0, 0, 0, 0.1),
     0 1px 0 rgba(255, 255, 255, 1) inset;
 }
 
 html.light .recent-card-btn {
   background: rgba(0, 0, 0, 0.03);
-  border-color: rgba(0, 0, 0, 0.10);
+  border-color: rgba(0, 0, 0, 0.1);
 }
 
 html.light .recent-card-btn:hover {
@@ -245,7 +252,7 @@ html.light .recent-card-btn:hover {
 
   /* Ambient background gradient */
   body::before {
-    content: '';
+    content: "";
     position: fixed;
     inset: 0;
     background:
@@ -275,7 +282,9 @@ html.light .recent-card-btn:hover {
   }
 
   /* Inputs */
-  input, select, textarea {
+  input,
+  select,
+  textarea {
     @apply w-full rounded-sm text-[0.8125rem] font-sans transition-all duration-200;
     background: var(--color-input-bg);
     color: var(--color-txt-primary);
@@ -283,18 +292,25 @@ html.light .recent-card-btn:hover {
     padding: 0.6rem 0.85rem;
   }
 
-  input:hover, select:hover, textarea:hover {
+  input:hover,
+  select:hover,
+  textarea:hover {
     border-color: var(--color-input-hover-border);
   }
 
-  input:focus, select:focus, textarea:focus {
+  input:focus,
+  select:focus,
+  textarea:focus {
     outline: none;
     border-color: var(--color-border-focus);
-    box-shadow: 0 0 0 3px var(--color-accent-dim), var(--shadow-sm);
+    box-shadow:
+      0 0 0 3px var(--color-accent-dim),
+      var(--shadow-sm);
     background: var(--color-input-bg-focus);
   }
 
-  input::placeholder, textarea::placeholder {
+  input::placeholder,
+  textarea::placeholder {
     color: var(--color-txt-tertiary);
   }
 
@@ -328,7 +344,8 @@ html.light .recent-card-btn:hover {
     @apply w-full border-collapse;
   }
 
-  th, td {
+  th,
+  td {
     @apply text-left;
     padding: 0.8rem 1rem;
     border-bottom: 1px solid var(--color-border);
@@ -353,7 +370,7 @@ html.light .recent-card-btn:hover {
   }
 
   tbody tr:hover td:first-child::before {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     top: 0;
@@ -407,7 +424,9 @@ html.light .recent-card-btn:hover {
     color: var(--color-txt-primary);
     border-color: var(--color-btn-hover-border);
   }
-  .btn:active { opacity: 0.85; }
+  .btn:active {
+    opacity: 0.85;
+  }
   .btn:disabled {
     @apply opacity-40 cursor-not-allowed;
   }
@@ -427,7 +446,9 @@ html.light .recent-card-btn:hover {
     color: var(--color-txt-primary);
     border-color: var(--color-btn-hover-border);
   }
-  .btn-sm:active { opacity: 0.85; }
+  .btn-sm:active {
+    opacity: 0.85;
+  }
   .btn-sm:disabled {
     @apply opacity-40 cursor-not-allowed;
   }
@@ -445,7 +466,9 @@ html.light .recent-card-btn:hover {
     background: var(--color-accent-light);
     box-shadow: var(--shadow-accent);
   }
-  .btn-primary:active { opacity: 0.85; }
+  .btn-primary:active {
+    opacity: 0.85;
+  }
   .btn-primary:disabled {
     @apply opacity-40 cursor-not-allowed;
   }
@@ -461,7 +484,9 @@ html.light .recent-card-btn:hover {
   .btn-danger:hover {
     background: var(--color-danger-hover);
   }
-  .btn-danger:active { opacity: 0.85; }
+  .btn-danger:active {
+    opacity: 0.85;
+  }
   .btn-danger:disabled {
     @apply opacity-40 cursor-not-allowed;
   }
@@ -477,7 +502,9 @@ html.light .recent-card-btn:hover {
   .btn-success:hover {
     opacity: 0.9;
   }
-  .btn-success:active { opacity: 0.85; }
+  .btn-success:active {
+    opacity: 0.85;
+  }
   .btn-success:disabled {
     @apply opacity-40 cursor-not-allowed;
   }
@@ -493,15 +520,16 @@ html.light .recent-card-btn:hover {
     border: 1px solid rgba(255, 255, 255, 0.15);
     box-shadow:
       0 1px 2px rgba(139, 92, 246, 0.25),
-      0 3px 10px rgba(139, 92, 246, 0.30),
+      0 3px 10px rgba(139, 92, 246, 0.3),
       inset 0 1px 0 rgba(255, 255, 255, 0.18);
-    transition: transform 0.15s var(--ease-out),
-                box-shadow 0.15s var(--ease-out),
-                background 0.15s var(--ease-out);
+    transition:
+      transform 0.15s var(--ease-out),
+      box-shadow 0.15s var(--ease-out),
+      background 0.15s var(--ease-out);
   }
   /* Shimmer highlight */
   .btn-sm-primary::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
     background: linear-gradient(
@@ -516,15 +544,15 @@ html.light .recent-card-btn:hover {
   .btn-sm-primary:hover {
     background: linear-gradient(135deg, #b79cfb 0%, #9d71f8 45%, #8b4ef0 100%);
     box-shadow:
-      0 2px 4px rgba(139, 92, 246, 0.30),
-      0 6px 20px rgba(139, 92, 246, 0.40),
+      0 2px 4px rgba(139, 92, 246, 0.3),
+      0 6px 20px rgba(139, 92, 246, 0.4),
       inset 0 1px 0 rgba(255, 255, 255, 0.22);
     transform: translateY(-1px);
   }
   .btn-sm-primary:active {
     transform: translateY(0);
     box-shadow:
-      0 1px 2px rgba(139, 92, 246, 0.20),
+      0 1px 2px rgba(139, 92, 246, 0.2),
       0 2px 8px rgba(139, 92, 246, 0.25),
       inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
@@ -545,7 +573,9 @@ html.light .recent-card-btn:hover {
     background: var(--color-btn-hover-bg);
     color: var(--color-txt-primary);
   }
-  .btn-ghost:active { opacity: 0.85; }
+  .btn-ghost:active {
+    opacity: 0.85;
+  }
   .btn-ghost:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -569,7 +599,7 @@ html.light .recent-card-btn:hover {
     background: var(--color-surface-secondary);
     border: 1px solid var(--color-glass-border);
     padding: 1.75rem;
-    box-shadow: 
+    box-shadow:
       0 2px 8px rgba(0, 0, 0, 0.15),
       0 12px 32px rgba(0, 0, 0, 0.2),
       0 24px 64px rgba(0, 0, 0, 0.25),
@@ -592,11 +622,7 @@ html.light .recent-card-btn:hover {
 
   .recent-card {
     @apply relative overflow-hidden rounded-xl cursor-pointer;
-    background: linear-gradient(
-      135deg,
-      rgba(30, 30, 40, 0.85) 0%,
-      rgba(20, 20, 30, 0.75) 100%
-    );
+    background: linear-gradient(135deg, rgba(30, 30, 40, 0.85) 0%, rgba(20, 20, 30, 0.75) 100%);
     backdrop-filter: blur(20px) saturate(1.4);
     -webkit-backdrop-filter: blur(20px) saturate(1.4);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -604,20 +630,17 @@ html.light .recent-card-btn:hover {
     box-shadow:
       0 4px 24px rgba(0, 0, 0, 0.3),
       0 1px 0 rgba(255, 255, 255, 0.05) inset;
-    transition: transform 0.25s var(--ease-out),
-                border-color 0.25s var(--ease-out),
-                box-shadow 0.25s var(--ease-out);
+    transition:
+      transform 0.25s var(--ease-out),
+      border-color 0.25s var(--ease-out),
+      box-shadow 0.25s var(--ease-out);
   }
 
   .recent-card::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.03) 0%,
-      transparent 50%
-    );
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, transparent 50%);
     pointer-events: none;
     border-radius: inherit;
   }
@@ -701,7 +724,9 @@ html.light .recent-card-btn:hover {
   .btn-connect-glass:hover {
     background: rgba(255, 255, 255, 0.08);
     transform: translateY(-1px);
-    box-shadow: 0 0 25px var(--btn-glow, rgba(139, 92, 246, 0.2)), inset 0 0 10px var(--btn-glow, rgba(139, 92, 246, 0.1));
+    box-shadow:
+      0 0 25px var(--btn-glow, rgba(139, 92, 246, 0.2)),
+      inset 0 0 10px var(--btn-glow, rgba(139, 92, 246, 0.1));
     border-color: var(--btn-text);
   }
 
@@ -782,7 +807,9 @@ html.light .recent-card-btn:hover {
   }
   .cs-trigger-open {
     border-color: var(--color-border-focus);
-    box-shadow: 0 0 0 3px var(--color-accent-dim), var(--shadow-sm);
+    box-shadow:
+      0 0 0 3px var(--color-accent-dim),
+      var(--shadow-sm);
     background: var(--color-input-bg-focus);
   }
 
@@ -824,7 +851,7 @@ html.light .recent-card-btn:hover {
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4);
   }
- 
+
   .session-thumbs-container {
     @apply flex flex-col gap-3 px-2.5 py-4 overflow-y-auto flex-1 w-full;
     scrollbar-width: thin;
@@ -837,118 +864,117 @@ html.light .recent-card-btn:hover {
     border: 1px solid var(--color-border);
     aspect-ratio: 16/9;
   }
- 
+
   .session-thumb:hover {
     border-color: var(--color-accent-light);
     box-shadow: 0 0 12px var(--color-accent-dim);
   }
- 
+
   .session-thumb-active {
     border-color: var(--color-accent);
     box-shadow: 0 0 16px var(--color-accent-dim);
   }
- 
+
   .session-thumb-error {
     border-color: var(--color-danger);
   }
- 
+
   .session-bar-toggle {
     @apply w-full flex flex-col items-center justify-center p-3 border-0 bg-transparent text-txt-secondary hover:text-txt-primary cursor-pointer transition-colors duration-150;
     border-bottom: 1px solid var(--color-border);
   }
- 
+
   .session-count-badge {
     @apply inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-accent text-white text-[0.65rem] font-bold shadow-lg mt-1.5;
   }
 
+  /* ── Historical Player ────────────────────────────────────────── */
+  .player-overlay {
+    @apply fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md;
+  }
 
-/* ── Historical Player ────────────────────────────────────────── */
-.player-overlay {
-  @apply fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md;
-}
+  .player-card {
+    @apply w-full max-w-7xl rounded-xl overflow-hidden shadow-2xl bg-surface border border-white/10 flex flex-col;
+    max-height: 90vh;
+  }
 
-.player-card {
-  @apply w-full max-w-7xl rounded-xl overflow-hidden shadow-2xl bg-surface border border-white/10 flex flex-col;
-  max-height: 90vh;
-}
+  .player-card-fullscreen {
+    @apply max-w-none rounded-none border-0;
+    max-height: 100vh;
+    width: 100vw;
+    height: 100vh;
+  }
 
-.player-card-fullscreen {
-  @apply max-w-none rounded-none border-0;
-  max-height: 100vh;
-  width: 100vw;
-  height: 100vh;
-}
+  .player-header {
+    @apply flex items-center justify-between px-6 py-4 border-b border-border bg-surface-secondary;
+  }
 
-.player-header {
-  @apply flex items-center justify-between px-6 py-4 border-b border-border bg-surface-secondary;
-}
+  .player-container {
+    @apply flex-1 bg-black relative flex items-center justify-center overflow-hidden min-h-[400px];
+  }
 
-.player-container {
-  @apply flex-1 bg-black relative flex items-center justify-center overflow-hidden min-h-[400px];
-}
+  .player-controls {
+    @apply px-6 py-4 bg-surface-secondary border-t border-border flex flex-col gap-4;
+  }
 
-.player-controls {
-  @apply px-6 py-4 bg-surface-secondary border-t border-border flex flex-col gap-4;
-}
+  .player-timeline {
+    @apply relative h-1.5 w-full bg-surface-tertiary rounded-full overflow-hidden;
+  }
 
-.player-timeline {
-  @apply relative h-1.5 w-full bg-surface-tertiary rounded-full overflow-hidden;
-}
+  .player-timeline-progress {
+    @apply absolute top-0 left-0 h-full bg-accent;
+    transition: width 0.5s linear;
+  }
 
-.player-timeline-progress {
-  @apply absolute top-0 left-0 h-full bg-accent;
-  transition: width 0.5s linear;
-}
+  .player-btn {
+    @apply flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all;
+    background: var(--color-surface-tertiary);
+    border: 1px solid var(--color-border);
+    color: var(--color-txt-secondary);
+  }
 
-.player-btn {
-  @apply flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all;
-  background: var(--color-surface-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-txt-secondary);
-}
+  .player-btn:hover {
+    @apply border-accent text-txt-primary;
+    background: var(--color-accent-dim);
+  }
 
-.player-btn:hover {
-  @apply border-accent text-txt-primary;
-  background: var(--color-accent-dim);
-}
+  .player-btn-active-replay {
+    @apply border-accent text-accent;
+    background: var(--color-accent-dim);
+  }
 
-.player-btn-active-replay {
-  @apply border-accent text-accent;
-  background: var(--color-accent-dim);
-}
+  .player-skip-btn {
+    @apply flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide transition-all cursor-pointer;
+    background: var(--color-surface-tertiary);
+    border: 1px solid var(--color-border);
+    color: var(--color-txt-tertiary);
+  }
 
-.player-skip-btn {
-  @apply flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide transition-all cursor-pointer;
-  background: var(--color-surface-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-txt-tertiary);
-}
+  .player-skip-btn:hover {
+    @apply border-accent text-txt-primary;
+    background: var(--color-accent-dim);
+  }
 
-.player-skip-btn:hover {
-  @apply border-accent text-txt-primary;
-  background: var(--color-accent-dim);
-}
+  .player-speed-btn {
+    @apply px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer;
+    background: var(--color-surface-tertiary);
+    border: 1px solid var(--color-border);
+    color: var(--color-txt-tertiary);
+  }
 
-.player-speed-btn {
-  @apply px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer;
-  background: var(--color-surface-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-txt-tertiary);
-}
+  .player-speed-btn:hover {
+    @apply border-accent text-txt-primary;
+    background: var(--color-accent-dim);
+  }
 
-.player-speed-btn:hover {
-  @apply border-accent text-txt-primary;
-  background: var(--color-accent-dim);
-}
+  .player-speed-btn-active {
+    @apply border-accent text-accent;
+    background: var(--color-accent-dim);
+  }
 
-.player-speed-btn-active {
-  @apply border-accent text-accent;
-  background: var(--color-accent-dim);
-}
-
-.player-loading {
-  @apply absolute inset-0 flex items-center justify-center bg-black/40 z-10;
-}
+  .player-loading {
+    @apply absolute inset-0 flex items-center justify-center bg-black/40 z-10;
+  }
 
   .spinner {
     @apply w-10 h-10 border-4 border-accent/20 border-t-accent rounded-full animate-spin;
@@ -972,19 +998,25 @@ html.light .recent-card-btn:hover {
   }
   .checkbox:focus-visible {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px var(--color-accent-dim), inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow:
+      0 0 0 3px var(--color-accent-dim),
+      inset 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   .checkbox:checked {
     border-color: transparent;
     background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
-    box-shadow: 0 2px 5px rgba(139, 92, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    box-shadow:
+      0 2px 5px rgba(139, 92, 246, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
   }
   .checkbox:checked:hover {
     background: linear-gradient(135deg, #b79cfb 0%, #9d71f8 45%, #8b4ef0 100%);
-    box-shadow: 0 3px 8px rgba(139, 92, 246, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    box-shadow:
+      0 3px 8px rgba(139, 92, 246, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
   }
   .checkbox:checked::after {
-    content: '';
+    content: "";
     position: absolute;
     top: 2.5px;
     left: 5.5px;
@@ -999,10 +1031,12 @@ html.light .recent-card-btn:hover {
   .checkbox:indeterminate {
     border-color: transparent;
     background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
-    box-shadow: 0 2px 5px rgba(139, 92, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    box-shadow:
+      0 2px 5px rgba(139, 92, 246, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
   }
   .checkbox:indeterminate::after {
-    content: '';
+    content: "";
     position: absolute;
     top: 8px;
     left: 4px;
@@ -1035,19 +1069,25 @@ html.light .recent-card-btn:hover {
   }
   .radio:focus-visible {
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px var(--color-accent-dim), inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow:
+      0 0 0 3px var(--color-accent-dim),
+      inset 0 1px 2px rgba(0, 0, 0, 0.1);
   }
   .radio:checked {
     border-color: transparent;
     background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #7c3aed 100%);
-    box-shadow: 0 2px 5px rgba(139, 92, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    box-shadow:
+      0 2px 5px rgba(139, 92, 246, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
   }
   .radio:checked:hover {
     background: linear-gradient(135deg, #b79cfb 0%, #9d71f8 45%, #8b4ef0 100%);
-    box-shadow: 0 3px 8px rgba(139, 92, 246, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    box-shadow:
+      0 3px 8px rgba(139, 92, 246, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
   }
   .radio:checked::after {
-    content: '';
+    content: "";
     position: absolute;
     top: 4px;
     left: 4px;
@@ -1108,36 +1148,63 @@ html.light .recent-card-btn:hover {
 
 /* ── Keyframes ─────────────────────────────────────────────── */
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes selectSlideIn {
-  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @keyframes checkPop {
-  0% { transform: rotate(45deg) scale(0); opacity: 0; }
-  60% { transform: rotate(45deg) scale(1.15); }
-  100% { transform: rotate(45deg) scale(1); opacity: 1; }
+  0% {
+    transform: rotate(45deg) scale(0);
+    opacity: 0;
+  }
+  60% {
+    transform: rotate(45deg) scale(1.15);
+  }
+  100% {
+    transform: rotate(45deg) scale(1);
+    opacity: 1;
+  }
 }
 
 /* ── Theme Transition ──────────────────────────────────────── */
 [data-theme-transitioning] * {
-  transition: background-color 0.3s var(--ease-out),
-              color 0.2s var(--ease-out),
-              border-color 0.3s var(--ease-out),
-              box-shadow 0.3s var(--ease-out) !important;
+  transition:
+    background-color 0.3s var(--ease-out),
+    color 0.2s var(--ease-out),
+    border-color 0.3s var(--ease-out),
+    box-shadow 0.3s var(--ease-out) !important;
 }
 
 /* ── Prose Docs — rendered markdown styling ────────────────── */
@@ -1189,7 +1256,8 @@ html.light .recent-card-btn:hover {
   color: var(--color-txt-primary);
   font-weight: 600;
 }
-.prose-docs ul, .prose-docs ol {
+.prose-docs ul,
+.prose-docs ol {
   margin: 0.75rem 0;
   padding-left: 1.5rem;
 }
@@ -1202,7 +1270,8 @@ html.light .recent-card-btn:hover {
 .prose-docs li {
   margin: 0.25rem 0;
 }
-.prose-docs li > ul, .prose-docs li > ol {
+.prose-docs li > ul,
+.prose-docs li > ol {
   margin: 0.25rem 0;
 }
 .prose-docs code {
@@ -1211,7 +1280,7 @@ html.light .recent-card-btn:hover {
   border-radius: 4px;
   background: var(--color-surface-tertiary);
   color: var(--color-accent-light);
-  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-family: "Fira Code", "Cascadia Code", monospace;
 }
 .prose-docs pre {
   margin: 1rem 0;

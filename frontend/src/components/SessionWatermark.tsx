@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { getMe, MeResponse } from '../api';
+import { useEffect, useRef, useState } from "react";
+import { getMe, MeResponse } from "../api";
 
 /**
  * Semi-transparent diagonal watermark overlay rendered on top of a session.
@@ -11,7 +11,9 @@ interface SessionWatermarkProps {
   connectionWatermark?: string;
 }
 
-export default function SessionWatermark({ connectionWatermark = 'inherit' }: SessionWatermarkProps) {
+export default function SessionWatermark({
+  connectionWatermark = "inherit",
+}: SessionWatermarkProps) {
   const [user, setUser] = useState<MeResponse | null>(null);
   const [timestamp, setTimestamp] = useState(() => formatTimestamp());
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -20,9 +22,13 @@ export default function SessionWatermark({ connectionWatermark = 'inherit' }: Se
   useEffect(() => {
     let cancelled = false;
     getMe()
-      .then((me) => { if (!cancelled) setUser(me); })
+      .then((me) => {
+        if (!cancelled) setUser(me);
+      })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Update the timestamp every 30 seconds
@@ -43,15 +49,15 @@ export default function SessionWatermark({ connectionWatermark = 'inherit' }: Se
     canvas.width = w * dpr;
     canvas.height = h * dpr;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, w, h);
 
-    const text = `${user.username}  •  ${user.client_ip || 'N/A'}  •  ${timestamp}`;
+    const text = `${user.username}  •  ${user.client_ip || "N/A"}  •  ${timestamp}`;
     const fontSize = 14;
     ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-    ctx.textBaseline = 'middle';
+    ctx.textBaseline = "middle";
 
     const metrics = ctx.measureText(text);
     const textWidth = metrics.width + 80; // spacing between repetitions
@@ -67,7 +73,7 @@ export default function SessionWatermark({ connectionWatermark = 'inherit' }: Se
     const startY = -diag;
 
     // Dark pass (visible on light backgrounds)
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+    ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
     for (let y = startY; y < diag; y += rowHeight) {
       for (let x = startX; x < diag; x += textWidth) {
         ctx.fillText(text, x, y);
@@ -75,7 +81,7 @@ export default function SessionWatermark({ connectionWatermark = 'inherit' }: Se
     }
 
     // Light pass offset by 1px (visible on dark backgrounds)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
     for (let y = startY; y < diag; y += rowHeight) {
       for (let x = startX; x < diag; x += textWidth) {
         ctx.fillText(text, x + 1, y + 1);
@@ -98,18 +104,18 @@ export default function SessionWatermark({ connectionWatermark = 'inherit' }: Se
   }, []);
 
   // Per-connection override: 'on' always shows, 'off' always hides, 'inherit' uses global
-  if (connectionWatermark === 'off') return null;
-  if (!user || (connectionWatermark === 'inherit' && !user.watermark_enabled)) return null;
+  if (connectionWatermark === "off") return null;
+  if (!user || (connectionWatermark === "inherit" && !user.watermark_enabled)) return null;
 
   return (
     <canvas
       ref={canvasRef}
       style={{
-        position: 'fixed',
+        position: "fixed",
         inset: 0,
-        width: '100vw',
-        height: '100vh',
-        pointerEvents: 'none',
+        width: "100vw",
+        height: "100vh",
+        pointerEvents: "none",
         zIndex: 9999,
       }}
     />
@@ -117,11 +123,11 @@ export default function SessionWatermark({ connectionWatermark = 'inherit' }: Se
 }
 
 function formatTimestamp(): string {
-  return new Date().toLocaleString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  return new Date().toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }

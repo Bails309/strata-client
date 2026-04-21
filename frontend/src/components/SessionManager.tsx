@@ -1,8 +1,8 @@
-import { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
-import Guacamole from 'guacamole-common-js';
+import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react";
+import Guacamole from "guacamole-common-js";
 
 export interface GuacSession {
-  id: string;                      // connection UUID
+  id: string; // connection UUID
   connectionId: string;
   name: string;
   protocol: string;
@@ -79,18 +79,24 @@ const SessionManagerContext = createContext<SessionManagerValue | null>(null);
 
 export function useSessionManager() {
   const ctx = useContext(SessionManagerContext);
-  if (!ctx) throw new Error('useSessionManager must be used within SessionManagerProvider');
+  if (!ctx) throw new Error("useSessionManager must be used within SessionManagerProvider");
   return ctx;
 }
 
-export function SessionManagerProvider({ children, canShare = false }: { children: React.ReactNode; canShare?: boolean }) {
+export function SessionManagerProvider({
+  children,
+  canShare = false,
+}: {
+  children: React.ReactNode;
+  canShare?: boolean;
+}) {
   const [sessions, setSessions] = useState<GuacSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [tiledSessionIds, setTiledSessionIds] = useState<string[]>([]);
   const [focusedSessionIds, setFocusedSessionIds] = useState<string[]>([]);
   const [sessionBarCollapsed, setSessionBarCollapsed] = useState(false);
   const sessionsRef = useRef<GuacSession[]>([]);
- 
+
   const barWidth = 0; // Floating overlay doesn't reserve space
 
   // Keep ref in sync
@@ -111,7 +117,11 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
     po.touch.onmouseup = null;
     po.touch.onmousemove = null;
     if (!po.window.closed) {
-      try { po.window.close(); } catch { /* ignore */ }
+      try {
+        po.window.close();
+      } catch {
+        /* ignore */
+      }
     }
     session._popout = undefined;
     session.isPoppedOut = false;
@@ -134,24 +144,24 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
     const existing = sessionsRef.current.find((s) => s.connectionId === opts.connectionId);
     if (existing) return existing;
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProto}//${window.location.host}/api/tunnel/${opts.connectionId}`;
 
     const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
     const client = new Guacamole.Client(tunnel);
     const display = client.getDisplay();
     const displayEl = display.getElement();
-    displayEl.style.background = '#000';
+    displayEl.style.background = "#000";
 
     // Mouse
     const mouse = new Guacamole.Mouse(displayEl);
-    mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+    mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       client.sendMouseState(e.state, true);
     });
 
     // Touch
     const touch = new Guacamole.Mouse.Touchscreen(displayEl);
-    touch.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+    touch.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       client.sendMouseState(e.state, true);
     });
 
@@ -170,24 +180,27 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
       keyboard,
       createdAt: Date.now(),
       filesystems: [],
-      remoteClipboard: '',
+      remoteClipboard: "",
     };
 
     // ── Clipboard sync: remote → local ──
     client.onclipboard = (stream: Guacamole.InputStream, mimetype: string) => {
-      if (mimetype !== 'text/plain') return;
+      if (mimetype !== "text/plain") return;
       const reader = new Guacamole.StringReader(stream);
-      let data = '';
-      reader.ontext = (text: string) => { data += text; };
+      let data = "";
+      reader.ontext = (text: string) => {
+        data += text;
+      };
       reader.onend = () => {
         session.remoteClipboard = data;
         // Write to browser clipboard if permitted.
         // When the session is in a pop-out window the main window lacks focus
         // so navigator.clipboard.writeText() is denied by the browser.  Use
         // the popup window's clipboard API instead since it has focus.
-        const clipNav = session._popout && !session._popout.window.closed
-          ? session._popout.window.navigator
-          : navigator;
+        const clipNav =
+          session._popout && !session._popout.window.closed
+            ? session._popout.window.navigator
+            : navigator;
         clipNav.clipboard?.writeText(data).catch(() => {});
         setSessions((prev) => [...prev]); // trigger re-render
       };
@@ -198,20 +211,20 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
       try {
         const text = await navigator.clipboard?.readText();
         if (text && text !== session.remoteClipboard) {
-          const stream = client.createClipboardStream('text/plain');
+          const stream = client.createClipboardStream("text/plain");
           const writer = new Guacamole.StringWriter(stream);
-          
-          // Split text into chunks to avoid hitting Guacamole protocol 
+
+          // Split text into chunks to avoid hitting Guacamole protocol
           // instruction size limits (typically 8KB). 4096 is a safe chunk size.
           // Add a small delay between chunks to avoid overwhelming the tunnel.
           const CHUNK_SIZE = 4096;
           for (let i = 0; i < text.length; i += CHUNK_SIZE) {
             writer.sendText(text.substring(i, i + CHUNK_SIZE));
-            // Tiny delay to let the event loop process and allow guacd to 
+            // Tiny delay to let the event loop process and allow guacd to
             // handle the reassembly buffer without bursting.
-            await new Promise(resolve => setTimeout(resolve, 5));
+            await new Promise((resolve) => setTimeout(resolve, 5));
           }
-          
+
           writer.sendEnd();
           session.remoteClipboard = text; // Update local state to avoid echo
         }
@@ -226,17 +239,17 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
     // *before* the click grants transient user-activation, so the Clipboard
     // API denies access.  mousedown IS the user gesture, so readText()
     // succeeds.
-    displayEl.addEventListener('mouseenter', pushClipboard);
-    displayEl.addEventListener('mousedown', pushClipboard);
-    displayEl.addEventListener('focus', pushClipboard, true);
+    displayEl.addEventListener("mouseenter", pushClipboard);
+    displayEl.addEventListener("mousedown", pushClipboard);
+    displayEl.addEventListener("focus", pushClipboard, true);
 
     // ── Clipboard sync: local → remote (on paste event) ──
     // This is more reliable than the Clipboard API readText() since
     // browsers always provide clipboardData on user-initiated paste events.
     const handlePaste = (e: ClipboardEvent) => {
-      const text = e.clipboardData?.getData('text/plain');
+      const text = e.clipboardData?.getData("text/plain");
       if (text && text !== session.remoteClipboard) {
-        const stream = client.createClipboardStream('text/plain');
+        const stream = client.createClipboardStream("text/plain");
         const writer = new Guacamole.StringWriter(stream);
         const CHUNK_SIZE = 4096;
         for (let i = 0; i < text.length; i += CHUNK_SIZE) {
@@ -246,8 +259,8 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
         session.remoteClipboard = text;
       }
     };
-    window.addEventListener('paste', handlePaste as EventListener);
-    session._cleanupPaste = () => window.removeEventListener('paste', handlePaste as EventListener);
+    window.addEventListener("paste", handlePaste as EventListener);
+    session._cleanupPaste = () => window.removeEventListener("paste", handlePaste as EventListener);
 
     // ── Filesystem objects (RDP drive, SFTP, etc.) ──
     client.onfilesystem = (object: Guacamole.GuacObject, name: string) => {
@@ -261,7 +274,7 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
       reader.onend = () => {
         const blob = reader.getBlob();
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = url;
         a.download = filename;
         document.body.appendChild(a);
@@ -286,12 +299,12 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
 
     // Handle errors
     tunnel.onerror = (status: Guacamole.Status) => {
-      session.error = status.message || 'Connection failed';
+      session.error = status.message || "Connection failed";
       setSessions((prev) => [...prev]); // trigger re-render
     };
 
     client.onerror = (status: Guacamole.Status) => {
-      session.error = status.message || 'Connection failed';
+      session.error = status.message || "Connection failed";
       setSessions((prev) => [...prev]);
     };
 
@@ -350,31 +363,38 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
     return session;
   }, []);
 
-  const closeSession = useCallback((id: string) => {
-    setSessions((prev) => {
-      const session = prev.find((s) => s.id === id);
-      if (session) {
-        cleanupPopout(session);
-        cleanupMultiMonitor(session);
-        session._cleanupPaste?.();
-        session.keyboard.onkeydown = null;
-        session.keyboard.onkeyup = null;
-        session.keyboard.reset();
-        try { session.client.disconnect(); } catch { /* ignore */ }
-      }
-      const remaining = prev.filter((s) => s.id !== id);
-      return remaining;
-    });
-    setTiledSessionIds((prev) => prev.filter((tid) => tid !== id));
-    setFocusedSessionIds((prev) => prev.filter((fid) => fid !== id));
-    setActiveSessionId((current) => {
-      if (current === id) {
-        const remaining = sessionsRef.current.filter((s) => s.id !== id);
-        return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
-      }
-      return current;
-    });
-  }, [cleanupPopout, cleanupMultiMonitor]);
+  const closeSession = useCallback(
+    (id: string) => {
+      setSessions((prev) => {
+        const session = prev.find((s) => s.id === id);
+        if (session) {
+          cleanupPopout(session);
+          cleanupMultiMonitor(session);
+          session._cleanupPaste?.();
+          session.keyboard.onkeydown = null;
+          session.keyboard.onkeyup = null;
+          session.keyboard.reset();
+          try {
+            session.client.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }
+        const remaining = prev.filter((s) => s.id !== id);
+        return remaining;
+      });
+      setTiledSessionIds((prev) => prev.filter((tid) => tid !== id));
+      setFocusedSessionIds((prev) => prev.filter((fid) => fid !== id));
+      setActiveSessionId((current) => {
+        if (current === id) {
+          const remaining = sessionsRef.current.filter((s) => s.id !== id);
+          return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+        }
+        return current;
+      });
+    },
+    [cleanupPopout, cleanupMultiMonitor]
+  );
 
   // Warn before closing the browser tab when sessions are active
   useEffect(() => {
@@ -382,27 +402,29 @@ export function SessionManagerProvider({ children, canShare = false }: { childre
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
     };
-    window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
   }, [sessions.length]);
 
   return (
-    <SessionManagerContext.Provider value={{
-      sessions,
-      activeSessionId,
-      setActiveSessionId,
-      createSession,
-      closeSession,
-      getSession,
-      tiledSessionIds,
-      setTiledSessionIds,
-      focusedSessionIds,
-      setFocusedSessionIds,
-      sessionBarCollapsed,
-      setSessionBarCollapsed,
-      barWidth,
-      canShare,
-    }}>
+    <SessionManagerContext.Provider
+      value={{
+        sessions,
+        activeSessionId,
+        setActiveSessionId,
+        createSession,
+        closeSession,
+        getSession,
+        tiledSessionIds,
+        setTiledSessionIds,
+        focusedSessionIds,
+        setFocusedSessionIds,
+        sessionBarCollapsed,
+        setSessionBarCollapsed,
+        barWidth,
+        canShare,
+      }}
+    >
       {children}
     </SessionManagerContext.Provider>
   );

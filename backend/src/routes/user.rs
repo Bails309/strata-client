@@ -2037,12 +2037,32 @@ pub async fn reveal_checkout_password(
 }
 
 /// Retry activation of an Approved checkout that failed to activate.
+///
+/// W2-10 — honours the optional `Idempotency-Key` request header. When
+/// present, the first successful (or failed) response is cached for
+/// `IDEMPOTENCY_TTL_HOURS` and any subsequent request carrying the same
+/// key for the same user+route short-circuits to the cached response.
+/// This protects against duplicate password resets when a client retries
+/// after a network failure.
 pub async fn retry_checkout_activation(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
     Path(checkout_id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, AppError> {
+    headers: HeaderMap,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    const ROUTE: &str = "POST /api/user/checkouts/:id/retry";
     let db = require_running(&state).await?;
+    let idem_key = crate::services::idempotency::extract_key(&headers)?;
+
+    if let Some(ref key) = idem_key {
+        if let Some(cached) =
+            crate::services::idempotency::lookup(&db.pool, user.id, ROUTE, key).await?
+        {
+            let status = axum::http::StatusCode::from_u16(cached.status_code as u16)
+                .unwrap_or(axum::http::StatusCode::OK);
+            return Ok((status, Json(cached.body)));
+        }
+    }
 
     let checkout: CheckoutRequest = sqlx::query_as(
         "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
@@ -2075,7 +2095,22 @@ pub async fn retry_checkout_activation(
             AppError::Validation(format!("Activation failed: {e}"))
         })?;
 
-    Ok(Json(json!({ "status": "Active" })))
+    let body = json!({ "status": "Active" });
+    if let Some(ref key) = idem_key {
+        if let Err(e) = crate::services::idempotency::store(
+            &db.pool,
+            user.id,
+            ROUTE,
+            key,
+            200,
+            &body,
+        )
+        .await
+        {
+            tracing::warn!("Failed to cache idempotency response for key {key}: {e}");
+        }
+    }
+    Ok((axum::http::StatusCode::OK, Json(body)))
 }
 
 pub async fn checkin_checkout(

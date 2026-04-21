@@ -6,18 +6,30 @@ use uuid::Uuid;
 
 /// Spawn the connection health-check worker.
 /// Runs every 120 seconds, TCP-probes each connection's hostname:port.
-pub fn spawn_health_check_worker(state: SharedState) {
-    tokio::spawn(async move {
-        // Wait 15s after boot before first run
-        tokio::time::sleep(Duration::from_secs(15)).await;
-        let mut interval = tokio::time::interval(Duration::from_secs(120));
-        loop {
-            interval.tick().await;
-            if let Err(e) = run_health_checks(state.clone()).await {
-                tracing::error!("Connection health-check worker error: {e}");
-            }
-        }
-    });
+///
+/// W2-6 / W2-7 — driven by the shared worker harness: listens on the
+/// shutdown token, bounds each iteration with a timeout, and backs off with
+/// jitter after an error.
+pub fn spawn_health_check_worker(
+    state: SharedState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    spawn_periodic(
+        PeriodicConfig {
+            label: "connection_health_check",
+            initial_delay: Duration::from_secs(15),
+            interval: Duration::from_secs(120),
+            // Each target has its own 5s TCP timeout; cap the whole pass at 90s.
+            iteration_timeout: Duration::from_secs(90),
+            error_backoff_base: Duration::from_secs(10),
+        },
+        shutdown,
+        move || {
+            let state = state.clone();
+            async move { run_health_checks(state).await }
+        },
+    )
 }
 
 #[derive(sqlx::FromRow)]

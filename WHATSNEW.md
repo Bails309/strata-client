@@ -1,3 +1,77 @@
+# What's New in v0.22.0
+
+> **Compliance & operations release.** No feature-facing changes for end users — v0.22.0 closes out the data-retention and operational-documentation items from the compliance tracker so administrators and on-call engineers have runtime-configurable retention windows, concrete runbooks, and a documented design record.
+
+---
+
+## 🗑️ Recording retention now actually deletes
+
+The scheduled recordings worker previously enforced `recordings_retention_days` only against **local files** in the recordings volume. Database rows and Azure Blob artefacts were left behind, so retention was partial and blob storage grew unbounded.
+
+As of v0.22.0, every sync pass:
+
+1. Selects every `recordings` row older than the configured window.
+2. Deletes the underlying artefact — Azure blob via the Transit-sealed storage account key, or local file from the recordings volume.
+3. Deletes the database row.
+
+Each pass logs `purged_azure`, `purged_local`, and `deleted_rows` totals for auditability.
+
+---
+
+## 👤 User hard-delete window is now configurable
+
+Soft-deleted users previously became unrecoverable after a **hardcoded 7 days**. That window was below many regulatory norms and could not be widened without a code change.
+
+As of v0.22.0 the window defaults to **90 days** and is editable by an administrator in the Admin Settings → **Security** tab → **Data Retention** section. Valid range is **1 to 3650 days**. The setting (`user_hard_delete_days`) is applied by the background cleanup worker via parameter-bound `make_interval(days => $1)` — no SQL interpolation, no downtime to change.
+
+> [!TIP]
+> Shortening the window does not immediately delete existing soft-deleted users — it simply means the next worker pass will consider any row whose `deleted_at` is older than the new window.
+
+---
+
+## 📚 Architecture Decision Records — now written down
+
+Five new ADRs capture decisions that were previously only in operator heads:
+
+| ADR | Topic |
+|---|---|
+| **ADR-0003** | Feature flags — why we kept boolean settings and when we'd promote to a real flag table |
+| **ADR-0004** | guacd connection model, protocol-parameter allow-list, and trust boundaries |
+| **ADR-0005** | JWT + refresh-token TTLs, single-use refresh rotation, global-logout lever |
+| **ADR-0006** | Vault Transit envelope format (`vault:<base64>`), rotate + rewrap path |
+| **ADR-0007** | Emergency approval bypass & scheduled-start checkouts — data model and audit invariants |
+
+All live under `docs/adr/`.
+
+---
+
+## 📘 On-call runbooks — copy-pasteable, not prose
+
+Five step-by-step runbooks were added under `docs/runbooks/`:
+
+- **Disaster Recovery** — RTO ≤ 4h / RPO ≤ 24h, full restore sequence including Vault unseal and DNS cutover.
+- **Security Incident Response** — SEV-1 containment in minutes, forensic SQL, remediation by incident class, post-incident cadence.
+- **Certificate Rotation** — ACME and internal-CA paths side by side, with rollback.
+- **Vault Operations** — unseal procedure, Transit key rotate + rewrap, and Shamir rekey for operator rotation.
+- **Database Operations** — streaming-replica failover, compensating-migration pattern, and panic-boot recovery.
+
+Each runbook follows a fixed template (Purpose → When to use → Prerequisites → Safety checks → Procedure → Verification → Rollback → Related).
+
+---
+
+## 🧭 Compliance tracker: Wave 5 closed
+
+`docs/compliance-tracker.md` now shows **59 of 62** items done (up from 46). Every Wave 5 item — the three scheduled-job tasks, the feature-flags ADR, the four engineering ADRs, and the five runbooks — is ticked. The three remaining open items are deferred Wave 4 refactor tasks (`W4-4`, `W4-5`, `W4-6`) with no functional impact; they're tracked for a dedicated follow-up.
+
+---
+
+## 🛠️ Under the hood
+
+- **Configurable retention windows** are bound via `make_interval(days => $1)` in every retention query path — no string concatenation of interval values anywhere.
+- **No schema changes**, no migrations, no restart-required settings. Everything in this release is driven by existing `settings`-table keys or new static files.
+
+---
+
 # What's New in v0.20.2
 
 > **v0.20.2 policy change**: Checkouts that go through an approver chain now **require a justification of at least 10 characters** (previously only Emergency Bypass required one). Approvers always see a written business reason before deciding. Self-approving users are unaffected — their comments remain optional.

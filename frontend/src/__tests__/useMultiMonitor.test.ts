@@ -1,18 +1,18 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import Guacamole from 'guacamole-common-js';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import Guacamole from "guacamole-common-js";
 
 // ── Mock guacamole-common-js ──────────────────────────────────────────
-vi.mock('guacamole-common-js', () => {
+vi.mock("guacamole-common-js", () => {
   const mockDisplay = {
-    getElement: () => document.createElement('div'),
+    getElement: () => document.createElement("div"),
     getWidth: () => 1920,
     getHeight: () => 1080,
     scale: vi.fn(),
     getDefaultLayer: () => ({
-      getCanvas: () => document.createElement('canvas'),
+      getCanvas: () => document.createElement("canvas"),
     }),
-    flatten: () => document.createElement('canvas'),
+    flatten: () => document.createElement("canvas"),
     onresize: null as any,
   };
   const mockClient = {
@@ -34,7 +34,9 @@ vi.mock('guacamole-common-js', () => {
 
   return {
     default: {
-      Client: vi.fn().mockImplementation(function () { return mockClient; }),
+      Client: vi.fn().mockImplementation(function () {
+        return mockClient;
+      }),
       WebSocketTunnel: vi.fn().mockImplementation(function () {
         return { onerror: null, onstatechange: null, oninstruction: null };
       }),
@@ -44,12 +46,18 @@ vi.mock('guacamole-common-js', () => {
         }),
         {
           State: vi.fn().mockImplementation(function (
-            x: number, y: number, l: boolean, m: boolean, r: boolean, u: boolean, d: boolean,
+            x: number,
+            y: number,
+            l: boolean,
+            m: boolean,
+            r: boolean,
+            u: boolean,
+            d: boolean
           ) {
             return { x, y, left: l, middle: m, right: r, up: u, down: d };
           }),
           Event: vi.fn(),
-        },
+        }
       ),
       Keyboard: vi.fn().mockImplementation(function () {
         return { onkeydown: null, onkeyup: null, reset: vi.fn() };
@@ -59,7 +67,7 @@ vi.mock('guacamole-common-js', () => {
 });
 
 // ── Mock winKeyProxy ──────────────────────────────────────────────────
-vi.mock('../utils/winKeyProxy', () => ({
+vi.mock("../utils/winKeyProxy", () => ({
   createWinKeyProxy: vi.fn(() => ({
     onkeydown: vi.fn(),
     onkeyup: vi.fn(),
@@ -67,23 +75,23 @@ vi.mock('../utils/winKeyProxy', () => ({
 }));
 
 // ── Import the hook ───────────────────────────────────────────────────
-import { useMultiMonitor } from '../components/useMultiMonitor';
+import { useMultiMonitor } from "../components/useMultiMonitor";
 
 function makeSession(overrides: Record<string, any> = {}) {
-  const tunnel = new Guacamole.WebSocketTunnel('ws://test');
+  const tunnel = new Guacamole.WebSocketTunnel("ws://test");
   const client = new Guacamole.Client(tunnel);
   return {
-    id: 'sess-1',
-    connectionId: 'conn-1',
-    name: 'Test Session',
-    protocol: 'rdp',
+    id: "sess-1",
+    connectionId: "conn-1",
+    name: "Test Session",
+    protocol: "rdp",
     client,
     tunnel,
-    displayEl: document.createElement('div'),
+    displayEl: document.createElement("div"),
     keyboard: {} as any,
     createdAt: Date.now(),
     filesystems: [],
-    remoteClipboard: '',
+    remoteClipboard: "",
     isPoppedOut: false,
     isMultiMonitor: false,
     _multiMonitor: undefined,
@@ -92,13 +100,13 @@ function makeSession(overrides: Record<string, any> = {}) {
 }
 
 function makeContainerRef() {
-  const div = document.createElement('div');
-  Object.defineProperty(div, 'clientWidth', { value: 1920, configurable: true });
-  Object.defineProperty(div, 'clientHeight', { value: 1080, configurable: true });
+  const div = document.createElement("div");
+  Object.defineProperty(div, "clientWidth", { value: 1920, configurable: true });
+  Object.defineProperty(div, "clientHeight", { value: 1080, configurable: true });
   return { current: div };
 }
 
-describe('useMultiMonitor', () => {
+describe("useMultiMonitor", () => {
   let originalGetScreenDetails: any;
 
   beforeEach(() => {
@@ -114,7 +122,7 @@ describe('useMultiMonitor', () => {
     }
   });
 
-  it('returns canMultiMonitor=false when Window Management API is unavailable', () => {
+  it("returns canMultiMonitor=false when Window Management API is unavailable", () => {
     delete (window as any).getScreenDetails;
     const session = makeSession();
     const containerRef = makeContainerRef();
@@ -126,7 +134,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.screenCount).toBe(0);
   });
 
-  it('returns canMultiMonitor=true when getScreenDetails is available', async () => {
+  it("returns canMultiMonitor=true when getScreenDetails is available", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -152,7 +160,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.screenCount).toBe(2);
   });
 
-  it('returns isMultiMonitor=false initially', () => {
+  it("returns isMultiMonitor=false initially", () => {
     delete (window as any).getScreenDetails;
     const session = makeSession();
     const containerRef = makeContainerRef();
@@ -161,16 +169,15 @@ describe('useMultiMonitor', () => {
     expect(result.current.isMultiMonitor).toBe(false);
   });
 
-  it('syncs isMultiMonitor from session._multiMonitor on session change', () => {
+  it("syncs isMultiMonitor from session._multiMonitor on session change", () => {
     delete (window as any).getScreenDetails;
     const session1 = makeSession({ _multiMonitor: { windows: [], cleanup: vi.fn() } });
     const session2 = makeSession({ _multiMonitor: undefined });
     const containerRef = makeContainerRef();
 
-    const { result, rerender } = renderHook(
-      ({ sess }) => useMultiMonitor(sess, containerRef),
-      { initialProps: { sess: session1 } },
-    );
+    const { result, rerender } = renderHook(({ sess }) => useMultiMonitor(sess, containerRef), {
+      initialProps: { sess: session1 },
+    });
 
     expect(result.current.isMultiMonitor).toBe(true);
 
@@ -178,9 +185,11 @@ describe('useMultiMonitor', () => {
     expect(result.current.isMultiMonitor).toBe(false);
   });
 
-  it('enableMultiMonitor does nothing when session is undefined', async () => {
+  it("enableMultiMonitor does nothing when session is undefined", async () => {
     (window as any).getScreenDetails = vi.fn().mockResolvedValue({
-      screens: [{ availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true }],
+      screens: [
+        { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
+      ],
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
@@ -201,7 +210,7 @@ describe('useMultiMonitor', () => {
     expect((window as any).getScreenDetails).not.toHaveBeenCalled();
   });
 
-  it('enableMultiMonitor does nothing when session is popped out', async () => {
+  it("enableMultiMonitor does nothing when session is popped out", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -223,9 +232,11 @@ describe('useMultiMonitor', () => {
     expect(result.current.isMultiMonitor).toBe(false);
   });
 
-  it('enableMultiMonitor does nothing when already in multi-monitor mode', async () => {
+  it("enableMultiMonitor does nothing when already in multi-monitor mode", async () => {
     (window as any).getScreenDetails = vi.fn().mockResolvedValue({
-      screens: [{ availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true }],
+      screens: [
+        { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
+      ],
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
@@ -249,8 +260,8 @@ describe('useMultiMonitor', () => {
     expect((window as any).getScreenDetails).not.toHaveBeenCalled();
   });
 
-  it('enableMultiMonitor handles getScreenDetails permission denial gracefully', async () => {
-    (window as any).getScreenDetails = vi.fn().mockRejectedValue(new Error('Permission denied'));
+  it("enableMultiMonitor handles getScreenDetails permission denial gracefully", async () => {
+    (window as any).getScreenDetails = vi.fn().mockRejectedValue(new Error("Permission denied"));
     const session = makeSession();
     const containerRef = makeContainerRef();
 
@@ -263,7 +274,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.isMultiMonitor).toBe(false);
   });
 
-  it('enableMultiMonitor returns early when only 1 screen detected', async () => {
+  it("enableMultiMonitor returns early when only 1 screen detected", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -284,7 +295,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.isMultiMonitor).toBe(false);
   });
 
-  it('enableMultiMonitor opens secondary windows and sets isMultiMonitor=true', async () => {
+  it("enableMultiMonitor opens secondary windows and sets isMultiMonitor=true", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -298,15 +309,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({
             drawImage: vi.fn(),
           }));
@@ -341,7 +352,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('enableMultiMonitor returns early if all popups are blocked', async () => {
+  it("enableMultiMonitor returns early if all popups are blocked", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -368,7 +379,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('disableMultiMonitor restores session state', async () => {
+  it("disableMultiMonitor restores session state", async () => {
     delete (window as any).getScreenDetails;
     const cleanupFn = vi.fn();
     const session = makeSession({
@@ -390,7 +401,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.isMultiMonitor).toBe(false);
   });
 
-  it('disableMultiMonitor does nothing when session is undefined', () => {
+  it("disableMultiMonitor does nothing when session is undefined", () => {
     delete (window as any).getScreenDetails;
     const containerRef = makeContainerRef();
 
@@ -401,7 +412,7 @@ describe('useMultiMonitor', () => {
     });
   });
 
-  it('disableMultiMonitor sends resize when originalSize was stored', async () => {
+  it("disableMultiMonitor sends resize when originalSize was stored", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -415,15 +426,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -459,7 +470,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('getLayout returns null when multi-monitor is not active', () => {
+  it("getLayout returns null when multi-monitor is not active", () => {
     delete (window as any).getScreenDetails;
     const session = makeSession();
     const containerRef = makeContainerRef();
@@ -468,7 +479,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.getLayout()).toBeNull();
   });
 
-  it('updatePrimarySize does nothing when layout is null', () => {
+  it("updatePrimarySize does nothing when layout is null", () => {
     delete (window as any).getScreenDetails;
     const session = makeSession();
     const containerRef = makeContainerRef();
@@ -480,7 +491,7 @@ describe('useMultiMonitor', () => {
     });
   });
 
-  it('handles Brave fingerprinted screens (all positions zeroed)', async () => {
+  it("handles Brave fingerprinted screens (all positions zeroed)", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 0, availHeight: 0, isPrimary: true },
@@ -492,21 +503,21 @@ describe('useMultiMonitor', () => {
     (window as any).getScreenDetails = vi.fn().mockResolvedValue(mockDetails);
 
     // Set fallback dimensions
-    Object.defineProperty(window.screen, 'availWidth', { value: 1920, configurable: true });
-    Object.defineProperty(window.screen, 'availHeight', { value: 1080, configurable: true });
+    Object.defineProperty(window.screen, "availWidth", { value: 1920, configurable: true });
+    Object.defineProperty(window.screen, "availHeight", { value: 1080, configurable: true });
 
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -536,7 +547,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('handles 3 screens correctly', async () => {
+  it("handles 3 screens correctly", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -551,15 +562,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -589,7 +600,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('handles some popups blocked (partial open)', async () => {
+  it("handles some popups blocked (partial open)", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -604,15 +615,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -625,9 +636,7 @@ describe('useMultiMonitor', () => {
     };
     const originalOpen = window.open;
     // First popup opens, second is blocked
-    window.open = vi.fn()
-      .mockReturnValueOnce(mockPopup)
-      .mockReturnValueOnce(null);
+    window.open = vi.fn().mockReturnValueOnce(mockPopup).mockReturnValueOnce(null);
 
     const session = makeSession();
     const containerRef = makeContainerRef();
@@ -644,7 +653,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('updatePrimarySize sends new aggregate size to server', async () => {
+  it("updatePrimarySize sends new aggregate size to server", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -658,15 +667,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -702,7 +711,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('updatePrimarySize skips when change is too small (< 2px)', async () => {
+  it("updatePrimarySize skips when change is too small (< 2px)", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -716,15 +725,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -759,7 +768,7 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('getLayout returns layout when multi-monitor is active', async () => {
+  it("getLayout returns layout when multi-monitor is active", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -773,15 +782,15 @@ describe('useMultiMonitor', () => {
     const mockPopup = {
       closed: false,
       document: {
-        title: '',
+        title: "",
         body: {
-          style: { margin: '', padding: '', overflow: '', background: '' },
+          style: { margin: "", padding: "", overflow: "", background: "" },
           appendChild: vi.fn(),
         },
         createElement: vi.fn(() => {
-          const canvas = document.createElement('canvas');
-          Object.defineProperty(canvas, 'clientWidth', { value: 1920 });
-          Object.defineProperty(canvas, 'clientHeight', { value: 1080 });
+          const canvas = document.createElement("canvas");
+          Object.defineProperty(canvas, "clientWidth", { value: 1920 });
+          Object.defineProperty(canvas, "clientHeight", { value: 1080 });
           (canvas as any).getContext = vi.fn(() => ({ drawImage: vi.fn() }));
           return canvas;
         }),
@@ -812,14 +821,14 @@ describe('useMultiMonitor', () => {
     window.open = originalOpen;
   });
 
-  it('screenschange listener updates screenCount', async () => {
+  it("screenschange listener updates screenCount", async () => {
     let screensChangeHandler: (() => void) | null = null;
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
       ],
       addEventListener: vi.fn((event: string, handler: () => void) => {
-        if (event === 'screenschange') screensChangeHandler = handler;
+        if (event === "screenschange") screensChangeHandler = handler;
       }),
       removeEventListener: vi.fn(),
     };
@@ -837,9 +846,13 @@ describe('useMultiMonitor', () => {
     expect(result.current.screenCount).toBe(1);
 
     // Simulate plugging in a second monitor
-    mockDetails.screens.push(
-      { availLeft: 1920, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: false },
-    );
+    mockDetails.screens.push({
+      availLeft: 1920,
+      availTop: 0,
+      availWidth: 1920,
+      availHeight: 1080,
+      isPrimary: false,
+    });
 
     if (screensChangeHandler) {
       await act(async () => {
@@ -850,7 +863,7 @@ describe('useMultiMonitor', () => {
     expect(result.current.screenCount).toBe(2);
   });
 
-  it('cleans up screenschange listener on unmount', async () => {
+  it("cleans up screenschange listener on unmount", async () => {
     const mockDetails = {
       screens: [
         { availLeft: 0, availTop: 0, availWidth: 1920, availHeight: 1080, isPrimary: true },
@@ -872,8 +885,8 @@ describe('useMultiMonitor', () => {
     unmount();
 
     expect(mockDetails.removeEventListener).toHaveBeenCalledWith(
-      'screenschange',
-      expect.any(Function),
+      "screenschange",
+      expect.any(Function)
     );
   });
 });

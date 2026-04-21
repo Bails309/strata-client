@@ -1,25 +1,25 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Credentials from './pages/Credentials';
-import AdminSettings from './pages/AdminSettings';
-import SessionClient from './pages/SessionClient';
-import TiledView from './pages/TiledView';
-import SharedViewer from './pages/SharedViewer';
-import AuditLogs from './pages/AuditLogs';
-import NvrPlayer from './pages/NvrPlayer';
-import Documentation from './pages/Documentation';
-import Sessions from './pages/Sessions';
-import Approvals from './pages/Approvals';
-import Layout from './components/Layout';
-import { SessionManagerProvider } from './components/SessionManager';
-import SessionBar from './components/SessionBar';
-import WhatsNewModal from './components/WhatsNewModal';
-import DisclaimerModal, { TERMS_VERSION } from './components/DisclaimerModal';
-import SessionTimeoutWarning from './components/SessionTimeoutWarning';
-import { checkAuthStatus, MeResponse } from './api';
-import { SettingsProvider } from './contexts/SettingsContext';
+import { useEffect, useState, useCallback } from "react";
+import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import Login from "./pages/Login";
+import Dashboard from "./pages/Dashboard";
+import Credentials from "./pages/Credentials";
+import AdminSettings from "./pages/AdminSettings";
+import SessionClient from "./pages/SessionClient";
+import TiledView from "./pages/TiledView";
+import SharedViewer from "./pages/SharedViewer";
+import AuditLogs from "./pages/AuditLogs";
+import NvrPlayer from "./pages/NvrPlayer";
+import Documentation from "./pages/Documentation";
+import Sessions from "./pages/Sessions";
+import Approvals from "./pages/Approvals";
+import Layout from "./components/Layout";
+import { SessionManagerProvider } from "./components/SessionManager";
+import SessionBar from "./components/SessionBar";
+import WhatsNewModal from "./components/WhatsNewModal";
+import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
+import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
+import { checkAuthStatus, MeResponse } from "./api";
+import { SettingsProvider } from "./contexts/SettingsContext";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -27,7 +27,7 @@ export default function App() {
   const navigate = useNavigate();
 
   const checkAuth = useCallback(async () => {
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem("access_token");
     if (!token) {
       setAuthenticated(false);
       return;
@@ -38,8 +38,8 @@ export default function App() {
     // token is stale, expired, or signed with a rotated key.
     const result = await checkAuthStatus();
     if (!result.authenticated || !result.user) {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('token_expiry');
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("token_expiry");
       setAuthenticated(false);
       return;
     }
@@ -58,28 +58,33 @@ export default function App() {
     if (result.authenticated && result.user) {
       setUser(result.user);
       setAuthenticated(true);
-      navigate('/');
+      navigate("/");
     } else {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('token_expiry');
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("token_expiry");
       setAuthenticated(false);
     }
   }
 
   function handleLogout() {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('token_expiry');
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("token_expiry");
     setAuthenticated(false);
     setUser(null);
-    navigate('/login');
+    navigate("/login");
   }
 
   if (authenticated === null) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="w-8 h-8 rounded-full animate-spin mx-auto mb-4"
-            style={{ border: '3px solid var(--color-border)', borderTopColor: 'var(--color-accent)' }} />
+          <div
+            className="w-8 h-8 rounded-full animate-spin mx-auto mb-4"
+            style={{
+              border: "3px solid var(--color-border)",
+              borderTopColor: "var(--color-accent)",
+            }}
+          />
           <p className="text-txt-secondary text-sm">Loading…</p>
         </div>
       </div>
@@ -88,7 +93,9 @@ export default function App() {
 
   return (
     <SettingsProvider>
-      <SessionManagerProvider canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}>
+      <SessionManagerProvider
+        canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
+      >
         {!authenticated ? (
           <Routes>
             <Route path="/login" element={<Login onLogin={handleLogin} />} />
@@ -97,7 +104,17 @@ export default function App() {
           </Routes>
         ) : user?.terms_accepted_version !== TERMS_VERSION ? (
           <DisclaimerModal
-            onAccept={() => setUser(u => u ? { ...u, terms_accepted_at: new Date().toISOString(), terms_accepted_version: TERMS_VERSION } : u)}
+            onAccept={() =>
+              setUser((u) =>
+                u
+                  ? {
+                      ...u,
+                      terms_accepted_at: new Date().toISOString(),
+                      terms_accepted_version: TERMS_VERSION,
+                    }
+                  : u
+              )
+            }
             onDecline={handleLogout}
           />
         ) : (
@@ -105,14 +122,75 @@ export default function App() {
             <Routes>
               <Route element={<Layout user={user} onLogout={handleLogout} />}>
                 <Route path="/" element={<Dashboard />} />
-                <Route path="/credentials" element={user?.vault_configured ? <Credentials vaultConfigured={true} /> : <Navigate to="/" replace />} />
-                <Route path="/admin" element={(user?.can_manage_system || user?.can_manage_users || user?.can_manage_connections || user?.can_create_users || user?.can_create_user_groups || user?.can_create_connections || user?.can_create_connection_folders || user?.can_create_sharing_profiles) ? <AdminSettings user={user} /> : <Navigate to="/" replace />} />
+                <Route
+                  path="/credentials"
+                  element={
+                    user?.vault_configured ? (
+                      <Credentials vaultConfigured={true} />
+                    ) : (
+                      <Navigate to="/" replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/admin"
+                  element={
+                    user?.can_manage_system ||
+                    user?.can_manage_users ||
+                    user?.can_manage_connections ||
+                    user?.can_create_users ||
+                    user?.can_create_user_groups ||
+                    user?.can_create_connections ||
+                    user?.can_create_connection_folders ||
+                    user?.can_create_sharing_profiles ? (
+                      <AdminSettings user={user} />
+                    ) : (
+                      <Navigate to="/" replace />
+                    )
+                  }
+                />
                 <Route path="/session/:connectionId" element={<SessionClient />} />
                 <Route path="/tiled" element={<TiledView />} />
-                <Route path="/observe/:sessionId" element={(user?.can_manage_system || user?.can_view_audit_logs || user?.can_view_sessions) ? <NvrPlayer /> : <Navigate to="/" replace />} />
-                <Route path="/audit" element={(user?.can_manage_system || user?.can_view_audit_logs) ? <AuditLogs /> : <Navigate to="/" replace />} />
-                <Route path="/sessions" element={(user?.can_view_sessions || user?.can_manage_system || user?.can_view_audit_logs) ? <Sessions user={user} /> : <Navigate to="/" replace />} />
-                <Route path="/approvals" element={user?.vault_configured ? <Approvals user={user} /> : <Navigate to="/" replace />} />
+                <Route
+                  path="/observe/:sessionId"
+                  element={
+                    user?.can_manage_system ||
+                    user?.can_view_audit_logs ||
+                    user?.can_view_sessions ? (
+                      <NvrPlayer />
+                    ) : (
+                      <Navigate to="/" replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/audit"
+                  element={
+                    user?.can_manage_system || user?.can_view_audit_logs ? (
+                      <AuditLogs />
+                    ) : (
+                      <Navigate to="/" replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/sessions"
+                  element={
+                    user?.can_view_sessions ||
+                    user?.can_manage_system ||
+                    user?.can_view_audit_logs ? (
+                      <Sessions user={user} />
+                    ) : (
+                      <Navigate to="/" replace />
+                    )
+                  }
+                />
+                <Route
+                  path="/approvals"
+                  element={
+                    user?.vault_configured ? <Approvals user={user} /> : <Navigate to="/" replace />
+                  }
+                />
                 <Route path="/docs" element={<Documentation user={user} />} />
               </Route>
               <Route path="/shared/:shareToken" element={<SharedViewer />} />

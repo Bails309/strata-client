@@ -145,8 +145,23 @@ pub async fn upload(
 
     let session_id =
         session_id.ok_or_else(|| AppError::Validation("Missing session_id field".into()))?;
-    let (filename, content_type, temp_path, size) =
+    let (filename, claimed_content_type, temp_path, size) =
         file_data.ok_or_else(|| AppError::Validation("Missing file field".into()))?;
+
+    // ── W3-6 — magic-number / MIME sniffing ────────────────────────────
+    //
+    // The multipart header-level `content_type` is attacker-controlled:
+    // a malicious client can upload an `.exe` and label it `image/png`.
+    // We re-detect the type by reading the first 512 bytes from disk and
+    // running it through `infer`, which matches against known magic-number
+    // signatures. If the claimed type is a concrete MIME type (e.g.
+    // "image/png") we require the detected type to match; unknown claimed
+    // types ("application/octet-stream" or empty) fall through to the
+    // detected value so generic downloads still work.
+    let content_type = sniff_mime(&temp_path, &claimed_content_type).await.map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        e
+    })?;
 
     let meta = file_store
         .store_from_path(
@@ -179,6 +194,68 @@ pub async fn upload(
         content_type: meta.content_type,
         download_url: format!("/api/files/{}", meta.token),
     }))
+}
+
+/// Read the first 512 bytes of `path` and run them through `infer` to
+/// derive the true MIME type. If the client's claimed `content_type` is a
+/// concrete `type/subtype` (not `application/octet-stream` or empty), we
+/// require it to match the detected type. A mismatch is rejected with
+/// `AppError::Validation` so a `.exe` labelled `image/png` never lands in
+/// the CDN. Detected-then-claimed wins when `infer` returns a result; we
+/// fall back to the claimed value for types `infer` does not recognise
+/// (e.g. plain text, CSV) as long as the claim looks well-formed.
+async fn sniff_mime(
+    path: &std::path::Path,
+    claimed: &str,
+) -> Result<String, AppError> {
+    use tokio::io::AsyncReadExt;
+    const HEAD_BYTES: usize = 512;
+
+    let mut f = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to reopen upload: {e}")))?;
+    let mut buf = vec![0u8; HEAD_BYTES];
+    let n = f
+        .read(&mut buf)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read upload head: {e}")))?;
+    buf.truncate(n);
+
+    let detected = infer::get(&buf).map(|k| k.mime_type().to_string());
+    let claimed_trimmed = claimed.trim();
+    let claim_is_generic = claimed_trimmed.is_empty()
+        || claimed_trimmed.eq_ignore_ascii_case("application/octet-stream");
+
+    match (detected, claim_is_generic) {
+        (Some(d), true) => Ok(d),
+        (Some(d), false) => {
+            if d.eq_ignore_ascii_case(claimed_trimmed) {
+                Ok(d)
+            } else {
+                Err(AppError::Validation(format!(
+                    "Declared content type '{claimed_trimmed}' does not match detected '{d}'"
+                )))
+            }
+        }
+        (None, _) => {
+            // `infer` has no signature for this file (likely plain text /
+            // CSV / JSON). Accept the claim as-is, but enforce a sane
+            // MIME shape to prevent header-injection shenanigans.
+            if claim_is_generic {
+                return Ok("application/octet-stream".into());
+            }
+            if !claimed_trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '+' | '-'))
+                || !claimed_trimmed.contains('/')
+            {
+                return Err(AppError::Validation(format!(
+                    "Invalid content type: {claimed_trimmed}"
+                )));
+            }
+            Ok(claimed_trimmed.to_string())
+        }
+    }
 }
 
 /// `GET /api/files/:token` — Download a file.
@@ -372,5 +449,75 @@ mod tests {
         assert_eq!(MAX_DOWNLOADS_PER_IP, 60);
         assert_eq!(DOWNLOAD_WINDOW_SECS, 60);
         const { assert!(MAX_DOWNLOAD_RATE_ENTRIES > 0) };
+    }
+
+    // ── W4-7 / W4-8: MIME sniffer coverage ────────────────────────
+
+    async fn write_temp(contents: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir();
+        let name = format!("sniff-test-{}.bin", Uuid::new_v4());
+        let path = dir.join(name);
+        tokio::fs::write(&path, contents).await.unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_accepts_matching_png() {
+        // 8-byte PNG magic → infer returns image/png.
+        let path = write_temp(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).await;
+        let out = sniff_mime(&path, "image/png").await.unwrap();
+        assert_eq!(out, "image/png");
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_rejects_png_labelled_as_jpeg() {
+        // W4-8: payload/label mismatch must fail validation, never succeed.
+        let path = write_temp(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).await;
+        let err = sniff_mime(&path, "image/jpeg").await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "got {err:?}");
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_replaces_octet_stream_with_detected() {
+        let path = write_temp(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).await;
+        let out = sniff_mime(&path, "application/octet-stream").await.unwrap();
+        assert_eq!(out, "image/png");
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_accepts_well_formed_claim_for_unknown_body() {
+        // Plain ASCII — infer returns None; a sane claim survives.
+        let path = write_temp(b"hello,world\n1,2\n").await;
+        let out = sniff_mime(&path, "text/csv").await.unwrap();
+        assert_eq!(out, "text/csv");
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_rejects_header_injection_in_claim() {
+        // W4-8: CRLF in a claimed MIME is a classic header-injection probe.
+        let path = write_temp(b"just some text").await;
+        let err = sniff_mime(&path, "text/plain\r\nX-Evil: 1").await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_rejects_missing_slash_in_claim() {
+        let path = write_temp(b"bytes").await;
+        let err = sniff_mime(&path, "notamime").await.unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn sniff_mime_empty_file_falls_back_to_octet_stream_claim() {
+        let path = write_temp(b"").await;
+        let out = sniff_mime(&path, "").await.unwrap();
+        assert_eq!(out, "application/octet-stream");
+        let _ = tokio::fs::remove_file(path).await;
     }
 }

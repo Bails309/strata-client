@@ -1,0 +1,57 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":timezone(Europe/London)"
+  ],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 0,
+
+  "docker": {
+    "pinDigests": true
+  },
+  "dockerfile": {
+    "pinDigests": true
+  },
+  "docker-compose": {
+    "pinDigests": true
+  },
+
+  "packageRules": [
+    {
+      "description": "Group minor+patch updates together to reduce review noise.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "minor/patch (all)",
+      "automerge": false
+    },
+    {
+      "description": "Security advisories still get their own PR.",
+      "matchPackagePatterns": ["*"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchDatasources": ["rust-crate", "npm", "docker"],
+      "vulnerabilityAlerts": {
+        "groupName": null,
+        "labels": ["security"]
+      }
+    },
+    {
+      "description": "Pin GitHub Actions by commit SHA (§13.2 supply-chain).",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Rust 1.x minor bumps — review, do not auto-merge.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["rust"],
+      "matchUpdateTypes": ["major", "minor"],
+      "automerge": false
+    }
+  ],
+
+  "vulnerabilityAlerts": {
+    "labels": ["security", "dependencies"],
+    "assignees": ["@platform-engineering"]
+  }
+}

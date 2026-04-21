@@ -253,9 +253,11 @@ strata-client/
 │           ├── health_check.rs  Background TCP health probes for connections
 │           ├── kerberos.rs    Multi-realm krb5.conf generation
 │           ├── middleware.rs   JWT auth + admin middleware
-│           ├── recordings.rs  Recording config
+│           ├── recordings.rs  Recording config + scheduled retention purge (DB rows, Azure blobs, local files)
+│           ├── session_cleanup.rs  Periodic active_sessions expiry sweep
 │           ├── session_registry.rs  NVR ring buffer + live session tracking
 │           ├── settings.rs    system_settings CRUD
+│           ├── user_cleanup.rs  Hard-delete soft-deleted users after configurable window (default 90 days)
 │           ├── file_store.rs  Session-scoped temporary file storage
 │           ├── vault.rs       Envelope encryption
 │           └── vault_provisioning.rs  Bundled Vault lifecycle
@@ -283,3 +285,31 @@ strata-client/
 ├── NOTICE                 Third-party attributions
 └── README.md
 ```
+
+## Architecture Decision Records
+
+Design decisions whose rationale outlives any single commit live as
+numbered ADRs under [adr/](adr/):
+
+| ADR | Topic |
+|---|---|
+| [ADR-0001](adr/ADR-0001-rate-limit-single-instance.md) | Rate-limit state: single-instance constraint with promotion criteria |
+| [ADR-0002](adr/ADR-0002-csrf-samesite-strict.md) | CSRF strategy: `SameSite=Strict` as the compensating control |
+| [ADR-0003](adr/ADR-0003-feature-flags-deferred.md) | Feature flags: boolean `settings` keys instead of a dedicated table |
+| [ADR-0004](adr/ADR-0004-guacd-connection-model.md) | guacd connection model, protocol-parameter allow-list, and trust boundaries |
+| [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) | JWT + refresh-token TTLs, single-use rotation, forced-logout lever |
+| [ADR-0006](adr/ADR-0006-vault-transit-envelope.md) | Vault Transit envelope (`vault:<base64>`), rotate + rewrap path |
+| [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts |
+
+## Operational Runbooks
+
+Step-by-step procedures for on-call engineers live under
+[runbooks/](runbooks/):
+
+| Runbook | When to use |
+|---|---|
+| [disaster-recovery.md](runbooks/disaster-recovery.md) | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h) |
+| [security-incident.md](runbooks/security-incident.md) | Credential exposure, token replay, unauthorised config change |
+| [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA) |
+| [vault-operations.md](runbooks/vault-operations.md) | Vault unseal, Transit key rotate + rewrap, Shamir rekey |
+| [database-operations.md](runbooks/database-operations.md) | Replica promotion, migration rollback, panic-boot recovery |

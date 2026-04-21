@@ -1,0 +1,13 @@
+{
+  "name": "strata-client-root",
+  "private": true,
+  "scripts": {
+    "prepare": "husky install",
+    "lint": "npm --prefix frontend run lint",
+    "format": "npm --prefix frontend run format"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.11"
+  }
+}

@@ -571,10 +571,21 @@ All services in the Docker Compose stack apply security constraints:
 
 Session recording captures are managed by a background sync task:
 
-- **Retention policy** — Recordings older than the configured `retention_days` (default: 30) are automatically deleted from local storage by the background sync task
-- **Azure Blob sync** — When Azure Blob storage is configured, local recordings are uploaded and then deleted locally to prevent disk growth
-- **Write protection** — Files modified within the last 30 seconds are skipped to avoid deleting active recordings
-- **Configurable** — Retention period and storage type (local / Azure Blob) are set via the Admin UI
+- **Retention policy** — Recordings older than the configured `recordings_retention_days` (default: 30) are automatically deleted on every sync pass. Starting in v0.22.0, retention is enforced **end-to-end**: each pass selects every `recordings` row older than the window, deletes the backing artefact (Azure blob via the Transit-sealed storage account key, or local file from the recordings volume), and then deletes the database row. Totals are logged as `purged_azure`, `purged_local`, and `deleted_rows` for auditability.
+- **Azure Blob sync** — When Azure Blob storage is configured, local recordings are uploaded and then deleted locally to prevent disk growth. Retention (above) also removes the remote blob once the row ages out.
+- **Write protection** — Files modified within the last 30 seconds are skipped to avoid deleting active recordings.
+- **Configurable** — Retention period and storage type (local / Azure Blob) are set via the Admin UI.
+
+---
+
+## User Lifecycle Retention
+
+Soft-deleted users (admin UI → Users → Delete) are recoverable for a configurable window before the background cleanup worker removes their record and any associated recordings:
+
+- **Setting** — `user_hard_delete_days` (default **90 days**, valid range 1–3650). Editable in Admin Settings → Security → Data Retention.
+- **Worker** — `backend/src/services/user_cleanup.rs` runs every 24 h. It reads the current setting, pre-purges the user's recordings (Azure + local), then executes `DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)`.
+- **SQL safety** — The day window is parameter-bound via `make_interval(days => $1)` after an `i32` parse + positive-integer guard. No string interpolation is used on any retention query.
+- **Effect of shortening the window** — Shortening does not retroactively delete users; the next worker pass simply applies the new window and removes any row whose `deleted_at` is already older than the new threshold.
 
 ---
 

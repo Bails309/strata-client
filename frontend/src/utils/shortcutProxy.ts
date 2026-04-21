@@ -28,10 +28,10 @@
  * handles as harmless no-ops.
  */
 
-const ALT_L   = 0xFFE9;
-const CTRL_L  = 0xFFE3;
-const SUPER_L = 0xFFEB;
-const TAB     = 0xFF09;
+const ALT_L = 0xffe9;
+const CTRL_L = 0xffe3;
+const SUPER_L = 0xffeb;
+const TAB = 0xff09;
 
 export type SendKey = (pressed: 0 | 1, keysym: number) => void;
 
@@ -48,7 +48,7 @@ export type SendKey = (pressed: 0 | 1, keysym: number) => void;
 export function installShortcutProxy(
   doc: Document,
   sendKey: SendKey,
-  isFocused?: () => boolean,
+  isFocused?: () => boolean
 ): () => void {
   // Track trigger keys we intercepted so we can also swallow their keyup.
   const interceptedCodes = new Set<string>();
@@ -57,7 +57,7 @@ export function installShortcutProxy(
     if (isFocused && !isFocused()) return;
 
     // ── Ctrl+Alt+` → Win+Tab ──
-    if (e.ctrlKey && e.altKey && e.code === 'Backquote') {
+    if (e.ctrlKey && e.altKey && e.code === "Backquote") {
       e.preventDefault();
       e.stopPropagation();
       interceptedCodes.add(e.code);
@@ -80,13 +80,15 @@ export function installShortcutProxy(
     }
   };
 
-  doc.addEventListener('keydown', onKeyDown, true);
-  doc.addEventListener('keyup', onKeyUp, true);
+  doc.addEventListener("keydown", onKeyDown, true);
+  doc.addEventListener("keyup", onKeyUp, true);
 
   return () => {
     try {
-      doc.removeEventListener('keydown', onKeyDown, true);
-      doc.removeEventListener('keyup', onKeyUp, true);
-    } catch { /* document may already be destroyed (e.g. popup closed) */ }
+      doc.removeEventListener("keydown", onKeyDown, true);
+      doc.removeEventListener("keyup", onKeyUp, true);
+    } catch {
+      /* document may already be destroyed (e.g. popup closed) */
+    }
   };
 }

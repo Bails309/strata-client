@@ -1,17 +1,27 @@
 use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::recordings;
+use crate::services::worker::{spawn_periodic, PeriodicConfig};
 use std::time::Duration;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
-pub fn spawn_cleanup_task(state: SharedState) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600)); // Once a day
-        loop {
-            interval.tick().await;
-            if let Err(e) = run_cleanup(state.clone()).await {
-                tracing::error!("User cleanup task failed: {e}");
-            }
-        }
-    });
+/// W2-4 / W2-7 — shared worker harness: cancellation, per-iteration timeout,
+/// jittered error backoff.
+pub fn spawn_cleanup_task(state: SharedState, shutdown: CancellationToken) -> JoinHandle<()> {
+    spawn_periodic(
+        PeriodicConfig {
+            label: "user_cleanup",
+            initial_delay: Duration::from_secs(60),
+            interval: Duration::from_secs(24 * 3600),
+            iteration_timeout: Duration::from_secs(30 * 60),
+            error_backoff_base: Duration::from_secs(60),
+        },
+        shutdown,
+        move || {
+            let state = state.clone();
+            async move { run_cleanup(state).await }
+        },
+    )
 }
 
 async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
@@ -27,15 +37,30 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         (db, vault)
     };
 
-    tracing::info!("Running user cleanup (hard-deleting users soft-deleted for >7 days) ...");
+    // W5-2: window is configurable via the `user_hard_delete_days` setting;
+    // defaults to 90 days when unset or malformed. Operators can set it to a
+    // smaller value for shorter retention; zero or negative values fall back
+    // to the default so a misconfiguration cannot hard-delete everything.
+    let days = crate::services::settings::get(&db.pool, "user_hard_delete_days")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<i32>().ok())
+        .filter(|d| *d > 0)
+        .unwrap_or(90);
+
+    tracing::info!(
+        "Running user cleanup (hard-deleting users soft-deleted for >{days} days) ..."
+    );
 
     // ── Purge recording files for users about to be hard-deleted ──
     let doomed_recordings: Vec<(String, String)> = sqlx::query_as(
         "SELECT r.storage_path, r.storage_type
          FROM recordings r
          JOIN users u ON r.user_id = u.id
-         WHERE u.deleted_at < now() - INTERVAL '7 days'",
+         WHERE u.deleted_at < now() - make_interval(days => $1)",
     )
+    .bind(days)
     .fetch_all(&db.pool)
     .await?;
 
@@ -81,9 +106,12 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     }
 
     // ── Hard-delete the users (CASCADE removes DB rows for recordings, tags, etc.) ──
-    let result = sqlx::query("DELETE FROM users WHERE deleted_at < now() - INTERVAL '7 days'")
-        .execute(&db.pool)
-        .await?;
+    let result = sqlx::query(
+        "DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)",
+    )
+    .bind(days)
+    .execute(&db.pool)
+    .await?;
 
     if result.rows_affected() > 0 {
         tracing::info!("Hard-deleted {} user(s)", result.rows_affected());

@@ -1,26 +1,26 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 // Mock the api module
-vi.mock('../api', () => ({
+vi.mock("../api", () => ({
   getMe: vi.fn().mockResolvedValue({
-    username: 'testadmin',
-    role: 'admin',
-    client_ip: '10.0.0.1',
+    username: "testadmin",
+    role: "admin",
+    client_ip: "10.0.0.1",
     watermark_enabled: false,
   }),
 }));
 
 // Mock the ThemeProvider
-vi.mock('../components/ThemeProvider', () => ({
-  useTheme: () => ({ theme: 'dark', preference: 'dark', setPreference: vi.fn(), cycle: vi.fn() }),
+vi.mock("../components/ThemeProvider", () => ({
+  useTheme: () => ({ theme: "dark", preference: "dark", setPreference: vi.fn(), cycle: vi.fn() }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 // Mock the SessionManager
-vi.mock('../components/SessionManager', () => ({
+vi.mock("../components/SessionManager", () => ({
   useSessionManager: () => ({
     sessions: [],
     activeSessionId: null,
@@ -33,16 +33,16 @@ vi.mock('../components/SessionManager', () => ({
   SessionManagerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import Layout, { useSidebarWidth } from '../components/Layout';
+import Layout, { useSidebarWidth } from "../components/Layout";
 
-const adminUser: import('../api').MeResponse = {
-  id: 'u1',
-  username: 'testadmin',
-  role: 'admin',
-  client_ip: '10.0.0.1',
+const adminUser: import("../api").MeResponse = {
+  id: "u1",
+  username: "testadmin",
+  role: "admin",
+  client_ip: "10.0.0.1",
   watermark_enabled: false,
   vault_configured: true,
-  terms_accepted_at: '2024-01-01T00:00:00Z',
+  terms_accepted_at: "2024-01-01T00:00:00Z",
   terms_accepted_version: 1,
   can_manage_system: true,
   can_manage_users: true,
@@ -57,58 +57,61 @@ const adminUser: import('../api').MeResponse = {
   is_approver: false,
 };
 
-function renderLayout(route = '/') {
+function renderLayout(route = "/") {
   return render(
     <MemoryRouter initialEntries={[route]}>
       <Layout user={adminUser} onLogout={vi.fn()} />
-    </MemoryRouter>,
+    </MemoryRouter>
   );
 }
 
-describe('Layout', () => {
-  it('renders navigation links', () => {
+describe("Layout", () => {
+  it("renders navigation links", () => {
     renderLayout();
-    expect(screen.getByText('Connections')).toBeInTheDocument();
-    expect(screen.getByText('Admin')).toBeInTheDocument();
-    expect(screen.getByText('Audit Logs')).toBeInTheDocument();
+    expect(screen.getByText("Connections")).toBeInTheDocument();
+    expect(screen.getByText("Admin")).toBeInTheDocument();
+    expect(screen.getByText("Audit Logs")).toBeInTheDocument();
   });
 
-  it('renders credentials link', () => {
+  it("renders credentials link", () => {
     renderLayout();
-    expect(screen.getByText('Credentials')).toBeInTheDocument();
+    expect(screen.getByText("Credentials")).toBeInTheDocument();
   });
 
-  it('renders brand logo', () => {
+  it("renders brand logo", () => {
     renderLayout();
-    const logo = screen.getByAltText('Strata Client');
+    const logo = screen.getByAltText("Strata Client");
     expect(logo).toBeInTheDocument();
   });
 
-  it('shows username and role after loading', () => {
+  it("shows username and role after loading", () => {
     renderLayout();
-    expect(screen.getByText('testadmin')).toBeInTheDocument();
-    expect(screen.getByText('admin')).toBeInTheDocument();
+    expect(screen.getByText("testadmin")).toBeInTheDocument();
+    expect(screen.getByText("admin")).toBeInTheDocument();
   });
 
-  it('highlights active nav item based on route', () => {
-    renderLayout('/admin');
-    const adminLink = screen.getByText('Admin').closest('a');
-    expect(adminLink?.className).toContain('font-semibold');
+  it("highlights active nav item based on route", () => {
+    renderLayout("/admin");
+    const adminLink = screen.getByText("Admin").closest("a");
+    expect(adminLink?.className).toContain("font-semibold");
   });
 
-  it('collapses sidebar when collapse button is clicked', async () => {
+  it("collapses sidebar when collapse button is clicked", async () => {
     renderLayout();
-    const collapseBtn = screen.getByTitle('Collapse sidebar');
+    const collapseBtn = screen.getByTitle("Collapse sidebar");
     expect(collapseBtn).toBeInTheDocument();
     await userEvent.click(collapseBtn);
-    expect(screen.getByTitle('Expand sidebar')).toBeInTheDocument();
+    expect(screen.getByTitle("Expand sidebar")).toBeInTheDocument();
   });
 });
 
-describe('useSidebarWidth', () => {
-  it('returns default width outside provider', () => {
-    function Inner() { const w = useSidebarWidth(); return <span>{w}</span>; }
+describe("useSidebarWidth", () => {
+  it("returns default width outside provider", () => {
+    function Inner() {
+      const w = useSidebarWidth();
+      return <span>{w}</span>;
+    }
     render(<Inner />);
-    expect(screen.getByText('180')).toBeInTheDocument();
+    expect(screen.getByText("180")).toBeInTheDocument();
   });
 });

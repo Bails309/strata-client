@@ -1,5 +1,10 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { uploadQuickShareFile, listQuickShareFiles, deleteQuickShareFile, QuickShareFile } from '../api';
+import { useState, useRef, useCallback, useEffect } from "react";
+import {
+  uploadQuickShareFile,
+  listQuickShareFiles,
+  deleteQuickShareFile,
+  QuickShareFile,
+} from "../api";
 
 interface Props {
   connectionId: string;
@@ -15,7 +20,12 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-export default function QuickShare({ connectionId, onClose, sidebarWidth, sessionBarCollapsed }: Props) {
+export default function QuickShare({
+  connectionId,
+  onClose,
+  sidebarWidth,
+  sessionBarCollapsed,
+}: Props) {
   const [files, setFiles] = useState<QuickShareFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,29 +46,32 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
     loadFiles();
   }, [loadFiles]);
 
-  const handleUpload = useCallback(async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-    setError(null);
-    setUploading(true);
-    try {
-      for (const file of Array.from(fileList)) {
-        await uploadQuickShareFile(connectionId, file);
+  const handleUpload = useCallback(
+    async (fileList: FileList | null) => {
+      if (!fileList || fileList.length === 0) return;
+      setError(null);
+      setUploading(true);
+      try {
+        for (const file of Array.from(fileList)) {
+          await uploadQuickShareFile(connectionId, file);
+        }
+        await loadFiles();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Upload failed");
+      } finally {
+        setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
       }
-      await loadFiles();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  }, [connectionId, loadFiles]);
+    },
+    [connectionId, loadFiles]
+  );
 
   const handleDelete = useCallback(async (token: string) => {
     try {
       await deleteQuickShareFile(token);
-      setFiles(f => f.filter(file => file.token !== token));
+      setFiles((f) => f.filter((file) => file.token !== token));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
+      setError(e instanceof Error ? e.message : "Delete failed");
     }
   }, []);
 
@@ -70,11 +83,14 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
     });
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    handleUpload(e.dataTransfer.files);
-  }, [handleUpload]);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      handleUpload(e.dataTransfer.files);
+    },
+    [handleUpload]
+  );
 
   return (
     <div
@@ -84,7 +100,16 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-white/5 bg-black/20">
         <div className="flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
             <polyline points="17 8 12 3 7 8" />
             <line x1="12" y1="3" x2="12" y2="15" />
@@ -92,7 +117,15 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
           <span className="text-sm font-bold tracking-tight">Quick Share</span>
         </div>
         <button onClick={onClose} className="text-txt-secondary hover:text-txt-primary">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
             <path d="M18 6L6 18M6 6l12 12" />
           </svg>
         </button>
@@ -101,8 +134,11 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
       {/* Upload area */}
       <div className="p-4 border-b border-white/5">
         <div
-          className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${dragOver ? 'border-accent bg-accent/10' : 'border-white/10 hover:border-white/20 hover:bg-white/5'}`}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${dragOver ? "border-accent bg-accent/10" : "border-white/10 hover:border-white/20 hover:bg-white/5"}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
@@ -116,19 +152,40 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
           />
           {uploading ? (
             <div className="flex flex-col items-center gap-2">
-              <svg className="animate-spin" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" opacity="0.25" /><path d="M12 2a10 10 0 019.5 7" opacity="0.75" />
+              <svg
+                className="animate-spin"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" opacity="0.25" />
+                <path d="M12 2a10 10 0 019.5 7" opacity="0.75" />
               </svg>
               <span className="text-[0.7rem] text-txt-secondary">Uploading...</span>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-2">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-txt-tertiary">
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-txt-tertiary"
+              >
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
                 <polyline points="17 8 12 3 7 8" />
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
-              <span className="text-[0.7rem] text-txt-secondary">Drop files or click to upload</span>
+              <span className="text-[0.7rem] text-txt-secondary">
+                Drop files or click to upload
+              </span>
               <span className="text-[0.6rem] text-txt-tertiary">Max 500 MB per file</span>
             </div>
           )}
@@ -139,7 +196,8 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
           </div>
         )}
         <p className="mt-2 text-[0.6rem] text-txt-tertiary leading-relaxed">
-          Files are temporary. Copy the URL and paste it in the remote session to download. Files are automatically deleted when the session ends.
+          Files are temporary. Copy the URL and paste it in the remote session to download. Files
+          are automatically deleted when the session ends.
         </p>
       </div>
 
@@ -152,10 +210,16 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
         ) : (
           <div className="space-y-2">
             {files.map((file) => (
-              <div key={file.token} className="p-3 rounded-lg bg-white/5 border border-white/5 hover:border-white/10 transition-colors">
+              <div
+                key={file.token}
+                className="p-3 rounded-lg bg-white/5 border border-white/5 hover:border-white/10 transition-colors"
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[0.75rem] font-medium text-txt-primary truncate" title={file.filename}>
+                    <div
+                      className="text-[0.75rem] font-medium text-txt-primary truncate"
+                      title={file.filename}
+                    >
                       {file.filename}
                     </div>
                     <div className="text-[0.6rem] text-txt-tertiary mt-0.5">
@@ -164,17 +228,36 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
-                      className={`p-1.5 rounded transition-colors ${copiedToken === file.token ? 'bg-green-500/20 text-green-400' : 'bg-white/5 hover:bg-white/10 text-txt-secondary hover:text-txt-primary'}`}
+                      className={`p-1.5 rounded transition-colors ${copiedToken === file.token ? "bg-green-500/20 text-green-400" : "bg-white/5 hover:bg-white/10 text-txt-secondary hover:text-txt-primary"}`}
                       onClick={() => copyUrl(file)}
                       title="Copy download URL"
                     >
                       {copiedToken === file.token ? (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
                           <polyline points="20 6 9 17 4 12" />
                         </svg>
                       ) : (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <rect x="9" y="9" width="13" height="13" rx="2" />
+                          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
                         </svg>
                       )}
                     </button>
@@ -183,8 +266,21 @@ export default function QuickShare({ connectionId, onClose, sidebarWidth, sessio
                       onClick={() => handleDelete(file.token)}
                       title="Delete file"
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2" />
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                        <path d="M10 11v6" />
+                        <path d="M14 11v6" />
+                        <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2" />
                       </svg>
                     </button>
                   </div>

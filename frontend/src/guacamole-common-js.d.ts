@@ -1,4 +1,4 @@
-declare module 'guacamole-common-js' {
+declare module "guacamole-common-js" {
   namespace Guacamole {
     class Status {
       code: number;
@@ -26,7 +26,11 @@ declare module 'guacamole-common-js' {
     }
 
     class HTTPTunnel extends Tunnel {
-      constructor(tunnelURL: string, crossDomain?: boolean, extraTunnelHeaders?: Record<string, string>);
+      constructor(
+        tunnelURL: string,
+        crossDomain?: boolean,
+        extraTunnelHeaders?: Record<string, string>
+      );
     }
 
     class Client {
@@ -112,7 +116,10 @@ declare module 'guacamole-common-js' {
 
     class GuacObject {
       index: number;
-      requestInputStream(name: string, bodyCallback: (stream: InputStream, mimetype: string) => void): void;
+      requestInputStream(
+        name: string,
+        bodyCallback: (stream: InputStream, mimetype: string) => void
+      ): void;
       createOutputStream(mimetype: string, name: string): OutputStream;
       onbody: ((stream: InputStream, mimetype: string, name: string) => void) | null;
       onundefine: (() => void) | null;
@@ -126,7 +133,15 @@ declare module 'guacamole-common-js' {
 
     namespace Mouse {
       class State {
-        constructor(x: number, y: number, left: boolean, middle: boolean, right: boolean, up: boolean, down: boolean);
+        constructor(
+          x: number,
+          y: number,
+          left: boolean,
+          middle: boolean,
+          right: boolean,
+          up: boolean,
+          down: boolean
+        );
         x: number;
         y: number;
         left: boolean;

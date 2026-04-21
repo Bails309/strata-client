@@ -1,17 +1,17 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { BrowserRouter } from 'react-router-dom';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { BrowserRouter } from "react-router-dom";
 
 // JSDOM doesn't have scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
 
-vi.mock('../components/ThemeProvider', () => ({
-  useTheme: () => ({ theme: 'dark', setTheme: vi.fn() }),
+vi.mock("../components/ThemeProvider", () => ({
+  useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('../api', () => ({
+vi.mock("../api", () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   updateSso: vi.fn(),
@@ -73,58 +73,89 @@ vi.mock('../api', () => ({
   getCheckoutRequests: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock('../contexts/SettingsContext', () => ({
+vi.mock("../contexts/SettingsContext", () => ({
   useSettings: () => ({
     settings: {},
     timeSettings: {
-      display_timezone: 'UTC',
-      display_time_format: 'HH:mm:ss',
-      display_date_format: 'YYYY-MM-DD',
+      display_timezone: "UTC",
+      display_time_format: "HH:mm:ss",
+      display_date_format: "YYYY-MM-DD",
     },
     loading: false,
     refreshSettings: vi.fn(),
     updateSettings: vi.fn(),
     formatDateTime: (date: any) => {
-      if (!date) return '—';
+      if (!date) return "—";
       return new Date(date).toISOString();
     },
   }),
   SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-import AdminSettings from '../pages/AdminSettings';
+import AdminSettings from "../pages/AdminSettings";
 import {
-  getSettings, getRoles, getConnections, getConnectionFolders, getUsers,
-  getServiceHealth, getMetrics, testSsoConnection, updateSso, updateRecordings, updateVault,
-  getKerberosRealms, createKerberosRealm, updateKerberosRealm, deleteKerberosRealm,
-  createRole, createConnection, updateConnection, deleteConnection,
-  createConnectionFolder, deleteConnectionFolder,
-  getActiveSessions, getAdSyncConfigs, createAdSyncConfig, updateAdSyncConfig, deleteAdSyncConfig,
-  triggerAdSync, testAdSyncConnection, getAdSyncRuns,
-  updateAuthMethods, updateSettings, updateRoleMappings, getSessionStats, getRecordings,
+  getSettings,
+  getRoles,
+  getConnections,
+  getConnectionFolders,
+  getUsers,
+  getServiceHealth,
+  getMetrics,
+  testSsoConnection,
+  updateSso,
+  updateRecordings,
+  updateVault,
+  getKerberosRealms,
+  createKerberosRealm,
+  updateKerberosRealm,
+  deleteKerberosRealm,
+  createRole,
+  createConnection,
+  updateConnection,
+  deleteConnection,
+  createConnectionFolder,
+  deleteConnectionFolder,
+  getActiveSessions,
+  getAdSyncConfigs,
+  createAdSyncConfig,
+  updateAdSyncConfig,
+  deleteAdSyncConfig,
+  triggerAdSync,
+  testAdSyncConnection,
+  getAdSyncRuns,
+  updateAuthMethods,
+  updateSettings,
+  updateRoleMappings,
+  getSessionStats,
+  getRecordings,
   updateUser,
-  getAdminTagsAdmin, createAdminTag, deleteAdminTag, getAdminConnectionTagsAdmin,
+  getAdminTagsAdmin,
+  createAdminTag,
+  deleteAdminTag,
+  getAdminConnectionTagsAdmin,
   updateDns,
-  getApprovalRoles, createApprovalRole, deleteApprovalRole,
+  getApprovalRoles,
+  createApprovalRole,
+  deleteApprovalRole,
   getCheckoutRequests,
-} from '../api';
+} from "../api";
 
 const healthOk = {
-  database: { connected: true, mode: 'local', host: 'localhost', latency_ms: 5 },
-  guacd: { reachable: true, host: 'guacd', port: 4822 },
-  vault: { configured: true, mode: 'local', address: 'http://vault:8200' },
-  schema: { status: 'in_sync', applied_migrations: 28, expected_migrations: 28 },
+  database: { connected: true, mode: "local", host: "localhost", latency_ms: 5 },
+  guacd: { reachable: true, host: "guacd", port: 4822 },
+  vault: { configured: true, mode: "local", address: "http://vault:8200" },
+  schema: { status: "in_sync", applied_migrations: 28, expected_migrations: 28 },
   uptime_secs: 3600,
-  environment: 'production',
+  environment: "production",
 };
 
 const healthDown = {
-  database: { connected: false, mode: 'local', host: 'localhost', latency_ms: null },
-  guacd: { reachable: false, host: 'guacd', port: 4822 },
-  vault: { configured: false, mode: '', address: '' },
-  schema: { status: 'unavailable', applied_migrations: 0, expected_migrations: 28 },
+  database: { connected: false, mode: "local", host: "localhost", latency_ms: null },
+  guacd: { reachable: false, host: "guacd", port: 4822 },
+  vault: { configured: false, mode: "", address: "" },
+  schema: { status: "unavailable", applied_migrations: 0, expected_migrations: 28 },
   uptime_secs: 0,
-  environment: 'production',
+  environment: "production",
 };
 
 const metricsOk = {
@@ -138,14 +169,14 @@ const metricsOk = {
   system_cpu_cores: 4,
 };
 
-const defaultUser: import('../api').MeResponse = {
-  id: 'u1',
-  username: 'admin',
-  role: 'admin',
-  client_ip: '127.0.0.1',
+const defaultUser: import("../api").MeResponse = {
+  id: "u1",
+  username: "admin",
+  role: "admin",
+  client_ip: "127.0.0.1",
   watermark_enabled: false,
   vault_configured: true,
-  terms_accepted_at: '2024-01-01T00:00:00Z',
+  terms_accepted_at: "2024-01-01T00:00:00Z",
   terms_accepted_version: 1,
   can_manage_system: true,
   can_manage_users: true,
@@ -164,7 +195,7 @@ function renderAdmin() {
   return render(
     <BrowserRouter>
       <AdminSettings user={defaultUser} />
-    </BrowserRouter>,
+    </BrowserRouter>
   );
 }
 
@@ -197,1034 +228,1251 @@ function setupDefaults() {
   vi.mocked(getAdminConnectionTagsAdmin).mockResolvedValue({});
 }
 
-describe('AdminSettings', () => {
+describe("AdminSettings", () => {
   beforeEach(setupDefaults);
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders heading', async () => {
+  it("renders heading", async () => {
     renderAdmin();
-    expect(await screen.findByText('Admin Settings')).toBeInTheDocument();
+    expect(await screen.findByText("Admin Settings")).toBeInTheDocument();
   });
 
-  it('renders all tab buttons', async () => {
+  it("renders all tab buttons", async () => {
     renderAdmin();
     // Wait for async init
-    await screen.findByText('Admin Settings');
-    for (const label of ['Health', 'SSO / OIDC', 'Kerberos', 'Recordings', 'Access', 'AD Sync', 'Sessions', 'Security']) {
+    await screen.findByText("Admin Settings");
+    for (const label of [
+      "Health",
+      "SSO / OIDC",
+      "Kerberos",
+      "Recordings",
+      "Access",
+      "AD Sync",
+      "Sessions",
+      "Security",
+    ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     // Vault appears in both tab button and health card
-    expect(screen.getAllByText('Vault').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Vault").length).toBeGreaterThanOrEqual(1);
   });
 
-  it('defaults to health tab', async () => {
+  it("defaults to health tab", async () => {
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    expect(screen.getByText('Health').className).toContain('tab-active');
+    await screen.findByText("Admin Settings");
+    expect(screen.getByText("Health").className).toContain("tab-active");
   });
 
-  it('switches tabs on click', async () => {
+  it("switches tabs on click", async () => {
     renderAdmin();
     const user = userEvent.setup();
-    await user.click(screen.getByText('SSO / OIDC'));
-    expect(screen.getByText('SSO / OIDC').className).toContain('tab-active');
-    expect(screen.getByText('Health').className).not.toContain('tab-active');
+    await user.click(screen.getByText("SSO / OIDC"));
+    expect(screen.getByText("SSO / OIDC").className).toContain("tab-active");
+    expect(screen.getByText("Health").className).not.toContain("tab-active");
   });
 
-  it('shows error when API fails', async () => {
-    vi.mocked(getSettings).mockRejectedValue(new Error('fail'));
+  it("shows error when API fails", async () => {
+    vi.mocked(getSettings).mockRejectedValue(new Error("fail"));
     renderAdmin();
-    expect(await screen.findByText('Failed to load settings')).toBeInTheDocument();
+    expect(await screen.findByText("Failed to load settings")).toBeInTheDocument();
   });
 });
 
-describe('HealthTab', () => {
+describe("HealthTab", () => {
   beforeEach(setupDefaults);
   afterEach(() => vi.restoreAllMocks());
 
-  it('shows loading state initially', async () => {
+  it("shows loading state initially", async () => {
     vi.mocked(getServiceHealth).mockReturnValue(new Promise(() => {}));
     vi.mocked(getMetrics).mockReturnValue(new Promise(() => {}));
     renderAdmin();
-    expect(await screen.findByText('Loading service health...')).toBeInTheDocument();
+    expect(await screen.findByText("Loading service health...")).toBeInTheDocument();
   });
 
-  it('shows Healthy badges when all services are up', async () => {
+  it("shows Healthy badges when all services are up", async () => {
     renderAdmin();
-    const badges = await screen.findAllByText('Healthy');
+    const badges = await screen.findAllByText("Healthy");
     expect(badges.length).toBe(4); // Database, guacd, Vault, Schema
   });
 
-  it('shows Unhealthy badges when services are down', async () => {
+  it("shows Unhealthy badges when services are down", async () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthDown);
     renderAdmin();
-    const unhealthy = await screen.findAllByText('Unhealthy');
+    const unhealthy = await screen.findAllByText("Unhealthy");
     expect(unhealthy.length).toBe(2); // Database, guacd
-    expect(screen.getByText('Not Configured')).toBeInTheDocument(); // Vault
-    const unavailable = screen.getAllByText('Unavailable');
+    expect(screen.getByText("Not Configured")).toBeInTheDocument(); // Vault
+    const unavailable = screen.getAllByText("Unavailable");
     expect(unavailable.length).toBeGreaterThanOrEqual(1); // Schema badge + status text
   });
 
-  it('shows vault mode badge', async () => {
+  it("shows vault mode badge", async () => {
     renderAdmin();
-    const bundled = await screen.findAllByText('Bundled');
+    const bundled = await screen.findAllByText("Bundled");
     expect(bundled.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows vault not-configured setup link', async () => {
+  it("shows vault not-configured setup link", async () => {
     vi.mocked(getServiceHealth).mockResolvedValue(healthDown);
     renderAdmin();
     expect(await screen.findByText(/Set up Vault/)).toBeInTheDocument();
   });
 
-  it('shows vault address when configured', async () => {
+  it("shows vault address when configured", async () => {
     renderAdmin();
-    expect(await screen.findByText('http://vault:8200')).toBeInTheDocument();
+    expect(await screen.findByText("http://vault:8200")).toBeInTheDocument();
   });
 
-  it('shows pool size from metrics', async () => {
+  it("shows pool size from metrics", async () => {
     renderAdmin();
-    expect(await screen.findByText('2')).toBeInTheDocument();
+    expect(await screen.findByText("2")).toBeInTheDocument();
   });
 
-  it('shows retry button when health fails', async () => {
-    vi.mocked(getServiceHealth).mockRejectedValue(new Error('fail'));
-    vi.mocked(getMetrics).mockRejectedValue(new Error('fail'));
+  it("shows retry button when health fails", async () => {
+    vi.mocked(getServiceHealth).mockRejectedValue(new Error("fail"));
+    vi.mocked(getMetrics).mockRejectedValue(new Error("fail"));
     renderAdmin();
-    expect(await screen.findByText('Failed to load service health.')).toBeInTheDocument();
-    expect(screen.getByText('Retry')).toBeInTheDocument();
+    expect(await screen.findByText("Failed to load service health.")).toBeInTheDocument();
+    expect(screen.getByText("Retry")).toBeInTheDocument();
   });
 
-  it('shows auto-refresh countdown', async () => {
+  it("shows auto-refresh countdown", async () => {
     renderAdmin();
     expect(await screen.findByText(/Auto-refreshing in \d+s/)).toBeInTheDocument();
   });
 
-  it('shows vault external mode', async () => {
+  it("shows vault external mode", async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
       ...healthOk,
-      vault: { configured: true, mode: 'external', address: 'https://vault.corp.com:8200' },
+      vault: { configured: true, mode: "external", address: "https://vault.corp.com:8200" },
     });
     renderAdmin();
-    const externals = await screen.findAllByText('External');
+    const externals = await screen.findAllByText("External");
     expect(externals.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('https://vault.corp.com:8200')).toBeInTheDocument();
+    expect(screen.getByText("https://vault.corp.com:8200")).toBeInTheDocument();
   });
 
-  it('shows uptime', async () => {
+  it("shows uptime", async () => {
     renderAdmin();
-    expect(await screen.findByText('1h 0m')).toBeInTheDocument();
+    expect(await screen.findByText("1h 0m")).toBeInTheDocument();
   });
 
-  it('shows active sessions count', async () => {
+  it("shows active sessions count", async () => {
     renderAdmin();
-    expect(await screen.findByText('7')).toBeInTheDocument();
+    expect(await screen.findByText("7")).toBeInTheDocument();
   });
 
-  it('shows environment', async () => {
+  it("shows environment", async () => {
     renderAdmin();
-    expect(await screen.findByText('production')).toBeInTheDocument();
+    expect(await screen.findByText("production")).toBeInTheDocument();
   });
 
-  it('shows schema status', async () => {
+  it("shows schema status", async () => {
     renderAdmin();
-    expect(await screen.findByText('In Sync')).toBeInTheDocument();
+    expect(await screen.findByText("In Sync")).toBeInTheDocument();
   });
 
-  it('shows database latency', async () => {
+  it("shows database latency", async () => {
     renderAdmin();
-    expect(await screen.findByText('5ms')).toBeInTheDocument();
+    expect(await screen.findByText("5ms")).toBeInTheDocument();
   });
 
-  it('retry button reloads health', async () => {
-    vi.mocked(getServiceHealth).mockRejectedValue(new Error('fail'));
-    vi.mocked(getMetrics).mockRejectedValue(new Error('fail'));
+  it("retry button reloads health", async () => {
+    vi.mocked(getServiceHealth).mockRejectedValue(new Error("fail"));
+    vi.mocked(getMetrics).mockRejectedValue(new Error("fail"));
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Retry');
+    await screen.findByText("Retry");
     vi.mocked(getServiceHealth).mockResolvedValue(healthOk);
     vi.mocked(getMetrics).mockResolvedValue(metricsOk);
-    await user.click(screen.getByText('Retry'));
-    const badges = await screen.findAllByText('Healthy');
+    await user.click(screen.getByText("Retry"));
+    const badges = await screen.findAllByText("Healthy");
     expect(badges.length).toBe(4);
   });
 
-  it('shows last checked timestamp', async () => {
+  it("shows last checked timestamp", async () => {
     renderAdmin();
-    await screen.findAllByText('Healthy');
+    await screen.findAllByText("Healthy");
     expect(screen.getByText(/Last Checked:/)).toBeInTheDocument();
   });
 });
 
-describe('SsoTab', () => {
+describe("SsoTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getSettings).mockResolvedValue({
-      sso_issuer_url: 'https://keycloak.example.com/realms/test',
-      sso_client_id: 'strata-client',
+      sso_issuer_url: "https://keycloak.example.com/realms/test",
+      sso_client_id: "strata-client",
     });
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders SSO form with pre-filled values', async () => {
+  it("renders SSO form with pre-filled values", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
-    expect(await screen.findByDisplayValue('https://keycloak.example.com/realms/test')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('strata-client')).toBeInTheDocument();
+    await user.click(screen.getByText("SSO / OIDC"));
+    expect(
+      await screen.findByDisplayValue("https://keycloak.example.com/realms/test")
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("strata-client")).toBeInTheDocument();
   });
 
-  it('shows test connection success', async () => {
-    vi.mocked(testSsoConnection).mockResolvedValue({ status: 'success', message: 'Issuer validated' });
+  it("shows test connection success", async () => {
+    vi.mocked(testSsoConnection).mockResolvedValue({
+      status: "success",
+      message: "Issuer validated",
+    });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
-    await screen.findByDisplayValue('strata-client');
-    const secretInput = screen.getByLabelText('Client Secret');
-    await user.type(secretInput, 'new-secret');
-    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
-    expect(await screen.findByText('Issuer validated')).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
+    await screen.findByDisplayValue("strata-client");
+    const secretInput = screen.getByLabelText("Client Secret");
+    await user.type(secretInput, "new-secret");
+    await user.click(screen.getByRole("button", { name: "Test Connection" }));
+    expect(await screen.findByText("Issuer validated")).toBeInTheDocument();
   });
 
-  it('shows test connection failure', async () => {
-    vi.mocked(testSsoConnection).mockRejectedValue(new Error('Connection refused'));
+  it("shows test connection failure", async () => {
+    vi.mocked(testSsoConnection).mockRejectedValue(new Error("Connection refused"));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
-    await screen.findByDisplayValue('strata-client');
-    const secretInput = screen.getByLabelText('Client Secret');
-    await user.type(secretInput, 'new-secret');
-    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
-    expect(await screen.findByText('Connection refused')).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
+    await screen.findByDisplayValue("strata-client");
+    const secretInput = screen.getByLabelText("Client Secret");
+    await user.type(secretInput, "new-secret");
+    await user.click(screen.getByRole("button", { name: "Test Connection" }));
+    expect(await screen.findByText("Connection refused")).toBeInTheDocument();
   });
 
-  it('saves SSO settings', async () => {
+  it("saves SSO settings", async () => {
     vi.mocked(updateSso).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
-    await screen.findByDisplayValue('strata-client');
-    await user.click(screen.getByText('Save SSO Settings'));
+    await user.click(screen.getByText("SSO / OIDC"));
+    await screen.findByDisplayValue("strata-client");
+    await user.click(screen.getByText("Save SSO Settings"));
     expect(updateSso).toHaveBeenCalled();
   });
 
-  it('disables test button when fields are empty', async () => {
+  it("disables test button when fields are empty", async () => {
     vi.mocked(getSettings).mockResolvedValue({});
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
+    await user.click(screen.getByText("SSO / OIDC"));
     await waitFor(() => {
-      expect(screen.getByText('Test Connection')).toBeDisabled();
+      expect(screen.getByText("Test Connection")).toBeDisabled();
     });
   });
 
-  it('shows Testing... text while test is in progress', async () => {
+  it("shows Testing... text while test is in progress", async () => {
     vi.mocked(testSsoConnection).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
-    await screen.findByDisplayValue('strata-client');
-    const secretInput = screen.getByLabelText('Client Secret');
-    await user.type(secretInput, 'new-secret');
-    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
-    expect(screen.getByText('Testing...')).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
+    await screen.findByDisplayValue("strata-client");
+    const secretInput = screen.getByLabelText("Client Secret");
+    await user.type(secretInput, "new-secret");
+    await user.click(screen.getByRole("button", { name: "Test Connection" }));
+    expect(screen.getByText("Testing...")).toBeInTheDocument();
   });
 
-  it('renders callback URL', async () => {
+  it("renders callback URL", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
+    await user.click(screen.getByText("SSO / OIDC"));
     expect(await screen.findByText(/\/api\/auth\/sso\/callback/)).toBeInTheDocument();
   });
 
-  it('handles non-Error exception in test connection', async () => {
-    vi.mocked(testSsoConnection).mockRejectedValue('string error');
+  it("handles non-Error exception in test connection", async () => {
+    vi.mocked(testSsoConnection).mockRejectedValue("string error");
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('SSO / OIDC'));
-    await screen.findByDisplayValue('strata-client');
-    await user.click(screen.getByRole('button', { name: 'SSO / OIDC' }));
-    await screen.findByDisplayValue('strata-client');
-    const secretInput = screen.getByLabelText('Client Secret');
-    await user.type(secretInput, 'new-secret');
-    await user.click(screen.getByRole('button', { name: 'Test Connection' }));
-    expect(await screen.findByText('Test failed')).toBeInTheDocument();
+    await user.click(screen.getByText("SSO / OIDC"));
+    await screen.findByDisplayValue("strata-client");
+    await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
+    await screen.findByDisplayValue("strata-client");
+    const secretInput = screen.getByLabelText("Client Secret");
+    await user.type(secretInput, "new-secret");
+    await user.click(screen.getByRole("button", { name: "Test Connection" }));
+    expect(await screen.findByText("Test failed")).toBeInTheDocument();
   });
 });
 
-describe('KerberosTab', () => {
+describe("KerberosTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getKerberosRealms).mockResolvedValue([
-      { id: 'kr-1', realm: 'EXAMPLE.COM', kdc_servers: 'dc1.example.com,dc2.example.com', admin_server: 'dc1.example.com', ticket_lifetime: '10h', renew_lifetime: '7d', is_default: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+      {
+        id: "kr-1",
+        realm: "EXAMPLE.COM",
+        kdc_servers: "dc1.example.com,dc2.example.com",
+        admin_server: "dc1.example.com",
+        ticket_lifetime: "10h",
+        renew_lifetime: "7d",
+        is_default: true,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
     ]);
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders existing realms', async () => {
+  it("renders existing realms", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    expect(await screen.findByText('EXAMPLE.COM')).toBeInTheDocument();
-    expect(screen.getByText('Default')).toBeInTheDocument();
+    await user.click(screen.getByText("Kerberos"));
+    expect(await screen.findByText("EXAMPLE.COM")).toBeInTheDocument();
+    expect(screen.getByText("Default")).toBeInTheDocument();
   });
 
-  it('shows empty state with no realms', async () => {
+  it("shows empty state with no realms", async () => {
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     expect(await screen.findByText(/No Kerberos realms configured/)).toBeInTheDocument();
   });
 
-  it('opens new realm form', async () => {
+  it("opens new realm form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    await screen.findByText('EXAMPLE.COM');
-    await user.click(screen.getByText('Add Realm'));
-    expect(screen.getByText('New Kerberos Realm')).toBeInTheDocument();
+    await user.click(screen.getByText("Kerberos"));
+    await screen.findByText("EXAMPLE.COM");
+    await user.click(screen.getByText("Add Realm"));
+    expect(screen.getByText("New Kerberos Realm")).toBeInTheDocument();
   });
 
-  it('opens edit realm form', async () => {
+  it("opens edit realm form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    await screen.findByText('EXAMPLE.COM');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Edit Realm')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('EXAMPLE.COM')).toBeInTheDocument();
+    await user.click(screen.getByText("Kerberos"));
+    await screen.findByText("EXAMPLE.COM");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Edit Realm")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("EXAMPLE.COM")).toBeInTheDocument();
   });
 
-  it('creates a new realm', async () => {
-    vi.mocked(createKerberosRealm).mockResolvedValue({ id: 'new-realm-id', status: 'success' });
+  it("creates a new realm", async () => {
+    vi.mocked(createKerberosRealm).mockResolvedValue({ id: "new-realm-id", status: "success" });
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     await screen.findByText(/No Kerberos realms configured/);
-    await user.click(screen.getByText('Add Realm'));
-    await user.type(screen.getByPlaceholderText('EXAMPLE.COM'), 'NEWREALM.COM');
-    await user.click(screen.getByText('Create Realm'));
+    await user.click(screen.getByText("Add Realm"));
+    await user.type(screen.getByPlaceholderText("EXAMPLE.COM"), "NEWREALM.COM");
+    await user.click(screen.getByText("Create Realm"));
     expect(createKerberosRealm).toHaveBeenCalled();
   });
 
-  it('shows validation error for empty realm name', async () => {
+  it("shows validation error for empty realm name", async () => {
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     await screen.findByText(/No Kerberos realms configured/);
-    await user.click(screen.getByText('Add Realm'));
-    await user.click(screen.getByText('Create Realm'));
-    expect(await screen.findByText('Realm name is required')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Realm"));
+    await user.click(screen.getByText("Create Realm"));
+    expect(await screen.findByText("Realm name is required")).toBeInTheDocument();
   });
 
-  it('deletes a realm', async () => {
-    vi.mocked(deleteKerberosRealm).mockResolvedValue({ status: 'success' });
+  it("deletes a realm", async () => {
+    vi.mocked(deleteKerberosRealm).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    await screen.findByText('EXAMPLE.COM');
-    await user.click(screen.getByText('Delete'));
-    expect(deleteKerberosRealm).toHaveBeenCalledWith('kr-1');
+    await user.click(screen.getByText("Kerberos"));
+    await screen.findByText("EXAMPLE.COM");
+    await user.click(screen.getByText("Delete"));
+    expect(deleteKerberosRealm).toHaveBeenCalledWith("kr-1");
   });
 
-  it('shows error on save failure', async () => {
-    vi.mocked(createKerberosRealm).mockRejectedValue(new Error('Network error'));
+  it("shows error on save failure", async () => {
+    vi.mocked(createKerberosRealm).mockRejectedValue(new Error("Network error"));
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     await screen.findByText(/No Kerberos realms/);
-    await user.click(screen.getByText('Add Realm'));
-    await user.type(screen.getByPlaceholderText('EXAMPLE.COM'), 'FAIL.COM');
-    await user.click(screen.getByText('Create Realm'));
-    expect(await screen.findByText('Network error')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Realm"));
+    await user.type(screen.getByPlaceholderText("EXAMPLE.COM"), "FAIL.COM");
+    await user.click(screen.getByText("Create Realm"));
+    expect(await screen.findByText("Network error")).toBeInTheDocument();
   });
 
-  it('updates an existing realm', async () => {
-    vi.mocked(updateKerberosRealm).mockResolvedValue({ status: 'success' });
+  it("updates an existing realm", async () => {
+    vi.mocked(updateKerberosRealm).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    await screen.findByText('EXAMPLE.COM');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Update Realm')).toBeInTheDocument();
-    await user.click(screen.getByText('Update Realm'));
-    expect(updateKerberosRealm).toHaveBeenCalledWith('kr-1', expect.objectContaining({ realm: 'EXAMPLE.COM' }));
+    await user.click(screen.getByText("Kerberos"));
+    await screen.findByText("EXAMPLE.COM");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Update Realm")).toBeInTheDocument();
+    await user.click(screen.getByText("Update Realm"));
+    expect(updateKerberosRealm).toHaveBeenCalledWith(
+      "kr-1",
+      expect.objectContaining({ realm: "EXAMPLE.COM" })
+    );
   });
 
-  it('cancel editing closes form', async () => {
+  it("cancel editing closes form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    await screen.findByText('EXAMPLE.COM');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Edit Realm')).toBeInTheDocument();
-    await user.click(screen.getByText('Cancel'));
-    expect(screen.queryByText('Edit Realm')).not.toBeInTheDocument();
+    await user.click(screen.getByText("Kerberos"));
+    await screen.findByText("EXAMPLE.COM");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Edit Realm")).toBeInTheDocument();
+    await user.click(screen.getByText("Cancel"));
+    expect(screen.queryByText("Edit Realm")).not.toBeInTheDocument();
   });
 
-  it('shows KDC count and admin server in realm details', async () => {
+  it("shows KDC count and admin server in realm details", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     expect(await screen.findByText(/2 KDCs/)).toBeInTheDocument();
     expect(screen.getByText(/dc1\.example\.com/)).toBeInTheDocument();
   });
 
-  it('adds and removes KDC fields', async () => {
+  it("adds and removes KDC fields", async () => {
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     await screen.findByText(/No Kerberos realms/);
-    await user.click(screen.getByText('Add Realm'));
+    await user.click(screen.getByText("Add Realm"));
     // Initially one KDC field, no remove button since only 1
-    expect(screen.queryByText('X')).not.toBeInTheDocument();
-    await user.click(screen.getByText('+ Add KDC'));
+    expect(screen.queryByText("X")).not.toBeInTheDocument();
+    await user.click(screen.getByText("+ Add KDC"));
     // Now 2 KDC fields, should have remove buttons
-    const removeButtons = screen.getAllByText('X');
+    const removeButtons = screen.getAllByText("X");
     expect(removeButtons.length).toBe(2);
     await user.click(removeButtons[0]);
     // Back to 1
-    expect(screen.queryByText('X')).not.toBeInTheDocument();
+    expect(screen.queryByText("X")).not.toBeInTheDocument();
   });
 
-  it('handles load error', async () => {
-    vi.mocked(getKerberosRealms).mockRejectedValue(new Error('load fail'));
+  it("handles load error", async () => {
+    vi.mocked(getKerberosRealms).mockRejectedValue(new Error("load fail"));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    expect(await screen.findByText('Failed to load Kerberos realms')).toBeInTheDocument();
+    await user.click(screen.getByText("Kerberos"));
+    expect(await screen.findByText("Failed to load Kerberos realms")).toBeInTheDocument();
   });
 
-  it('handles delete error', async () => {
-    vi.mocked(deleteKerberosRealm).mockRejectedValue(new Error('Delete failed'));
+  it("handles delete error", async () => {
+    vi.mocked(deleteKerberosRealm).mockRejectedValue(new Error("Delete failed"));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
-    await screen.findByText('EXAMPLE.COM');
-    await user.click(screen.getByText('Delete'));
-    expect(await screen.findByText('Delete failed')).toBeInTheDocument();
+    await user.click(screen.getByText("Kerberos"));
+    await screen.findByText("EXAMPLE.COM");
+    await user.click(screen.getByText("Delete"));
+    expect(await screen.findByText("Delete failed")).toBeInTheDocument();
   });
 
-  it('shows Saving... text during save', async () => {
+  it("shows Saving... text during save", async () => {
     vi.mocked(createKerberosRealm).mockReturnValue(new Promise(() => {}));
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     await screen.findByText(/No Kerberos realms/);
-    await user.click(screen.getByText('Add Realm'));
-    await user.type(screen.getByPlaceholderText('EXAMPLE.COM'), 'TEST.COM');
-    await user.click(screen.getByText('Create Realm'));
-    expect(screen.getByText('Saving...')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Realm"));
+    await user.type(screen.getByPlaceholderText("EXAMPLE.COM"), "TEST.COM");
+    await user.click(screen.getByText("Create Realm"));
+    expect(screen.getByText("Saving...")).toBeInTheDocument();
   });
 
-  it('auto-sets is_default when first realm', async () => {
+  it("auto-sets is_default when first realm", async () => {
     vi.mocked(getKerberosRealms).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Kerberos'));
+    await user.click(screen.getByText("Kerberos"));
     await screen.findByText(/No Kerberos realms/);
-    await user.click(screen.getByText('Add Realm'));
+    await user.click(screen.getByText("Add Realm"));
     // Default realm checkbox should be checked for first realm
-    const checkbox = screen.getByRole('checkbox');
+    const checkbox = screen.getByRole("checkbox");
     expect(checkbox).toBeChecked();
   });
 });
 
-describe('RecordingsTab', () => {
+describe("RecordingsTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getSettings).mockResolvedValue({
-      recordings_enabled: 'true',
-      recordings_retention_days: '14',
-      recordings_storage_type: 'local',
+      recordings_enabled: "true",
+      recordings_retention_days: "14",
+      recordings_storage_type: "local",
     });
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders recordings form', async () => {
+  it("renders recordings form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Recordings'));
-    expect(await screen.findByText('Session Recordings')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('14')).toBeInTheDocument();
+    await user.click(screen.getByText("Recordings"));
+    expect(await screen.findByText("Session Recordings")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("14")).toBeInTheDocument();
   });
 
-  it('shows azure blob fields when azure selected', async () => {
-    vi.mocked(getSettings).mockResolvedValue({ recordings_storage_type: 'azure_blob' });
+  it("shows azure blob fields when azure selected", async () => {
+    vi.mocked(getSettings).mockResolvedValue({ recordings_storage_type: "azure_blob" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Recordings'));
-    expect(await screen.findByText('Account Name')).toBeInTheDocument();
-    expect(screen.getByText('Container Name')).toBeInTheDocument();
-    expect(screen.getByText('Access Key')).toBeInTheDocument();
+    await user.click(screen.getByText("Recordings"));
+    expect(await screen.findByText("Account Name")).toBeInTheDocument();
+    expect(screen.getByText("Container Name")).toBeInTheDocument();
+    expect(screen.getByText("Access Key")).toBeInTheDocument();
   });
 
-  it('saves recording settings', async () => {
+  it("saves recording settings", async () => {
     vi.mocked(updateRecordings).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Recordings'));
-    await screen.findByText('Session Recordings');
-    await user.click(screen.getByText('Save Recording Settings'));
+    await user.click(screen.getByText("Recordings"));
+    await screen.findByText("Session Recordings");
+    await user.click(screen.getByText("Save Recording Settings"));
     expect(updateRecordings).toHaveBeenCalled();
   });
 
-  it('hides azure fields when local storage', async () => {
+  it("hides azure fields when local storage", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Recordings'));
-    await screen.findByText('Session Recordings');
-    expect(screen.queryByText('Account Name')).not.toBeInTheDocument();
+    await user.click(screen.getByText("Recordings"));
+    await screen.findByText("Session Recordings");
+    expect(screen.queryByText("Account Name")).not.toBeInTheDocument();
   });
 
-  it('saves recording settings with azure blob params', async () => {
-    vi.mocked(getSettings).mockResolvedValue({ recordings_storage_type: 'azure_blob', recordings_azure_account_name: 'myacct', recordings_azure_container_name: 'recs', recordings_azure_access_key: 'abc123' });
+  it("saves recording settings with azure blob params", async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      recordings_storage_type: "azure_blob",
+      recordings_azure_account_name: "myacct",
+      recordings_azure_container_name: "recs",
+      recordings_azure_access_key: "abc123",
+    });
     vi.mocked(updateRecordings).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Recordings'));
-    await screen.findByText('Account Name');
-    await user.click(screen.getByText('Save Recording Settings'));
-    expect(updateRecordings).toHaveBeenCalledWith(expect.objectContaining({
-      storage_type: 'azure_blob',
-      azure_account_name: 'myacct',
-      azure_container_name: 'recs',
-      azure_access_key: 'abc123',
-    }));
+    await user.click(screen.getByText("Recordings"));
+    await screen.findByText("Account Name");
+    await user.click(screen.getByText("Save Recording Settings"));
+    expect(updateRecordings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storage_type: "azure_blob",
+        azure_account_name: "myacct",
+        azure_container_name: "recs",
+        azure_access_key: "abc123",
+      })
+    );
   });
 
-  it('populates fields from settings', async () => {
+  it("populates fields from settings", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Recordings'));
-    await screen.findByText('Session Recordings');
+    await user.click(screen.getByText("Recordings"));
+    await screen.findByText("Session Recordings");
     // retention days from settings
-    expect(screen.getByDisplayValue('14')).toBeInTheDocument();
+    expect(screen.getByDisplayValue("14")).toBeInTheDocument();
   });
 });
 
-describe('VaultTab', () => {
+describe("VaultTab", () => {
   beforeEach(setupDefaults);
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders vault form', async () => {
+  it("renders vault form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    expect(await screen.findByText('Vault Configuration')).toBeInTheDocument();
+    await user.click(screen.getByText("Vault"));
+    expect(await screen.findByText("Vault Configuration")).toBeInTheDocument();
   });
 
-  it('shows bundled mode text', async () => {
+  it("shows bundled mode text", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
+    await user.click(screen.getByText("Vault"));
     expect(await screen.findByText(/bundled Vault container/)).toBeInTheDocument();
   });
 
-  it('shows external vault fields when external mode selected', async () => {
+  it("shows external vault fields when external mode selected", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    await screen.findByText('Vault Configuration');
-    await user.click(screen.getByText('External'));
-    expect(screen.getByText('Vault URL')).toBeInTheDocument();
-    expect(screen.getByText('Vault Token / AppRole')).toBeInTheDocument();
+    await user.click(screen.getByText("Vault"));
+    await screen.findByText("Vault Configuration");
+    await user.click(screen.getByText("External"));
+    expect(screen.getByText("Vault URL")).toBeInTheDocument();
+    expect(screen.getByText("Vault Token / AppRole")).toBeInTheDocument();
   });
 
-  it('saves vault settings', async () => {
+  it("saves vault settings", async () => {
     vi.mocked(updateVault).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    await screen.findByText('Vault Configuration');
-    await user.click(screen.getByText('Save Vault Settings'));
-    expect(updateVault).toHaveBeenCalledWith(expect.objectContaining({ mode: 'local' }));
+    await user.click(screen.getByText("Vault"));
+    await screen.findByText("Vault Configuration");
+    await user.click(screen.getByText("Save Vault Settings"));
+    expect(updateVault).toHaveBeenCalledWith(expect.objectContaining({ mode: "local" }));
   });
 
-  it('saves credential TTL', async () => {
-    vi.mocked(updateSettings).mockResolvedValue({ status: 'success' });
+  it("saves credential TTL", async () => {
+    vi.mocked(updateSettings).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    await screen.findByText('Credential Password Expiry');
-    await user.click(screen.getByText('Save Expiry Setting'));
+    await user.click(screen.getByText("Vault"));
+    await screen.findByText("Credential Password Expiry");
+    await user.click(screen.getByText("Save Expiry Setting"));
     expect(updateSettings).toHaveBeenCalled();
   });
 
-  it('saves external vault settings', async () => {
+  it("saves external vault settings", async () => {
     vi.mocked(updateVault).mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    await screen.findByText('Vault Configuration');
-    await user.click(screen.getByText('External'));
-    await user.type(screen.getByPlaceholderText('http://vault:8200'), 'https://ext.vault:8200');
-    await user.type(screen.getByPlaceholderText('s.xxxxxxxxx'), 'my-token');
-    await user.click(screen.getByText('Save Vault Settings'));
-    expect(updateVault).toHaveBeenCalledWith(expect.objectContaining({
-      mode: 'external',
-    }));
+    await user.click(screen.getByText("Vault"));
+    await screen.findByText("Vault Configuration");
+    await user.click(screen.getByText("External"));
+    await user.type(screen.getByPlaceholderText("http://vault:8200"), "https://ext.vault:8200");
+    await user.type(screen.getByPlaceholderText("s.xxxxxxxxx"), "my-token");
+    await user.click(screen.getByText("Save Vault Settings"));
+    expect(updateVault).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "external",
+      })
+    );
   });
 
-  it('shows Saving... during vault save', async () => {
+  it("shows Saving... during vault save", async () => {
     vi.mocked(updateVault).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    await screen.findByText('Vault Configuration');
-    await user.click(screen.getByText('Save Vault Settings'));
-    expect(screen.getByText('Saving...')).toBeInTheDocument();
+    await user.click(screen.getByText("Vault"));
+    await screen.findByText("Vault Configuration");
+    await user.click(screen.getByText("Save Vault Settings"));
+    expect(screen.getByText("Saving...")).toBeInTheDocument();
   });
 
-  it('shows current vault mode from health data', async () => {
+  it("shows current vault mode from health data", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
+    await user.click(screen.getByText("Vault"));
     expect(await screen.findByText(/Currently using/)).toBeInTheDocument();
-    const bundledEls = screen.getAllByText('Bundled');
+    const bundledEls = screen.getAllByText("Bundled");
     expect(bundledEls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows external current mode', async () => {
+  it("shows external current mode", async () => {
     vi.mocked(getServiceHealth).mockResolvedValue({
       ...healthOk,
-      vault: { configured: true, mode: 'external', address: 'https://vault.corp.com:8200' },
+      vault: { configured: true, mode: "external", address: "https://vault.corp.com:8200" },
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
+    await user.click(screen.getByText("Vault"));
     await waitFor(() => {
       expect(screen.getByText(/Currently using/)).toBeInTheDocument();
     });
   });
 
-  it('shows TTL saving state', async () => {
+  it("shows TTL saving state", async () => {
     vi.mocked(updateSettings).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    await screen.findByText('Credential Password Expiry');
-    await user.click(screen.getByText('Save Expiry Setting'));
+    await user.click(screen.getByText("Vault"));
+    await screen.findByText("Credential Password Expiry");
+    await user.click(screen.getByText("Save Expiry Setting"));
     // The button should show Saving... while TTL is being saved
-    const savingBtns = screen.getAllByText('Saving...');
+    const savingBtns = screen.getAllByText("Saving...");
     expect(savingBtns.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('displays TTL hours from settings', async () => {
-    vi.mocked(getSettings).mockResolvedValue({ credential_ttl_hours: '6' });
+  it("displays TTL hours from settings", async () => {
+    vi.mocked(getSettings).mockResolvedValue({ credential_ttl_hours: "6" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    expect(await screen.findByText('6h')).toBeInTheDocument();
+    await user.click(screen.getByText("Vault"));
+    expect(await screen.findByText("6h")).toBeInTheDocument();
   });
 
-  it('handles invalid TTL with default 12', async () => {
-    vi.mocked(getSettings).mockResolvedValue({ credential_ttl_hours: 'invalid' });
+  it("handles invalid TTL with default 12", async () => {
+    vi.mocked(getSettings).mockResolvedValue({ credential_ttl_hours: "invalid" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Vault'));
-    expect(await screen.findByText('12h')).toBeInTheDocument();
+    await user.click(screen.getByText("Vault"));
+    expect(await screen.findByText("12h")).toBeInTheDocument();
   });
 });
 
-describe('AccessTab', () => {
+describe("AccessTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getRoles).mockResolvedValue([
-      { id: 'r1', name: 'admin', can_manage_system: true, can_manage_users: true, can_manage_connections: true, can_view_audit_logs: true, can_create_users: true, can_create_user_groups: true, can_create_connections: true, can_create_connection_folders: true, can_create_sharing_profiles: true, can_view_sessions: true },
-      { id: 'r2', name: 'user', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false, can_view_sessions: false },
+      {
+        id: "r1",
+        name: "admin",
+        can_manage_system: true,
+        can_manage_users: true,
+        can_manage_connections: true,
+        can_view_audit_logs: true,
+        can_create_users: true,
+        can_create_user_groups: true,
+        can_create_connections: true,
+        can_create_connection_folders: true,
+        can_create_sharing_profiles: true,
+        can_view_sessions: true,
+      },
+      {
+        id: "r2",
+        name: "user",
+        can_manage_system: false,
+        can_manage_users: false,
+        can_manage_connections: false,
+        can_view_audit_logs: false,
+        can_create_users: false,
+        can_create_user_groups: false,
+        can_create_connections: false,
+        can_create_connection_folders: false,
+        can_create_sharing_profiles: false,
+        can_view_sessions: false,
+      },
     ]);
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: 'RDP server', folder_id: undefined, extra: {} },
+      {
+        id: "c1",
+        name: "Server A",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        domain: "",
+        description: "RDP server",
+        folder_id: undefined,
+        extra: {},
+      },
     ]);
     vi.mocked(getConnectionFolders).mockResolvedValue([]);
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders roles table', async () => {
+  it("renders roles table", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    expect(await screen.findByText('admin')).toBeInTheDocument();
-    expect(screen.getByText('user')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    expect(await screen.findByText("admin")).toBeInTheDocument();
+    expect(screen.getByText("user")).toBeInTheDocument();
   });
 
-  it('creates a new role', async () => {
-    vi.mocked(createRole).mockResolvedValue({ id: 'r3', name: 'viewer', can_manage_system: false, can_manage_users: false, can_manage_connections: false, can_view_audit_logs: false, can_create_users: false, can_create_user_groups: false, can_create_connections: false, can_create_connection_folders: false, can_create_sharing_profiles: false, can_view_sessions: false });
-    vi.mocked(updateRoleMappings).mockResolvedValue({ status: 'ok' });
+  it("creates a new role", async () => {
+    vi.mocked(createRole).mockResolvedValue({
+      id: "r3",
+      name: "viewer",
+      can_manage_system: false,
+      can_manage_users: false,
+      can_manage_connections: false,
+      can_view_audit_logs: false,
+      can_create_users: false,
+      can_create_user_groups: false,
+      can_create_connections: false,
+      can_create_connection_folders: false,
+      can_create_sharing_profiles: false,
+      can_view_sessions: false,
+    });
+    vi.mocked(updateRoleMappings).mockResolvedValue({ status: "ok" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('admin');
-    await user.click(screen.getByText('Create New Role'));
-    const input = screen.getByPlaceholderText('e.g. Helpdesk');
-    await user.type(input, 'viewer');
-    await user.click(screen.getByText('Create Role'));
-    expect(createRole).toHaveBeenCalledWith(expect.objectContaining({ name: 'viewer' }));
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("admin");
+    await user.click(screen.getByText("Create New Role"));
+    const input = screen.getByPlaceholderText("e.g. Helpdesk");
+    await user.type(input, "viewer");
+    await user.click(screen.getByText("Create Role"));
+    expect(createRole).toHaveBeenCalledWith(expect.objectContaining({ name: "viewer" }));
   });
 
-  it('switches to sessions tab', async () => {
+  it("switches to sessions tab", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByRole('button', { name: 'Sessions' }));
+    await user.click(screen.getByRole("button", { name: "Sessions" }));
     expect(await screen.findByText(/last 30 days/i)).toBeInTheDocument();
   });
 
-  it('renders connections table', async () => {
+  it("renders connections table", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    expect(await screen.findByText('Server A')).toBeInTheDocument();
-    expect(screen.getByText('RDP')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    expect(await screen.findByText("Server A")).toBeInTheDocument();
+    expect(screen.getByText("RDP")).toBeInTheDocument();
   });
 
-  it('opens add connection form', async () => {
+  it("opens add connection form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    expect(screen.getByText('Add Connection')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    expect(screen.getByText("Add Connection")).toBeInTheDocument();
   });
 
-  it('opens edit connection form', async () => {
+  it("opens edit connection form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
     // Target the Edit button specifically in the connections table
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
-    const editBtns = within(connectionsCard).getAllByText('Edit');
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
+    const editBtns = within(connectionsCard).getAllByText("Edit");
     await user.click(editBtns[0]);
-    expect(screen.getByText('Edit Connection')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Server A')).toBeInTheDocument();
+    expect(screen.getByText("Edit Connection")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Server A")).toBeInTheDocument();
   });
 
-  it('filters connections by search', async () => {
+  it("filters connections by search", async () => {
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} },
-      { id: 'c2', name: 'Server B', protocol: 'ssh', hostname: '10.0.0.2', port: 22, domain: '', description: '', folder_id: undefined, extra: {} },
+      {
+        id: "c1",
+        name: "Server A",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        domain: "",
+        description: "",
+        folder_id: undefined,
+        extra: {},
+      },
+      {
+        id: "c2",
+        name: "Server B",
+        protocol: "ssh",
+        hostname: "10.0.0.2",
+        port: 22,
+        domain: "",
+        description: "",
+        folder_id: undefined,
+        extra: {},
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.type(screen.getByPlaceholderText(/Search connections/), 'Server B');
-    expect(screen.getByText('Server B')).toBeInTheDocument();
-    expect(screen.queryByText('Server A')).not.toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.type(screen.getByPlaceholderText(/Search connections/), "Server B");
+    expect(screen.getByText("Server B")).toBeInTheDocument();
+    expect(screen.queryByText("Server A")).not.toBeInTheDocument();
   });
 
-  it('creates a connection', async () => {
-    vi.mocked(createConnection).mockResolvedValue({ id: 'c2', name: 'New', protocol: 'rdp', hostname: '1.2.3.4', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} });
+  it("creates a connection", async () => {
+    vi.mocked(createConnection).mockResolvedValue({
+      id: "c2",
+      name: "New",
+      protocol: "rdp",
+      hostname: "1.2.3.4",
+      port: 3389,
+      domain: "",
+      description: "",
+      folder_id: undefined,
+      extra: {},
+    });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.type(screen.getByPlaceholderText('My Server'), 'New');
-    await user.clear(screen.getByPlaceholderText('10.0.0.10'));
-    await user.type(screen.getByPlaceholderText('10.0.0.10'), '1.2.3.4');
-    await user.click(screen.getByText('Create Connection'));
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.type(screen.getByPlaceholderText("My Server"), "New");
+    await user.clear(screen.getByPlaceholderText("10.0.0.10"));
+    await user.type(screen.getByPlaceholderText("10.0.0.10"), "1.2.3.4");
+    await user.click(screen.getByText("Create Connection"));
     expect(createConnection).toHaveBeenCalled();
   });
 
-  it('deletes a connection with confirm', async () => {
-    vi.mocked(deleteConnection).mockResolvedValue({ status: 'success' });
+  it("deletes a connection with confirm", async () => {
+    vi.mocked(deleteConnection).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const deleteBtns = screen.getAllByText('Delete');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const deleteBtns = screen.getAllByText("Delete");
     await user.click(deleteBtns[0]);
     // ConfirmModal appears — click its confirm button (btn-danger)
-    const allDeleteBtns = await screen.findAllByRole('button', { name: 'Delete' });
-    const confirmBtn = allDeleteBtns.find(btn => btn.classList.contains('btn-danger'))!;
+    const allDeleteBtns = await screen.findAllByRole("button", { name: "Delete" });
+    const confirmBtn = allDeleteBtns.find((btn) => btn.classList.contains("btn-danger"))!;
     await user.click(confirmBtn);
-    expect(deleteConnection).toHaveBeenCalledWith('c1');
+    expect(deleteConnection).toHaveBeenCalledWith("c1");
   });
 
-  it('does not delete when confirm is cancelled', async () => {
+  it("does not delete when confirm is cancelled", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const deleteBtns = screen.getAllByText('Delete');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const deleteBtns = screen.getAllByText("Delete");
     await user.click(deleteBtns[0]);
     // ConfirmModal appears — click Cancel
-    const cancelBtn = await screen.findByRole('button', { name: 'Cancel' });
+    const cancelBtn = await screen.findByRole("button", { name: "Cancel" });
     await user.click(cancelBtn);
     expect(deleteConnection).not.toHaveBeenCalled();
   });
 
-  it('shows connection description', async () => {
+  it("shows connection description", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    expect(await screen.findByText('RDP server')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    expect(await screen.findByText("RDP server")).toBeInTheDocument();
   });
 
-  it('shows folder_name for foldered connections', async () => {
-    vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'Servers', parent_id: undefined }]);
+  it("shows folder_name for foldered connections", async () => {
+    vi.mocked(getConnectionFolders).mockResolvedValue([
+      { id: "g1", name: "Servers", parent_id: undefined },
+    ]);
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server G', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: 'g1', extra: {} },
+      {
+        id: "c1",
+        name: "Server G",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        domain: "",
+        description: "",
+        folder_id: "g1",
+        extra: {},
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
-    const table = within(connectionsCard).getByRole('table');
-    const serversEls = await within(table).findAllByText('Servers');
+    await user.click(screen.getByText("Access"));
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
+    const table = within(connectionsCard).getByRole("table");
+    const serversEls = await within(table).findAllByText("Servers");
     expect(serversEls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows dash for unfoldered connections', async () => {
+  it("shows dash for unfoldered connections", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const dashes = screen.getAllByText('—');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows pagination for many connections', async () => {
+  it("shows pagination for many connections", async () => {
     const manyConns = Array.from({ length: 25 }, (_, i) => ({
-      id: `c${i}`, name: `Server ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, domain: '', description: '', folder_id: undefined, extra: {},
+      id: `c${i}`,
+      name: `Server ${i}`,
+      protocol: "rdp",
+      hostname: `10.0.0.${i}`,
+      port: 3389,
+      domain: "",
+      description: "",
+      folder_id: undefined,
+      extra: {},
     }));
     vi.mocked(getConnections).mockResolvedValue(manyConns);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server 0');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
-    expect(within(connectionsCard).getByText('Page 1 of 2')).toBeInTheDocument();
-    expect(within(connectionsCard).getByText('← Prev')).toBeDisabled();
-    await user.click(within(connectionsCard).getByText('Next →'));
-    expect(within(connectionsCard).getByText('Page 2 of 2')).toBeInTheDocument();
-    expect(within(connectionsCard).getByText('Next →')).toBeDisabled();
-    await user.click(within(connectionsCard).getByText('← Prev'));
-    expect(within(connectionsCard).getByText('Page 1 of 2')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server 0");
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
+    expect(within(connectionsCard).getByText("Page 1 of 2")).toBeInTheDocument();
+    expect(within(connectionsCard).getByText("← Prev")).toBeDisabled();
+    await user.click(within(connectionsCard).getByText("Next →"));
+    expect(within(connectionsCard).getByText("Page 2 of 2")).toBeInTheDocument();
+    expect(within(connectionsCard).getByText("Next →")).toBeDisabled();
+    await user.click(within(connectionsCard).getByText("← Prev"));
+    expect(within(connectionsCard).getByText("Page 1 of 2")).toBeInTheDocument();
   });
 
-  it('resets page on search', async () => {
+  it("resets page on search", async () => {
     const manyConns = Array.from({ length: 25 }, (_, i) => ({
-      id: `c${i}`, name: `Server ${i}`, protocol: 'rdp', hostname: `10.0.0.${i}`, port: 3389, domain: '', description: '', folder_id: undefined, extra: {},
+      id: `c${i}`,
+      name: `Server ${i}`,
+      protocol: "rdp",
+      hostname: `10.0.0.${i}`,
+      port: 3389,
+      domain: "",
+      description: "",
+      folder_id: undefined,
+      extra: {},
     }));
     vi.mocked(getConnections).mockResolvedValue(manyConns);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server 0');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
-    await user.click(within(connectionsCard).getByText('Next →'));
-    expect(within(connectionsCard).getByText('Page 2 of 2')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server 0");
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
+    await user.click(within(connectionsCard).getByText("Next →"));
+    expect(within(connectionsCard).getByText("Page 2 of 2")).toBeInTheDocument();
     // Search resets to page 1
-    await user.type(screen.getByPlaceholderText(/Search connections/), 'Server 1');
-    expect(screen.queryByText('Page 2')).not.toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText(/Search connections/), "Server 1");
+    expect(screen.queryByText("Page 2")).not.toBeInTheDocument();
   });
 
-  it('shows connection count', async () => {
+  it("shows connection count", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
+    await user.click(screen.getByText("Access"));
     expect(await screen.findByText(/1 connection/)).toBeInTheDocument();
   });
 
-  it('shows filtered count', async () => {
+  it("shows filtered count", async () => {
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} },
-      { id: 'c2', name: 'Server B', protocol: 'ssh', hostname: '10.0.0.2', port: 22, domain: '', description: '', folder_id: undefined, extra: {} },
+      {
+        id: "c1",
+        name: "Server A",
+        protocol: "rdp",
+        hostname: "10.0.0.1",
+        port: 3389,
+        domain: "",
+        description: "",
+        folder_id: undefined,
+        extra: {},
+      },
+      {
+        id: "c2",
+        name: "Server B",
+        protocol: "ssh",
+        hostname: "10.0.0.2",
+        port: 22,
+        domain: "",
+        description: "",
+        folder_id: undefined,
+        extra: {},
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.type(screen.getByPlaceholderText(/Search connections/), 'Server A');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.type(screen.getByPlaceholderText(/Search connections/), "Server A");
     expect(screen.getByText(/1 of 2/)).toBeInTheDocument();
   });
 
-  it('updates connection via edit form', async () => {
-    vi.mocked(updateConnection).mockResolvedValue({ id: 'c1', name: 'Server Updated', protocol: 'rdp', hostname: '10.0.0.1', port: 3389, domain: '', description: '', folder_id: undefined, extra: {} });
+  it("updates connection via edit form", async () => {
+    vi.mocked(updateConnection).mockResolvedValue({
+      id: "c1",
+      name: "Server Updated",
+      protocol: "rdp",
+      hostname: "10.0.0.1",
+      port: 3389,
+      domain: "",
+      description: "",
+      folder_id: undefined,
+      extra: {},
+    });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
-    const editBtns = within(connectionsCard).getAllByText('Edit');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
+    const editBtns = within(connectionsCard).getAllByText("Edit");
     await user.click(editBtns[0]);
-    await screen.findByText('Edit Connection');
-    await user.click(screen.getByText('Save Changes'));
-    expect(updateConnection).toHaveBeenCalledWith('c1', expect.any(Object));
+    await screen.findByText("Edit Connection");
+    await user.click(screen.getByText("Save Changes"));
+    expect(updateConnection).toHaveBeenCalledWith("c1", expect.any(Object));
   });
 
-  it('closes form after connection deleted if editing same id', async () => {
-    vi.mocked(deleteConnection).mockResolvedValue({ status: 'success' });
+  it("closes form after connection deleted if editing same id", async () => {
+    vi.mocked(deleteConnection).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const connectionsCard = screen.getByRole('heading', { name: 'Connections' }).closest('.card') as HTMLElement;
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const connectionsCard = screen
+      .getByRole("heading", { name: "Connections" })
+      .closest(".card") as HTMLElement;
     // Open edit first
-    const editBtns = within(connectionsCard).getAllByText('Edit');
+    const editBtns = within(connectionsCard).getAllByText("Edit");
     await user.click(editBtns[0]);
-    expect(screen.getByText('Edit Connection')).toBeInTheDocument();
+    expect(screen.getByText("Edit Connection")).toBeInTheDocument();
     // Delete while form is open
-    const deleteBtns = within(connectionsCard).getAllByText('Delete');
+    const deleteBtns = within(connectionsCard).getAllByText("Delete");
     await user.click(deleteBtns[0]);
     // ConfirmModal appears — click its confirm button (btn-danger)
-    const allDeleteBtns = await screen.findAllByRole('button', { name: 'Delete' });
-    const confirmBtn = allDeleteBtns.find(btn => btn.classList.contains('btn-danger'))!;
+    const allDeleteBtns = await screen.findAllByRole("button", { name: "Delete" });
+    const confirmBtn = allDeleteBtns.find((btn) => btn.classList.contains("btn-danger"))!;
     await user.click(confirmBtn);
     // Form should be closed
-    await waitFor(() => expect(screen.queryByText('Edit Connection')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Edit Connection")).not.toBeInTheDocument());
   });
 
-  it('cancel closes the add form', async () => {
+  it("cancel closes the add form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    expect(screen.getByText('Add Connection')).toBeInTheDocument();
-    const cancelBtns = screen.getAllByText('Cancel');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    expect(screen.getByText("Add Connection")).toBeInTheDocument();
+    const cancelBtns = screen.getAllByText("Cancel");
     await user.click(cancelBtns[0]);
-    expect(screen.queryByText('Add Connection')).not.toBeInTheDocument();
+    expect(screen.queryByText("Add Connection")).not.toBeInTheDocument();
   });
 
-  it('renders users table with OIDC sub', async () => {
+  it("renders users table with OIDC sub", async () => {
     vi.mocked(getUsers).mockResolvedValue([
-      { id: 'u1', username: 'alice', email: 'alice@example.com', auth_type: 'sso', role_name: 'admin', sub: 'oidc-sub-123' },
+      {
+        id: "u1",
+        username: "alice",
+        email: "alice@example.com",
+        auth_type: "sso",
+        role_name: "admin",
+        sub: "oidc-sub-123",
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    expect(await screen.findByText('alice')).toBeInTheDocument();
-    expect(screen.getByText('oidc-sub-123')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    expect(await screen.findByText("alice")).toBeInTheDocument();
+    expect(screen.getByText("oidc-sub-123")).toBeInTheDocument();
   });
 
-  it('shows dash when user has no OIDC sub', async () => {
+  it("shows dash when user has no OIDC sub", async () => {
     vi.mocked(getUsers).mockResolvedValue([
-      { id: 'u1', username: 'bob', email: 'bob@example.com', auth_type: 'local', role_name: 'user', sub: '' },
+      {
+        id: "u1",
+        username: "bob",
+        email: "bob@example.com",
+        auth_type: "local",
+        role_name: "user",
+        sub: "",
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('bob');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("bob");
     // OIDC sub column shows — for empty sub
-    const dashes = screen.getAllByText('—');
+    const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('allows changing a user role via dropdown', async () => {
+  it("allows changing a user role via dropdown", async () => {
     vi.mocked(getUsers).mockResolvedValue([
-      { id: 'u1', username: 'alice', email: 'alice@example.com', auth_type: 'sso', role_name: 'admin', sub: '' },
+      {
+        id: "u1",
+        username: "alice",
+        email: "alice@example.com",
+        auth_type: "sso",
+        role_name: "admin",
+        sub: "",
+      },
     ]);
-    vi.mocked(updateUser).mockResolvedValue({ status: 'updated' });
+    vi.mocked(updateUser).mockResolvedValue({ status: "updated" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('alice');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("alice");
     // The role column uses the custom Select component
-    const roleTrigger = screen.getByRole('button', { name: 'admin' });
+    const roleTrigger = screen.getByRole("button", { name: "admin" });
     await user.click(roleTrigger);
-    const option = await screen.findByRole('option', { name: 'user' });
+    const option = await screen.findByRole("option", { name: "user" });
     await user.click(option);
-    expect(updateUser).toHaveBeenCalledWith('u1', { role_id: 'r2' });
+    expect(updateUser).toHaveBeenCalledWith("u1", { role_id: "r2" });
   });
 
-  it('shows no folders empty state', async () => {
+  it("shows no folders empty state", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
+    await user.click(screen.getByText("Access"));
     expect(await screen.findByText(/No folders created yet/)).toBeInTheDocument();
   });
 
-  it('renders folders table', async () => {
+  it("renders folders table", async () => {
     vi.mocked(getConnectionFolders).mockResolvedValue([
-      { id: 'g1', name: 'Production', parent_id: undefined },
-      { id: 'g2', name: 'Staging', parent_id: 'g1' },
+      { id: "g1", name: "Production", parent_id: undefined },
+      { id: "g2", name: "Staging", parent_id: "g1" },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    const prodEls = await screen.findAllByText('Production');
+    await user.click(screen.getByText("Access"));
+    const prodEls = await screen.findAllByText("Production");
     expect(prodEls.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Staging')).toBeInTheDocument();
-    expect(screen.getByText('Root')).toBeInTheDocument();
+    expect(screen.getByText("Staging")).toBeInTheDocument();
+    expect(screen.getByText("Root")).toBeInTheDocument();
   });
 
-  it('creates a folder', async () => {
-    vi.mocked(createConnectionFolder).mockResolvedValue({ id: 'g1', name: 'DevOps', parent_id: undefined });
+  it("creates a folder", async () => {
+    vi.mocked(createConnectionFolder).mockResolvedValue({
+      id: "g1",
+      name: "DevOps",
+      parent_id: undefined,
+    });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
+    await user.click(screen.getByText("Access"));
     await screen.findByText(/No folders created yet/);
-    await user.type(screen.getByPlaceholderText('Folder name...'), 'DevOps');
-    await user.click(screen.getByText('Add Folder'));
-    expect(createConnectionFolder).toHaveBeenCalledWith(expect.objectContaining({ name: 'DevOps' }));
+    await user.type(screen.getByPlaceholderText("Folder name..."), "DevOps");
+    await user.click(screen.getByText("Add Folder"));
+    expect(createConnectionFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "DevOps" })
+    );
   });
 
-  it('deletes a folder with confirm', async () => {
-    vi.mocked(getConnectionFolders).mockResolvedValue([{ id: 'g1', name: 'ToDelete', parent_id: undefined }]);
-    vi.mocked(deleteConnectionFolder).mockResolvedValue({ status: 'success' });
+  it("deletes a folder with confirm", async () => {
+    vi.mocked(getConnectionFolders).mockResolvedValue([
+      { id: "g1", name: "ToDelete", parent_id: undefined },
+    ]);
+    vi.mocked(deleteConnectionFolder).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('ToDelete');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("ToDelete");
     // Find the folder delete button
-    const folderDeleteBtns = screen.getAllByText('Delete');
+    const folderDeleteBtns = screen.getAllByText("Delete");
     await user.click(folderDeleteBtns[folderDeleteBtns.length - 1]);
     // ConfirmModal appears — click its confirm button (btn-danger)
-    const allDeleteBtns = await screen.findAllByRole('button', { name: 'Delete' });
-    const confirmBtn = allDeleteBtns.find(btn => btn.classList.contains('btn-danger'))!;
+    const allDeleteBtns = await screen.findAllByRole("button", { name: "Delete" });
+    const confirmBtn = allDeleteBtns.find((btn) => btn.classList.contains("btn-danger"))!;
     await user.click(confirmBtn);
-    expect(deleteConnectionFolder).toHaveBeenCalledWith('g1');
+    expect(deleteConnectionFolder).toHaveBeenCalledWith("g1");
   });
 
-  it('disables Add Role button when role name is empty', async () => {
+  it("disables Add Role button when role name is empty", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByRole('heading', { name: 'Roles' });
-    expect(screen.getByText('Create New Role')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByRole("heading", { name: "Roles" });
+    expect(screen.getByText("Create New Role")).toBeInTheDocument();
   });
 
-  it('disables Add Folder button when name is empty', async () => {
+  it("disables Add Folder button when name is empty", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Connection Folders');
-    expect(screen.getByText('Add Folder')).toBeDisabled();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Connection Folders");
+    expect(screen.getByText("Add Folder")).toBeDisabled();
   });
 
-  it('highlights currently edited connection row', async () => {
+  it("highlights currently edited connection row", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getAllByText('Server A').find(el => el.closest('tr'))?.closest('tr');
-    if (!row) throw new Error('Row not found');
-    await user.click(within(row).getByText('Edit'));
-    
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen
+      .getAllByText("Server A")
+      .find((el) => el.closest("tr"))
+      ?.closest("tr");
+    if (!row) throw new Error("Row not found");
+    await user.click(within(row).getByText("Edit"));
+
     // The row for the edited connection should have bg-surface-secondary class
     await waitFor(() => {
-      expect(row.className).toContain('bg-surface-secondary');
+      expect(row.className).toContain("bg-surface-secondary");
     });
   });
 });
 
-describe('SessionsTab', () => {
+describe("SessionsTab", () => {
   beforeEach(() => {
     setupDefaults();
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders session stat cards with data', async () => {
+  it("renders session stat cards with data", async () => {
     vi.mocked(getSessionStats).mockResolvedValue({
       total_sessions: 72,
       total_hours: 1.2,
@@ -1241,25 +1489,25 @@ describe('SessionsTab', () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('72')).toBeInTheDocument();
-    expect(screen.getByText('1.2')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    await user.click(screen.getByText("Sessions"));
+    expect(await screen.findByText("72")).toBeInTheDocument();
+    expect(screen.getByText("1.2")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText(/last 30 days/i)).toBeInTheDocument();
   });
 
-  it('shows dash placeholders when stats are loading', async () => {
+  it("shows dash placeholders when stats are loading", async () => {
     vi.mocked(getSessionStats).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
+    await user.click(screen.getByText("Sessions"));
     await screen.findByText(/last 30 days/i);
-    const dashes = screen.getAllByText('—');
+    const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('renders top connections table', async () => {
+  it("renders top connections table", async () => {
     vi.mocked(getSessionStats).mockResolvedValue({
       total_sessions: 10,
       total_hours: 2.5,
@@ -1269,8 +1517,8 @@ describe('SessionsTab', () => {
       median_duration_mins: 12.0,
       total_bandwidth_bytes: 0,
       top_connections: [
-        { name: 'Server X', protocol: 'rdp', sessions: 8, total_hours: 1.5 },
-        { name: 'Server Y', protocol: 'ssh', sessions: 2, total_hours: 1.0 },
+        { name: "Server X", protocol: "rdp", sessions: 8, total_hours: 1.5 },
+        { name: "Server Y", protocol: "ssh", sessions: 2, total_hours: 1.0 },
       ],
       top_users: [],
       daily_trend: [],
@@ -1279,14 +1527,14 @@ describe('SessionsTab', () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('Server X')).toBeInTheDocument();
-    expect(screen.getByText('rdp')).toBeInTheDocument();
-    expect(screen.getByText('Server Y')).toBeInTheDocument();
-    expect(screen.getByText('ssh')).toBeInTheDocument();
+    await user.click(screen.getByText("Sessions"));
+    expect(await screen.findByText("Server X")).toBeInTheDocument();
+    expect(screen.getByText("rdp")).toBeInTheDocument();
+    expect(screen.getByText("Server Y")).toBeInTheDocument();
+    expect(screen.getByText("ssh")).toBeInTheDocument();
   });
 
-  it('renders top users table', async () => {
+  it("renders top users table", async () => {
     vi.mocked(getSessionStats).mockResolvedValue({
       total_sessions: 10,
       total_hours: 2.5,
@@ -1297,8 +1545,8 @@ describe('SessionsTab', () => {
       total_bandwidth_bytes: 0,
       top_connections: [],
       top_users: [
-        { username: 'alice', sessions: 6, total_hours: 1.0, last_session: '2026-04-10T14:30:00Z' },
-        { username: 'bob', sessions: 4, total_hours: 1.5, last_session: null },
+        { username: "alice", sessions: 6, total_hours: 1.0, last_session: "2026-04-10T14:30:00Z" },
+        { username: "bob", sessions: 4, total_hours: 1.5, last_session: null },
       ],
       daily_trend: [],
       protocol_distribution: [],
@@ -1306,12 +1554,12 @@ describe('SessionsTab', () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    expect(await screen.findByText('alice')).toBeInTheDocument();
-    expect(screen.getByText('bob')).toBeInTheDocument();
+    await user.click(screen.getByText("Sessions"));
+    expect(await screen.findByText("alice")).toBeInTheDocument();
+    expect(screen.getByText("bob")).toBeInTheDocument();
   });
 
-  it('shows empty state for leaderboard tables', async () => {
+  it("shows empty state for leaderboard tables", async () => {
     vi.mocked(getSessionStats).mockResolvedValue({
       total_sessions: 0,
       total_hours: 0,
@@ -1328,438 +1576,617 @@ describe('SessionsTab', () => {
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Sessions'));
-    const noDataEls = await screen.findAllByText('No data yet.');
+    await user.click(screen.getByText("Sessions"));
+    const noDataEls = await screen.findAllByText("No data yet.");
     expect(noDataEls.length).toBe(2);
   });
 });
 
-describe('AdSyncTab', () => {
+describe("AdSyncTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Corp AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      {
+        id: "ad1",
+        label: "Corp AD",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "cn=admin",
+        bind_password: "***",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "simple",
+        keytab_path: "",
+        krb5_principal: "",
+        tls_skip_verify: false,
+        ca_cert_pem: "",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: true,
+      },
     ]);
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders AD sync configs', async () => {
+  it("renders AD sync configs", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    expect(await screen.findByText('Corp AD')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    expect(await screen.findByText("Corp AD")).toBeInTheDocument();
   });
 
-  it('shows empty state with no configs', async () => {
+  it("shows empty state with no configs", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     expect(await screen.findByText(/no AD sync sources/i)).toBeInTheDocument();
   });
 
-  it('shows enabled badge on config', async () => {
+  it("shows enabled badge on config", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    expect(await screen.findByText('Enabled')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    expect(await screen.findByText("Enabled")).toBeInTheDocument();
   });
 
-  it('shows disabled badge', async () => {
+  it("shows disabled badge", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Disabled AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: false },
+      {
+        id: "ad1",
+        label: "Disabled AD",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "cn=admin",
+        bind_password: "***",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "simple",
+        keytab_path: "",
+        krb5_principal: "",
+        tls_skip_verify: false,
+        ca_cert_pem: "",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: false,
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    expect(await screen.findByText('Disabled')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    expect(await screen.findByText("Disabled")).toBeInTheDocument();
   });
 
-  it('shows config details', async () => {
+  it("shows config details", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    expect(await screen.findByText('ldaps://dc1.corp.com')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    expect(await screen.findByText("ldaps://dc1.corp.com")).toBeInTheDocument();
     expect(screen.getByText(/Simple Bind/)).toBeInTheDocument();
   });
 
-  it('opens add source form', async () => {
+  it("opens add source form", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     await screen.findByText(/no AD sync sources/i);
-    await user.click(screen.getByText('Add Source'));
-    expect(screen.getByText('Add AD Source')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Source"));
+    expect(screen.getByText("Add AD Source")).toBeInTheDocument();
   });
 
-  it('opens edit source form', async () => {
+  it("opens edit source form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Edit AD Source')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Corp AD')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Edit AD Source")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Corp AD")).toBeInTheDocument();
   });
 
-  it('saves a new config', async () => {
-    vi.mocked(createAdSyncConfig).mockResolvedValue({ id: 'ad2', status: 'success' });
+  it("saves a new config", async () => {
+    vi.mocked(createAdSyncConfig).mockResolvedValue({ id: "ad2", status: "success" });
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     await screen.findByText(/no AD sync sources/i);
-    await user.click(screen.getByText('Add Source'));
-    await user.type(screen.getByPlaceholderText('Production AD'), 'New AD');
-    await user.type(screen.getByPlaceholderText(/ldaps:\/\//), 'ldaps://dc2.corp.com');
-    await user.click(screen.getByText('Save'));
+    await user.click(screen.getByText("Add Source"));
+    await user.type(screen.getByPlaceholderText("Production AD"), "New AD");
+    await user.type(screen.getByPlaceholderText(/ldaps:\/\//), "ldaps://dc2.corp.com");
+    await user.click(screen.getByText("Save"));
     expect(createAdSyncConfig).toHaveBeenCalled();
   });
 
-  it('saves when updating existing config', async () => {
-    vi.mocked(updateAdSyncConfig).mockResolvedValue({ status: 'success' });
+  it("saves when updating existing config", async () => {
+    vi.mocked(updateAdSyncConfig).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    await user.click(screen.getByText('Save'));
-    expect(updateAdSyncConfig).toHaveBeenCalledWith('ad1', expect.any(Object));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    await user.click(screen.getByText("Save"));
+    expect(updateAdSyncConfig).toHaveBeenCalledWith("ad1", expect.any(Object));
   });
 
-  it('deletes config with confirm', async () => {
-    vi.mocked(deleteAdSyncConfig).mockResolvedValue({ status: 'success' });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it("deletes config with confirm", async () => {
+    vi.mocked(deleteAdSyncConfig).mockResolvedValue({ status: "success" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Delete'));
-    expect(deleteAdSyncConfig).toHaveBeenCalledWith('ad1');
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Delete"));
+    expect(deleteAdSyncConfig).toHaveBeenCalledWith("ad1");
   });
 
-  it('does not delete when confirm is cancelled', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it("does not delete when confirm is cancelled", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Delete'));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Delete"));
     expect(deleteAdSyncConfig).not.toHaveBeenCalled();
   });
 
-  it('triggers sync', async () => {
-    vi.mocked(triggerAdSync).mockResolvedValue({ status: 'success', run_id: 'r1' });
+  it("triggers sync", async () => {
+    vi.mocked(triggerAdSync).mockResolvedValue({ status: "success", run_id: "r1" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('⟳ Sync Now'));
-    expect(triggerAdSync).toHaveBeenCalledWith('ad1');
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("⟳ Sync Now"));
+    expect(triggerAdSync).toHaveBeenCalledWith("ad1");
   });
 
-  it('shows Syncing... while sync in progress', async () => {
+  it("shows Syncing... while sync in progress", async () => {
     vi.mocked(triggerAdSync).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('⟳ Sync Now'));
-    expect(screen.getByText('Syncing...')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("⟳ Sync Now"));
+    expect(screen.getByText("Syncing...")).toBeInTheDocument();
   });
 
-  it('shows sync history', async () => {
+  it("shows sync history", async () => {
     vi.mocked(getAdSyncRuns).mockResolvedValue([
-      { id: 'r1', config_id: 'ad1', started_at: '2024-06-01T12:00:00Z', status: 'success', created: 5, updated: 2, soft_deleted: 0, hard_deleted: 0, error_message: '' },
+      {
+        id: "r1",
+        config_id: "ad1",
+        started_at: "2024-06-01T12:00:00Z",
+        status: "success",
+        created: 5,
+        updated: 2,
+        soft_deleted: 0,
+        hard_deleted: 0,
+        error_message: "",
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('History'));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("History"));
     expect(await screen.findByText(/Sync History/)).toBeInTheDocument();
-    expect(screen.getByText('success')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText("success")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
   });
 
-  it('shows empty sync history', async () => {
+  it("shows empty sync history", async () => {
     vi.mocked(getAdSyncRuns).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('History'));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("History"));
     expect(await screen.findByText(/No sync runs yet/)).toBeInTheDocument();
   });
 
-  it('back button returns from history to config list', async () => {
+  it("back button returns from history to config list", async () => {
     vi.mocked(getAdSyncRuns).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('History'));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("History"));
     await screen.findByText(/No sync runs yet/);
-    await user.click(screen.getByText('← Back'));
-    expect(await screen.findByText('Corp AD')).toBeInTheDocument();
+    await user.click(screen.getByText("← Back"));
+    expect(await screen.findByText("Corp AD")).toBeInTheDocument();
   });
 
-  it('cancel button returns from edit to config list', async () => {
+  it("cancel button returns from edit to config list", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Edit AD Source')).toBeInTheDocument();
-    await user.click(screen.getByText('Cancel'));
-    expect(await screen.findByText('Corp AD')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Edit AD Source")).toBeInTheDocument();
+    await user.click(screen.getByText("Cancel"));
+    expect(await screen.findByText("Corp AD")).toBeInTheDocument();
   });
 
-  it('shows kerberos auth fields when kerberos method selected', async () => {
+  it("shows kerberos auth fields when kerberos method selected", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Kerb AD', ldap_url: 'ldaps://dc1.corp.com', bind_dn: '', bind_password: '', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'kerberos', keytab_path: '/etc/krb5/strata.keytab', krb5_principal: 'svc@CORP.COM', tls_skip_verify: false, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      {
+        id: "ad1",
+        label: "Kerb AD",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "",
+        bind_password: "",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "kerberos",
+        keytab_path: "/etc/krb5/strata.keytab",
+        krb5_principal: "svc@CORP.COM",
+        tls_skip_verify: false,
+        ca_cert_pem: "",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: true,
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Kerb AD');
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Kerb AD");
     expect(screen.getByText(/Kerberos Keytab/)).toBeInTheDocument();
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByDisplayValue('/etc/krb5/strata.keytab')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('svc@CORP.COM')).toBeInTheDocument();
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByDisplayValue("/etc/krb5/strata.keytab")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("svc@CORP.COM")).toBeInTheDocument();
   });
 
-  it('test connection shows success result', async () => {
-    vi.mocked(testAdSyncConnection).mockResolvedValue({ status: 'success', message: 'Found 10 computers', sample: ['Server1', 'Server2'], count: 10 });
+  it("test connection shows success result", async () => {
+    vi.mocked(testAdSyncConnection).mockResolvedValue({
+      status: "success",
+      message: "Found 10 computers",
+      sample: ["Server1", "Server2"],
+      count: 10,
+    });
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     await screen.findByText(/no AD sync sources/i);
-    await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('⚡ Test Connection'));
-    expect(await screen.findByText('Found 10 computers')).toBeInTheDocument();
-    expect(screen.getByText('Server1')).toBeInTheDocument();
-    expect(screen.getByText('Server2')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Source"));
+    await user.click(screen.getByText("⚡ Test Connection"));
+    expect(await screen.findByText("Found 10 computers")).toBeInTheDocument();
+    expect(screen.getByText("Server1")).toBeInTheDocument();
+    expect(screen.getByText("Server2")).toBeInTheDocument();
     expect(screen.getByText(/of 10/)).toBeInTheDocument();
   });
 
-  it('test connection shows error result', async () => {
-    vi.mocked(testAdSyncConnection).mockRejectedValue(new Error('LDAP bind failed'));
+  it("test connection shows error result", async () => {
+    vi.mocked(testAdSyncConnection).mockRejectedValue(new Error("LDAP bind failed"));
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     await screen.findByText(/no AD sync sources/i);
-    await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('⚡ Test Connection'));
-    expect(await screen.findByText('LDAP bind failed')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Source"));
+    await user.click(screen.getByText("⚡ Test Connection"));
+    expect(await screen.findByText("LDAP bind failed")).toBeInTheDocument();
   });
 
-  it('shows Testing... during test', async () => {
+  it("shows Testing... during test", async () => {
     vi.mocked(testAdSyncConnection).mockReturnValue(new Promise(() => {}));
     vi.mocked(getAdSyncConfigs).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     await screen.findByText(/no AD sync sources/i);
-    await user.click(screen.getByText('Add Source'));
-    await user.click(screen.getByText('⚡ Test Connection'));
-    expect(screen.getByText('Testing...')).toBeInTheDocument();
+    await user.click(screen.getByText("Add Source"));
+    await user.click(screen.getByText("⚡ Test Connection"));
+    expect(screen.getByText("Testing...")).toBeInTheDocument();
   });
 
-  it('shows config with CA cert and TLS skip verify info', async () => {
+  it("shows config with CA cert and TLS skip verify info", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'TLS Skip', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: true, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      {
+        id: "ad1",
+        label: "TLS Skip",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "cn=admin",
+        bind_password: "***",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "simple",
+        keytab_path: "",
+        krb5_principal: "",
+        tls_skip_verify: true,
+        ca_cert_pem: "",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: true,
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     expect(await screen.findByText(/TLS Skip Verify/)).toBeInTheDocument();
   });
 
-  it('shows config with CA cert loaded', async () => {
+  it("shows config with CA cert loaded", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'CA Cert', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: 'CERT_DATA', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      {
+        id: "ad1",
+        label: "CA Cert",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "cn=admin",
+        bind_password: "***",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "simple",
+        keytab_path: "",
+        krb5_principal: "",
+        tls_skip_verify: false,
+        ca_cert_pem: "CERT_DATA",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: true,
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
+    await user.click(screen.getByText("AD Sync"));
     expect(await screen.findByText(/CA Cert ✓/)).toBeInTheDocument();
   });
 
-  it('shows search base management in edit form', async () => {
+  it("shows search base management in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByDisplayValue('DC=corp,DC=com')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByDisplayValue("DC=corp,DC=com")).toBeInTheDocument();
     // Add search base
-    await user.click(screen.getByText('+ Add Search Base'));
+    await user.click(screen.getByText("+ Add Search Base"));
     const searchBaseInputs = screen.getAllByPlaceholderText(/OU=Servers/);
     expect(searchBaseInputs.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows sync history with error run', async () => {
+  it("shows sync history with error run", async () => {
     vi.mocked(getAdSyncRuns).mockResolvedValue([
-      { id: 'r1', config_id: 'ad1', started_at: '2024-06-01T12:00:00Z', status: 'error', created: 0, updated: 0, soft_deleted: 0, hard_deleted: 0, error_message: 'LDAP timeout' },
+      {
+        id: "r1",
+        config_id: "ad1",
+        started_at: "2024-06-01T12:00:00Z",
+        status: "error",
+        created: 0,
+        updated: 0,
+        soft_deleted: 0,
+        hard_deleted: 0,
+        error_message: "LDAP timeout",
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('History'));
-    expect(await screen.findByText('error')).toBeInTheDocument();
-    expect(screen.getByText('LDAP timeout')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("History"));
+    expect(await screen.findByText("error")).toBeInTheDocument();
+    expect(screen.getByText("LDAP timeout")).toBeInTheDocument();
   });
 
-  it('shows search filter dropdown in edit form', async () => {
+  it("shows search filter dropdown in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Search Filter')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Search Filter")).toBeInTheDocument();
   });
 
-  it('shows protocol select in edit form', async () => {
+  it("shows protocol select in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Protocol')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Protocol")).toBeInTheDocument();
   });
 
-  it('shows search scope select in edit form', async () => {
+  it("shows search scope select in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Search Scope')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Search Scope")).toBeInTheDocument();
   });
 
-  it('shows default port field in edit form', async () => {
+  it("shows default port field in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Default Port')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('3389')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Default Port")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("3389")).toBeInTheDocument();
   });
 
-  it('shows sync interval field in edit form', async () => {
+  it("shows sync interval field in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Sync Interval (minutes)')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('60')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Sync Interval (minutes)")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("60")).toBeInTheDocument();
   });
 
-  it('shows TLS skip verify checkbox in edit form', async () => {
+  it("shows TLS skip verify checkbox in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Skip TLS verification')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Skip TLS verification")).toBeInTheDocument();
   });
 
-  it('shows CA certificate option when TLS skip is unchecked', async () => {
+  it("shows CA certificate option when TLS skip is unchecked", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
     // TLS skip is false by default, so CA cert option should be visible
-    expect(screen.getByText('CA Certificate (PEM)')).toBeInTheDocument();
-    expect(screen.getByText('Upload Certificate')).toBeInTheDocument();
+    expect(screen.getByText("CA Certificate (PEM)")).toBeInTheDocument();
+    expect(screen.getByText("Upload Certificate")).toBeInTheDocument();
   });
 
-  it('shows domain override field in edit form', async () => {
+  it("shows domain override field in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Domain Override')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Domain Override")).toBeInTheDocument();
   });
 
-  it('shows connection folder select in edit form', async () => {
+  it("shows connection folder select in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Connection Folder')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Connection Folder")).toBeInTheDocument();
   });
 
-  it('shows enabled checkbox in edit form', async () => {
+  it("shows enabled checkbox in edit form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Corp AD');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.getByText('Enabled')).toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Corp AD");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.getByText("Enabled")).toBeInTheDocument();
   });
 
-  it('hides CA cert option when TLS skip verify is checked', async () => {
+  it("hides CA cert option when TLS skip verify is checked", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'Skip TLS', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: true, ca_cert_pem: '', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      {
+        id: "ad1",
+        label: "Skip TLS",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "cn=admin",
+        bind_password: "***",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "simple",
+        keytab_path: "",
+        krb5_principal: "",
+        tls_skip_verify: true,
+        ca_cert_pem: "",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: true,
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('Skip TLS');
-    await user.click(screen.getByText('Edit'));
-    expect(screen.queryByText('CA Certificate (PEM)')).not.toBeInTheDocument();
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("Skip TLS");
+    await user.click(screen.getByText("Edit"));
+    expect(screen.queryByText("CA Certificate (PEM)")).not.toBeInTheDocument();
   });
 
-  it('shows replace certificate button when ca_cert is loaded in edit', async () => {
+  it("shows replace certificate button when ca_cert is loaded in edit", async () => {
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
-      { id: 'ad1', label: 'With Cert', ldap_url: 'ldaps://dc1.corp.com', bind_dn: 'cn=admin', bind_password: '***', search_bases: ['DC=corp,DC=com'], search_filter: '', protocol: 'rdp', default_port: 3389, sync_interval_minutes: 60, folder_id: '', domain_override: '', auth_method: 'simple', keytab_path: '', krb5_principal: '', tls_skip_verify: false, ca_cert_pem: 'CERT_DATA', created_at: '', updated_at: '', search_scope: 'sub', enabled: true },
+      {
+        id: "ad1",
+        label: "With Cert",
+        ldap_url: "ldaps://dc1.corp.com",
+        bind_dn: "cn=admin",
+        bind_password: "***",
+        search_bases: ["DC=corp,DC=com"],
+        search_filter: "",
+        protocol: "rdp",
+        default_port: 3389,
+        sync_interval_minutes: 60,
+        folder_id: "",
+        domain_override: "",
+        auth_method: "simple",
+        keytab_path: "",
+        krb5_principal: "",
+        tls_skip_verify: false,
+        ca_cert_pem: "CERT_DATA",
+        created_at: "",
+        updated_at: "",
+        search_scope: "sub",
+        enabled: true,
+      },
     ]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('AD Sync'));
-    await screen.findByText('With Cert');
-    await user.click(screen.getByText('Edit'));
+    await user.click(screen.getByText("AD Sync"));
+    await screen.findByText("With Cert");
+    await user.click(screen.getByText("Edit"));
     expect(screen.getByText(/Replace Certificate/)).toBeInTheDocument();
     expect(screen.getByText(/Certificate loaded/)).toBeInTheDocument();
   });
 });
 
-describe('SecurityTab', () => {
+describe("SecurityTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getSettings).mockResolvedValue({
-      watermark_enabled: 'true',
-      local_auth_enabled: 'true',
-      sso_enabled: 'false',
+      watermark_enabled: "true",
+      local_auth_enabled: "true",
+      sso_enabled: "false",
     });
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders security toggles', async () => {
+  it("renders security toggles", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    expect(await screen.findByText('Session Watermark')).toBeInTheDocument();
+    await user.click(screen.getByText("Security"));
+    expect(await screen.findByText("Session Watermark")).toBeInTheDocument();
   });
 
-  it('saves security settings', async () => {
-    vi.mocked(updateAuthMethods).mockResolvedValue({ status: 'success' });
-    vi.mocked(updateSettings).mockResolvedValue({ status: 'success' });
+  it("saves security settings", async () => {
+    vi.mocked(updateAuthMethods).mockResolvedValue({ status: "success" });
+    vi.mocked(updateSettings).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Session Watermark');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Session Watermark");
     const saveBtns = screen.getAllByText(/save/i);
     await user.click(saveBtns[saveBtns.length - 1]);
     await waitFor(() => {
@@ -1767,26 +2194,26 @@ describe('SecurityTab', () => {
     });
   });
 
-  it('renders authentication method toggles', async () => {
+  it("renders authentication method toggles", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    expect(await screen.findByText('Local Authentication')).toBeInTheDocument();
-    expect(screen.getByText('SSO / OIDC (Keycloak)')).toBeInTheDocument();
+    await user.click(screen.getByText("Security"));
+    expect(await screen.findByText("Local Authentication")).toBeInTheDocument();
+    expect(screen.getByText("SSO / OIDC (Keycloak)")).toBeInTheDocument();
   });
 
-  it('prevents disabling both auth methods (local off while SSO off)', async () => {
+  it("prevents disabling both auth methods (local off while SSO off)", async () => {
     vi.mocked(getSettings).mockResolvedValue({
-      watermark_enabled: 'false',
-      local_auth_enabled: 'true',
-      sso_enabled: 'false',
+      watermark_enabled: "false",
+      local_auth_enabled: "true",
+      sso_enabled: "false",
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Local Authentication');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Local Authentication");
     // Find local auth checkbox and try unchecking it
-    const checkboxes = screen.getAllByRole('checkbox');
+    const checkboxes = screen.getAllByRole("checkbox");
     // local auth checkbox (first one) - should stay checked since SSO is off
     const localCheckbox = checkboxes[0];
     expect(localCheckbox).toBeChecked();
@@ -1795,17 +2222,17 @@ describe('SecurityTab', () => {
     expect(localCheckbox).toBeChecked();
   });
 
-  it('prevents disabling both auth methods (SSO off while local off)', async () => {
+  it("prevents disabling both auth methods (SSO off while local off)", async () => {
     vi.mocked(getSettings).mockResolvedValue({
-      watermark_enabled: 'false',
-      local_auth_enabled: 'false',
-      sso_enabled: 'true',
+      watermark_enabled: "false",
+      local_auth_enabled: "false",
+      sso_enabled: "true",
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Local Authentication');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Local Authentication");
+    const checkboxes = screen.getAllByRole("checkbox");
     // SSO checkbox (second one) - should stay checked since local is off
     const ssoCheckbox = checkboxes[1];
     expect(ssoCheckbox).toBeChecked();
@@ -1813,17 +2240,17 @@ describe('SecurityTab', () => {
     expect(ssoCheckbox).toBeChecked();
   });
 
-  it('allows toggling when other method is enabled', async () => {
+  it("allows toggling when other method is enabled", async () => {
     vi.mocked(getSettings).mockResolvedValue({
-      watermark_enabled: 'false',
-      local_auth_enabled: 'true',
-      sso_enabled: 'true',
+      watermark_enabled: "false",
+      local_auth_enabled: "true",
+      sso_enabled: "true",
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Local Authentication');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Local Authentication");
+    const checkboxes = screen.getAllByRole("checkbox");
     // Can uncheck SSO since local is on
     const ssoCheckbox = checkboxes[1];
     expect(ssoCheckbox).toBeChecked();
@@ -1831,46 +2258,47 @@ describe('SecurityTab', () => {
     expect(ssoCheckbox).not.toBeChecked();
   });
 
-  it('watermark checkbox toggles', async () => {
+  it("watermark checkbox toggles", async () => {
     vi.mocked(getSettings).mockResolvedValue({
-      watermark_enabled: 'false',
-      local_auth_enabled: 'true',
-      sso_enabled: 'false',
+      watermark_enabled: "false",
+      local_auth_enabled: "true",
+      sso_enabled: "false",
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Session Watermark');
-    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Session Watermark");
+    const checkboxes = screen.getAllByRole("checkbox");
     const watermarkCheckbox = checkboxes[2]; // 3rd checkbox
     expect(watermarkCheckbox).not.toBeChecked();
     await user.click(watermarkCheckbox);
     expect(watermarkCheckbox).toBeChecked();
   });
 
-  it('shows Saving... during save', async () => {
+  it("shows Saving... during save", async () => {
     vi.mocked(updateSettings).mockReturnValue(new Promise(() => {}));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Session Watermark');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Session Watermark");
     const saveBtns = screen.getAllByText(/save/i);
     await user.click(saveBtns[saveBtns.length - 1]);
-    expect(screen.getByText('Saving...')).toBeInTheDocument();
+    expect(screen.getByText("Saving...")).toBeInTheDocument();
   });
 
-  it('sends watermark and auth settings on save', async () => {
-    vi.mocked(updateAuthMethods).mockResolvedValue({ status: 'success' });
-    vi.mocked(updateSettings).mockResolvedValue({ status: 'success' });
+  it("sends watermark and auth settings on save", async () => {
+    vi.mocked(updateAuthMethods).mockResolvedValue({ status: "success" });
+    vi.mocked(updateSettings).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Security'));
-    await screen.findByText('Session Watermark');
+    await user.click(screen.getByText("Security"));
+    await screen.findByText("Session Watermark");
     const saveBtns = screen.getAllByText(/save/i);
     await user.click(saveBtns[saveBtns.length - 1]);
     await waitFor(() => {
       expect(updateSettings).toHaveBeenCalledWith([
-        { key: 'watermark_enabled', value: 'true' },
+        { key: "watermark_enabled", value: "true" },
+        { key: "user_hard_delete_days", value: "90" },
       ]);
       expect(updateAuthMethods).toHaveBeenCalledWith({
         sso_enabled: false,
@@ -1880,789 +2308,881 @@ describe('SecurityTab', () => {
   });
 });
 
-describe('ConnectionForm protocol sections', () => {
+describe("ConnectionForm protocol sections", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'ssh', hostname: '10.0.0.1', port: 22, description: 'SSH server', folder_id: undefined, folder_name: undefined, domain: '', extra: {} },
+      {
+        id: "c1",
+        name: "Server A",
+        protocol: "ssh",
+        hostname: "10.0.0.1",
+        port: 22,
+        description: "SSH server",
+        folder_id: undefined,
+        folder_name: undefined,
+        domain: "",
+        extra: {},
+      },
     ]);
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('shows SSH protocol sections when editing SSH connection', async () => {
+  it("shows SSH protocol sections when editing SSH connection", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getByText('Server A').closest('tr')!;
-    await user.click(within(row).getByText('Edit'));
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen.getByText("Server A").closest("tr")!;
+    await user.click(within(row).getByText("Edit"));
     // SSH sections should render — section titles have ▸/▾ prefix
     expect(screen.getByText(/Authentication/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /[▸▾]\s*Display/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /[▸▾]\s*Display/ })).toBeInTheDocument();
     expect(screen.getByText(/Terminal Behavior/)).toBeInTheDocument();
     expect(screen.getByText(/SFTP/)).toBeInTheDocument();
     expect(screen.getByText(/Screen Recording/)).toBeInTheDocument();
     expect(screen.getByText(/Wake-on-LAN/)).toBeInTheDocument();
   });
 
-  it('expands and collapses SSH section', async () => {
+  it("expands and collapses SSH section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getByText('Server A').closest('tr')!;
-    await user.click(within(row).getByText('Edit'));
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen.getByText("Server A").closest("tr")!;
+    await user.click(within(row).getByText("Edit"));
     // Authentication is defaultOpen, so it should show fields
-    expect(screen.getByText('Private Key')).toBeInTheDocument();
+    expect(screen.getByText("Private Key")).toBeInTheDocument();
     // Display is collapsed by default — click to expand
     // Use getByRole to distinguish from the "Display" tab
-    await user.click(screen.getByRole('button', { name: /▸ Display/ }));
-    expect(screen.getByText('Font Name')).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /▸ Display/ }));
+    expect(screen.getByText("Font Name")).toBeInTheDocument();
     // Click again to collapse
-    await user.click(screen.getByRole('button', { name: /▾ Display/ }));
-    expect(screen.queryByText('Font Name')).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /▾ Display/ }));
+    expect(screen.queryByText("Font Name")).not.toBeInTheDocument();
   });
 
-  it('shows VNC protocol sections when protocol changed to VNC', async () => {
+  it("shows VNC protocol sections when protocol changed to VNC", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
     // Default is RDP — switch to VNC via the protocol dropdown
-    const protocolTrigger = screen.getAllByText('RDP').find(el => el.closest('[aria-haspopup="listbox"]'))!;
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
     await user.click(protocolTrigger);
-    await user.click(screen.getByText('VNC'));
+    await user.click(screen.getByText("VNC"));
     // VNC Authentication section is defaultOpen, so Password should be visible
-    expect(screen.getByText('Password')).toBeInTheDocument();
+    expect(screen.getByText("Password")).toBeInTheDocument();
   });
 
-  it('calls createConnection on form submit', async () => {
+  it("calls createConnection on form submit", async () => {
     vi.mocked(createConnection).mockResolvedValue({
-      id: 'c2', name: 'New SSH', protocol: 'ssh', hostname: '10.0.0.5', port: 22,
-      description: '', folder_id: undefined, folder_name: undefined, domain: '', extra: {},
+      id: "c2",
+      name: "New SSH",
+      protocol: "ssh",
+      hostname: "10.0.0.5",
+      port: 22,
+      description: "",
+      folder_id: undefined,
+      folder_name: undefined,
+      domain: "",
+      extra: {},
     });
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.type(screen.getByPlaceholderText('My Server'), 'New SSH');
-    await user.clear(screen.getByPlaceholderText('10.0.0.10'));
-    await user.type(screen.getByPlaceholderText('10.0.0.10'), '10.0.0.5');
-    await user.click(screen.getByText('Create Connection'));
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.type(screen.getByPlaceholderText("My Server"), "New SSH");
+    await user.clear(screen.getByPlaceholderText("10.0.0.10"));
+    await user.type(screen.getByPlaceholderText("10.0.0.10"), "10.0.0.5");
+    await user.click(screen.getByText("Create Connection"));
     await waitFor(() => {
-      expect(createConnection).toHaveBeenCalledWith(expect.objectContaining({ name: 'New SSH', hostname: '10.0.0.5' }));
+      expect(createConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "New SSH", hostname: "10.0.0.5" })
+      );
     });
   });
 
-  it('closes form with Cancel button', async () => {
+  it("closes form with Cancel button", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    expect(screen.getByText('Add Connection')).toBeInTheDocument();
-    const cancelButtons = screen.getAllByText('Cancel');
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    expect(screen.getByText("Add Connection")).toBeInTheDocument();
+    const cancelButtons = screen.getAllByText("Cancel");
     await user.click(cancelButtons[cancelButtons.length - 1]);
-    expect(screen.queryByPlaceholderText('My Server')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("My Server")).not.toBeInTheDocument();
   });
 
-  it('shows RDP Authentication section open by default in Add Connection form', async () => {
+  it("shows RDP Authentication section open by default in Add Connection form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    expect(screen.getByText('Ignore server certificate')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    expect(screen.getByText("Ignore server certificate")).toBeInTheDocument();
     expect(screen.getByText(/Security Mode/)).toBeInTheDocument();
   });
 
-  it('expands RDP Remote Desktop Gateway section', async () => {
+  it("expands RDP Remote Desktop Gateway section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Remote Desktop Gateway/ }));
-    expect(screen.getByText('Gateway Hostname')).toBeInTheDocument();
-    expect(screen.getByText('Gateway Port')).toBeInTheDocument();
-    expect(screen.getByText('Gateway Username')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Remote Desktop Gateway/ }));
+    expect(screen.getByText("Gateway Hostname")).toBeInTheDocument();
+    expect(screen.getByText("Gateway Port")).toBeInTheDocument();
+    expect(screen.getByText("Gateway Username")).toBeInTheDocument();
   });
 
-  it('expands RDP Basic Settings section', async () => {
+  it("expands RDP Basic Settings section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Basic Settings/ }));
-    expect(screen.getByText('Keyboard Layout')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Basic Settings/ }));
+    expect(screen.getByText("Keyboard Layout")).toBeInTheDocument();
   });
 
-  it('expands RDP Display section', async () => {
+  it("expands RDP Display section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Display/ }));
-    expect(screen.getByText('Color Depth')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Display/ }));
+    expect(screen.getByText("Color Depth")).toBeInTheDocument();
   });
 
-  it('expands RDP Performance section', async () => {
+  it("expands RDP Performance section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Performance/ }));
-    expect(screen.getByText('Enable wallpaper')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Performance/ }));
+    expect(screen.getByText("Enable wallpaper")).toBeInTheDocument();
   });
 
-  it('expands RDP Drive Redirection section', async () => {
+  it("expands RDP Drive Redirection section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Device Redirection/ }));
-    expect(screen.getByText('Enable drive / file transfer')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Device Redirection/ }));
+    expect(screen.getByText("Enable drive / file transfer")).toBeInTheDocument();
   });
 
-  it('expands RDP Screen Recording section', async () => {
+  it("expands RDP Screen Recording section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Screen Recording/ }));
-    expect(screen.getByText('Exclude graphical output')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Screen Recording/ }));
+    expect(screen.getByText("Exclude graphical output")).toBeInTheDocument();
   });
 
-  it('expands RDP Wake-on-LAN section', async () => {
+  it("expands RDP Wake-on-LAN section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Wake-on-LAN/ }));
-    expect(screen.getByText('Send WoL packet before connecting')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Wake-on-LAN/ }));
+    expect(screen.getByText("Send WoL packet before connecting")).toBeInTheDocument();
   });
 
-  it('expands RDP Clipboard section', async () => {
+  it("expands RDP Clipboard section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Clipboard/ }));
-    expect(screen.getByText('Disable copy from remote')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Clipboard/ }));
+    expect(screen.getByText("Disable copy from remote")).toBeInTheDocument();
   });
 
-  it('expands RDP RemoteApp section', async () => {
+  it("expands RDP RemoteApp section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ RemoteApp/ }));
-    expect(screen.getByPlaceholderText('||notepad')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ RemoteApp/ }));
+    expect(screen.getByPlaceholderText("||notepad")).toBeInTheDocument();
   });
 
-  it('expands RDP Load Balancing section', async () => {
+  it("expands RDP Load Balancing section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Load Balancing/ }));
-    expect(screen.getByText('Load Balance Info')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Load Balancing/ }));
+    expect(screen.getByText("Load Balance Info")).toBeInTheDocument();
   });
 
-  it('expands RDP SFTP section', async () => {
+  it("expands RDP SFTP section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ SFTP/ }));
-    expect(screen.getByText('Enable SFTP file transfer')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ SFTP/ }));
+    expect(screen.getByText("Enable SFTP file transfer")).toBeInTheDocument();
   });
 
-  it('expands RDP Kerberos / NLA section', async () => {
+  it("expands RDP Kerberos / NLA section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    await user.click(screen.getByText('+ Add Connection'));
-    await user.click(screen.getByRole('button', { name: /▸ Kerberos/ }));
-    expect(screen.getByText('Auth Package')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    await user.click(screen.getByRole("button", { name: /▸ Kerberos/ }));
+    expect(screen.getByText("Auth Package")).toBeInTheDocument();
   });
 
-  it('expands SSH Terminal Behavior section', async () => {
+  it("expands SSH Terminal Behavior section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getByText('Server A').closest('tr')!;
-    await user.click(within(row).getByText('Edit'));
-    await user.click(screen.getByRole('button', { name: /▸ Terminal Behavior/ }));
-    expect(screen.getByPlaceholderText('Execute on connect')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen.getByText("Server A").closest("tr")!;
+    await user.click(within(row).getByText("Edit"));
+    await user.click(screen.getByRole("button", { name: /▸ Terminal Behavior/ }));
+    expect(screen.getByPlaceholderText("Execute on connect")).toBeInTheDocument();
   });
 
-  it('expands SSH SFTP section', async () => {
+  it("expands SSH SFTP section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getByText('Server A').closest('tr')!;
-    await user.click(within(row).getByText('Edit'));
-    await user.click(screen.getByRole('button', { name: /▸ SFTP/ }));
-    expect(screen.getByText('Enable SFTP')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen.getByText("Server A").closest("tr")!;
+    await user.click(within(row).getByText("Edit"));
+    await user.click(screen.getByRole("button", { name: /▸ SFTP/ }));
+    expect(screen.getByText("Enable SFTP")).toBeInTheDocument();
   });
 
-  it('expands SSH Screen Recording section', async () => {
+  it("expands SSH Screen Recording section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getByText('Server A').closest('tr')!;
-    await user.click(within(row).getByText('Edit'));
-    await user.click(screen.getByRole('button', { name: /▸ Screen Recording/ }));
-    expect(screen.getByText('Include key events')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen.getByText("Server A").closest("tr")!;
+    await user.click(within(row).getByText("Edit"));
+    await user.click(screen.getByRole("button", { name: /▸ Screen Recording/ }));
+    expect(screen.getByText("Include key events")).toBeInTheDocument();
   });
 
-  it('expands SSH Wake-on-LAN section', async () => {
+  it("expands SSH Wake-on-LAN section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Access'));
-    await screen.findByText('Server A');
-    const row = screen.getByText('Server A').closest('tr')!;
-    await user.click(within(row).getByText('Edit'));
-    await user.click(screen.getByRole('button', { name: /▸ Wake-on-LAN/ }));
-    expect(screen.getByText('Send WoL packet')).toBeInTheDocument();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    const row = screen.getByText("Server A").closest("tr")!;
+    await user.click(within(row).getByText("Edit"));
+    await user.click(screen.getByRole("button", { name: /▸ Wake-on-LAN/ }));
+    expect(screen.getByText("Send WoL packet")).toBeInTheDocument();
   });
 });
 
-describe('DisplayTab', () => {
+describe("DisplayTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getSettings).mockResolvedValue({
-      display_timezone: 'America/New_York',
-      display_date_format: 'MM/DD/YYYY',
-      display_time_format: 'hh:mm:ss A',
+      display_timezone: "America/New_York",
+      display_date_format: "MM/DD/YYYY",
+      display_time_format: "hh:mm:ss A",
     });
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders Display Preferences heading', async () => {
+  it("renders Display Preferences heading", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Display'));
-    expect(await screen.findByText('Display Preferences')).toBeInTheDocument();
+    await user.click(screen.getByText("Display"));
+    expect(await screen.findByText("Display Preferences")).toBeInTheDocument();
   });
 
-  it('shows timezone label', async () => {
+  it("shows timezone label", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Display'));
-    expect(await screen.findByText('Display Timezone')).toBeInTheDocument();
+    await user.click(screen.getByText("Display"));
+    expect(await screen.findByText("Display Timezone")).toBeInTheDocument();
   });
 
-  it('shows date and time format labels', async () => {
+  it("shows date and time format labels", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Display'));
-    await screen.findByText('Display Preferences');
-    expect(screen.getByText('Date Format')).toBeInTheDocument();
-    expect(screen.getByText('Time Format')).toBeInTheDocument();
+    await user.click(screen.getByText("Display"));
+    await screen.findByText("Display Preferences");
+    expect(screen.getByText("Date Format")).toBeInTheDocument();
+    expect(screen.getByText("Time Format")).toBeInTheDocument();
   });
 
-  it('shows preview section', async () => {
+  it("shows preview section", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Display'));
-    expect(await screen.findByText('Preview')).toBeInTheDocument();
+    await user.click(screen.getByText("Display"));
+    expect(await screen.findByText("Preview")).toBeInTheDocument();
   });
 
-  it('shows save button', async () => {
+  it("shows save button", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Display'));
-    expect(await screen.findByText('Save Display Settings')).toBeInTheDocument();
+    await user.click(screen.getByText("Display"));
+    expect(await screen.findByText("Save Display Settings")).toBeInTheDocument();
   });
 
-  it('saves display settings', async () => {
+  it("saves display settings", async () => {
     vi.mocked(updateSettings).mockResolvedValue(undefined as any);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Display'));
-    await screen.findByText('Save Display Settings');
-    await user.click(screen.getByText('Save Display Settings'));
+    await user.click(screen.getByText("Display"));
+    await screen.findByText("Save Display Settings");
+    await user.click(screen.getByText("Save Display Settings"));
     await waitFor(() => expect(updateSettings).toHaveBeenCalled());
   });
 });
 
-describe('TagsTab', () => {
+describe("TagsTab", () => {
   beforeEach(() => {
     setupDefaults();
     vi.mocked(getConnections).mockResolvedValue([
-      { id: 'c1', name: 'Server A', protocol: 'rdp', hostname: '10.0.0.1', port: 3389 },
+      { id: "c1", name: "Server A", protocol: "rdp", hostname: "10.0.0.1", port: 3389 },
     ] as any);
     vi.mocked(getAdminTagsAdmin).mockResolvedValue([
-      { id: 't1', name: 'Production', color: '#ef4444' },
+      { id: "t1", name: "Production", color: "#ef4444" },
     ] as any);
-    vi.mocked(getAdminConnectionTagsAdmin).mockResolvedValue({ c1: ['t1'] });
+    vi.mocked(getAdminConnectionTagsAdmin).mockResolvedValue({ c1: ["t1"] });
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders Global Tags heading', async () => {
+  it("renders Global Tags heading", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    expect(await screen.findByText('Global Tags')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    expect(await screen.findByText("Global Tags")).toBeInTheDocument();
   });
 
-  it('shows existing tags', async () => {
+  it("shows existing tags", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    expect(await screen.findByText('Production')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    expect(await screen.findByText("Production")).toBeInTheDocument();
   });
 
-  it('shows Create Tag button', async () => {
+  it("shows Create Tag button", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    expect(await screen.findByText('Create Tag')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    expect(await screen.findByText("Create Tag")).toBeInTheDocument();
   });
 
-  it('creates a new tag', async () => {
-    vi.mocked(createAdminTag).mockResolvedValue({ id: 't2', name: 'Staging', color: '#3b82f6' } as any);
+  it("creates a new tag", async () => {
+    vi.mocked(createAdminTag).mockResolvedValue({
+      id: "t2",
+      name: "Staging",
+      color: "#3b82f6",
+    } as any);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    await screen.findByText('Production');
+    await user.click(screen.getByText("Tags"));
+    await screen.findByText("Production");
     const input = screen.getByPlaceholderText(/Production/);
-    await user.type(input, 'Staging');
-    await user.click(screen.getByText('Create Tag'));
-    await waitFor(() => expect(createAdminTag).toHaveBeenCalledWith('Staging', expect.any(String)));
+    await user.type(input, "Staging");
+    await user.click(screen.getByText("Create Tag"));
+    await waitFor(() => expect(createAdminTag).toHaveBeenCalledWith("Staging", expect.any(String)));
   });
 
-  it('shows empty state when no tags', async () => {
+  it("shows empty state when no tags", async () => {
     vi.mocked(getAdminTagsAdmin).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    expect(await screen.findByText('No global tags created yet.')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    expect(await screen.findByText("No global tags created yet.")).toBeInTheDocument();
   });
 
-  it('deletes a tag', async () => {
+  it("deletes a tag", async () => {
     vi.mocked(deleteAdminTag).mockResolvedValue(undefined as any);
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    await screen.findByText('Production');
-    await user.click(screen.getByText('Delete'));
-    await waitFor(() => expect(deleteAdminTag).toHaveBeenCalledWith('t1'));
+    await user.click(screen.getByText("Tags"));
+    await screen.findByText("Production");
+    await user.click(screen.getByText("Delete"));
+    await waitFor(() => expect(deleteAdminTag).toHaveBeenCalledWith("t1"));
   });
 
-  it('shows error on load failure', async () => {
-    vi.mocked(getAdminTagsAdmin).mockRejectedValue(new Error('fail'));
+  it("shows error on load failure", async () => {
+    vi.mocked(getAdminTagsAdmin).mockRejectedValue(new Error("fail"));
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    expect(await screen.findByText('Failed to load tags')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    expect(await screen.findByText("Failed to load tags")).toBeInTheDocument();
   });
 
-  it('shows connection count for a tag', async () => {
+  it("shows connection count for a tag", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    expect(await screen.findByText('1 connection')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    expect(await screen.findByText("1 connection")).toBeInTheDocument();
   });
 
-  it('shows Edit and Assign buttons', async () => {
+  it("shows Edit and Assign buttons", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    await screen.findByText('Production');
-    expect(screen.getByText('Edit')).toBeInTheDocument();
-    expect(screen.getByText('Assign')).toBeInTheDocument();
+    await user.click(screen.getByText("Tags"));
+    await screen.findByText("Production");
+    expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText("Assign")).toBeInTheDocument();
   });
 
-  it('opens edit mode for a tag', async () => {
+  it("opens edit mode for a tag", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    await screen.findByText('Production');
-    await user.click(screen.getByText('Edit'));
+    await user.click(screen.getByText("Tags"));
+    await screen.findByText("Production");
+    await user.click(screen.getByText("Edit"));
     // Should show Save and Cancel buttons in edit mode
-    expect(screen.getByText('Save')).toBeInTheDocument();
-    expect(screen.getByText('Cancel')).toBeInTheDocument();
+    expect(screen.getByText("Save")).toBeInTheDocument();
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
   });
 
-  it('cancels edit mode', async () => {
+  it("cancels edit mode", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    await screen.findByText('Production');
-    await user.click(screen.getByText('Edit'));
-    await user.click(screen.getByText('Cancel'));
+    await user.click(screen.getByText("Tags"));
+    await screen.findByText("Production");
+    await user.click(screen.getByText("Edit"));
+    await user.click(screen.getByText("Cancel"));
     // Back to normal mode
-    expect(screen.getByText('Edit')).toBeInTheDocument();
+    expect(screen.getByText("Edit")).toBeInTheDocument();
   });
 
-  it('shows Assign panel when clicking Assign', async () => {
+  it("shows Assign panel when clicking Assign", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await user.click(screen.getByText('Tags'));
-    await screen.findByText('Production');
-    await user.click(screen.getByText('Assign'));
+    await user.click(screen.getByText("Tags"));
+    await screen.findByText("Production");
+    await user.click(screen.getByText("Assign"));
     // Should show the connection assignment panel with Server A
-    expect(await screen.findByText('Server A')).toBeInTheDocument();
+    expect(await screen.findByText("Server A")).toBeInTheDocument();
   });
 });
 
-describe('NetworkTab', () => {
+describe("NetworkTab", () => {
   beforeEach(setupDefaults);
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders Network & DNS Settings heading', async () => {
+  it("renders Network & DNS Settings heading", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
     expect(await screen.findByText(/Network & DNS Settings/)).toBeInTheDocument();
   });
 
-  it('shows Enable Custom DNS checkbox', async () => {
+  it("shows Enable Custom DNS checkbox", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    expect(await screen.findByText('Enable Custom DNS')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    expect(await screen.findByText("Enable Custom DNS")).toBeInTheDocument();
   });
 
-  it('shows DNS server fields when enabled', async () => {
+  it("shows DNS server fields when enabled", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    expect(await screen.findByText('DNS Server Addresses')).toBeInTheDocument();
-    expect(screen.getByText('Search Domains')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    expect(await screen.findByText("DNS Server Addresses")).toBeInTheDocument();
+    expect(screen.getByText("Search Domains")).toBeInTheDocument();
   });
 
-  it('hides DNS server fields when disabled', async () => {
+  it("hides DNS server fields when disabled", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'false' });
+    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: "false" });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    await screen.findByText('Enable Custom DNS');
-    expect(screen.queryByText('DNS Server Addresses')).not.toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    await screen.findByText("Enable Custom DNS");
+    expect(screen.queryByText("DNS Server Addresses")).not.toBeInTheDocument();
   });
 
-  it('enables DNS fields when checkbox is toggled', async () => {
+  it("enables DNS fields when checkbox is toggled", async () => {
     const user = userEvent.setup();
     vi.mocked(getSettings).mockResolvedValue({});
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    const checkbox = await screen.findByRole('checkbox');
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    const checkbox = await screen.findByRole("checkbox");
     await user.click(checkbox);
-    expect(await screen.findByText('DNS Server Addresses')).toBeInTheDocument();
+    expect(await screen.findByText("DNS Server Addresses")).toBeInTheDocument();
   });
 
-  it('shows validation error for invalid IP', async () => {
+  it("shows validation error for invalid IP", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: 'not-an-ip', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "not-an-ip",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
     expect(await screen.findByText(/Invalid DNS server address/)).toBeInTheDocument();
   });
 
-  it('shows validation error for invalid IP octets', async () => {
+  it("shows validation error for invalid IP octets", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '999.999.999.999', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "999.999.999.999",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
     expect(await screen.findByText(/Invalid IP address/)).toBeInTheDocument();
   });
 
-  it('shows validation error for invalid port', async () => {
+  it("shows validation error for invalid port", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1:99999', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1:99999",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
     expect(await screen.findByText(/Invalid port number/)).toBeInTheDocument();
   });
 
-  it('shows validation error for invalid search domain', async () => {
+  it("shows validation error for invalid search domain", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: 'bad domain!' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1",
+      dns_search_domains: "bad domain!",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
     expect(await screen.findByText(/Invalid domain/)).toBeInTheDocument();
   });
 
-  it('shows validation error for too many search domains', async () => {
+  it("shows validation error for too many search domains", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: 'a.com,b.com,c.com,d.com,e.com,f.com,g.com' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1",
+      dns_search_domains: "a.com,b.com,c.com,d.com,e.com,f.com,g.com",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
     expect(await screen.findByText(/at most 6 search domains/)).toBeInTheDocument();
   });
 
-  it('accepts valid IP addresses', async () => {
+  it("accepts valid IP addresses", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1, 192.168.1.1', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1, 192.168.1.1",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    await screen.findByText('DNS Server Addresses');
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    await screen.findByText("DNS Server Addresses");
     expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
   });
 
-  it('saves DNS settings and shows restart notice', async () => {
+  it("saves DNS settings and shows restart notice", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: 'corp.local' });
-    vi.mocked(updateDns).mockResolvedValue({ status: 'ok', restart_required: true, message: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1",
+      dns_search_domains: "corp.local",
+    });
+    vi.mocked(updateDns).mockResolvedValue({ status: "ok", restart_required: true, message: "" });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    await screen.findByText('DNS Server Addresses');
-    await user.click(screen.getByText('Save Network Settings'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    await screen.findByText("DNS Server Addresses");
+    await user.click(screen.getByText("Save Network Settings"));
     await waitFor(() => {
       expect(updateDns).toHaveBeenCalledWith({
         dns_enabled: true,
-        dns_servers: '10.0.0.1',
-        dns_search_domains: 'corp.local',
+        dns_servers: "10.0.0.1",
+        dns_search_domains: "corp.local",
       });
     });
     expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
   });
 
-  it('saves DNS settings without restart notice', async () => {
+  it("saves DNS settings without restart notice", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: '' });
-    vi.mocked(updateDns).mockResolvedValue({ status: 'ok', restart_required: false, message: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1",
+      dns_search_domains: "",
+    });
+    vi.mocked(updateDns).mockResolvedValue({ status: "ok", restart_required: false, message: "" });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    await screen.findByText('DNS Server Addresses');
-    await user.click(screen.getByText('Save Network Settings'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    await screen.findByText("DNS Server Addresses");
+    await user.click(screen.getByText("Save Network Settings"));
     await waitFor(() => {
       expect(updateDns).toHaveBeenCalled();
     });
     expect(screen.queryByText(/Restart required/)).not.toBeInTheDocument();
   });
 
-  it('shows How it works section when DNS is enabled', async () => {
+  it("shows How it works section when DNS is enabled", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    expect(await screen.findByText('How it works')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    expect(await screen.findByText("How it works")).toBeInTheDocument();
   });
 
-  it('accepts valid IP:port format', async () => {
+  it("accepts valid IP:port format", async () => {
     const user = userEvent.setup();
-    vi.mocked(getSettings).mockResolvedValue({ dns_enabled: 'true', dns_servers: '10.0.0.1:53', dns_search_domains: '' });
+    vi.mocked(getSettings).mockResolvedValue({
+      dns_enabled: "true",
+      dns_servers: "10.0.0.1:53",
+      dns_search_domains: "",
+    });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Network'));
-    await screen.findByText('DNS Server Addresses');
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Network"));
+    await screen.findByText("DNS Server Addresses");
     expect(screen.queryByText(/Invalid/)).not.toBeInTheDocument();
   });
 });
 
-describe('PasswordsTab', () => {
+describe("PasswordsTab", () => {
   beforeEach(setupDefaults);
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders Password Management heading', async () => {
+  it("renders Password Management heading", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    expect(await screen.findByText('Password Management')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    expect(await screen.findByText("Password Management")).toBeInTheDocument();
   });
 
-  it('shows approval roles sub-tabs', async () => {
+  it("shows approval roles sub-tabs", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    expect(await screen.findByText('Approval Roles')).toBeInTheDocument();
-    expect(screen.getByText('Account Mappings')).toBeInTheDocument();
-    expect(screen.getByText('Checkout Requests')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    expect(await screen.findByText("Approval Roles")).toBeInTheDocument();
+    expect(screen.getByText("Account Mappings")).toBeInTheDocument();
+    expect(screen.getByText("Checkout Requests")).toBeInTheDocument();
   });
 
-  it('shows no approval roles empty state', async () => {
+  it("shows no approval roles empty state", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    expect(await screen.findByText('No approval roles defined yet.')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    expect(await screen.findByText("No approval roles defined yet.")).toBeInTheDocument();
   });
 
-  it('shows create approval role form', async () => {
+  it("shows create approval role form", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    expect(await screen.findByText('Create Approval Role')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Role name')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Description (optional)')).toBeInTheDocument();
-    expect(screen.getByText('Create Role')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    expect(await screen.findByText("Create Approval Role")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Role name")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Description (optional)")).toBeInTheDocument();
+    expect(screen.getByText("Create Role")).toBeInTheDocument();
   });
 
-  it('creates an approval role', async () => {
+  it("creates an approval role", async () => {
     const user = userEvent.setup();
-    vi.mocked(createApprovalRole).mockResolvedValue({ id: 'r1', status: 'created' });
+    vi.mocked(createApprovalRole).mockResolvedValue({ id: "r1", status: "created" });
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await user.type(screen.getByPlaceholderText('Role name'), 'Admins');
-    await user.type(screen.getByPlaceholderText('Description (optional)'), 'Admin approvers');
-    await user.click(screen.getByText('Create Role'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await user.type(screen.getByPlaceholderText("Role name"), "Admins");
+    await user.type(screen.getByPlaceholderText("Description (optional)"), "Admin approvers");
+    await user.click(screen.getByText("Create Role"));
     await waitFor(() => {
-      expect(createApprovalRole).toHaveBeenCalledWith({ name: 'Admins', description: 'Admin approvers' });
+      expect(createApprovalRole).toHaveBeenCalledWith({
+        name: "Admins",
+        description: "Admin approvers",
+      });
     });
   });
 
-  it('renders existing approval roles', async () => {
+  it("renders existing approval roles", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: 'r1', name: 'IT Admins', description: 'IT team', created_at: '', updated_at: '' },
+      { id: "r1", name: "IT Admins", description: "IT team", created_at: "", updated_at: "" },
     ]);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    expect(await screen.findByText('IT Admins')).toBeInTheDocument();
-    expect(screen.getByText('IT team')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    expect(await screen.findByText("IT Admins")).toBeInTheDocument();
+    expect(screen.getByText("IT team")).toBeInTheDocument();
   });
 
-  it('deletes an approval role', async () => {
+  it("deletes an approval role", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: 'r1', name: 'IT Admins', description: '', created_at: '', updated_at: '' },
+      { id: "r1", name: "IT Admins", description: "", created_at: "", updated_at: "" },
     ]);
     vi.mocked(deleteApprovalRole).mockResolvedValue(undefined as any);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await screen.findByText('IT Admins');
-    await user.click(screen.getByText('Delete'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await screen.findByText("IT Admins");
+    await user.click(screen.getByText("Delete"));
     await waitFor(() => {
-      expect(deleteApprovalRole).toHaveBeenCalledWith('r1');
+      expect(deleteApprovalRole).toHaveBeenCalledWith("r1");
     });
   });
 
-  it('expands a role to show configure options', async () => {
+  it("expands a role to show configure options", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: 'r1', name: 'IT Admins', description: '', created_at: '', updated_at: '' },
+      { id: "r1", name: "IT Admins", description: "", created_at: "", updated_at: "" },
     ]);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await screen.findByText('IT Admins');
-    await user.click(screen.getByText('Configure'));
-    expect(await screen.findByText('Managed Account Scope')).toBeInTheDocument();
-    expect(screen.getByText('Approvers')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await screen.findByText("IT Admins");
+    await user.click(screen.getByText("Configure"));
+    expect(await screen.findByText("Managed Account Scope")).toBeInTheDocument();
+    expect(screen.getByText("Approvers")).toBeInTheDocument();
   });
 
-  it('collapses expanded role', async () => {
+  it("collapses expanded role", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: 'r1', name: 'IT Admins', description: '', created_at: '', updated_at: '' },
+      { id: "r1", name: "IT Admins", description: "", created_at: "", updated_at: "" },
     ]);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await screen.findByText('IT Admins');
-    await user.click(screen.getByText('Configure'));
-    await screen.findByText('Managed Account Scope');
-    await user.click(screen.getByText('Collapse'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await screen.findByText("IT Admins");
+    await user.click(screen.getByText("Configure"));
+    await screen.findByText("Managed Account Scope");
+    await user.click(screen.getByText("Collapse"));
     await waitFor(() => {
-      expect(screen.queryByText('Managed Account Scope')).not.toBeInTheDocument();
+      expect(screen.queryByText("Managed Account Scope")).not.toBeInTheDocument();
     });
   });
 
-  it('switches to Account Mappings sub-tab', async () => {
+  it("switches to Account Mappings sub-tab", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await user.click(screen.getByText('Account Mappings'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await user.click(screen.getByText("Account Mappings"));
     // No PM-enabled configs = shows empty state
     expect(await screen.findByText(/No PM-enabled AD Sync sources/)).toBeInTheDocument();
   });
 
-  it('shows account mappings form when PM configs exist', async () => {
+  it("shows account mappings form when PM configs exist", async () => {
     const user = userEvent.setup();
     vi.mocked(getAdSyncConfigs).mockResolvedValue([
       {
-        id: 'adc1', label: 'AD Source', ldap_url: 'ldap://dc.corp', bind_dn: 'CN=admin', bind_password: '',
-        search_bases: ['DC=corp'], search_filter: '', search_scope: 'sub', protocol: 'rdp',
-        default_port: 3389, tls_skip_verify: false, sync_interval_minutes: 60, enabled: true,
-        auth_method: 'simple', pm_enabled: true, created_at: '', updated_at: '',
+        id: "adc1",
+        label: "AD Source",
+        ldap_url: "ldap://dc.corp",
+        bind_dn: "CN=admin",
+        bind_password: "",
+        search_bases: ["DC=corp"],
+        search_filter: "",
+        search_scope: "sub",
+        protocol: "rdp",
+        default_port: 3389,
+        tls_skip_verify: false,
+        sync_interval_minutes: 60,
+        enabled: true,
+        auth_method: "simple",
+        pm_enabled: true,
+        created_at: "",
+        updated_at: "",
       },
     ]);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await user.click(screen.getByText('Account Mappings'));
-    expect(await screen.findByText('Create Account Mapping')).toBeInTheDocument();
-    expect(screen.getByText('No account mappings.')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await user.click(screen.getByText("Account Mappings"));
+    expect(await screen.findByText("Create Account Mapping")).toBeInTheDocument();
+    expect(screen.getByText("No account mappings.")).toBeInTheDocument();
   });
 
-  it('switches to Checkout Requests sub-tab', async () => {
+  it("switches to Checkout Requests sub-tab", async () => {
     const user = userEvent.setup();
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await user.click(screen.getByText('Checkout Requests'));
-    expect(await screen.findByText('No checkout requests.')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await user.click(screen.getByText("Checkout Requests"));
+    expect(await screen.findByText("No checkout requests.")).toBeInTheDocument();
   });
 
-  it('shows checkout requests table with data', async () => {
+  it("shows checkout requests table with data", async () => {
     const user = userEvent.setup();
     vi.mocked(getCheckoutRequests).mockResolvedValue([
       {
-        id: 'cr1', requester_user_id: 'u1', managed_ad_dn: 'CN=svc,DC=corp', status: 'Active',
-        requested_duration_mins: 60, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        id: "cr1",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=svc,DC=corp",
+        status: "Active",
+        requested_duration_mins: 60,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 3600000).toISOString(),
       },
     ]);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await user.click(screen.getByText('Checkout Requests'));
-    expect(await screen.findByText('CN=svc,DC=corp')).toBeInTheDocument();
-    expect(screen.getByText('Active')).toBeInTheDocument();
-    expect(screen.getByText('60m')).toBeInTheDocument();
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await user.click(screen.getByText("Checkout Requests"));
+    expect(await screen.findByText("CN=svc,DC=corp")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("60m")).toBeInTheDocument();
   });
 
-  it('refreshes checkout requests', async () => {
+  it("refreshes checkout requests", async () => {
     const user = userEvent.setup();
     vi.mocked(getCheckoutRequests).mockResolvedValue([]);
     renderAdmin();
-    await screen.findByText('Admin Settings');
-    await user.click(screen.getByText('Password Mgmt'));
-    await user.click(screen.getByText('Checkout Requests'));
-    await screen.findByText('No checkout requests.');
-    await user.click(screen.getByText('Refresh'));
+    await screen.findByText("Admin Settings");
+    await user.click(screen.getByText("Password Mgmt"));
+    await user.click(screen.getByText("Checkout Requests"));
+    await screen.findByText("No checkout requests.");
+    await user.click(screen.getByText("Refresh"));
     await waitFor(() => {
       expect(getCheckoutRequests).toHaveBeenCalledTimes(2);
     });

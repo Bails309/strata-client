@@ -14,8 +14,9 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use axum_prometheus::PrometheusMetricLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 
 use crate::services::app_state::SharedState;
 use crate::services::middleware::{require_admin, require_auth};
@@ -23,10 +24,26 @@ use crate::services::middleware::{require_admin, require_auth};
 pub fn build_router(state: SharedState) -> Router {
     let cors = build_cors_layer();
 
+    // W3-12 — Prometheus RED metrics per endpoint. The layer records
+    // request count, latency histogram and in-flight gauge against the
+    // matched route pattern (e.g. `/api/user/connections/:id`) so
+    // cardinality stays bounded.
+    let (prom_layer, prom_handle) = PrometheusMetricLayer::pair();
+
     // ── Public routes (no auth) ──────────────────────────────────────
     let public = Router::new()
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))
+        // /metrics is public at the HTTP layer — it is expected to be
+        // firewalled or exposed only on an admin-only network policy per
+        // Coding Standards §11.6 / W3-12.
+        .route(
+            "/metrics",
+            get(move || {
+                let handle = prom_handle.clone();
+                async move { handle.render() }
+            }),
+        )
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/refresh", post(auth::refresh))
@@ -350,7 +367,21 @@ pub fn build_router(state: SharedState) -> Router {
     public
         .merge(admin)
         .merge(user_routes)
-        .layer(TraceLayer::new_for_http())
+        // W3-11 — inject/propagate `x-request-id` into a task-local so
+        // outbound HTTP calls can stamp the same id on downstream
+        // requests. `inject_request_id` runs *before* TraceLayer so the
+        // span picks the id up as a field.
+        .layer(middleware::from_fn(
+            crate::services::request_id::inject_request_id,
+        ))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(
+                DefaultMakeSpan::new()
+                    .level(tracing::Level::INFO)
+                    .include_headers(false),
+            ),
+        )
+        .layer(prom_layer)
         .layer(cors)
         .with_state(state)
 }

@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react';
-import { login, getStatus, StatusResponse } from '../api';
-import { useTheme } from '../components/ThemeProvider';
+import { useEffect, useState } from "react";
+import { login, getStatus, StatusResponse } from "../api";
+import { useTheme } from "../components/ThemeProvider";
 
 interface Props {
   onLogin: () => void;
 }
 
 export default function Login({ onLogin }: Props) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const { theme } = useTheme();
@@ -23,9 +23,9 @@ export default function Login({ onLogin }: Props) {
     const token = tokenMatch ? decodeURIComponent(tokenMatch[1]) : null;
     if (token) {
       // Clear the fragment to remove the token from the URL / browser history
-      window.history.replaceState(null, '', window.location.pathname);
-      localStorage.setItem('access_token', token);
-      localStorage.setItem('token_expiry', String(Date.now() + 1200 * 1000));
+      window.history.replaceState(null, "", window.location.pathname);
+      localStorage.setItem("access_token", token);
+      localStorage.setItem("token_expiry", String(Date.now() + 1200 * 1000));
       onLogin();
       return;
     }
@@ -33,10 +33,10 @@ export default function Login({ onLogin }: Props) {
     // Fetch system status to see enabled auth methods
     async function init() {
       try {
-         const s = await getStatus();
-         setStatus(s);
+        const s = await getStatus();
+        setStatus(s);
       } catch {
-         // Fallback - show nothing or retry
+        // Fallback - show nothing or retry
       }
     }
     init();
@@ -45,16 +45,16 @@ export default function Login({ onLogin }: Props) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setError('');
+    setError("");
 
     try {
       const res = await login({ username, password });
-      localStorage.setItem('access_token', res.access_token);
+      localStorage.setItem("access_token", res.access_token);
       const ttl = res.expires_in ?? 1200;
-      localStorage.setItem('token_expiry', String(Date.now() + ttl * 1000));
+      localStorage.setItem("token_expiry", String(Date.now() + ttl * 1000));
       onLogin();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setLoading(false);
     }
@@ -66,7 +66,7 @@ export default function Login({ onLogin }: Props) {
         {/* Logo */}
         <div className="text-center mb-8">
           <img
-            src={theme === 'dark' ? '/logo-dark.png' : '/logo-light.png'}
+            src={theme === "dark" ? "/logo-dark.png" : "/logo-light.png"}
             alt="Strata Client"
             className="mx-auto mb-4"
             style={{ maxWidth: 200 }}
@@ -83,7 +83,10 @@ export default function Login({ onLogin }: Props) {
           )}
 
           {status?.local_auth_enabled && (
-            <form onSubmit={handleSubmit} className={status.sso_enabled ? 'mb-6 pb-6 border-b border-border/50' : ''}>
+            <form
+              onSubmit={handleSubmit}
+              className={status.sso_enabled ? "mb-6 pb-6 border-b border-border/50" : ""}
+            >
               <div className="form-group">
                 <label>Username</label>
                 <input
@@ -113,9 +116,9 @@ export default function Login({ onLogin }: Props) {
                 type="submit"
                 className="btn-primary w-full mt-2"
                 disabled={loading || !username || !password}
-                style={{ padding: '0.65rem' }}
+                style={{ padding: "0.65rem" }}
               >
-                {loading ? 'Signing in…' : 'Sign In'}
+                {loading ? "Signing in…" : "Sign In"}
               </button>
             </form>
           )}
@@ -125,10 +128,13 @@ export default function Login({ onLogin }: Props) {
               <a
                 href="/api/auth/sso/login"
                 className="btn w-full border border-border bg-surface-primary hover:bg-surface-secondary flex items-center justify-center gap-3 transition-all transform hover:scale-[1.01]"
-                style={{ padding: '0.65rem' }}
+                style={{ padding: "0.65rem" }}
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
-                  <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
+                  <path
+                    fill="currentColor"
+                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"
+                  />
                 </svg>
                 <span className="font-semibold text-txt-primary">Sign in with SSO</span>
               </a>
@@ -146,9 +152,7 @@ export default function Login({ onLogin }: Props) {
           )}
         </div>
 
-        <p className="text-center text-txt-tertiary text-xs mt-6">
-          Strata Client
-        </p>
+        <p className="text-center text-txt-tertiary text-xs mt-6">Strata Client</p>
       </div>
     </div>
   );

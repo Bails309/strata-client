@@ -171,7 +171,7 @@ pub async fn upload_to_azure(
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("PUT", data.len(), ct, &x_headers, &resource)?;
 
-    let client = reqwest::Client::builder().https_only(true).build()?;
+    let client = crate::services::http_client::azure_client();
     let resp = client
         .put(url)
         .header("Authorization", auth)
@@ -193,7 +193,26 @@ pub async fn upload_to_azure(
 }
 
 /// Stream a file from disk to Azure Blob Storage without loading it entirely into memory.
+///
+/// W3-4 — wraps the single-shot operation in `retry_transient_with_jitter`
+/// so a network blip or 5xx from Azure does not immediately surface as a
+/// recording-upload failure.
 pub async fn upload_file_to_azure(
+    cfg: &AzureBlobConfig,
+    blob: &str,
+    file_path: &str,
+) -> anyhow::Result<()> {
+    crate::services::retry::retry_transient_with_jitter(
+        "azure_blob.upload",
+        || upload_file_to_azure_once(cfg, blob, file_path),
+        crate::services::retry::is_http_transient,
+        3,
+        std::time::Duration::from_millis(500),
+    )
+    .await
+}
+
+async fn upload_file_to_azure_once(
     cfg: &AzureBlobConfig,
     blob: &str,
     file_path: &str,
@@ -218,7 +237,7 @@ pub async fn upload_file_to_azure(
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = reqwest::Body::wrap_stream(stream);
 
-    let client = reqwest::Client::builder().https_only(true).build()?;
+    let client = crate::services::http_client::azure_client();
     let resp = client
         .put(url)
         .header("Authorization", auth)
@@ -240,7 +259,22 @@ pub async fn upload_file_to_azure(
     Ok(())
 }
 
+/// W3-4 — retrying wrapper around a single GET.
 pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<Vec<u8>> {
+    crate::services::retry::retry_transient_with_jitter(
+        "azure_blob.download",
+        || download_from_azure_once(cfg, blob),
+        crate::services::retry::is_http_transient,
+        3,
+        std::time::Duration::from_millis(500),
+    )
+    .await
+}
+
+async fn download_from_azure_once(
+    cfg: &AzureBlobConfig,
+    blob: &str,
+) -> anyhow::Result<Vec<u8>> {
     let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
@@ -249,7 +283,7 @@ pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::R
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("GET", 0, "", &x_headers, &resource)?;
 
-    let client = reqwest::Client::builder().https_only(true).build()?;
+    let client = crate::services::http_client::azure_client();
     let resp = client
         .get(url)
         .header("Authorization", auth)
@@ -279,7 +313,7 @@ pub async fn download_stream_from_azure(
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("GET", 0, "", &x_headers, &resource)?;
 
-    let client = reqwest::Client::builder().https_only(true).build()?;
+    let client = crate::services::http_client::azure_client();
     let resp = client
         .get(url)
         .header("Authorization", auth)
@@ -299,8 +333,19 @@ pub async fn download_stream_from_azure(
 
 // ── Background sync task ───────────────────────────────────────────────
 
-/// Delete a blob from Azure Blob Storage.
+/// Delete a blob from Azure Blob Storage (W3-4 retrying wrapper).
 pub async fn delete_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<()> {
+    crate::services::retry::retry_transient_with_jitter(
+        "azure_blob.delete",
+        || delete_from_azure_once(cfg, blob),
+        crate::services::retry::is_http_transient,
+        3,
+        std::time::Duration::from_millis(500),
+    )
+    .await
+}
+
+async fn delete_from_azure_once(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<()> {
     let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
@@ -309,7 +354,7 @@ pub async fn delete_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Res
     let resource = format!("/{}/{}/{blob}", cfg.account_name, cfg.container_name);
     let auth = cfg.sign("DELETE", 0, "", &x_headers, &resource)?;
 
-    let client = reqwest::Client::builder().https_only(true).build()?;
+    let client = crate::services::http_client::azure_client();
     let resp = client
         .delete(url)
         .header("Authorization", auth)
@@ -328,26 +373,43 @@ pub async fn delete_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Res
     Ok(())
 }
 
-pub fn spawn_sync_task(state: crate::services::app_state::SharedState) {
-    tokio::spawn(async move {
-        let mut synced: HashSet<String> = HashSet::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            let (pool, vault) = {
-                let s = state.read().await;
-                let pool = match s.db.as_ref() {
-                    Some(db) => db.pool.clone(),
-                    None => continue,
+/// W2-4 / W2-7 — shared worker harness: cancellation, per-iteration timeout,
+/// jittered error backoff. The `synced` set is kept across iterations via an
+/// `Arc<Mutex<_>>` so repeated work is not re-done on every tick.
+pub fn spawn_sync_task(
+    state: crate::services::app_state::SharedState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    let synced = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::<String>::new()));
+    spawn_periodic(
+        PeriodicConfig {
+            label: "recording_sync",
+            initial_delay: std::time::Duration::from_secs(20),
+            interval: std::time::Duration::from_secs(60),
+            // Uploads can be chunky; cap the pass at 10 minutes.
+            iteration_timeout: std::time::Duration::from_secs(10 * 60),
+            error_backoff_base: std::time::Duration::from_secs(15),
+        },
+        shutdown,
+        move || {
+            let state = state.clone();
+            let synced = synced.clone();
+            async move {
+                let (pool, vault) = {
+                    let s = state.read().await;
+                    let pool = match s.db.as_ref() {
+                        Some(db) => db.pool.clone(),
+                        None => return Ok(()),
+                    };
+                    let vault = s.config.as_ref().and_then(|c| c.vault.clone());
+                    (pool, vault)
                 };
-                let vault = s.config.as_ref().and_then(|c| c.vault.clone());
-                (pool, vault)
-            };
-            if let Err(e) = sync_pass(&pool, &mut synced, vault.as_ref()).await {
-                tracing::warn!("Recording sync error: {e}");
+                let mut synced = synced.lock().await;
+                sync_pass(&pool, &mut synced, vault.as_ref()).await
             }
-        }
-    });
+        },
+    )
 }
 
 async fn sync_pass(
@@ -443,6 +505,68 @@ async fn sync_pass(
                         }
                     }
                 }
+            }
+        }
+
+        // W5-1: DB + Azure blob purge for rows older than retention.
+        // The filesystem pass above handles any local files that survived an
+        // earlier sync cycle; here we clear the corresponding DB rows and,
+        // for Azure-backed recordings, the remote blob too.
+        let doomed: Vec<(String, String)> = sqlx::query_as(
+            "SELECT storage_path, storage_type
+             FROM recordings
+             WHERE created_at < now() - make_interval(days => $1)",
+        )
+        .bind(config.retention_days as i32)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        if !doomed.is_empty() {
+            let azure_cfg = if config.storage_type == StorageType::AzureBlob {
+                get_azure_config(pool, vault).await.ok().flatten()
+            } else {
+                None
+            };
+
+            let mut purged_local = 0usize;
+            let mut purged_azure = 0usize;
+            for (storage_path, storage_type) in &doomed {
+                match storage_type.as_str() {
+                    "azure" | "azure_blob" => {
+                        if let Some(ref cfg) = azure_cfg {
+                            match delete_from_azure(cfg, storage_path).await {
+                                Ok(_) => purged_azure += 1,
+                                Err(e) => tracing::warn!(
+                                    "Azure retention purge failed for {storage_path}: {e}"
+                                ),
+                            }
+                        }
+                    }
+                    _ => {
+                        // Local files should already be gone from the pass
+                        // above, but attempt a best-effort unlink to mop up
+                        // orphans (e.g. DB row survived a crash mid-delete).
+                        let p = format!("{dir}/{storage_path}");
+                        if tokio::fs::remove_file(&p).await.is_ok() {
+                            purged_local += 1;
+                        }
+                    }
+                }
+            }
+
+            let deleted_rows =
+                sqlx::query("DELETE FROM recordings WHERE created_at < now() - make_interval(days => $1)")
+                    .bind(config.retention_days as i32)
+                    .execute(pool)
+                    .await?
+                    .rows_affected();
+
+            if deleted_rows > 0 {
+                tracing::info!(
+                    "Retention purge: removed {deleted_rows} recording row(s), \
+                     {purged_azure} azure blob(s), {purged_local} orphan local file(s)"
+                );
             }
         }
     }

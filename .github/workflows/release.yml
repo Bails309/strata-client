@@ -1,0 +1,162 @@
+# Release pipeline (W1-10 through W1-14)
+#
+# Fires on semver tags (v*.*.*). Builds the backend + frontend images,
+# pushes them to GHCR by digest, and then for EACH digest:
+#
+#   1. Generates a CycloneDX SBOM (anchore/sbom-action@v0) and uploads it as a
+#      workflow artefact + attaches it to the GitHub Release.
+#   2. Signs the image digest keylessly with Cosign (GitHub OIDC).
+#   3. Attaches the SBOM as an in-toto attestation (`cosign attest`).
+#   4. Emits SLSA Level-3 build provenance via
+#      slsa-framework/slsa-github-generator (container workflow).
+#
+# Deployment pipelines must verify both `cosign verify` AND
+# `slsa-verifier verify-image` against the digest before rolling a new tag.
+# That verification step is described in
+# [docs/runbooks/README.md](../../docs/runbooks/README.md) and will be wired
+# into the deploy job once one exists.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write        # create / update Releases
+  packages: write        # push to GHCR
+  id-token: write        # OIDC token for cosign keyless + SLSA
+  attestations: write    # attach attestations to the artefact
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository }}
+
+jobs:
+  # ── Build & push each image, capture its digest ────────────────────
+  build-and-push:
+    name: Build & push ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend]
+    outputs:
+      backend-digest: ${{ steps.collect.outputs.backend }}
+      frontend-digest: ${{ steps.collect.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.service }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push ${{ matrix.service }}
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Collect digest
+        id: collect
+        run: |
+          echo "${{ matrix.service }}=${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.service }}.cdx.json
+
+      - name: Upload SBOM as workflow artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.service }}
+          path: sbom-${{ matrix.service }}.cdx.json
+          retention-days: 90
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Cosign keyless sign
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}"
+
+      - name: Cosign attest SBOM (in-toto, cyclonedx predicate)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign attest --yes \
+            --predicate sbom-${{ matrix.service }}.cdx.json \
+            --type cyclonedx \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}"
+
+      - name: Attach SBOM to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom-${{ matrix.service }}.cdx.json
+          draft: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+
+  # ── SLSA Level 3 provenance per image ──────────────────────────────
+  # The reusable container generator produces the provenance and
+  # attaches it to the image in the same registry.
+  provenance-backend:
+    name: SLSA provenance (backend)
+    needs: [build-and-push]
+    permissions:
+      id-token: write
+      actions: read
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    with:
+      image: ghcr.io/${{ github.repository }}/backend
+      digest: ${{ needs.build-and-push.outputs.backend-digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  provenance-frontend:
+    name: SLSA provenance (frontend)
+    needs: [build-and-push]
+    permissions:
+      id-token: write
+      actions: read
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.0.0
+    with:
+      image: ghcr.io/${{ github.repository }}/frontend
+      digest: ${{ needs.build-and-push.outputs.frontend-digest }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}

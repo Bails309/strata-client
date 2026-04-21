@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import Guacamole from 'guacamole-common-js';
-import { GuacSession } from './SessionManager';
-import { createWinKeyProxy } from '../utils/winKeyProxy';
-import { installShortcutProxy } from '../utils/shortcutProxy';
-import { installKeyboardLock } from '../utils/keyboardLock';
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import Guacamole from "guacamole-common-js";
+import { GuacSession } from "./SessionManager";
+import { createWinKeyProxy } from "../utils/winKeyProxy";
+import { installShortcutProxy } from "../utils/shortcutProxy";
+import { installKeyboardLock } from "../utils/keyboardLock";
 
 /**
  * Hook that manages popping a Guacamole session out into a separate browser window.
@@ -16,13 +16,15 @@ import { installKeyboardLock } from '../utils/keyboardLock';
  */
 export function usePopOut(
   session: GuacSession | undefined,
-  containerRef: React.RefObject<HTMLDivElement | null>,
+  containerRef: React.RefObject<HTMLDivElement | null>
 ) {
   const navigate = useNavigate();
 
   // Derive initial state from the session — if it already has a popup open
   // (e.g. we navigated away and came back), reflect that immediately.
-  const [isPoppedOut, setIsPoppedOut] = useState(() => !!session?._popout && !session._popout.window.closed);
+  const [isPoppedOut, setIsPoppedOut] = useState(
+    () => !!session?._popout && !session._popout.window.closed
+  );
 
   // Sync isPoppedOut when the session changes (switching between connections).
   useEffect(() => {
@@ -48,16 +50,16 @@ export function usePopOut(
     // Return the display element to the main window container
     const container = containerRef.current;
     if (container && session.displayEl) {
-      container.innerHTML = '';
+      container.innerHTML = "";
       container.appendChild(session.displayEl);
 
       // Re-attach mouse/touch handlers since the element moved between documents
       const mouse = new Guacamole.Mouse(session.displayEl);
-      mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+      mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
         session.client.sendMouseState(e.state, true);
       });
       const touch = new Guacamole.Mouse.Touchscreen(session.displayEl);
-      touch.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+      touch.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
         session.client.sendMouseState(e.state, true);
       });
 
@@ -75,12 +77,20 @@ export function usePopOut(
       // No container — user navigated away from the session page while the
       // popup was open.  Adopt the display element back into the main document
       // so it isn't destroyed with the popup, then navigate to the session.
-      try { document.adoptNode(session.displayEl); } catch { /* already in main doc */ }
+      try {
+        document.adoptNode(session.displayEl);
+      } catch {
+        /* already in main doc */
+      }
     }
 
     // Close the popup window
     if (!po.window.closed) {
-      try { po.window.close(); } catch { /* ignore */ }
+      try {
+        po.window.close();
+      } catch {
+        /* ignore */
+      }
     }
     session._popout = undefined;
     session.isPoppedOut = false;
@@ -105,11 +115,10 @@ export function usePopOut(
     let height = Math.round(screen.availHeight * 0.8);
 
     try {
-      if ('getScreenDetails' in window) {
+      if ("getScreenDetails" in window) {
         const details: ScreenDetails = await (window as any).getScreenDetails();
         if (details.screens.length > 1) {
-          const secondary =
-            details.screens.find((s: any) => !s.isPrimary) || details.screens[1];
+          const secondary = details.screens.find((s: any) => !s.isPrimary) || details.screens[1];
           left = secondary.availLeft;
           top = secondary.availTop;
           width = secondary.availWidth;
@@ -125,37 +134,37 @@ export function usePopOut(
       `top=${top}`,
       `width=${width}`,
       `height=${height}`,
-      'menubar=no',
-      'toolbar=no',
-      'location=no',
-      'status=no',
-    ].join(',');
+      "menubar=no",
+      "toolbar=no",
+      "location=no",
+      "status=no",
+    ].join(",");
 
-    const popup = window.open('about:blank', `strata-popout-${sess.id}`, features);
+    const popup = window.open("about:blank", `strata-popout-${sess.id}`, features);
     if (!popup) return; // popup blocked
 
     // ── Set up the popup document ──
     popup.document.title = `${sess.name} — Strata`;
     const body = popup.document.body;
-    body.style.margin = '0';
-    body.style.padding = '0';
-    body.style.overflow = 'hidden';
-    body.style.background = '#000';
-    body.style.width = '100vw';
-    body.style.height = '100vh';
-    body.style.cursor = 'none';
+    body.style.margin = "0";
+    body.style.padding = "0";
+    body.style.overflow = "hidden";
+    body.style.background = "#000";
+    body.style.width = "100vw";
+    body.style.height = "100vh";
+    body.style.cursor = "none";
 
     // ── Reparent the display element ──
     body.appendChild(sess.displayEl);
 
     // ── Mouse/touch handlers for the popup document ──
     const mouse = new Guacamole.Mouse(sess.displayEl);
-    mouse.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+    mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       sess.client.sendMouseState(e.state, true);
     });
 
     const touch = new Guacamole.Mouse.Touchscreen(sess.displayEl);
-    touch.onEach(['mousedown', 'mouseup', 'mousemove'], (e: Guacamole.Mouse.Event) => {
+    touch.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       sess.client.sendMouseState(e.state, true);
     });
 
@@ -171,24 +180,23 @@ export function usePopOut(
 
     // Capture-phase key trap to prevent browser shortcuts in popup
     const trapKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F12') return;
-      if (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) return;
+      if (e.key === "F12") return;
+      if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
       // Ctrl+K → relay to main window to open command palette
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault();
         e.stopImmediatePropagation();
         kb.reset();
-        window.postMessage({ type: 'strata:open-command-palette' }, '*');
+        window.postMessage({ type: "strata:open-command-palette" }, "*");
         return;
       }
       e.preventDefault();
     };
-    popup.document.addEventListener('keydown', trapKeyDown, true);
+    popup.document.addEventListener("keydown", trapKeyDown, true);
 
     // Shortcut proxy: Ctrl+Alt+Tab → Alt+Tab, Ctrl+Alt+` → Win+Tab
-    const removeShortcutProxy = installShortcutProxy(
-      popup.document,
-      (p, k) => sess.client.sendKeyEvent(p, k),
+    const removeShortcutProxy = installShortcutProxy(popup.document, (p, k) =>
+      sess.client.sendKeyEvent(p, k)
     );
 
     // Keyboard Lock: capture OS-level shortcuts in fullscreen popouts
@@ -201,7 +209,7 @@ export function usePopOut(
       try {
         const text = await popup.navigator.clipboard?.readText();
         if (text && text !== sess.remoteClipboard) {
-          const stream = sess.client.createClipboardStream('text/plain');
+          const stream = sess.client.createClipboardStream("text/plain");
           const writer = new Guacamole.StringWriter(stream);
           const CHUNK_SIZE = 4096;
           for (let i = 0; i < text.length; i += CHUNK_SIZE) {
@@ -217,9 +225,9 @@ export function usePopOut(
 
     const handlePastePopup = (e: Event) => {
       const ce = e as ClipboardEvent;
-      const text = ce.clipboardData?.getData('text/plain');
+      const text = ce.clipboardData?.getData("text/plain");
       if (text && text !== sess.remoteClipboard) {
-        const stream = sess.client.createClipboardStream('text/plain');
+        const stream = sess.client.createClipboardStream("text/plain");
         const writer = new Guacamole.StringWriter(stream);
         const CHUNK_SIZE = 4096;
         for (let i = 0; i < text.length; i += CHUNK_SIZE) {
@@ -230,10 +238,10 @@ export function usePopOut(
       }
     };
 
-    sess.displayEl.addEventListener('mouseenter', pushClipboardPopup);
-    sess.displayEl.addEventListener('mousedown', pushClipboardPopup);
-    popup.addEventListener('focus', pushClipboardPopup);
-    popup.document.addEventListener('paste', handlePastePopup);
+    sess.displayEl.addEventListener("mouseenter", pushClipboardPopup);
+    sess.displayEl.addEventListener("mousedown", pushClipboardPopup);
+    popup.addEventListener("focus", pushClipboardPopup);
+    popup.document.addEventListener("paste", handlePastePopup);
 
     // ── Handle resize in the popup ──
     const display = sess.client.getDisplay();
@@ -260,7 +268,7 @@ export function usePopOut(
       setTimeout(() => handleResize(), 0);
     };
 
-    popup.addEventListener('resize', handleResize);
+    popup.addEventListener("resize", handleResize);
     requestAnimationFrame(() => handleResize());
 
     // ── Detect when the popup is moved to a different screen ──
@@ -272,7 +280,10 @@ export function usePopOut(
     let lastScreenY = popup.screenY;
     let lastDpr = popup.devicePixelRatio;
     const screenPollId = setInterval(() => {
-      if (popup.closed) { clearInterval(screenPollId); return; }
+      if (popup.closed) {
+        clearInterval(screenPollId);
+        return;
+      }
       const sx = popup.screenX;
       const sy = popup.screenY;
       const dpr = popup.devicePixelRatio;
@@ -294,7 +305,7 @@ export function usePopOut(
     // ── Handle popup close (user closes the popup window) ──
     // Use a ref-style callback so returnDisplay always uses the latest session state
     const onUnload = () => returnDisplay();
-    popup.addEventListener('pagehide', onUnload);
+    popup.addEventListener("pagehide", onUnload);
 
     // Poll in case pagehide doesn't fire reliably
     const pollId = setInterval(() => {
@@ -307,22 +318,26 @@ export function usePopOut(
     const cleanup = () => {
       clearInterval(pollId);
       clearInterval(screenPollId);
-      popup.removeEventListener('resize', handleResize);
-      popup.removeEventListener('pagehide', onUnload);
-      popup.removeEventListener('focus', pushClipboardPopup);
+      popup.removeEventListener("resize", handleResize);
+      popup.removeEventListener("pagehide", onUnload);
+      popup.removeEventListener("focus", pushClipboardPopup);
       // Restore previous display.onresize so the main-window effect can
       // re-register its own handler without leftover popup closures.
       display.onresize = prevOnResize ?? null;
       try {
-        popup.document.removeEventListener('keydown', trapKeyDown, true);
-        popup.document.removeEventListener('paste', handlePastePopup);
+        popup.document.removeEventListener("keydown", trapKeyDown, true);
+        popup.document.removeEventListener("paste", handlePastePopup);
         removeShortcutProxy();
         removeKeyboardLock();
-      } catch { /* popup may already be closed */ }
+      } catch {
+        /* popup may already be closed */
+      }
       try {
-        sess.displayEl.removeEventListener('mouseenter', pushClipboardPopup);
-        sess.displayEl.removeEventListener('mousedown', pushClipboardPopup);
-      } catch { /* ignore */ }
+        sess.displayEl.removeEventListener("mouseenter", pushClipboardPopup);
+        sess.displayEl.removeEventListener("mousedown", pushClipboardPopup);
+      } catch {
+        /* ignore */
+      }
     };
 
     // ── Store all pop-out state on the session (persists across route changes) ──

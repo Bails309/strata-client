@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] — 2026-04-21
+
+### Added
+- **Scheduled Recording Retention Purge**: The background recordings worker (`sync_pass` in `backend/src/services/recordings.rs`) now enforces the `recordings_retention_days` setting against the database and Azure Blob Storage, not just the local filesystem. On every pass it selects every `recordings` row whose `created_at` is older than the configured window, deletes the underlying artefact — Azure blob via the Transit-sealed account key, or local file from the recordings volume — and then deletes the database row. Purge totals are logged as `purged_azure`, `purged_local`, and `deleted_rows` for auditability.
+- **Configurable User Hard-Delete Window**: Soft-deleted users are now hard-deleted after a configurable window (default **90 days**, previously a hardcoded 7 days). The `user_cleanup` worker reads the `user_hard_delete_days` setting and applies it via PostgreSQL `make_interval(days => $1)` parameter binding — no SQL interpolation. Administrators can change the window in the new **Data Retention** section of the Security tab in Admin Settings (valid range 1–3650 days).
+- **Admin UI — Data Retention Controls**: The Security tab now includes a **User hard-delete window (days)** input that persists to the `user_hard_delete_days` setting via the existing generic settings endpoint. The control is validated client-side (positive integer, 1–3650) and documents exactly what the window governs.
+- **ADR-0003 — Feature Flags (Deferred)**: Documents the decision to keep the existing boolean `settings` table as the feature-flag mechanism rather than introducing a dedicated `feature_flags` table. Includes promotion criteria for when a future ADR would supersede this decision (percentage rollout, scheduled activation, auto-expiry, or per-user targeting). — `docs/adr/ADR-0003-feature-flags-deferred.md`
+- **ADR-0004 — guacd Connection Model**: Documents the split-trust model: guacd is reachable only on the internal Docker network, credentials are ephemeral per-handshake, and Guacamole protocol parameters from user-controlled database fields are filtered through an allow-list before being forwarded. — `docs/adr/ADR-0004-guacd-connection-model.md`
+- **ADR-0005 — JWT + Refresh-Token Sessions**: Pins the 20-minute access token / 8-hour refresh token TTLs, refresh-token single-use rotation, revocation via `revoked_tokens` table + in-memory set, and per-user `sessions_valid_after` lever for forced global logout. — `docs/adr/ADR-0005-jwt-refresh-token-sessions.md`
+- **ADR-0006 — Vault Transit Envelope Encryption**: Documents the `vault:<base64>` envelope format used for every operator-managed secret at rest, the key hierarchy (root → Transit KEK → per-encryption DEKs that never materialise in Strata), and the rotate + rewrap path that upgrades ciphertexts without exposing plaintext. — `docs/adr/ADR-0006-vault-transit-envelope.md`
+- **ADR-0007 — Emergency Approval Bypass & Scheduled-Start Checkouts**: Documents the data model (`emergency_bypass`, `scheduled_start_at`, scope-level `pm_allow_emergency_bypass`), the activation semantics (`scheduled_start_at <= now()` idempotent worker filter), and the audit invariants (`pm.checkout.emergency` event, weekly review cadence). — `docs/adr/ADR-0007-emergency-bypass-checkouts.md`
+- **Operational Runbooks**: Five new copy-pasteable runbooks for on-call engineers.
+  - **Disaster Recovery** (RTO ≤ 4h, RPO ≤ 24h) — `docs/runbooks/disaster-recovery.md`
+  - **Security Incident Response** (SEV tiers, containment, forensic queries) — `docs/runbooks/security-incident.md`
+  - **Certificate Rotation** (ACME + internal CA) — `docs/runbooks/certificate-rotation.md`
+  - **Vault Operations** (unseal, Transit rotate + rewrap, Shamir rekey) — `docs/runbooks/vault-operations.md`
+  - **Database Operations** (replica promotion, compensating-migration pattern, panic-boot recovery) — `docs/runbooks/database-operations.md`
+
+### Changed
+- **`user_cleanup` Worker**: Both SQL queries (the recordings-pre-purge and the final user DELETE) now use parameter-bound `make_interval(days => $1)` instead of the hardcoded `INTERVAL '7 days'`. The tracing log line at the start of each pass now includes the active `days` value.
+- **Compliance Tracker**: `docs/compliance-tracker.md` Wave 5 is fully closed (13 of 13). Progress table now shows 59/62 total items done; the three remaining items are deferred Wave 4 refactor tasks (W4-4/5/6) with no functional impact.
+
+### Security
+- **Configurable Retention Windows**: Both the recordings retention purge and the user hard-delete cleanup are now driven by runtime-editable settings (`recordings_retention_days`, `user_hard_delete_days`) rather than hardcoded constants. This closes the §25.2/§25.3 Coding-Standards gap around operator-controllable data-retention windows and removes the previous 7-day user-hard-delete floor that was below many regulatory norms.
+- **No SQL Interpolation in Retention Paths**: All day-window values are bound via `make_interval(days => $1)` and parsed through `i32` with a positive-integer guard. There is no string concatenation of interval values in any retention query path.
+
 ## [0.21.0] — 2026-04-21
 
 ### Added

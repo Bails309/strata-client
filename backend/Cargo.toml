@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "0.21.0"
+version = "0.22.0"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"
@@ -17,7 +17,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs", "request-id"] }
 
 # Serialisation
 serde = { version = "1", features = ["derive"] }
@@ -53,7 +53,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Streaming
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
 futures-util = "0.3"
 bytes = "1"
 
@@ -73,6 +73,10 @@ scopeguard = "1"
 urlencoding = "2.1"
 tempfile = "3"
 sysinfo = "0.33"
+# Magic-number / MIME detection for uploads (W3-6)
+infer = { version = "0.19", default-features = false }
+# Prometheus /metrics endpoint (W3-12)
+axum-prometheus = "0.7"
 
 [profile.release]
 lto = true

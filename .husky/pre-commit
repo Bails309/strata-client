@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Pre-commit hook managed by husky (W4-2).
+# Runs lint-staged, which in turn drives ESLint + Prettier on staged frontend
+# files and `cargo fmt` on staged backend files.
+. "$(dirname -- "$0")/_/husky.sh"
+
+npx --no-install lint-staged

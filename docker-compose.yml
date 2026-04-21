@@ -140,8 +140,10 @@ services:
 
 
   # ── 5. Local PostgreSQL ─────────────────────────────────────────────
+  # Pinned base image (W1-8): digest refreshed by Renovate / Dependabot
+  # (see .github/dependabot.yml docker ecosystem).
   postgres-local:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:93d55776e04376e19adb2733e3ccebb4392ee7dd86d8ff238503b30fe719c84f
     restart: unless-stopped
     profiles:
       - local-db
@@ -176,7 +178,7 @@ services:
 
   # ── 6. Bundled HashiCorp Vault ──────────────────────────────────────
   vault:
-    image: hashicorp/vault:1.19
+    image: hashicorp/vault:1.19@sha256:c4298db7f9b2ea8cab452cbff5877749087913aa035fcae62026cf16132929f5
     restart: unless-stopped
     networks:
       - guac-internal

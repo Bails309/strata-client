@@ -186,49 +186,103 @@ async fn main() -> anyhow::Result<()> {
         started_at: std::time::Instant::now(),
     }));
 
+    // ── W2-7 — shared cancellation token + worker-handle registry ──
+    //
+    // Every long-running background task registers its JoinHandle here so
+    // the graceful-shutdown path can drain the set before the process exits.
+    // Cancellation is cooperative: the shared worker harness listens on the
+    // token and unwinds cleanly when it fires.
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
     // ── Spawn recording sync background task ──
-    services::recordings::spawn_sync_task(state.clone());
+    worker_handles.push(services::recordings::spawn_sync_task(
+        state.clone(),
+        shutdown.clone(),
+    ));
 
     // ── Spawn AD sync scheduler ──
-    services::ad_sync::spawn_sync_scheduler(state.clone());
+    worker_handles.push(services::ad_sync::spawn_sync_scheduler(
+        state.clone(),
+        shutdown.clone(),
+    ));
 
     // ── Spawn User cleanup background task ──
-    services::user_cleanup::spawn_cleanup_task(state.clone());
+    worker_handles.push(services::user_cleanup::spawn_cleanup_task(
+        state.clone(),
+        shutdown.clone(),
+    ));
 
     // ── Spawn password checkout expiration scrubber (every 60s) ──
-    services::checkouts::spawn_expiration_worker(state.clone());
+    worker_handles.push(services::checkouts::spawn_expiration_worker(
+        state.clone(),
+        shutdown.clone(),
+    ));
 
     // ── Spawn password auto-rotation worker (daily) ──
-    services::checkouts::spawn_auto_rotation_worker(state.clone());
+    worker_handles.push(services::checkouts::spawn_auto_rotation_worker(
+        state.clone(),
+        shutdown.clone(),
+    ));
 
     // ── Spawn connection health-check worker (every 120s) ──
-    services::health_check::spawn_health_check_worker(state.clone());
+    worker_handles.push(services::health_check::spawn_health_check_worker(
+        state.clone(),
+        shutdown.clone(),
+    ));
 
     // ── Spawn active_sessions cleanup background task ──
-    {
-        let cleanup_pool = db_pool.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // every 5 min
-            loop {
-                interval.tick().await;
-                let _ = sqlx::query("DELETE FROM active_sessions WHERE expires_at < now()")
-                    .execute(&cleanup_pool)
-                    .await;
-            }
-        });
-    }
+    // (W2-5 / W2-8) moved into a dedicated service so the error path is
+    // explicit rather than `let _ = sqlx::query(...)`.
+    worker_handles.push(services::session_cleanup::spawn_session_cleanup_task(
+        db_pool.clone(),
+        shutdown.clone(),
+    ));
 
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
 
     tracing::info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    let shutdown_signal_token = shutdown.clone();
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        // Signal every worker to start draining.
+        shutdown_signal_token.cancel();
+    })
     .await?;
+
+    // ── W2-7 — drain background workers before exit ──
+    //
+    // At this point Axum has stopped accepting new connections and every
+    // in-flight request has either completed or been aborted by tokio. The
+    // workers have already been cancelled; here we simply wait (with a cap)
+    // for each JoinHandle so any pending DB UPDATE / file flush has a chance
+    // to land.
+    let drain_deadline = std::time::Duration::from_secs(15);
+    tracing::info!(
+        "Shutdown: waiting up to {}s for {} background worker(s) to drain",
+        drain_deadline.as_secs(),
+        worker_handles.len()
+    );
+    let drain = async {
+        for h in worker_handles {
+            let _ = h.await;
+        }
+    };
+    if tokio::time::timeout(drain_deadline, drain).await.is_err() {
+        tracing::warn!(
+            "Shutdown: some workers did not drain within {}s — continuing exit",
+            drain_deadline.as_secs()
+        );
+    } else {
+        tracing::info!("Shutdown: all background workers drained");
+    }
 
     Ok(())
 }
@@ -326,24 +380,36 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
 
     let username = std::env::var("DEFAULT_ADMIN_USERNAME").unwrap_or_else(|_| "admin".into());
     let password = std::env::var("DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| {
-        // Generate a random 16-character password for first boot
+        // Generate a random 16-character password for first boot.
+        //
+        // W3-10 (§11.3) — we **never** log the generated password, not even
+        // behind an env-var opt-in. It is written once to a transient file
+        // with mode 0o600 (owner-read/write only) and scheduled for
+        // automatic deletion after 15 minutes. The operator is expected to
+        // cat the file, change the password, and move on.
         use base64::Engine;
         let mut buf = [0u8; 12];
         rand::RngCore::fill_bytes(&mut rand::rng(), &mut buf);
         let generated = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
-        // Only log the generated password if explicitly opted-in (avoid leaking to log aggregators)
-        if std::env::var("STRATA_SHOW_ADMIN_PASSWORD").ok().as_deref() == Some("true") {
-            tracing::warn!("Generated default admin password: {generated}");
+
+        let pw_path = std::path::PathBuf::from("/tmp/.strata-admin-password");
+        if let Err(e) = write_admin_password_file(&pw_path, &generated) {
+            // Fall back to logging a *warning that a password was generated*
+            // (never the password itself) so the operator has at least some
+            // breadcrumb that the account exists.
+            tracing::error!(
+                "Failed to write default admin password to {}: {e}. \
+                 Set DEFAULT_ADMIN_PASSWORD explicitly to recover.",
+                pw_path.display()
+            );
         } else {
             tracing::warn!(
-                "A default admin password was generated. Set STRATA_SHOW_ADMIN_PASSWORD=true \
-                 to display it in logs, or set DEFAULT_ADMIN_PASSWORD to control it."
+                "A default admin password was generated and written to {} \
+                 (mode 0600, auto-deletes in 15 minutes). \
+                 Read it now, log in, and change it.",
+                pw_path.display()
             );
-            // Write to a transient file readable only by the current user
-            let pw_path = std::path::PathBuf::from("/tmp/.strata-admin-password");
-            if std::fs::write(&pw_path, &generated).is_ok() {
-                tracing::warn!("Default admin password written to {}", pw_path.display());
-            }
+            schedule_admin_password_deletion(pw_path, std::time::Duration::from_secs(15 * 60));
         }
         generated
     });
@@ -384,3 +450,59 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
 }
 
 use argon2::PasswordHasher;
+
+/// W3-10 — write the generated admin password to disk with permissions set
+/// so only the current user can read it (0o600 on Unix, NTFS ACL inherit
+/// on Windows). The file contents are overwritten if it already exists.
+fn write_admin_password_file(
+    path: &std::path::Path,
+    password: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(password.as_bytes())?;
+        f.flush()?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        f.write_all(password.as_bytes())?;
+        f.flush()?;
+        Ok(())
+    }
+}
+
+/// W3-10 — spawn a best-effort background task that unlinks the transient
+/// admin-password file after `ttl`. Failure to delete is logged but does not
+/// abort startup; the operator can still remove the file manually.
+fn schedule_admin_password_deletion(path: std::path::PathBuf, ttl: std::time::Duration) {
+    tokio::spawn(async move {
+        tokio::time::sleep(ttl).await;
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(
+                "Transient admin password file {} auto-deleted",
+                path.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => { /* already gone */ }
+            Err(e) => tracing::warn!(
+                "Failed to auto-delete transient admin password file {}: {e}",
+                path.display()
+            ),
+        }
+    });
+}

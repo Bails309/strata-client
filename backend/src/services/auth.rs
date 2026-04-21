@@ -1,5 +1,4 @@
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
@@ -49,10 +48,7 @@ pub async fn validate_token(
         return Err(AppError::Auth("OIDC issuer must use HTTPS".into()));
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| AppError::Auth(format!("HTTP client error: {e}")))?;
+    let client = crate::services::http_client::oidc_client();
 
     // 1. Fetch OIDC discovery
     let discovery_url = format!(
@@ -223,5 +219,47 @@ mod tests {
         let cloned = disc.clone();
         assert_eq!(cloned.issuer, disc.issuer);
         assert_eq!(cloned.jwks_uri, disc.jwks_uri);
+    }
+
+    // ── W4-8 negative / misuse tests ───────────────────────────────
+
+    #[tokio::test]
+    async fn validate_token_rejects_empty_token() {
+        let result = validate_token("https://idp.example.com", "client", "").await;
+        assert!(result.is_err(), "empty token must be rejected");
+    }
+
+    #[tokio::test]
+    async fn validate_token_rejects_malformed_token() {
+        // Not three dot-separated segments → jsonwebtoken must error before any
+        // network call.
+        let result = validate_token("https://idp.example.com", "client", "not-a-jwt").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn validate_token_rejects_token_with_bogus_segments() {
+        // Syntactically three segments but none are valid base64url JSON.
+        let result = validate_token(
+            "https://idp.example.com",
+            "client",
+            "AAA.BBB.CCC",
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn validate_token_rejects_sql_injection_shaped_issuer() {
+        // W4-8: the caller-supplied issuer string is used in a URL; a SQL-ish
+        // payload must be rejected by URL parsing / HTTPS enforcement rather
+        // than making it to any network stack.
+        let result = validate_token(
+            "https://idp.example.com'; DROP TABLE users;--",
+            "client",
+            "fake.jwt.token",
+        )
+        .await;
+        assert!(result.is_err());
     }
 }

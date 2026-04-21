@@ -20,17 +20,19 @@
 /** System key codes to lock — explicit list is more reliable than
  *  the "lock everything" overload on Windows/Chromium. */
 const SYSTEM_KEYS = [
-  'MetaLeft', 'MetaRight',     // Win keys
-  'AltLeft', 'AltRight',       // Alt keys (for Alt+Tab)
-  'Tab',                        // Tab (for Alt+Tab, Win+Tab)
-  'Escape',                     // Esc (for Ctrl+Esc → Start)
+  "MetaLeft",
+  "MetaRight", // Win keys
+  "AltLeft",
+  "AltRight", // Alt keys (for Alt+Tab)
+  "Tab", // Tab (for Alt+Tab, Win+Tab)
+  "Escape", // Esc (for Ctrl+Esc → Start)
 ];
 
 function isKeyboardLockSupported(): boolean {
   return (
-    typeof navigator !== 'undefined' &&
-    'keyboard' in navigator &&
-    typeof (navigator as NavigatorWithKeyboard).keyboard?.lock === 'function'
+    typeof navigator !== "undefined" &&
+    "keyboard" in navigator &&
+    typeof (navigator as NavigatorWithKeyboard).keyboard?.lock === "function"
   );
 }
 
@@ -78,11 +80,11 @@ export async function requestFullscreenWithLock(el: Element): Promise<void> {
   await el.requestFullscreen();
   if (isKeyboardLockSupported()) {
     await lockKeyboard();
-  } else if (typeof window !== 'undefined' && window.location.protocol !== 'https:') {
+  } else if (typeof window !== "undefined" && window.location.protocol !== "https:") {
     console.warn(
-      '[Strata] Keyboard Lock API is unavailable — system keys (Win, Alt+Tab) ' +
-      'cannot be captured in fullscreen. Enable HTTPS or use http://localhost ' +
-      'to unlock this feature.',
+      "[Strata] Keyboard Lock API is unavailable — system keys (Win, Alt+Tab) " +
+        "cannot be captured in fullscreen. Enable HTTPS or use http://localhost " +
+        "to unlock this feature."
     );
   }
 }
@@ -114,7 +116,7 @@ export function installKeyboardLock(doc: Document): () => void {
     }
   };
 
-  doc.addEventListener('fullscreenchange', onFullscreenChange);
+  doc.addEventListener("fullscreenchange", onFullscreenChange);
 
   // If already fullscreen when installed, lock immediately.
   if (doc.fullscreenElement) {
@@ -122,7 +124,7 @@ export function installKeyboardLock(doc: Document): () => void {
   }
 
   return () => {
-    doc.removeEventListener('fullscreenchange', onFullscreenChange);
+    doc.removeEventListener("fullscreenchange", onFullscreenChange);
     unlockKeyboard();
   };
 }

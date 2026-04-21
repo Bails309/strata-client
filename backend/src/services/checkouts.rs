@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::config::VaultConfig;
 use crate::error::AppError;
+use crate::routes::admin::parse_ldap_error_hint;
 use crate::services::vault;
 
 // ── Password policy from ad_sync_configs ───────────────────────────────
@@ -223,13 +224,27 @@ pub async fn activate_checkout(
     vault_cfg: &VaultConfig,
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
-    // Load the checkout request
-    let req: CheckoutRequest =
-        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
-            .bind(checkout_id)
-            .fetch_optional(pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+    // W2-9 — race-free activation.
+    //
+    // Two approvers clicking "Activate" at the same instant used to each
+    // read the row, see `status = 'Approved'`, and then each push a
+    // password to AD + seal a credential. The second write won: the first
+    // user's profile pointed at a password that no longer worked in AD.
+    //
+    // We now open a transaction and take a row-level lock via
+    // `SELECT ... FOR UPDATE` before looking at `status`. The lock is
+    // scoped to this one checkout row, so contention is bounded; the lock
+    // is released when the transaction commits (after the final UPDATE) or
+    // rolls back on error.
+    let mut tx = pool.begin().await?;
+
+    let req: CheckoutRequest = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE id = $1 FOR UPDATE",
+    )
+    .bind(checkout_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
     if req.status != "Approved" && req.status != "Active" && req.status != "Scheduled" {
         return Err(AppError::Validation(format!(
@@ -292,7 +307,8 @@ pub async fn activate_checkout(
     )
     .await?;
 
-    // Update checkout to Active with expiry
+    // Update checkout to Active with expiry (inside the same transaction so
+    // the row lock held by `SELECT ... FOR UPDATE` is released atomically).
     sqlx::query(
         "UPDATE password_checkout_requests
          SET status = 'Active',
@@ -304,7 +320,7 @@ pub async fn activate_checkout(
     .bind(req.requested_duration_mins.to_string())
     .bind(profile_id)
     .bind(checkout_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Relink any profiles that were linked to a previous (expired) checkout
@@ -328,8 +344,10 @@ pub async fn activate_checkout(
     .bind(req.requester_user_id)
     .bind(&req.managed_ad_dn)
     .bind(req.requested_duration_mins.to_string())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     tracing::info!(
         "Checkout {} activated for DN '{}', expires in {} mins",
@@ -425,12 +443,19 @@ pub async fn checkin_checkout(
         ))
     })?;
 
-    // Expire the managed credential profile
+    // Expire the managed credential profile. W2-8 — surface errors instead
+    // of swallowing them with `let _`.
     if let Some(profile_id) = req.vault_credential_id {
-        let _ = sqlx::query("UPDATE credential_profiles SET expires_at = now() WHERE id = $1")
-            .bind(profile_id)
-            .execute(pool)
-            .await;
+        if let Err(e) =
+            sqlx::query("UPDATE credential_profiles SET expires_at = now() WHERE id = $1")
+                .bind(profile_id)
+                .execute(pool)
+                .await
+        {
+            tracing::warn!(
+                "Failed to expire credential profile {profile_id} during check-in: {e}"
+            );
+        }
     }
 
     // Mark checkout as CheckedIn
@@ -540,12 +565,19 @@ pub async fn expire_checkout(
         );
     }
 
-    // Mark the credential profile as expired (don't delete — mapping stays intact)
+    // Mark the credential profile as expired (don't delete — mapping stays intact).
+    // W2-8 — surface errors instead of swallowing them with `let _`.
     if let Some(profile_id) = req.vault_credential_id {
-        let _ = sqlx::query("UPDATE credential_profiles SET expires_at = now() WHERE id = $1")
-            .bind(profile_id)
-            .execute(pool)
-            .await;
+        if let Err(e) =
+            sqlx::query("UPDATE credential_profiles SET expires_at = now() WHERE id = $1")
+                .bind(profile_id)
+                .execute(pool)
+                .await
+        {
+            tracing::warn!(
+                "Failed to expire credential profile {profile_id} during checkout expiry: {e}"
+            );
+        }
     }
 
     // Mark checkout as Expired
@@ -829,6 +861,20 @@ pub async fn ldap_reset_password(
                     )));
                 }
             } else {
+                // Decode the common AD sub-status codes (data 525/52e/530/531/532/533/52f/701/773/775)
+                // into a user-friendly validation message instead of returning the raw
+                // "Password modify returned rc=0 but verification bind failed (rc=49) … data XXX"
+                // string that surfaces in the Credentials UI.
+                if let Some(hint) = parse_ldap_error_hint(&res.text) {
+                    tracing::error!(
+                        "VERIFICATION BIND FAILED for '{}': rc={}, message='{}' → {}",
+                        target_dn,
+                        res.rc,
+                        res.text,
+                        hint
+                    );
+                    return Err(AppError::Validation(hint));
+                }
                 tracing::error!(
                     "VERIFICATION BIND FAILED for '{}': rc={}, message='{}' — password may NOT have changed!",
                     target_dn, res.rc, res.text
@@ -1023,19 +1069,24 @@ fn extract_cn_from_dn(dn: &str) -> String {
 
 use crate::services::app_state::{BootPhase, SharedState};
 
-/// Spawn the checkout expiration scrubber (runs every 60s)
-pub fn spawn_expiration_worker(state: SharedState) {
-    tokio::spawn(async move {
-        // Wait 30s after boot before starting
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            if let Err(e) = run_expiration_scrub(state.clone()).await {
-                tracing::error!("Checkout expiration scrubber error: {e}");
-            }
-        }
-    });
+/// Spawn the checkout expiration scrubber (runs every 60s).
+///
+/// Uses the shared worker harness so the loop obeys shutdown cancellation,
+/// bounds each iteration with a timeout, and backs off with jitter after an
+/// error (W2-4 / W2-7).
+pub fn spawn_expiration_worker(
+    state: SharedState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    spawn_periodic(
+        PeriodicConfig::every_60s("checkout_expiration_scrubber"),
+        shutdown,
+        move || {
+            let state = state.clone();
+            async move { run_expiration_scrub(state).await }
+        },
+    )
 }
 
 async fn run_expiration_scrub(state: SharedState) -> anyhow::Result<()> {
@@ -1107,19 +1158,30 @@ async fn run_expiration_scrub(state: SharedState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Spawn the auto-rotation worker (runs daily)
-pub fn spawn_auto_rotation_worker(state: SharedState) {
-    tokio::spawn(async move {
-        // Wait 60s after boot
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
-        loop {
-            interval.tick().await;
-            if let Err(e) = run_auto_rotation(state.clone()).await {
-                tracing::error!("Auto-rotation worker error: {e}");
-            }
-        }
-    });
+/// Spawn the auto-rotation worker (runs daily).
+///
+/// W2-4 / W2-7 — uses the shared worker harness for shutdown cancellation,
+/// per-iteration timeout, and jittered error backoff.
+pub fn spawn_auto_rotation_worker(
+    state: SharedState,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::worker::{spawn_periodic, PeriodicConfig};
+    spawn_periodic(
+        PeriodicConfig {
+            label: "checkout_auto_rotation",
+            initial_delay: std::time::Duration::from_secs(60),
+            interval: std::time::Duration::from_secs(24 * 3600),
+            // Rotation can touch many managed accounts; give it a generous budget.
+            iteration_timeout: std::time::Duration::from_secs(30 * 60),
+            error_backoff_base: std::time::Duration::from_secs(60),
+        },
+        shutdown,
+        move || {
+            let state = state.clone();
+            async move { run_auto_rotation(state).await }
+        },
+    )
 }
 
 async fn run_auto_rotation(state: SharedState) -> anyhow::Result<()> {
@@ -1232,5 +1294,70 @@ mod tests {
         );
         assert_eq!(extract_cn_from_dn("some-other-format"), "some-other-format");
         assert_eq!(extract_cn_from_dn(""), "");
+    }
+
+    // ── W4-7 / W4-8 additions ───────────────────────────────────────
+
+    /// Generated passwords must include every required class when all are on,
+    /// even at the 12-char floor applied by `generate_password`.
+    #[test]
+    fn generate_password_all_classes_required_at_floor() {
+        let policy = PasswordPolicy {
+            min_length: 4, // below the 12-char floor; generator must enforce it
+            require_uppercase: true,
+            require_lowercase: true,
+            require_numbers: true,
+            require_symbols: true,
+        };
+        let pw = generate_password(&policy);
+        assert!(pw.len() >= 12, "floor must apply, got {}", pw.len());
+        assert!(pw.chars().any(|c| c.is_ascii_uppercase()));
+        assert!(pw.chars().any(|c| c.is_ascii_lowercase()));
+        assert!(pw.chars().any(|c| c.is_ascii_digit()));
+        assert!(pw.chars().any(|c| !c.is_alphanumeric()));
+    }
+
+    /// With every class disabled the generator must still produce a usable,
+    /// ascii-only password (falls back to upper + lower + digit pool).
+    #[test]
+    fn generate_password_all_classes_disabled_fallback() {
+        let policy = PasswordPolicy {
+            min_length: 16,
+            require_uppercase: false,
+            require_lowercase: false,
+            require_numbers: false,
+            require_symbols: false,
+        };
+        let pw = generate_password(&policy);
+        assert!(pw.len() >= 16);
+        assert!(pw.is_ascii());
+        assert!(!pw.chars().any(|c| c.is_ascii_whitespace()));
+    }
+
+    /// Two calls in quick succession must produce different passwords — a
+    /// weak statistical guarantee but strong enough to catch a fixed-seed
+    /// regression.
+    #[test]
+    fn generate_password_not_deterministic() {
+        let policy = PasswordPolicy::default();
+        let a = generate_password(&policy);
+        let b = generate_password(&policy);
+        assert_ne!(a, b, "consecutive passwords must differ");
+    }
+
+    /// The CN extractor must tolerate arbitrary attacker-shaped DNs without
+    /// panicking (W4-8 negative case).
+    #[test]
+    fn extract_cn_misuse_inputs() {
+        // Embedded commas inside a quoted CN are not unescaped by the simple
+        // parser, but the function must not panic on any of these shapes.
+        assert_eq!(
+            extract_cn_from_dn(r#"CN="weird,name",OU=x,DC=y"#),
+            r#""weird"#
+        );
+        assert_eq!(extract_cn_from_dn("CN="), "");
+        assert_eq!(extract_cn_from_dn(",,,,"), ",,,,");
+        // Unicode is preserved byte-for-byte.
+        assert_eq!(extract_cn_from_dn("CN=Zoë,DC=x"), "Zoë");
     }
 }

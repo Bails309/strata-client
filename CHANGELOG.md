@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] — 2026-04-21
+
+### Added
+- **Product Roadmap Page** (`/docs` → Roadmap): A new section in the built-in documentation menu renders a modern, themed roadmap of proposed features across four areas — Recordings, Security & Zero Trust, Auditing / Analytics / Compliance, and Workflows & Collaboration, plus a Notifications & Email theme. Each item carries a status (`Proposed | Researching | In Progress | Shipped`), area tags, description, and optional bullets. A status-summary strip totals items per status.
+- **Admin-Editable Roadmap Statuses**: Administrators with `can_manage_system` can change any item's status directly from the roadmap page using a modern dropdown (the shared `Select` component). Non-admin users see a read-only colour-coded status badge. Updates are optimistic with rollback on error and persist in `system_settings.roadmap_statuses` as a single JSON blob — no migration required.
+- **Editable Self-Approve on Account Mappings**: The *Existing Mappings* table in Password Management → Account Mappings now renders the Self-Approve column as a modern dropdown. Admins can toggle `can_self_approve` in place without deleting and re-creating the mapping. Updates are optimistic with rollback on error and write an `account_mapping.updated` audit entry.
+
+### Endpoints (New)
+- `GET  /api/roadmap` — any authenticated user. Returns `{ "statuses": { "<item-id>": "<status>", … } }`.
+- `PUT  /api/admin/roadmap/:item_id` — admin-only. Upserts a single roadmap item's status. Validates the item id (alphanumeric + `-_`, ≤ 64 chars) and the status value.
+- `PATCH /api/admin/account-mappings/:id` — admin-only. Partial update of `can_self_approve` and/or `friendly_name` on an existing user → managed-account mapping. Uses `COALESCE` so unspecified fields are left untouched; returns 404 when the mapping does not exist; writes `account_mapping.updated` to the audit log.
+
+### Fixed
+- **CheckedIn Managed Profiles No Longer Bypass the Renewal Prompt**: `GET /api/user/connection-info` previously reported a profile as having live credentials whenever its TTL had not expired — even if the backing password checkout had been voluntarily checked in (Vault password scrambled). The client then proceeded to authenticate with scrambled credentials, producing a visible "Authentication failure" error and a silent AD account lockout. Both SQL queries in the handler now join `password_checkout_requests` and require a live `Active` (and un-expired) checkout; otherwise the profile is surfaced through the `expired_profile` path so the SessionClient prompt fires with the duration + justification input, matching the behaviour of a TTL-expired profile.
+
 ## [0.20.2] — 2026-04-20
 
 ### Changed

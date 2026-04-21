@@ -701,6 +701,24 @@ Accept the recording disclaimer / terms of service. Sets `terms_accepted_at` to 
 { "ok": true }
 ```
 
+### `GET /api/roadmap`
+
+Return all admin-set roadmap item status overrides. Available to any
+authenticated user and used by the `/docs → Roadmap` page to overlay
+persisted statuses on top of the frontend's built-in item definitions. Items
+without a stored override fall back to the default status shipped in the
+client bundle.
+
+**Response** `200 OK`
+```json
+{
+  "statuses": {
+    "recording-screenshots": "In Progress",
+    "notifications-managed-account-emails": "Shipped"
+  }
+}
+```
+
 ### `GET /api/user/display-settings`
 
 Returns the three display-related settings (timezone, time format, date format) without requiring admin privileges. Used by the frontend `SettingsContext` to format timestamps for all users.
@@ -1526,6 +1544,20 @@ Delete an account mapping.
 
 Delete an account mapping.
 
+#### `PATCH /api/admin/account-mappings/:id`
+
+Partially update an existing user → managed-account mapping. Any field omitted
+from the request body is left unchanged (`COALESCE`-semantics). Requires
+`can_manage_system`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `can_self_approve` | boolean | No | Toggle whether the user can self-approve checkouts against this mapping. |
+| `friendly_name` | string | No | Human-readable label for the managed account. |
+
+Returns `404` if the mapping id does not exist. Writes an
+`account_mapping.updated` audit log entry with the requested changes.
+
 #### `GET /api/admin/ad-sync-configs/:id/unmapped-accounts`
 
 Discover AD accounts matching the PM target filter that are not yet mapped to any user.
@@ -1537,6 +1569,26 @@ Test service account password rotation for a config. Body: `{ "config_id": "uuid
 #### `GET /api/admin/checkout-requests`
 
 List all checkout requests (up to 200, most recent first).
+
+#### `PUT /api/admin/roadmap/:item_id`
+
+Upsert the status of a single roadmap item. Requires `can_manage_system`.
+Item id must be non-empty, ≤ 64 chars, and contain only alphanumerics,
+`-`, or `_`. The status must be one of `Proposed`, `Researching`,
+`In Progress`, or `Shipped`.
+
+Overrides are stored as a single JSON blob under the
+`roadmap_statuses` key of `system_settings`.
+
+**Body**
+```json
+{ "status": "In Progress" }
+```
+
+**Response** `200 OK`
+```json
+{ "ok": true, "item_id": "recording-screenshots", "status": "In Progress" }
+```
 
 ### User Endpoints (authenticated)
 

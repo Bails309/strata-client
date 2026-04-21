@@ -213,7 +213,7 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route(
             "/api/admin/account-mappings/:id",
-            delete(admin::delete_account_mapping),
+            delete(admin::delete_account_mapping).patch(admin::update_account_mapping),
         )
         .route(
             "/api/admin/ad-sync-configs/:id/unmapped-accounts",

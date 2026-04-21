@@ -483,6 +483,14 @@ export const createAccountMapping = (data: { user_id: string; managed_ad_dn: str
   request<{ id: string; status: string }>('/admin/account-mappings', { method: 'POST', body: JSON.stringify(data) });
 export const deleteAccountMapping = (id: string) =>
   request<{ status: string }>(`/admin/account-mappings/${id}`, { method: 'DELETE' });
+export const updateAccountMapping = (
+  id: string,
+  data: { can_self_approve?: boolean; friendly_name?: string },
+) =>
+  request<{ status: string }>(`/admin/account-mappings/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
 
 // Admin: Unmapped accounts
 export const getUnmappedAccounts = (configId: string) =>

@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: '0.21.0',
+    subtitle: 'Roadmap Page, Admin-Editable Statuses & Inline Self-Approve Toggle',
+    sections: [
+      {
+        title: 'Built-In Product Roadmap',
+        description:
+          'A new Roadmap section in the documentation menu renders a themed, modern view of proposed features across Recordings, Security & Zero Trust, Auditing, Workflows, and Notifications. Each item shows a coloured status badge (Proposed / Researching / In Progress / Shipped), area tags and a description, with a summary strip totalling items by status.',
+      },
+      {
+        title: 'Admins Can Change Roadmap Item Status In-Place',
+        description:
+          'Administrators with Manage System can update any roadmap item\'s status using a modern dropdown without leaving the page. Everyone else sees a read-only colour-coded badge. Changes are optimistic with rollback on error and persist server-side as a single JSON blob in system_settings — so statuses survive restarts and are shared across replicas.',
+      },
+      {
+        title: 'Self-Approve Toggle Now Editable on Existing Mappings',
+        description:
+          'The Self-Approve column in Admin → Password Management → Account Mappings now renders the shared modern dropdown. Admins can flip Yes / No directly in the row without deleting and re-creating the mapping. A new PATCH /api/admin/account-mappings/:id endpoint handles the partial update and writes an account_mapping.updated audit entry.',
+      },
+      {
+        title: 'CheckedIn Managed Profiles No Longer Attempt Scrambled Logins',
+        description:
+          'When a managed-account password was voluntarily checked in, the client previously still attempted to authenticate with the now-scrambled credential, producing a confusing "Authentication failure" error and — in some environments — an AD account lockout. The backend connection-info handler now treats any profile whose backing checkout is not Active (or whose checkout has itself expired) the same as a TTL-expired profile, so the SessionClient renewal prompt fires instead of a failed bind.',
+      },
+    ],
+  },
+  {
     version: '0.20.2',
     subtitle: 'Justification Mandatory for Approval-Required Checkouts',
     sections: [

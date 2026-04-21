@@ -4136,6 +4136,47 @@ pub async fn delete_account_mapping(
     Ok(Json(json!({ "status": "deleted" })))
 }
 
+#[derive(Deserialize)]
+pub struct UpdateAccountMappingRequest {
+    pub can_self_approve: Option<bool>,
+    pub friendly_name: Option<String>,
+}
+
+pub async fn update_account_mapping(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(mapping_id): Path<Uuid>,
+    Json(body): Json<UpdateAccountMappingRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let res = sqlx::query(
+        "UPDATE user_account_mappings SET
+            can_self_approve = COALESCE($2, can_self_approve),
+            friendly_name    = COALESCE($3, friendly_name)
+         WHERE id = $1",
+    )
+    .bind(mapping_id)
+    .bind(body.can_self_approve)
+    .bind(body.friendly_name.as_deref())
+    .execute(&db.pool)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(AppError::NotFound("Account mapping not found".into()));
+    }
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "account_mapping.updated",
+        &json!({
+            "mapping_id": mapping_id,
+            "can_self_approve": body.can_self_approve,
+        }),
+    )
+    .await?;
+    Ok(Json(json!({ "status": "updated" })))
+}
+
 // ── Test rotation dry-run ──────────────────────────────────────────────
 
 #[derive(Deserialize)]

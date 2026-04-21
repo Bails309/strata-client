@@ -74,6 +74,7 @@ import {
   getAccountMappings,
   createAccountMapping,
   deleteAccountMapping,
+  updateAccountMapping,
   getUnmappedAccounts,
   testRotation,
   getCheckoutRequests,
@@ -5208,6 +5209,18 @@ function PasswordsTab({
     }
   };
 
+  const handleToggleSelfApprove = async (id: string, next: boolean) => {
+    // Optimistic update so the modern dropdown feels instant.
+    setMappings((prev) => prev.map((m) => (m.id === id ? { ...m, can_self_approve: next } : m)));
+    try {
+      await updateAccountMapping(id, { can_self_approve: next });
+    } catch {
+      // Revert on failure, then reload to pick up server truth.
+      setMappings((prev) => prev.map((m) => (m.id === id ? { ...m, can_self_approve: !next } : m)));
+      loadMappings();
+    }
+  };
+
   const pmConfigs = adSyncConfigs.filter((c) => c.pm_enabled);
 
   return (
@@ -5637,7 +5650,19 @@ function PasswordsTab({
                               ? adSyncConfigs.find((c) => c.id === m.ad_sync_config_id)?.label || '—'
                               : '—'}
                           </td>
-                          <td className="py-1">{m.can_self_approve ? 'Yes' : 'No'}</td>
+                          <td className="py-1">
+                            <div className="w-24">
+                              <Select
+                                value={m.can_self_approve ? 'yes' : 'no'}
+                                onChange={(v) => handleToggleSelfApprove(m.id, v === 'yes')}
+                                options={[
+                                  { value: 'yes', label: 'Yes' },
+                                  { value: 'no', label: 'No' },
+                                ]}
+                                className="w-24"
+                              />
+                            </div>
+                          </td>
                           <td className="py-1">
                             <button
                               className="text-danger text-xs"

@@ -2862,7 +2862,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "strata-backend"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2892,7 +2892,7 @@ dependencies = [
  "sqlx",
  "sysinfo",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "toml",

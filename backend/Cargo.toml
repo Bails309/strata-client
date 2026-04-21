@@ -43,7 +43,7 @@ aes-gcm = "0.10"
 rand = "0.9.3"
 base64 = "0.22"
 sha2 = "0.10"
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 argon2 = "0.5"

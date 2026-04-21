@@ -72,7 +72,7 @@ dotenvy = "0.15"
 scopeguard = "1"
 urlencoding = "2.1"
 tempfile = "3"
-sysinfo = "0.33"
+sysinfo = "0.38"
 # Magic-number / MIME detection for uploads (W3-6)
 infer = { version = "0.19", default-features = false }
 # Prometheus /metrics endpoint (W3-12)

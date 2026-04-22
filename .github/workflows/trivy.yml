@@ -39,7 +39,7 @@ jobs:
       # in a deployable image. The SARIF upload feeds Code Scanning so findings
       # surface on the PR even when the step has failed.
       - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: strata/${{ matrix.service }}:scan
           format: sarif

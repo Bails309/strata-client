@@ -88,6 +88,9 @@ export default function DisclaimerModal({ onAccept, onDecline }: Props) {
           ref={contentRef}
           className="px-6 py-4 overflow-y-auto flex-1 text-sm text-txt-secondary space-y-5"
           onScroll={handleScroll}
+          tabIndex={0}
+          role="region"
+          aria-label="Disclaimer content"
         >
           <p className="text-txt-primary font-medium">
             By using this RDP service, you agree to the following:

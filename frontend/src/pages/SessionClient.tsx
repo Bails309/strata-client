@@ -808,6 +808,11 @@ export default function SessionClient() {
 
     // Listen for Ctrl+K relay from popout/multi-monitor windows
     const handlePaletteMessage = (e: MessageEvent) => {
+      // Origin check — only accept messages from our own origin. The popout
+      // and multi-monitor child windows are `window.open()`ed from this same
+      // origin, so `e.origin === window.location.origin` is the correct
+      // invariant. Reject cross-origin frames that may also relay postMessage.
+      if (e.origin !== window.location.origin) return;
       if (e.data?.type === "strata:open-command-palette") {
         // Release any held keys on the server BEFORE flipping the guard
         // so the generated keyup events are not swallowed.

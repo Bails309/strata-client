@@ -21,7 +21,17 @@ export default function Login({ onLogin }: Props) {
     const hash = window.location.hash;
     const tokenMatch = hash.match(/[#&]token=([^&]*)/);
     const token = tokenMatch ? decodeURIComponent(tokenMatch[1]) : null;
-    if (token) {
+    // Defence-in-depth: only accept values that look like a JWT
+    // (three base64url segments separated by dots). The backend still
+    // validates the signature on every subsequent API call — this check
+    // just prevents obviously-bogus user-supplied strings from being
+    // written to localStorage and later echoed in Authorization headers.
+    const isJwtShaped =
+      typeof token === "string" &&
+      token.length > 0 &&
+      token.length < 4096 &&
+      /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
+    if (isJwtShaped) {
       // Clear the fragment to remove the token from the URL / browser history
       window.history.replaceState(null, "", window.location.pathname);
       localStorage.setItem("access_token", token);

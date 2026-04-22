@@ -135,14 +135,17 @@ describe("Login page", () => {
 
   it("extracts SSO token from URL fragment and calls onLogin", async () => {
     const onLogin = vi.fn();
-    window.location.hash = "#token=sso-jwt-token-123";
+    // Fake JWT-shaped token (three base64url segments). Login now rejects
+    // values that don't match this shape as defence-in-depth.
+    const fakeJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.sig-placeholder";
+    window.location.hash = `#token=${fakeJwt}`;
 
     renderLogin(onLogin);
 
     await vi.waitFor(() => {
       expect(onLogin).toHaveBeenCalled();
     });
-    expect(localStorage.getItem("access_token")).toBe("sso-jwt-token-123");
+    expect(localStorage.getItem("access_token")).toBe(fakeJwt);
     // Fragment should be cleared
     expect(window.location.hash).toBe("");
   });

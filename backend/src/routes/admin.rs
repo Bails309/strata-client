@@ -1843,7 +1843,7 @@ pub async fn create_user(
     }
 
     let (password_hash, plaintext_password) = if body.auth_type == "local" {
-        use rand::{distr::Alphanumeric, Rng};
+        use rand::{distr::Alphanumeric, RngExt};
         let gen_len = auth::MIN_PASSWORD_LENGTH.max(16);
         let plain: String = rand::rng()
             .sample_iter(Alphanumeric)
@@ -1959,7 +1959,7 @@ pub async fn reset_user_password(
     }
 
     // Generate a new random password
-    use rand::{distr::Alphanumeric, Rng};
+    use rand::{distr::Alphanumeric, RngExt};
     let gen_len = auth::MIN_PASSWORD_LENGTH.max(16);
     let plain: String = rand::rng()
         .sample_iter(Alphanumeric)
@@ -2291,13 +2291,13 @@ pub async fn observe_session_ws(
             let depth_str = total_buffer_ms.to_string();
             let offset_str = offset.to_string();
             let header = format_guac_inst("nvrheader", &[&total_str, &speed_str, &depth_str, &offset_str]);
-            if socket.send(Message::Text(header)).await.is_err() {
+            if socket.send(Message::Text(header.into())).await.is_err() {
                 return;
             }
 
             // Send last-known size instruction first
             if let Some(size_inst) = size_inst {
-                if socket.send(Message::Text(size_inst)).await.is_err() {
+                if socket.send(Message::Text(size_inst.into())).await.is_err() {
                     return;
                 }
             }
@@ -2331,7 +2331,7 @@ pub async fn observe_session_ws(
                 }
 
                 if !stripped.is_empty()
-                    && socket.send(Message::Text(stripped)).await.is_err()
+                    && socket.send(Message::Text(stripped.into())).await.is_err()
                 {
                     return;
                 }
@@ -2340,7 +2340,7 @@ pub async fn observe_session_ws(
             // Flush the base state with the last sync so the display
             // renders all accumulated drawing ops as one atomic frame.
             if let Some(sync) = last_sync_inst.take() {
-                if socket.send(Message::Text(sync)).await.is_err() {
+                if socket.send(Message::Text(sync.into())).await.is_err() {
                     return;
                 }
             }
@@ -2378,19 +2378,19 @@ pub async fn observe_session_ws(
                     let progress_ms = delay_ms.saturating_sub(paced_origin_ms);
                     let ms_str = progress_ms.to_string();
                     let progress = format_guac_inst("nvrprogress", &[&ms_str]);
-                    if socket.send(Message::Text(progress)).await.is_err() {
+                    if socket.send(Message::Text(progress.into())).await.is_err() {
                         return;
                     }
                 }
 
-                if socket.send(Message::Text(frame.clone())).await.is_err() {
+                if socket.send(Message::Text(frame.clone().into())).await.is_err() {
                     return;
                 }
             }
 
             // Send replay-done marker so the frontend knows we're now live
             let done = format_guac_inst("nvrreplaydone", &[]);
-            let _ = socket.send(Message::Text(done)).await;
+            let _ = socket.send(Message::Text(done.into())).await;
 
             // Phase 2: Forward live frames from the broadcast channel while
             // draining client-sent messages (e.g. Guacamole tunnel pings)
@@ -2421,7 +2421,7 @@ pub async fn observe_session_ws(
                         match result {
                             Ok(frame) => {
                                 last_frame_at = std::time::Instant::now();
-                                if socket.send(Message::Text((*frame).clone())).await.is_err() {
+                                if socket.send(Message::Text((*frame).clone().into())).await.is_err() {
                                     break;
                                 }
                             }
@@ -2447,7 +2447,7 @@ pub async fn observe_session_ws(
                                         }
                                     }
                                     if !stripped.is_empty()
-                                        && socket.send(Message::Text(stripped)).await.is_err()
+                                        && socket.send(Message::Text(stripped.into())).await.is_err()
                                     {
                                         send_ok = false;
                                         break;
@@ -2462,7 +2462,7 @@ pub async fn observe_session_ws(
                                     .as_millis()
                                     .to_string();
                                 let sync = format_guac_inst("sync", &[&ts]);
-                                if socket.send(Message::Text(sync)).await.is_err() {
+                                if socket.send(Message::Text(sync.into())).await.is_err() {
                                     break;
                                 }
                                 last_frame_at = std::time::Instant::now();
@@ -2495,7 +2495,7 @@ pub async fn observe_session_ws(
                                 .as_millis()
                                 .to_string();
                             let sync = format_guac_inst("sync", &[&ts]);
-                            if socket.send(Message::Text(sync)).await.is_err() {
+                            if socket.send(Message::Text(sync.into())).await.is_err() {
                                 break;
                             }
                         }

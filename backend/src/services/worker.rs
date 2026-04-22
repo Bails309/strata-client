@@ -16,7 +16,7 @@
 //! requirements. Call-sites supply the tick period, an iteration budget, and
 //! an async closure; everything else is handled centrally.
 
-use rand::Rng;
+use rand::RngExt;
 use std::future::Future;
 use std::time::Duration;
 use tokio::task::JoinHandle;

@@ -1,7 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -740,8 +740,8 @@ mod tests {
 
     async fn start_mock_vault(state: MockVault) -> SocketAddr {
         let app = Router::new()
-            .route("/v1/transit/encrypt/:key", post(encrypt_handler))
-            .route("/v1/transit/decrypt/:key", post(decrypt_handler))
+            .route("/v1/transit/encrypt/{key}", post(encrypt_handler))
+            .route("/v1/transit/decrypt/{key}", post(decrypt_handler))
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

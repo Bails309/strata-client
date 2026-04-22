@@ -452,7 +452,7 @@ mod tests {
                 }),
             )
             .route(
-                "/v1/transit/keys/:name",
+                "/v1/transit/keys/{name}",
                 post(
                     |AxumState(s): AxumState<MockVault>, AxumPath(name): AxumPath<String>| async move {
                         s.keys_created.lock().await.push(name);

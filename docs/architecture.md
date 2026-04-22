@@ -64,7 +64,7 @@ Volumes:
 | Item | Value |
 |---|---|
 | Language | Rust (2021 edition) |
-| Framework | Axum 0.7 + Tokio |
+| Framework | Axum 0.8 + Tokio |
 | Source | `backend/` |
 | Port | 8080 |
 
@@ -94,7 +94,7 @@ The central orchestrator. Responsibilities:
 | Item | Value |
 |---|---|
 | Language | TypeScript |
-| Framework | React 18 + Vite |
+| Framework | React 19 + Vite |
 | Styling | Tailwind CSS v4 |
 | Runtime | nginx (production) |
 | Source | `frontend/` |

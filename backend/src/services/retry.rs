@@ -21,7 +21,7 @@
 //! Blog (2015). It keeps the worst case bounded while decorrelating retries
 //! across concurrent callers.
 
-use rand::Rng;
+use rand::RngExt;
 use std::future::Future;
 use std::time::Duration;
 

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;

@@ -52,10 +52,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))
         .route(
-            "/api/shared/tunnel/:share_token",
+            "/api/shared/tunnel/{share_token}",
             get(share::ws_shared_tunnel),
         )
-        .route("/api/files/:token", get(files::download));
+        .route("/api/files/{token}", get(files::download));
 
     // ── Admin routes (auth + admin role) ─────────────────────────────
     let admin = Router::new()
@@ -80,11 +80,11 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::create_kerberos_realm),
         )
         .route(
-            "/api/admin/kerberos-realms/:id",
+            "/api/admin/kerberos-realms/{id}",
             put(admin::update_kerberos_realm),
         )
         .route(
-            "/api/admin/kerberos-realms/:id",
+            "/api/admin/kerberos-realms/{id}",
             delete(admin::delete_kerberos_realm),
         )
         .route(
@@ -99,14 +99,14 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_roles).post(admin::create_role),
         )
         .route(
-            "/api/admin/roles/:id",
+            "/api/admin/roles/{id}",
             put(admin::update_role).delete(admin::delete_role),
         )
         .route("/api/admin/connections", get(admin::list_connections))
         .route("/api/admin/connections", post(admin::create_connection))
-        .route("/api/admin/connections/:id", put(admin::update_connection))
+        .route("/api/admin/connections/{id}", put(admin::update_connection))
         .route(
-            "/api/admin/connections/:id",
+            "/api/admin/connections/{id}",
             delete(admin::delete_connection),
         )
         .route(
@@ -118,15 +118,15 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::create_connection_folder),
         )
         .route(
-            "/api/admin/connection-folders/:id",
+            "/api/admin/connection-folders/{id}",
             put(admin::update_connection_folder),
         )
         .route(
-            "/api/admin/connection-folders/:id",
+            "/api/admin/connection-folders/{id}",
             delete(admin::delete_connection_folder),
         )
         .route(
-            "/api/admin/roles/:id/mappings",
+            "/api/admin/roles/{id}/mappings",
             get(admin::get_role_mappings).put(admin::update_role_mappings),
         )
         .route(
@@ -134,20 +134,20 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_users).post(admin::create_user),
         )
         .route(
-            "/api/admin/users/:id",
+            "/api/admin/users/{id}",
             delete(admin::delete_user)
                 .post(admin::restore_user)
                 .put(admin::update_user),
         )
         .route(
-            "/api/admin/users/:id/reset-password",
+            "/api/admin/users/{id}/reset-password",
             post(admin::reset_user_password),
         )
         .route("/api/admin/audit-logs", get(admin::list_audit_logs))
         .route("/api/admin/sessions", get(admin::list_active_sessions))
         .route("/api/admin/sessions/kill", post(admin::kill_sessions))
         .route(
-            "/api/admin/sessions/:id/observe",
+            "/api/admin/sessions/{id}/observe",
             get(admin::observe_session),
         )
         .route(
@@ -155,7 +155,7 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::recordings::list_recordings),
         )
         .route(
-            "/api/admin/recordings/:id/stream",
+            "/api/admin/recordings/{id}/stream",
             get(admin::recordings::stream_recording),
         )
         .route(
@@ -180,19 +180,19 @@ pub fn build_router(state: SharedState) -> Router {
             post(admin::test_pm_target_filter),
         )
         .route(
-            "/api/admin/ad-sync-configs/:id",
+            "/api/admin/ad-sync-configs/{id}",
             put(admin::update_ad_sync_config),
         )
         .route(
-            "/api/admin/ad-sync-configs/:id",
+            "/api/admin/ad-sync-configs/{id}",
             delete(admin::delete_ad_sync_config),
         )
         .route(
-            "/api/admin/ad-sync-configs/:id/sync",
+            "/api/admin/ad-sync-configs/{id}/sync",
             post(admin::trigger_ad_sync),
         )
         .route(
-            "/api/admin/ad-sync-configs/:id/runs",
+            "/api/admin/ad-sync-configs/{id}/runs",
             get(admin::list_ad_sync_runs),
         )
         .route(
@@ -200,7 +200,7 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_admin_tags).post(admin::create_admin_tag),
         )
         .route(
-            "/api/admin/tags/:tag_id",
+            "/api/admin/tags/{tag_id}",
             put(admin::update_admin_tag).delete(admin::delete_admin_tag),
         )
         .route(
@@ -213,15 +213,15 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_approval_roles).post(admin::create_approval_role),
         )
         .route(
-            "/api/admin/approval-roles/:id",
+            "/api/admin/approval-roles/{id}",
             put(admin::update_approval_role).delete(admin::delete_approval_role),
         )
         .route(
-            "/api/admin/approval-roles/:id/assignments",
+            "/api/admin/approval-roles/{id}/assignments",
             get(admin::list_role_assignments).put(admin::set_role_assignments),
         )
         .route(
-            "/api/admin/approval-roles/:id/accounts",
+            "/api/admin/approval-roles/{id}/accounts",
             get(admin::list_role_accounts).put(admin::set_role_accounts),
         )
         .route(
@@ -229,11 +229,11 @@ pub fn build_router(state: SharedState) -> Router {
             get(admin::list_account_mappings).post(admin::create_account_mapping),
         )
         .route(
-            "/api/admin/account-mappings/:id",
+            "/api/admin/account-mappings/{id}",
             delete(admin::delete_account_mapping).patch(admin::update_account_mapping),
         )
         .route(
-            "/api/admin/ad-sync-configs/:id/unmapped-accounts",
+            "/api/admin/ad-sync-configs/{id}/unmapped-accounts",
             get(admin::list_unmapped_accounts),
         )
         .route("/api/admin/pm/test-rotation", post(admin::test_rotation))
@@ -241,8 +241,8 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/checkout-requests",
             get(admin::list_checkout_requests),
         )
-        .route("/api/recordings/:filename", get(user::get_recording))
-        .route("/api/admin/roadmap/:item_id", put(roadmap::set_status))
+        .route("/api/recordings/{filename}", get(user::get_recording))
+        .route("/api/admin/roadmap/{item_id}", put(roadmap::set_status))
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
@@ -263,19 +263,19 @@ pub fn build_router(state: SharedState) -> Router {
             post(user::create_credential_profile),
         )
         .route(
-            "/api/user/credential-profiles/:profile_id",
+            "/api/user/credential-profiles/{profile_id}",
             put(user::update_credential_profile),
         )
         .route(
-            "/api/user/credential-profiles/:profile_id",
+            "/api/user/credential-profiles/{profile_id}",
             delete(user::delete_credential_profile),
         )
         .route(
-            "/api/user/credential-profiles/:profile_id/mappings",
+            "/api/user/credential-profiles/{profile_id}/mappings",
             get(user::get_profile_mappings),
         )
         .route(
-            "/api/user/credential-profiles/:profile_id/link-checkout",
+            "/api/user/credential-profiles/{profile_id}/link-checkout",
             post(user::link_checkout_to_profile),
         )
         .route(
@@ -283,21 +283,21 @@ pub fn build_router(state: SharedState) -> Router {
             put(user::set_credential_mapping),
         )
         .route(
-            "/api/user/credential-mappings/:connection_id",
+            "/api/user/credential-mappings/{connection_id}",
             delete(user::remove_credential_mapping),
         )
         .route("/api/user/favorites", get(user::list_favorites))
         .route("/api/user/favorites", post(user::toggle_favorite))
         .route("/api/user/tags", get(user::list_tags))
         .route("/api/user/tags", post(user::create_tag))
-        .route("/api/user/tags/:tag_id", put(user::update_tag))
-        .route("/api/user/tags/:tag_id", delete(user::delete_tag))
+        .route("/api/user/tags/{tag_id}", put(user::update_tag))
+        .route("/api/user/tags/{tag_id}", delete(user::delete_tag))
         .route("/api/user/connection-tags", get(user::list_connection_tags))
         .route("/api/user/connection-tags", post(user::set_connection_tags))
         .route("/api/user/display-tags", get(user::list_display_tags))
         .route("/api/user/display-tags", post(user::set_display_tag))
         .route(
-            "/api/user/display-tags/:connection_id",
+            "/api/user/display-tags/{connection_id}",
             delete(user::remove_display_tag),
         )
         .route("/api/user/admin-tags", get(user::list_admin_tags))
@@ -310,24 +310,24 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::get_display_settings),
         )
         .route(
-            "/api/user/connections/:connection_id/info",
+            "/api/user/connections/{connection_id}/info",
             get(user::connection_info),
         )
-        .route("/api/tunnel/:connection_id", get(tunnel::ws_tunnel))
+        .route("/api/tunnel/{connection_id}", get(tunnel::ws_tunnel))
         .route("/api/tunnel/ticket", post(tunnel::create_tunnel_ticket))
         .route(
-            "/api/user/connections/:connection_id/share",
+            "/api/user/connections/{connection_id}/share",
             post(share::create_share),
         )
-        .route("/api/user/shares/:share_id", delete(share::revoke_share))
+        .route("/api/user/shares/{share_id}", delete(share::revoke_share))
         .route("/api/user/recordings", get(user::my_recordings))
         .route(
-            "/api/user/recordings/:id/stream",
+            "/api/user/recordings/{id}/stream",
             get(user::my_recording_stream),
         )
         .route("/api/user/sessions", get(user::my_active_sessions))
         .route(
-            "/api/user/sessions/:id/observe",
+            "/api/user/sessions/{id}/observe",
             get(user::my_observe_session),
         )
         // ── Password checkout user routes ────────────────────────────
@@ -337,19 +337,19 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::my_checkouts).post(user::request_checkout),
         )
         .route(
-            "/api/user/checkouts/:id/decide",
+            "/api/user/checkouts/{id}/decide",
             post(user::decide_checkout),
         )
         .route(
-            "/api/user/checkouts/:id/reveal",
+            "/api/user/checkouts/{id}/reveal",
             get(user::reveal_checkout_password),
         )
         .route(
-            "/api/user/checkouts/:id/retry",
+            "/api/user/checkouts/{id}/retry",
             post(user::retry_checkout_activation),
         )
         .route(
-            "/api/user/checkouts/:id/checkin",
+            "/api/user/checkouts/{id}/checkin",
             post(user::checkin_checkout),
         )
         .route("/api/user/pending-approvals", get(user::pending_approvals))
@@ -358,10 +358,10 @@ pub fn build_router(state: SharedState) -> Router {
             post(files::upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route(
-            "/api/files/session/:session_id",
+            "/api/files/session/{session_id}",
             get(files::list_session_files),
         )
-        .route("/api/files/delete/:token", delete(files::delete_file))
+        .route("/api/files/delete/{token}", delete(files::delete_file))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     public

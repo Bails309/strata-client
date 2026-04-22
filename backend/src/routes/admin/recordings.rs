@@ -434,7 +434,7 @@ async fn handle_recording_stream(
     let duration_str = duration_ms.to_string();
     let header = format_guac_instruction("nvrheader", &[&duration_str]);
     socket
-        .send(axum::extract::ws::Message::Text(header))
+        .send(axum::extract::ws::Message::Text(header.into()))
         .await?;
 
     let mut parser = GuacamoleParser::new();
@@ -481,7 +481,7 @@ async fn handle_recording_stream(
                                             &[&abs_elapsed.to_string()],
                                         );
                                         socket
-                                            .send(axum::extract::ws::Message::Text(seeked))
+                                            .send(axum::extract::ws::Message::Text(seeked.into()))
                                             .await?;
                                     } else if last_progress_sent.elapsed().as_millis() > 200 {
                                         let prog = format_guac_instruction(
@@ -489,7 +489,7 @@ async fn handle_recording_stream(
                                             &[&abs_elapsed.to_string()],
                                         );
                                         let _ = socket
-                                            .send(axum::extract::ws::Message::Text(prog))
+                                            .send(axum::extract::ws::Message::Text(prog.into()))
                                             .await;
                                         last_progress_sent = std::time::Instant::now();
                                     }
@@ -607,7 +607,7 @@ async fn handle_recording_stream(
                                                     let remaining_guac = (remaining_wall as f64 * speed) as u64;
                                                     let interp = abs_elapsed.saturating_sub(remaining_guac);
                                                     let prog = format_guac_instruction("nvrprogress", &[&interp.to_string()]);
-                                                    socket.send(axum::extract::ws::Message::Text(prog)).await?;
+                                                    socket.send(axum::extract::ws::Message::Text(prog.into())).await?;
                                                     last_progress_sent = std::time::Instant::now();
                                                 }
                                             }
@@ -620,7 +620,7 @@ async fn handle_recording_stream(
                                             "nvrprogress",
                                             &[&abs_elapsed.to_string()],
                                         );
-                                        socket.send(axum::extract::ws::Message::Text(prog)).await?;
+                                        socket.send(axum::extract::ws::Message::Text(prog.into())).await?;
                                         last_progress_sent = std::time::Instant::now();
                                     }
                                 }
@@ -638,7 +638,7 @@ async fn handle_recording_stream(
             // are always sent so the display state builds up correctly.
             if !(seeking && instruction.opcode == "sync") {
                 socket
-                    .send(axum::extract::ws::Message::Text(instruction.raw))
+                    .send(axum::extract::ws::Message::Text(instruction.raw.into()))
                     .await?;
             }
         }
@@ -646,7 +646,7 @@ async fn handle_recording_stream(
 
     // Signal end-of-recording so the frontend can close gracefully
     let end_msg = format_guac_instruction("nvrend", &[]);
-    let _ = socket.send(axum::extract::ws::Message::Text(end_msg)).await;
+    let _ = socket.send(axum::extract::ws::Message::Text(end_msg.into())).await;
     let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
 
     Ok(())

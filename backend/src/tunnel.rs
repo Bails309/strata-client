@@ -508,7 +508,7 @@ async fn handle_guac_handshake(
                 let msg = "Session terminated by administrator";
                 let inst = guac_instruction("error", &[msg, "521"]);
                 let text = String::from_utf8_lossy(&inst).into_owned();
-                let _ = ws.send(axum::extract::ws::Message::Text(text)).await;
+                let _ = ws.send(axum::extract::ws::Message::Text(text.into())).await;
                 break;
             }
 
@@ -522,7 +522,7 @@ async fn handle_guac_handshake(
                         // (as opposed to a network drop).
                         let disc = guac_instruction("disconnect", &[]);
                         let text = String::from_utf8_lossy(&disc).into_owned();
-                        let _ = ws.send(Message::Text(text)).await;
+                        let _ = ws.send(Message::Text(text.into())).await;
                         break;
                     }
                     Ok(n) => {
@@ -559,7 +559,7 @@ async fn handle_guac_handshake(
                                 let _ = tx.send(std::sync::Arc::new(text.clone()));
                             }
 
-                            if ws.send(Message::Text(text)).await.is_err() {
+                            if ws.send(Message::Text(text.into())).await.is_err() {
                                 tracing::info!("WebSocket send failed (client disconnected)");
                                 break;
                             }
@@ -571,7 +571,7 @@ async fn handle_guac_handshake(
                         // Tell the browser so it doesn't auto-reconnect
                         let disc = guac_instruction("disconnect", &[]);
                         let text = String::from_utf8_lossy(&disc).into_owned();
-                        let _ = ws.send(Message::Text(text)).await;
+                        let _ = ws.send(Message::Text(text.into())).await;
                         break;
                     }
                 }
@@ -641,7 +641,7 @@ async fn handle_guac_handshake(
                     tracing::info!("WebSocket keepalive timeout (no pong in 30s)");
                     break;
                 }
-                if ws.send(Message::Ping(Vec::new())).await.is_err() {
+                if ws.send(Message::Ping(Vec::new().into())).await.is_err() {
                     tracing::info!("WebSocket ping send failed");
                     break;
                 }

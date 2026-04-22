@@ -12,11 +12,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.22.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.23.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/rust-1.94-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
-  <img src="https://img.shields.io/badge/typescript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/rust-1.95-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
+  <img src="https://img.shields.io/badge/typescript-6-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/postgresql-16-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL">
   <img src="https://img.shields.io/badge/vault-1.19-FFEC6E?style=flat-square&logo=vault&logoColor=black" alt="Vault">
   <img src="https://img.shields.io/badge/docker-compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
@@ -202,7 +202,7 @@ After setup, log in and navigate to **Admin → SSO / OIDC** to configure your i
 
 ```bash
 cd backend
-# Requires Rust 1.94
+# Requires Rust 1.95
 cargo run
 ```
 

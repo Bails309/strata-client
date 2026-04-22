@@ -95,7 +95,7 @@ export default function SessionClient() {
   const userDisconnectRef = useRef(false);
   const serverDisconnectRef = useRef(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wireHandlersRef = useRef<(session: GuacSession, attempt: number) => void>();
+  const wireHandlersRef = useRef<((session: GuacSession, attempt: number) => void) | undefined>(undefined);
   /** Ref mirror of `error` so effects always read the latest value. */
   const errorRef = useRef("");
   /** Ref mirror of sessions for stable access inside tunnel-close callbacks. */

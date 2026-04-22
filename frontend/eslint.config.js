@@ -53,6 +53,16 @@ export default [
       "react/react-in-jsx-scope": "off", // modern JSX transform
       "react/prop-types": "off", // TypeScript covers this
 
+      // react-hooks v7 added several compiler-strict rules (set-state-in-effect,
+      // immutability, purity, refs, globals, preserve-manual-memoization).
+      // Demote to warn so the bump lands without a mass refactor — tighten later.
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/immutability": "warn",
+      "react-hooks/purity": "warn",
+      "react-hooks/refs": "warn",
+      "react-hooks/globals": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+
       // Accessibility — warnings for now; promote to errors per page as fixed
       ...jsxA11y.configs.recommended.rules,
       "jsx-a11y/anchor-is-valid": "warn",

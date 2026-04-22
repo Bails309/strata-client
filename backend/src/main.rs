@@ -94,8 +94,8 @@ async fn main() -> anyhow::Result<()> {
         s
     } else {
         use base64::Engine;
-        let mut key = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+        use rand::RngExt;
+        let key: [u8; 32] = rand::rng().random();
         let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key);
         tracing::info!("Generated new JWT signing secret");
 
@@ -361,8 +361,8 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
         // automatic deletion after 15 minutes. The operator is expected to
         // cat the file, change the password, and move on.
         use base64::Engine;
-        let mut buf = [0u8; 12];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut buf);
+        use rand::RngExt;
+        let buf: [u8; 12] = rand::rng().random();
         let generated = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
 
         let pw_path = std::path::PathBuf::from("/tmp/.strata-admin-password");

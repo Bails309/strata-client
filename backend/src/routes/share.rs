@@ -268,7 +268,7 @@ pub async fn ws_shared_tunnel(
             // Send the last-known size instruction so the display renders
             // at the correct dimensions
             if let Some(size_inst) = size_inst {
-                if socket.send(Message::Text(size_inst)).await.is_err() {
+                if socket.send(Message::Text(size_inst.into())).await.is_err() {
                     return;
                 }
             }
@@ -289,7 +289,7 @@ pub async fn ws_shared_tunnel(
                     }
                 }
                 if !stripped.is_empty()
-                    && socket.send(Message::Text(stripped)).await.is_err()
+                    && socket.send(Message::Text(stripped.into())).await.is_err()
                 {
                     return;
                 }
@@ -297,7 +297,7 @@ pub async fn ws_shared_tunnel(
 
             // Flush accumulated drawing ops with a single sync
             if let Some(sync) = last_sync_inst.take() {
-                if socket.send(Message::Text(sync)).await.is_err() {
+                if socket.send(Message::Text(sync.into())).await.is_err() {
                     return;
                 }
             }
@@ -313,7 +313,7 @@ pub async fn ws_shared_tunnel(
                         match result {
                             Ok(frame) => {
                                 last_frame_at = std::time::Instant::now();
-                                if socket.send(Message::Text((*frame).clone())).await.is_err() {
+                                if socket.send(Message::Text((*frame).clone().into())).await.is_err() {
                                     break;
                                 }
                             }
@@ -337,7 +337,7 @@ pub async fn ws_shared_tunnel(
                                         }
                                     }
                                     if !stripped.is_empty()
-                                        && socket.send(Message::Text(stripped)).await.is_err()
+                                        && socket.send(Message::Text(stripped.into())).await.is_err()
                                     {
                                         send_ok = false;
                                         break;
@@ -351,7 +351,7 @@ pub async fn ws_shared_tunnel(
                                     .as_millis()
                                     .to_string();
                                 let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
-                                if socket.send(Message::Text(sync)).await.is_err() {
+                                if socket.send(Message::Text(sync.into())).await.is_err() {
                                     break;
                                 }
                                 last_frame_at = std::time::Instant::now();
@@ -362,11 +362,12 @@ pub async fn ws_shared_tunnel(
                     msg = socket.recv() => {
                         match msg {
                             None => break, // client disconnected
-                            Some(Ok(Message::Text(text))) if is_control => {
+                            Some(Ok(Message::Text(text)))
+                                if is_control
                                 // Forward input from control viewer to owner's guacd
-                                if input_tx.send(text).await.is_err() {
-                                    break; // owner's session ended
-                                }
+                                    && input_tx.send(text.to_string()).await.is_err() =>
+                            {
+                                break; // owner's session ended
                             }
                             _ => {} // discard in view mode or for non-text messages
                         }
@@ -382,7 +383,7 @@ pub async fn ws_shared_tunnel(
                                 .as_millis()
                                 .to_string();
                             let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
-                            if socket.send(Message::Text(sync)).await.is_err() {
+                            if socket.send(Message::Text(sync.into())).await.is_err() {
                                 break;
                             }
                         }

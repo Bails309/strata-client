@@ -28,9 +28,9 @@ Items are grouped into deployment waves. Complete a wave before starting the nex
 - [x] **W1-4** Add CodeQL (or Semgrep) SAST workflow for JS/TS + Rust (§18.2) — [.github/workflows/codeql.yml](.github/workflows/codeql.yml) covers `javascript-typescript`, `rust`, `actions` with `security-extended,security-and-quality` packs
 
 ### 1.B — Digest pinning
-- [x] **W1-5** Pin every `FROM` line by `@sha256:` digest — [backend/Dockerfile](backend/Dockerfile) (`rust:1.94-alpine`, `alpine:3.19`)
-- [x] **W1-6** Pin every `FROM` line by `@sha256:` digest — [frontend/Dockerfile](frontend/Dockerfile) (`node:24-alpine`, `nginx:alpine`)
-- [x] **W1-7** Pin every `FROM` line by `@sha256:` digest — [guacd/Dockerfile](guacd/Dockerfile) (`alpine:3.21`)
+- [x] **W1-5** Pin every `FROM` line by `@sha256:` digest — [backend/Dockerfile](backend/Dockerfile) (`rust:1.95-alpine`, `alpine:3.23`)
+- [x] **W1-6** Pin every `FROM` line by `@sha256:` digest — [frontend/Dockerfile](frontend/Dockerfile) (`node:25-alpine`, `nginx:alpine`)
+- [x] **W1-7** Pin every `FROM` line by `@sha256:` digest — [guacd/Dockerfile](guacd/Dockerfile) (`alpine:3.23`)
 - [x] **W1-8** Replace all floating `image:` tags with `@sha256:` digests — [docker-compose.yml](docker-compose.yml) (`postgres:16-alpine`, `hashicorp/vault:1.19`); locally-built `strata/*:latest` images are produced by the `build:` block and are intentionally tag-only
 - [x] **W1-9** Enable Renovate `docker.pinDigests: true` (or Dependabot Docker) to auto-refresh the digests — [renovate.json](renovate.json) with `docker.pinDigests`, `dockerfile.pinDigests`, `docker-compose.pinDigests`; Dependabot docker ecosystem already configured in [.github/dependabot.yml](.github/dependabot.yml) as a belt-and-braces backup
 

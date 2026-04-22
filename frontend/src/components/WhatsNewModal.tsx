@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.23.0",
+    subtitle: "Dependency Modernization — Rust 1.95, axum 0.8, React 19, TypeScript 6",
+    sections: [
+      {
+        title: "Backend on Rust 1.95 and axum 0.8",
+        description:
+          "The Rust toolchain is bumped from 1.94 to 1.95 and every major backend dependency has moved to its current release — axum 0.7 → 0.8, axum-extra 0.9 → 0.12, tower 0.4 → 0.5, tower-http 0.5 → 0.6, rand 0.9 → 0.10, sha2 0.10 → 0.11, hmac 0.12 → 0.13. No API shape, wire format, or configuration changes: every one of the 817 backend tests passes on the new stack.",
+      },
+      {
+        title: "Frontend on React 19 and TypeScript 6",
+        description:
+          "React is bumped from 18 to 19, react-router-dom from 6 to 7, and TypeScript from 5 to 6. All 1162 Vitest tests pass and the production build is clean. The new react-hooks 7 compiler-aware rules (set-state-in-effect, immutability, purity, refs) are enabled at warn level so they ride alongside the existing lint backlog until a dedicated cleanup sweep promotes them to errors.",
+      },
+      {
+        title: "Hardened cargo-audit Configuration",
+        description:
+          "audit.toml has moved from backend/audit.toml to backend/.cargo/audit.toml — the canonical discovery path. The previous location was silently ignored by cargo-audit, meaning CI was fail-opening on the three RUSTSEC advisories we explicitly suppressed with justifications. The ignore list itself is unchanged; the file is now actually read.",
+      },
+      {
+        title: "Container Base Image Refresh",
+        description:
+          "The backend runtime and guacd images are unified on alpine:3.23 (from 3.21 / 3.22), and the frontend builder moves to node:25-alpine. Trivy CRITICAL/HIGH scans are clean on every rebuilt image.",
+      },
+    ],
+  },
+  {
     version: "0.22.0",
     subtitle: "Data Retention Controls, ADRs & On-Call Runbooks",
     sections: [

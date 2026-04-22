@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, type ReactElement } from "react";
 import { marked } from "marked";
 import { RELEASE_CARDS, WHATS_NEW_VERSION } from "../components/WhatsNewModal";
 import Select from "../components/Select";
@@ -19,7 +19,7 @@ import apiReferenceMd from "@docs/api-reference.md?raw";
 interface DocSection {
   id: string;
   label: string;
-  icon: JSX.Element;
+  icon: ReactElement;
   content: string | null; // null = custom renderer (What's New)
 }
 

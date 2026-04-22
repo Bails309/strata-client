@@ -853,7 +853,7 @@ function SessionThumbnail({
   onTagPickerOpen: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>();
+  const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const tagPickerRef = useRef<HTMLDivElement>(null);
 

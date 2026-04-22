@@ -30,7 +30,7 @@ export default function SessionMenu({
   const [activeFsIndex, setActiveFsIndex] = useState<number | null>(null);
   const [clipboardText, setClipboardText] = useState("");
   const [clipboardVisible, setClipboardVisible] = useState(false);
-  const clipboardTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const clipboardTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Sync remote clipboard text when menu opens
   useEffect(() => {

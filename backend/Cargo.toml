@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "0.22.0"
+version = "0.23.0"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"
@@ -14,10 +14,10 @@ path = "src/main.rs"
 tokio = { version = "1", features = ["full"] }
 
 # Web framework
-axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
-axum-extra = { version = "0.9", features = ["typed-header"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace", "fs", "request-id"] }
+axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "request-id"] }
 
 # Serialisation
 serde = { version = "1", features = ["derive"] }
@@ -40,10 +40,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], defau
 
 # Cryptography (envelope encryption)
 aes-gcm = "0.10"
-rand = "0.9.3"
+rand = "0.10"
 base64 = "0.22"
-sha2 = "0.10"
-hmac = "0.12"
+sha2 = "0.11"
+hmac = "0.13"
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 argon2 = "0.5"

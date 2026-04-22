@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] — 2026-04-22
+
+### Changed
+- **Dependency Modernization — Major Version Upgrades**: Swept the backend and frontend onto current major versions of every long-deferred dependency. No behavioural changes for end users; surface area of this release is entirely under the hood.
+  - **Rust toolchain**: backend builder image bumped from `rust:1.94-alpine` to `rust:1.95-alpine`; runtime image (and `guacd` base) bumped from `alpine:3.21`/`3.22` to `alpine:3.23`.
+  - **axum 0.7 → 0.8** (plus `axum-extra` 0.9 → 0.12, `tower` 0.4 → 0.5, `tower-http` 0.5 → 0.6). Route path syntax migrated from `:param` / `*splat` to `{param}` / `{*splat}` across every router (`backend/src/routes/mod.rs`, `backend/src/services/vault.rs`, and the `vault_provisioning` test fixture). `Message::Text`/`Message::Ping` now take `Utf8Bytes`/`Bytes` instead of `String`/`Vec<u8>`; all websocket send sites updated. No API shape or wire-format changes.
+  - **rand 0.9 → 0.10**: convenience methods (`random`, `random_range`, `sample_iter`) moved from the `Rng` trait to the new `RngExt` trait; every call site imports `RngExt` and the two `fill_bytes` sites in `main.rs` now use `rand::rng().random::<[u8; 32]>()` idioms.
+  - **sha2 0.10 → 0.11, hmac 0.12 → 0.13**: `new_from_slice` now lives on `KeyInit` (added to the `use hmac::{Hmac, KeyInit, Mac};` import in `recordings.rs`).
+  - **Frontend — React 18 → 19**: `useRef<T>()` callers now pass an explicit `undefined` initial value (`SessionBar.tsx`, `SessionMenu.tsx`, `SessionClient.tsx`); the removed global `JSX` namespace is replaced with `ReactElement` from `react` (`Documentation.tsx`). No UI or behaviour changes — all 1162 Vitest tests pass, production build clean.
+  - **Frontend — react-router-dom 6 → 7**: no code changes required; the project already uses the data-router APIs.
+  - **Frontend — TypeScript 5 → 6**: `tsconfig.json` adds `"ignoreDeprecations": "6.0"` to silence the `baseUrl` deprecation warning ahead of the TypeScript 7 removal.
+  - **Frontend — eslint-plugin-react-hooks 5 → 7**: the new compiler-aware rules (`set-state-in-effect`, `immutability`, `purity`, `refs`, `globals`, `preserve-manual-memoization`) are enabled at **warn** level in `eslint.config.js` so the bump lands without a mass refactor. They ride alongside the existing warnings until a dedicated hooks-purity sweep promotes them.
+  - **Dockerfile bumps**: `frontend/Dockerfile` moves to `node:25-alpine`; all runtime stages now target `alpine:3.23`. Trivy CRITICAL/HIGH scans clean on every rebuilt image.
+
+### Security
+- **Rust 1.95 Clippy Tightening**: The new `collapsible_match` lint flagged a nested `if let` in the share-token websocket loop (`backend/src/routes/share.rs`); collapsed into a single match guard with no behavioural change.
+- **`cargo-audit` Configuration Relocated**: `audit.toml` moved from `backend/audit.toml` to `backend/.cargo/audit.toml` — the canonical discovery path. The three existing RUSTSEC ignores (`RUSTSEC-2023-0071`, `RUSTSEC-2024-0379`, `RUSTSEC-2024-0384`) are preserved verbatim with their justifications. Previously the file was silently ignored, so CI would fail-open on any advisory those rules were suppressing; this closes that hole.
+
+### Deferred
+- **eslint 9 → 10**: blocked upstream. `eslint-plugin-react@7.37.5` (latest) uses `context.getFilename()`, which eslint 10 removed (`contextOrFilename.getFilename is not a function`); `eslint-plugin-jsx-a11y@6.10.2` likewise caps its peer at `^9`. Will revisit when both plugins ship eslint-10-compatible releases.
+
 ## [0.22.0] — 2026-04-21
 
 ### Added

@@ -40,7 +40,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], defau
 
 # Cryptography (envelope encryption)
 aes-gcm = "0.10"
-rand = "0.9.3"
+rand = "0.10.1"
 base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"

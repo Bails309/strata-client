@@ -620,7 +620,9 @@ async fn handle_recording_stream(
                                             "nvrprogress",
                                             &[&abs_elapsed.to_string()],
                                         );
-                                        socket.send(axum::extract::ws::Message::Text(prog.into())).await?;
+                                        socket
+                                            .send(axum::extract::ws::Message::Text(prog.into()))
+                                            .await?;
                                         last_progress_sent = std::time::Instant::now();
                                     }
                                 }
@@ -646,7 +648,9 @@ async fn handle_recording_stream(
 
     // Signal end-of-recording so the frontend can close gracefully
     let end_msg = format_guac_instruction("nvrend", &[]);
-    let _ = socket.send(axum::extract::ws::Message::Text(end_msg.into())).await;
+    let _ = socket
+        .send(axum::extract::ws::Message::Text(end_msg.into()))
+        .await;
     let _ = socket.send(axum::extract::ws::Message::Close(None)).await;
 
     Ok(())

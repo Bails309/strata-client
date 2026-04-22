@@ -240,12 +240,7 @@ mod tests {
     #[tokio::test]
     async fn validate_token_rejects_token_with_bogus_segments() {
         // Syntactically three segments but none are valid base64url JSON.
-        let result = validate_token(
-            "https://idp.example.com",
-            "client",
-            "AAA.BBB.CCC",
-        )
-        .await;
+        let result = validate_token("https://idp.example.com", "client", "AAA.BBB.CCC").await;
         assert!(result.is_err());
     }
 

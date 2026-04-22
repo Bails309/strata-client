@@ -55,7 +55,10 @@ jobs:
 
       - name: Run cargo audit (backend)
         working-directory: backend
-        run: cargo audit --deny warnings
+        # Fail on vulnerabilities, unsound, and unmaintained advisories.
+        # Yanked crates remain informational (no RUSTSEC ID to ignore).
+        # Per-advisory ignores with justifications live in backend/audit.toml.
+        run: cargo audit --deny unsound --deny unmaintained
 
       # Node: npm advisory database
       - name: Setup Node.js

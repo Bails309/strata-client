@@ -271,10 +271,7 @@ pub async fn download_from_azure(cfg: &AzureBlobConfig, blob: &str) -> anyhow::R
     .await
 }
 
-async fn download_from_azure_once(
-    cfg: &AzureBlobConfig,
-    blob: &str,
-) -> anyhow::Result<Vec<u8>> {
+async fn download_from_azure_once(cfg: &AzureBlobConfig, blob: &str) -> anyhow::Result<Vec<u8>> {
     let url = cfg.blob_url(blob)?;
     let date = chrono::Utc::now()
         .format("%a, %d %b %Y %H:%M:%S GMT")
@@ -555,12 +552,13 @@ async fn sync_pass(
                 }
             }
 
-            let deleted_rows =
-                sqlx::query("DELETE FROM recordings WHERE created_at < now() - make_interval(days => $1)")
-                    .bind(config.retention_days as i32)
-                    .execute(pool)
-                    .await?
-                    .rows_affected();
+            let deleted_rows = sqlx::query(
+                "DELETE FROM recordings WHERE created_at < now() - make_interval(days => $1)",
+            )
+            .bind(config.retention_days as i32)
+            .execute(pool)
+            .await?
+            .rows_affected();
 
             if deleted_rows > 0 {
                 tracing::info!(

@@ -158,10 +158,12 @@ pub async fn upload(
     // "image/png") we require the detected type to match; unknown claimed
     // types ("application/octet-stream" or empty) fall through to the
     // detected value so generic downloads still work.
-    let content_type = sniff_mime(&temp_path, &claimed_content_type).await.map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        e
-    })?;
+    let content_type = sniff_mime(&temp_path, &claimed_content_type)
+        .await
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            e
+        })?;
 
     let meta = file_store
         .store_from_path(
@@ -204,10 +206,7 @@ pub async fn upload(
 /// the CDN. Detected-then-claimed wins when `infer` returns a result; we
 /// fall back to the claimed value for types `infer` does not recognise
 /// (e.g. plain text, CSV) as long as the claim looks well-formed.
-async fn sniff_mime(
-    path: &std::path::Path,
-    claimed: &str,
-) -> Result<String, AppError> {
+async fn sniff_mime(path: &std::path::Path, claimed: &str) -> Result<String, AppError> {
     use tokio::io::AsyncReadExt;
     const HEAD_BYTES: usize = 512;
 
@@ -500,7 +499,9 @@ mod tests {
     async fn sniff_mime_rejects_header_injection_in_claim() {
         // W4-8: CRLF in a claimed MIME is a classic header-injection probe.
         let path = write_temp(b"just some text").await;
-        let err = sniff_mime(&path, "text/plain\r\nX-Evil: 1").await.unwrap_err();
+        let err = sniff_mime(&path, "text/plain\r\nX-Evil: 1")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
         let _ = tokio::fs::remove_file(path).await;
     }

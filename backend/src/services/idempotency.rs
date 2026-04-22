@@ -27,7 +27,9 @@ pub struct CachedResponse {
 
 /// Extract and validate the `Idempotency-Key` header. Returns `None` if the
 /// header is absent; returns `Err` if it is present but malformed.
-pub fn extract_key(headers: &axum::http::HeaderMap) -> Result<Option<String>, crate::error::AppError> {
+pub fn extract_key(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<String>, crate::error::AppError> {
     let Some(v) = headers.get("Idempotency-Key") else {
         return Ok(None);
     };

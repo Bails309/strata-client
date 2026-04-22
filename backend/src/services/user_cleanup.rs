@@ -49,9 +49,7 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         .filter(|d| *d > 0)
         .unwrap_or(90);
 
-    tracing::info!(
-        "Running user cleanup (hard-deleting users soft-deleted for >{days} days) ..."
-    );
+    tracing::info!("Running user cleanup (hard-deleting users soft-deleted for >{days} days) ...");
 
     // ── Purge recording files for users about to be hard-deleted ──
     let doomed_recordings: Vec<(String, String)> = sqlx::query_as(
@@ -106,12 +104,11 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     }
 
     // ── Hard-delete the users (CASCADE removes DB rows for recordings, tags, etc.) ──
-    let result = sqlx::query(
-        "DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)",
-    )
-    .bind(days)
-    .execute(&db.pool)
-    .await?;
+    let result =
+        sqlx::query("DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)")
+            .bind(days)
+            .execute(&db.pool)
+            .await?;
 
     if result.rows_affected() > 0 {
         tracing::info!("Hard-deleted {} user(s)", result.rows_affected());

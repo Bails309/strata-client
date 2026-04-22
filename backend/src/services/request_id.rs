@@ -41,7 +41,9 @@ where
 
 /// Current request id, or `"-"` if no scope is active.
 pub fn current_request_id() -> String {
-    CURRENT.try_with(|s| s.clone()).unwrap_or_else(|_| "-".into())
+    CURRENT
+        .try_with(|s| s.clone())
+        .unwrap_or_else(|_| "-".into())
 }
 
 /// Axum middleware: read (or mint) `x-request-id`, stash into task-local,

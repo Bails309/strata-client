@@ -68,9 +68,7 @@ where
                 if !is_transient(&e) || attempt == attempts {
                     return Err(e);
                 }
-                tracing::warn!(
-                    "{label}: attempt {attempt}/{attempts} failed (retrying): {e}"
-                );
+                tracing::warn!("{label}: attempt {attempt}/{attempts} failed (retrying): {e}");
                 last_err = Some(e);
             }
         }
@@ -107,7 +105,8 @@ pub fn is_ldap_transient(err: &anyhow::Error) -> bool {
         || msg.contains("rc=50")          // insufficientAccessRights
         || msg.contains("rc=32")          // noSuchObject
         || msg.contains("rc=34")          // invalidDNSyntax
-        || msg.contains("rc=53")          // unwillingToPerform
+        || msg.contains("rc=53")
+    // unwillingToPerform
     {
         return false;
     }

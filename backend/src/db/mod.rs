@@ -91,11 +91,9 @@ impl Database {
             .max_lifetime(Some(Duration::from_secs(max_lifetime_secs)))
             .after_connect(move |conn, _meta| {
                 Box::pin(async move {
-                    sqlx::query(&format!(
-                        "SET statement_timeout = {statement_timeout_ms}"
-                    ))
-                    .execute(&mut *conn)
-                    .await?;
+                    sqlx::query(&format!("SET statement_timeout = {statement_timeout_ms}"))
+                        .execute(&mut *conn)
+                        .await?;
                     Ok(())
                 })
             })

@@ -454,10 +454,7 @@ use argon2::PasswordHasher;
 /// W3-10 — write the generated admin password to disk with permissions set
 /// so only the current user can read it (0o600 on Unix, NTFS ACL inherit
 /// on Windows). The file contents are overwritten if it already exists.
-fn write_admin_password_file(
-    path: &std::path::Path,
-    password: &str,
-) -> std::io::Result<()> {
+fn write_admin_password_file(path: &std::path::Path, password: &str) -> std::io::Result<()> {
     use std::io::Write;
 
     #[cfg(unix)]

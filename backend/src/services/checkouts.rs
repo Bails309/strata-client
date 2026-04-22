@@ -238,13 +238,12 @@ pub async fn activate_checkout(
     // rolls back on error.
     let mut tx = pool.begin().await?;
 
-    let req: CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1 FOR UPDATE",
-    )
-    .bind(checkout_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+    let req: CheckoutRequest =
+        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1 FOR UPDATE")
+            .bind(checkout_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
     if req.status != "Approved" && req.status != "Active" && req.status != "Scheduled" {
         return Err(AppError::Validation(format!(
@@ -452,9 +451,7 @@ pub async fn checkin_checkout(
                 .execute(pool)
                 .await
         {
-            tracing::warn!(
-                "Failed to expire credential profile {profile_id} during check-in: {e}"
-            );
+            tracing::warn!("Failed to expire credential profile {profile_id} during check-in: {e}");
         }
     }
 

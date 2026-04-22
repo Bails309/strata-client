@@ -2097,15 +2097,8 @@ pub async fn retry_checkout_activation(
 
     let body = json!({ "status": "Active" });
     if let Some(ref key) = idem_key {
-        if let Err(e) = crate::services::idempotency::store(
-            &db.pool,
-            user.id,
-            ROUTE,
-            key,
-            200,
-            &body,
-        )
-        .await
+        if let Err(e) =
+            crate::services::idempotency::store(&db.pool, user.id, ROUTE, key, 200, &body).await
         {
             tracing::warn!("Failed to cache idempotency response for key {key}: {e}");
         }

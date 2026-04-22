@@ -1,0 +1,30 @@
+# cargo-audit configuration.
+#
+# Advisories listed below are known and tracked. Each entry MUST have a
+# justification and (where applicable) a tracking issue / review date.
+# Re-evaluate quarterly and remove entries as upstream fixes land.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — `rsa` Marvin timing side-channel (medium).
+    # Pulled in transitively by `jsonwebtoken` (RSA JWT verification) and by
+    # `sqlx-macros-core` (MySQL compile-time checks, unused at runtime — we
+    # only enable the `postgres` sqlx feature). No fixed upgrade is available
+    # upstream. Mitigation: Strata does not expose RSA signing/decryption to
+    # untrusted network timing; JWTs are verified server-side against trusted
+    # OIDC JWKS. Revisit when `rsa` publishes a constant-time release.
+    "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2025-0134 — `rustls-pemfile` unmaintained (warning only).
+    # Direct dependency used for loading CA bundles / client certs. Upstream
+    # functionality has moved into `rustls-pki-types`; migration is tracked
+    # but non-trivial. No known vulnerability, only a maintenance notice.
+    "RUSTSEC-2025-0134",
+
+    # RUSTSEC-2026-0097 — `rand` 0.8.5 unsoundness with custom loggers
+    # (warning, not a direct vulnerability). Only reachable via transitive
+    # deps (`tungstenite`, `sqlx-*`, `num-bigint-dig`, `jsonwebtoken`) which
+    # have not yet migrated to rand 0.9. Strata's own code uses rand 0.9.3.
+    # Remove once upstream crates publish rand-0.9 releases.
+    "RUSTSEC-2026-0097",
+]

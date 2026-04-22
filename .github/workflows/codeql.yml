@@ -26,9 +26,10 @@ jobs:
             build-mode: none
           - language: actions
             build-mode: none
-          # Rust is analysed via the autobuild mode. Backend code lives in ./backend.
+          # Rust extractor does not support autobuild; use build-mode: none
+          # (CodeQL scans sources directly without invoking cargo).
           - language: rust
-            build-mode: autobuild
+            build-mode: none
 
     steps:
       - uses: actions/checkout@v4
@@ -39,17 +40,6 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended,security-and-quality
-
-      # Rust needs an explicit build directory.
-      - name: Install Rust toolchain (rust job only)
-        if: matrix.language == 'rust'
-        uses: dtolnay/rust-toolchain@1.94.0
-
-      - name: Autobuild (rust only)
-        if: matrix.build-mode == 'autobuild'
-        uses: github/codeql-action/autobuild@v3
-        with:
-          working-directory: backend
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3

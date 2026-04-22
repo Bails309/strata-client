@@ -7209,9 +7209,9 @@ function SecurityTab({
               className="w-32"
             />
             <p className="text-txt-secondary text-sm mt-1">
-              Number of days a soft-deleted user remains recoverable before the background
-              cleanup task permanently removes their record and any associated session
-              recordings. Defaults to 90 days. Must be between 1 and 3650.
+              Number of days a soft-deleted user remains recoverable before the background cleanup
+              task permanently removes their record and any associated session recordings. Defaults
+              to 90 days. Must be between 1 and 3650.
             </p>
           </div>
         </div>

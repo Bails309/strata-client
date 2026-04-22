@@ -3,7 +3,7 @@
 # without a weekly Dependabot PR. Dependabot (docker ecosystem) still opens
 # PRs when the tag itself moves, and Trivy (CI image scan) gates
 # HIGH/CRITICAL fixable CVEs so staleness cannot ship to main.
-FROM rust:1.94-alpine AS builder
+FROM rust:1.95-alpine AS builder
 
 RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static
 
@@ -19,7 +19,7 @@ COPY backend/ .
 RUN touch src/main.rs && cargo build --release
 
 # ── Runtime stage ─────────────────────────────────────────────────────
-FROM alpine:3.22
+FROM alpine:3.23
 
 # Pull the latest Alpine security patches before installing runtime deps
 # so Trivy doesn't flag HIGH CVEs that already have an upstream fix.

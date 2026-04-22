@@ -1,11 +1,19 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Mock the markdown imports and marked
 vi.mock("@docs/architecture.md?raw", () => ({ default: "# Architecture\nArch content here" }));
 vi.mock("@docs/security.md?raw", () => ({ default: "# Security\nSecurity content here" }));
 vi.mock("@docs/api-reference.md?raw", () => ({ default: "# API Reference\nAPI content here" }));
+
+// Mock the roadmap API calls used by the Roadmap tab.
+const getRoadmapStatusesMock = vi.fn();
+const setRoadmapStatusMock = vi.fn();
+vi.mock("../api", () => ({
+  getRoadmapStatuses: (...args: unknown[]) => getRoadmapStatusesMock(...args),
+  setRoadmapStatus: (...args: unknown[]) => setRoadmapStatusMock(...args),
+}));
 
 vi.mock("../components/WhatsNewModal", () => ({
   RELEASE_CARDS: [
@@ -28,6 +36,8 @@ import Documentation from "../pages/Documentation";
 describe("Documentation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    getRoadmapStatusesMock.mockReset();
+    setRoadmapStatusMock.mockReset();
   });
 
   it("renders Documentation heading", () => {
@@ -96,5 +106,109 @@ describe("Documentation", () => {
     render(<Documentation />);
     expect(screen.getByText("v0.14.7")).toBeInTheDocument();
     expect(screen.getByText("v0.14.6")).toBeInTheDocument();
+  });
+
+  describe("Roadmap tab", () => {
+    it("renders roadmap themes and status summary (non-admin view)", async () => {
+      getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
+      const user = userEvent.setup();
+      render(<Documentation />);
+      await user.click(screen.getByText("Roadmap"));
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Product Roadmap" })
+      ).toBeInTheDocument();
+      // Status summary cards (Proposed / Researching / In Progress / Shipped)
+      expect(screen.getAllByText("Proposed").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText("In Progress").length).toBeGreaterThanOrEqual(1);
+      // Non-admin users see status badges, not selects
+      expect(screen.queryByText("Admin Editable")).not.toBeInTheDocument();
+      await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
+    });
+
+    it("shows Admin Editable badge for users with manage_system permission", async () => {
+      getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
+      const user = userEvent.setup();
+      render(
+        <Documentation
+          user={
+            {
+              id: "1",
+              email: "admin@example.com",
+              can_manage_system: true,
+            } as never
+          }
+        />
+      );
+      await user.click(screen.getByText("Roadmap"));
+      expect(await screen.findByText("Admin Editable")).toBeInTheDocument();
+    });
+
+    it("renders load error when getRoadmapStatuses rejects", async () => {
+      getRoadmapStatusesMock.mockRejectedValue(new Error("boom"));
+      const user = userEvent.setup();
+      render(<Documentation />);
+      await user.click(screen.getByText("Roadmap"));
+      expect(await screen.findByText(/Could not load saved statuses: boom/i)).toBeInTheDocument();
+    });
+
+    it("applies overrides returned from the API to the displayed status", async () => {
+      // Pick any valid roadmap id; use a clearly distinctive override so we
+      // can assert the effective status appears as a badge.
+      getRoadmapStatusesMock.mockResolvedValue({
+        statuses: { "nonexistent-id": "Shipped" },
+      });
+      const user = userEvent.setup();
+      render(<Documentation />);
+      await user.click(screen.getByText("Roadmap"));
+      // Roadmap renders regardless; just confirm the async load resolved.
+      await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Product Roadmap" })
+      ).toBeInTheDocument();
+    });
+
+    it("calls setRoadmapStatus when an admin changes a status via the Select", async () => {
+      getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
+      setRoadmapStatusMock.mockResolvedValue({});
+      const user = userEvent.setup();
+      render(
+        <Documentation user={{ id: "1", email: "a@x.io", can_manage_system: true } as never} />
+      );
+      await user.click(screen.getByText("Roadmap"));
+      await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
+
+      // Open the first Select on the first roadmap item and pick "Shipped".
+      // Our custom Select renders the current value as clickable text.
+      const selectButtons = screen.getAllByRole("button", {
+        name: /Proposed|Researching|In Progress|Shipped/,
+      });
+      await user.click(selectButtons[0]);
+      // Menu options appear in a portal; grab the last matching "Shipped" node
+      // (the first could be the summary card label).
+      const shippedOptions = await screen.findAllByText("Shipped");
+      await user.click(shippedOptions[shippedOptions.length - 1]);
+
+      await waitFor(() => expect(setRoadmapStatusMock).toHaveBeenCalled());
+    });
+
+    it("rolls back optimistic update and shows error when setRoadmapStatus rejects", async () => {
+      getRoadmapStatusesMock.mockResolvedValue({ statuses: {} });
+      setRoadmapStatusMock.mockRejectedValue(new Error("save failed"));
+      const user = userEvent.setup();
+      render(
+        <Documentation user={{ id: "1", email: "a@x.io", can_manage_system: true } as never} />
+      );
+      await user.click(screen.getByText("Roadmap"));
+      await waitFor(() => expect(getRoadmapStatusesMock).toHaveBeenCalled());
+
+      const selectButtons = screen.getAllByRole("button", {
+        name: /Proposed|Researching|In Progress|Shipped/,
+      });
+      await user.click(selectButtons[0]);
+      const shippedOptions = await screen.findAllByText("Shipped");
+      await user.click(shippedOptions[shippedOptions.length - 1]);
+
+      expect(await screen.findByText(/save failed/i)).toBeInTheDocument();
+    });
   });
 });

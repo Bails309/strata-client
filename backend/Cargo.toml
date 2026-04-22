@@ -22,7 +22,7 @@ tower-http = { version = "0.5", features = ["cors", "trace", "fs", "request-id"]
 # Serialisation
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1"
 
 # Database
 sqlx = { version = "0.8.1", features = [
@@ -66,13 +66,13 @@ rustls-native-certs = "0.8"
 # Misc
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 dotenvy = "0.15"
 scopeguard = "1"
 urlencoding = "2.1"
 tempfile = "3"
-sysinfo = "0.33"
+sysinfo = "0.38"
 # Magic-number / MIME detection for uploads (W3-6)
 infer = { version = "0.19", default-features = false }
 # Prometheus /metrics endpoint (W3-12)

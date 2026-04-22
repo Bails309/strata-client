@@ -164,10 +164,10 @@ pub async fn seal(vault: &VaultConfig, plaintext: &[u8]) -> Result<SealedCredent
         .map_err(|e| AppError::Internal(format!("AES init: {e}")))?;
 
     let nonce_bytes: [u8; 12] = rand::rng().random();
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::from(nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|e| AppError::Internal(format!("AES encrypt: {e}")))?;
 
     // 3. Wrap DEK via Vault Transit engine (with retry)
@@ -262,9 +262,17 @@ pub async fn unseal(
     let cipher = Aes256Gcm::new_from_slice(&dek)
         .map_err(|e| AppError::Internal(format!("AES init: {e}")))?;
 
-    let nonce = Nonce::from_slice(nonce_bytes);
+    if nonce_bytes.len() != 12 {
+        return Err(AppError::Internal(format!(
+            "Invalid nonce length: expected 12, got {}",
+            nonce_bytes.len()
+        )));
+    }
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(nonce_bytes);
+    let nonce = Nonce::from(nonce_arr);
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| AppError::Internal(format!("AES decrypt: {e}")))?;
 
     // Zeroize DEK from memory

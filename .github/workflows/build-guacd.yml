@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Determine upstream version
         id: version
@@ -36,10 +36,10 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build guacd locally for smoke test
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./guacd
           file: ./guacd/Dockerfile
@@ -84,7 +84,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push custom guacd
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./guacd
           file: ./guacd/Dockerfile

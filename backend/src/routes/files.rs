@@ -160,9 +160,8 @@ pub async fn upload(
     // detected value so generic downloads still work.
     let content_type = sniff_mime(&temp_path, &claimed_content_type)
         .await
-        .map_err(|e| {
+        .inspect_err(|_e| {
             let _ = std::fs::remove_file(&temp_path);
-            e
         })?;
 
     let meta = file_store

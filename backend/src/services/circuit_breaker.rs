@@ -4,11 +4,11 @@
 //!
 //! * `Closed`   — calls pass through; errors count toward a failure budget.
 //! * `Open`     — calls short-circuit with [`CircuitError::Open`] for a
-//!                cool-down window without ever invoking the operation.
+//!   cool-down window without ever invoking the operation.
 //! * `HalfOpen` — after cool-down, one probe call is allowed. Success
-//!                closes the circuit; failure re-opens it for another
-//!                cool-down window (no exponential blow-out — we rely on
-//!                the caller's own retry backoff for that).
+//!   closes the circuit; failure re-opens it for another
+//!   cool-down window (no exponential blow-out — we rely on
+//!   the caller's own retry backoff for that).
 //!
 //! The design targets the three integrations called out in §3.3 — Vault,
 //! LDAP, Azure — so the footprint is intentionally tiny (a `Mutex` and

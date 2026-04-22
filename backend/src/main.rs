@@ -193,51 +193,24 @@ async fn main() -> anyhow::Result<()> {
     // Cancellation is cooperative: the shared worker harness listens on the
     // token and unwinds cleanly when it fires.
     let shutdown = tokio_util::sync::CancellationToken::new();
-    let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-
-    // ── Spawn recording sync background task ──
-    worker_handles.push(services::recordings::spawn_sync_task(
-        state.clone(),
-        shutdown.clone(),
-    ));
-
-    // ── Spawn AD sync scheduler ──
-    worker_handles.push(services::ad_sync::spawn_sync_scheduler(
-        state.clone(),
-        shutdown.clone(),
-    ));
-
-    // ── Spawn User cleanup background task ──
-    worker_handles.push(services::user_cleanup::spawn_cleanup_task(
-        state.clone(),
-        shutdown.clone(),
-    ));
-
-    // ── Spawn password checkout expiration scrubber (every 60s) ──
-    worker_handles.push(services::checkouts::spawn_expiration_worker(
-        state.clone(),
-        shutdown.clone(),
-    ));
-
-    // ── Spawn password auto-rotation worker (daily) ──
-    worker_handles.push(services::checkouts::spawn_auto_rotation_worker(
-        state.clone(),
-        shutdown.clone(),
-    ));
-
-    // ── Spawn connection health-check worker (every 120s) ──
-    worker_handles.push(services::health_check::spawn_health_check_worker(
-        state.clone(),
-        shutdown.clone(),
-    ));
-
-    // ── Spawn active_sessions cleanup background task ──
-    // (W2-5 / W2-8) moved into a dedicated service so the error path is
-    // explicit rather than `let _ = sqlx::query(...)`.
-    worker_handles.push(services::session_cleanup::spawn_session_cleanup_task(
-        db_pool.clone(),
-        shutdown.clone(),
-    ));
+    let worker_handles: Vec<tokio::task::JoinHandle<()>> = vec![
+        // ── Spawn recording sync background task ──
+        services::recordings::spawn_sync_task(state.clone(), shutdown.clone()),
+        // ── Spawn AD sync scheduler ──
+        services::ad_sync::spawn_sync_scheduler(state.clone(), shutdown.clone()),
+        // ── Spawn User cleanup background task ──
+        services::user_cleanup::spawn_cleanup_task(state.clone(), shutdown.clone()),
+        // ── Spawn password checkout expiration scrubber (every 60s) ──
+        services::checkouts::spawn_expiration_worker(state.clone(), shutdown.clone()),
+        // ── Spawn password auto-rotation worker (daily) ──
+        services::checkouts::spawn_auto_rotation_worker(state.clone(), shutdown.clone()),
+        // ── Spawn connection health-check worker (every 120s) ──
+        services::health_check::spawn_health_check_worker(state.clone(), shutdown.clone()),
+        // ── Spawn active_sessions cleanup background task ──
+        // (W2-5 / W2-8) moved into a dedicated service so the error path is
+        // explicit rather than `let _ = sqlx::query(...)`.
+        services::session_cleanup::spawn_session_cleanup_task(db_pool.clone(), shutdown.clone()),
+    ];
 
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());

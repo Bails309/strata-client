@@ -629,9 +629,7 @@ describe("KerberosTab", () => {
     renderAdmin();
     await user.click(screen.getByText("Kerberos"));
     expect(await screen.findByText(/2 KDCs/)).toBeInTheDocument();
-    expect(
-      screen.getByText("dc1.example.com", { exact: false }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("dc1.example.com", { exact: false })).toBeInTheDocument();
   });
 
   it("adds and removes KDC fields", async () => {

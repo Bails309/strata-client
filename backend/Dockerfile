@@ -19,7 +19,7 @@ COPY backend/ .
 RUN touch src/main.rs && cargo build --release
 
 # ── Runtime stage ─────────────────────────────────────────────────────
-FROM alpine:3.22
+FROM alpine:3.23
 
 # Pull the latest Alpine security patches before installing runtime deps
 # so Trivy doesn't flag HIGH CVEs that already have an upstream fix.

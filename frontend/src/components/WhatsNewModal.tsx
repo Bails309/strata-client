@@ -25,6 +25,32 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.23.1",
+    subtitle: "Admin Settings Refactor & Compliance Tracker Retired",
+    sections: [
+      {
+        title: "AdminSettings.tsx No Longer a Monolith",
+        description:
+          "The 8,402-line AdminSettings.tsx has been split into one module per tab under frontend/src/pages/admin/ (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AD Sync, Access). Shared connection-form helpers (Section, FieldGrid, RdpSections, SshSections, VncSections) moved to admin/connectionForm.tsx; shared RDP keyboard layouts to admin/rdpKeyboardLayouts.ts. The parent is now a 258-line dispatcher — a net reduction of 8,144 lines with zero behavioural changes. All 1,162 frontend tests pass green.",
+      },
+      {
+        title: "Faster Reviews, Smaller Edits, Lower HMR Cost",
+        description:
+          "Each admin tab is now reviewed and tested in isolation. Touching the Vault tab no longer churns the whole file, Vite HMR only reloads the affected tab, and the directory layout is self-documenting for onboarding engineers.",
+      },
+      {
+        title: "Compliance Tracker Retired — 62 / 62 Items Closed",
+        description:
+          "docs/compliance-tracker.md has been deleted after reaching 62 of 62 items across Waves 0–5. The artefacts it produced remain in their permanent homes: seven ADRs under docs/adr/ (rate limiting, CSRF, feature flags, guacd model, JWT/refresh, Vault envelope, emergency bypass), five runbooks under docs/runbooks/, and the architecture baseline in docs/adrs/0001-architecture-baseline.md.",
+      },
+      {
+        title: "No Migrations, No Config Changes",
+        description:
+          "v0.23.1 is a pure refactor + documentation release. No schema changes, no settings changes, no restart-required semantics. The Rust 1.95 / React 19 / TypeScript 6 toolchain from v0.23.0 is unchanged.",
+      },
+    ],
+  },
+  {
     version: "0.23.0",
     subtitle: "Dependency Modernization — Rust 1.95, axum 0.8, React 19, TypeScript 6",
     sections: [

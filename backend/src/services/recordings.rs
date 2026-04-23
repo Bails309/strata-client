@@ -572,6 +572,273 @@ async fn sync_pass(
     Ok(())
 }
 
+// ── User-facing recording queries ──────────────────────────────────────
+
+/// List recordings owned by a user, optionally filtered by connection.
+pub async fn list_for_user(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    user_id: uuid::Uuid,
+    connection_id: Option<uuid::Uuid>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<crate::db::Recording>, crate::error::AppError> {
+    let rows = sqlx::query_as::<_, crate::db::Recording>(
+        "SELECT * FROM recordings
+         WHERE user_id = $1
+           AND ($2::uuid IS NULL OR connection_id = $2)
+         ORDER BY started_at DESC
+         LIMIT $3 OFFSET $4",
+    )
+    .bind(user_id)
+    .bind(connection_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Fetch a recording iff it belongs to `user_id`.
+pub async fn get_owned_by_user(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    recording_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+) -> Result<Option<crate::db::Recording>, crate::error::AppError> {
+    let row = sqlx::query_as("SELECT * FROM recordings WHERE id = $1 AND user_id = $2")
+        .bind(recording_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Insert the initial row marking the start of a session recording.
+/// Storage type is always `'local'` at handshake — Azure uploads are
+/// performed asynchronously after the session ends.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_start(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    session_id: String,
+    connection_id: uuid::Uuid,
+    connection_name: String,
+    user_id: uuid::Uuid,
+    username: String,
+    storage_path: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query(
+        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7)",
+    )
+    .bind(session_id)
+    .bind(connection_id)
+    .bind(connection_name)
+    .bind(user_id)
+    .bind(username)
+    .bind(storage_path)
+    .bind(started_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// ── Admin session stats (30-day window) ────────────────────────────────
+
+/// Scalar aggregates over the 30-day recordings window.
+/// Tuple: (total_sessions, total_hours, unique_users, avg_duration_mins,
+/// median_duration_mins, total_bandwidth_bytes).
+pub type SessionStatsScalars = (i64, f64, i64, f64, f64, i64);
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct TopConnectionRow {
+    pub name: String,
+    pub protocol: String,
+    pub sessions: i64,
+    pub total_hours: f64,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct TopUserRow {
+    pub username: String,
+    pub sessions: i64,
+    pub total_hours: f64,
+    pub last_session: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct DailyTrendRow {
+    pub date: chrono::NaiveDate,
+    pub sessions: i64,
+    pub hours: f64,
+    pub unique_users: i64,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct ProtocolDistributionRow {
+    pub protocol: String,
+    pub sessions: i64,
+    pub total_hours: f64,
+}
+
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct PeakHourRow {
+    pub hour: f64,
+    pub sessions: i64,
+}
+
+/// Scalar aggregates for the admin session-stats dashboard.
+pub async fn fetch_session_stats_scalars(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+) -> Result<SessionStatsScalars, crate::error::AppError> {
+    let row = sqlx::query_as(
+        "WITH cutoff_data AS (
+            SELECT * FROM recordings WHERE started_at >= NOW() - INTERVAL '30 days'
+        )
+        SELECT
+            (SELECT COUNT(*) FROM cutoff_data),
+            (SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM cutoff_data),
+            (SELECT COUNT(DISTINCT user_id) FROM cutoff_data),
+            (SELECT COALESCE(AVG(duration_secs::float) / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
+            (SELECT COALESCE((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_secs))::float / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
+            (SELECT COALESCE(SUM(COALESCE(bytes_from_guacd, 0) + COALESCE(bytes_to_guacd, 0)), 0)::bigint FROM cutoff_data)",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Daily session totals for the last 30 days.
+pub async fn fetch_daily_trend(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+) -> Result<Vec<DailyTrendRow>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT started_at::date AS date,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS hours,
+                COUNT(DISTINCT user_id) AS unique_users
+         FROM recordings
+         WHERE started_at >= NOW() - INTERVAL '30 days'
+         GROUP BY started_at::date
+         ORDER BY date",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Session counts by connection protocol over the last 30 days.
+pub async fn fetch_protocol_distribution(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+) -> Result<Vec<ProtocolDistributionRow>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'unknown') AS protocol,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
+         FROM recordings r
+         WHERE started_at >= NOW() - INTERVAL '30 days'
+         GROUP BY protocol
+         ORDER BY sessions DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Session counts bucketed by hour-of-day over the last 30 days.
+pub async fn fetch_peak_hours(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+) -> Result<Vec<PeakHourRow>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT EXTRACT(HOUR FROM started_at)::float AS hour,
+                COUNT(*) AS sessions
+         FROM recordings
+         WHERE started_at >= NOW() - INTERVAL '30 days'
+         GROUP BY hour
+         ORDER BY hour",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Top-10 connections by session count over the last 30 days.
+pub async fn fetch_top_connections(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+) -> Result<Vec<TopConnectionRow>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT connection_name AS name,
+                COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'rdp') AS protocol,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
+         FROM recordings r
+         WHERE started_at >= NOW() - INTERVAL '30 days'
+         GROUP BY connection_id, connection_name
+         ORDER BY sessions DESC
+         LIMIT 10",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Top-10 users by session count over the last 30 days.
+pub async fn fetch_top_users(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+) -> Result<Vec<TopUserRow>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT username,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours,
+                MAX(started_at) AS last_session
+         FROM recordings
+         WHERE started_at >= NOW() - INTERVAL '30 days'
+         GROUP BY user_id, username
+         ORDER BY sessions DESC
+         LIMIT 10",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+// ── Admin listing / lookup ─────────────────────────────────────────────
+
+/// Paginated recordings list with optional `user_id` / `connection_id` filters.
+pub async fn list_admin(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    user_id: Option<uuid::Uuid>,
+    connection_id: Option<uuid::Uuid>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<crate::db::Recording>, crate::error::AppError> {
+    let rows = sqlx::query_as::<_, crate::db::Recording>(
+        "SELECT * FROM recordings
+         WHERE ($1::uuid IS NULL OR user_id = $1)
+           AND ($2::uuid IS NULL OR connection_id = $2)
+         ORDER BY started_at DESC
+         LIMIT $3 OFFSET $4",
+    )
+    .bind(user_id)
+    .bind(connection_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Fetch a single recording by id, regardless of ownership.
+pub async fn get_by_id(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    id: uuid::Uuid,
+) -> Result<Option<crate::db::Recording>, crate::error::AppError> {
+    let row = sqlx::query_as("SELECT * FROM recordings WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,1519 @@
+import { useState } from "react";
+import Select from "../../components/Select";
+import { getTimezones } from "../../utils/time";
+import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
+
+// ── Helper: Collapsible Section ─────────────────────────────────────
+
+export function Section({
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border border-border rounded-md mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full text-left px-3 py-2 bg-surface-secondary border-0 cursor-pointer font-semibold text-sm text-txt-primary ${open ? "rounded-t-md" : "rounded-md"}`}
+      >
+        {open ? "▾" : "▸"} {title}
+      </button>
+      {open && <div className="p-3">{children}</div>}
+    </div>
+  );
+}
+
+// ── Helper: 2-column grid of form fields ────────────────────────────
+
+export function FieldGrid({ children }: { children: React.ReactNode }) {
+  return <div className="grid grid-cols-2 gap-x-4 gap-y-2">{children}</div>;
+}
+
+// ── RDP Parameter Sections ──────────────────────────────────────────
+
+export function RdpSections({
+  extra: _extra,
+  setExtra: _setExtra,
+  ex,
+  setEx,
+}: {
+  extra: Record<string, string>;
+  setExtra: (v: Record<string, string>) => void;
+  ex: (k: string) => string;
+  setEx: (k: string, v: string) => void;
+}) {
+  return (
+    <>
+      <Section title="Authentication" defaultOpen>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The security mode to use for the RDP connection. 'Any' allows the server to choose. 'NLA' uses Network Level Authentication. 'TLS' uses TLS encryption. 'RDP' uses standard RDP encryption. 'VMConnect' uses Hyper-V's enhanced session mode.">
+              Security Mode
+            </label>
+            <Select
+              value={ex("security") || "any"}
+              onChange={(v) => setEx("security", v)}
+              options={[
+                { value: "any", label: "Any" },
+                { value: "nla", label: "NLA" },
+                { value: "nla-ext", label: "NLA + Extended" },
+                { value: "tls", label: "TLS" },
+                { value: "rdp", label: "RDP Encryption" },
+                { value: "vmconnect", label: "Hyper-V / VMConnect" },
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2 mt-1"
+              title="Ignore the certificate returned by the server, even if it cannot be validated. Useful when connecting to servers with self-signed certificates."
+            >
+              <input
+                type="checkbox"
+                checked={ex("ignore-cert") === "true"}
+                onChange={(e) => setEx("ignore-cert", e.target.checked ? "true" : "false")}
+                className="checkbox"
+              />
+              Ignore server certificate
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Remote Desktop Gateway">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through.">
+              Gateway Hostname
+            </label>
+            <input
+              value={ex("gateway-hostname")}
+              onChange={(e) => setEx("gateway-hostname", e.target.value)}
+              placeholder="gw.example.com"
+              title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The port of the Remote Desktop Gateway. By default, this is 443.">
+              Gateway Port
+            </label>
+            <input
+              type="number"
+              value={ex("gateway-port")}
+              onChange={(e) => setEx("gateway-port", e.target.value)}
+              placeholder="443"
+              title="The port of the Remote Desktop Gateway. By default, this is 443."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The domain to use when authenticating with the Remote Desktop Gateway.">
+              Gateway Domain
+            </label>
+            <input
+              value={ex("gateway-domain")}
+              onChange={(e) => setEx("gateway-domain", e.target.value)}
+              title="The domain to use when authenticating with the Remote Desktop Gateway."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The username to use when authenticating with the Remote Desktop Gateway.">
+              Gateway Username
+            </label>
+            <input
+              value={ex("gateway-username")}
+              onChange={(e) => setEx("gateway-username", e.target.value)}
+              title="The username to use when authenticating with the Remote Desktop Gateway."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The password to use when authenticating with the Remote Desktop Gateway.">
+              Gateway Password
+            </label>
+            <input
+              type="password"
+              value={ex("gateway-password")}
+              onChange={(e) => setEx("gateway-password", e.target.value)}
+              title="The password to use when authenticating with the Remote Desktop Gateway."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Basic Settings">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted.">
+              Keyboard Layout
+            </label>
+            <Select
+              value={ex("server-layout")}
+              onChange={(v) => setEx("server-layout", v)}
+              placeholder="Default (US English)"
+              options={RDP_KEYBOARD_LAYOUTS}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">
+              Timezone
+            </label>
+            <Select
+              value={ex("timezone")}
+              onChange={(v) => setEx("timezone", v)}
+              placeholder="System default"
+              options={[
+                { value: "", label: "System default" },
+                ...getTimezones().map((tz) => ({ value: tz, label: tz })),
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The name of the client to present to the RDP server. Typically not required.">
+              Client Name
+            </label>
+            <input
+              value={ex("client-name")}
+              onChange={(e) => setEx("client-name", e.target.value)}
+              placeholder="Strata"
+              title="The name of the client to present to the RDP server. Typically not required."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions.">
+              Initial Program
+            </label>
+            <input
+              value={ex("initial-program")}
+              onChange={(e) => setEx("initial-program", e.target.value)}
+              title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Connect to the administrator console (Session 0) of the RDP server. This is the physical console session."
+            >
+              <input
+                type="checkbox"
+                checked={ex("console") === "true"}
+                onChange={(e) => setEx("console", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Administrator console
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enable multi-touch support, allowing touch events from the client to be forwarded to the remote desktop."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-touch") === "true"}
+                onChange={(e) => setEx("enable-touch", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable multi-touch
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Display">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The color depth to request from the RDP server, in bits per pixel. If omitted, the color depth is automatically negotiated.">
+              Color Depth
+            </label>
+            <Select
+              value={ex("color-depth")}
+              onChange={(v) => setEx("color-depth", v)}
+              placeholder="Auto"
+              options={[
+                { value: "", label: "Auto" },
+                { value: "8", label: "8-bit (256 colors)" },
+                { value: "16", label: "16-bit (High color)" },
+                { value: "24", label: "24-bit (True color)" },
+                { value: "32", label: "32-bit" },
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The method to use to update the RDP session when the browser window is resized. 'Display Update' sends a display update command. 'Reconnect' disconnects and reconnects with the new resolution.">
+              Resize Method
+            </label>
+            <Select
+              value={ex("resize-method") || "display-update"}
+              onChange={(v) => setEx("resize-method", v)}
+              options={[
+                { value: "display-update", label: "Display Update" },
+                { value: "reconnect", label: "Reconnect" },
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Forces lossless image compression for all graphical updates. Increases quality but uses more bandwidth."
+            >
+              <input
+                type="checkbox"
+                checked={ex("force-lossless") === "true"}
+                onChange={(e) => setEx("force-lossless", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Force lossless compression
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Prevents any user input from being sent to the remote desktop. The session is view-only."
+            >
+              <input
+                type="checkbox"
+                checked={ex("read-only") === "true"}
+                onChange={(e) => setEx("read-only", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Read-only (view only)
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Clipboard">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="Controls how line endings in clipboard content are normalized. 'Preserve' keeps original line endings, 'Unix' converts to LF, 'Windows' converts to CRLF.">
+              Normalize Clipboard
+            </label>
+            <Select
+              value={ex("normalize-clipboard")}
+              onChange={(v) => setEx("normalize-clipboard", v)}
+              placeholder="Default (preserve)"
+              options={[
+                { value: "", label: "Default (preserve)" },
+                { value: "preserve", label: "Preserve" },
+                { value: "unix", label: "Unix (LF)" },
+                { value: "windows", label: "Windows (CRLF)" },
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0" />
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Prevents text from being copied from the remote desktop to the local clipboard."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-copy") === "true"}
+                onChange={(e) => setEx("disable-copy", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable copy from remote
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Prevents text from being pasted from the local clipboard to the remote desktop."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-paste") === "true"}
+                onChange={(e) => setEx("disable-paste", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable paste to remote
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Device Redirection">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables audio playback from the remote desktop. Audio is enabled by default."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-audio") === "true"}
+                onChange={(e) => setEx("disable-audio", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable audio playback
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables audio input (microphone) support, allowing the user's local microphone to be used within the remote desktop session."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-audio-input") === "true"}
+                onChange={(e) => setEx("enable-audio-input", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable audio input (microphone)
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables printer redirection. PDF documents sent to the redirected printer will be available for download via the Guacamole menu."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-printing") === "true"}
+                onChange={(e) => setEx("enable-printing", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable printing
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop.">
+              Printer Name
+            </label>
+            <input
+              value={ex("printer-name")}
+              onChange={(e) => setEx("printer-name", e.target.value)}
+              placeholder="Strata Printer"
+              title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop."
+            />
+          </div>
+        </FieldGrid>
+        <hr className="border-0 border-t border-border my-3" />
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables file transfer over a virtual drive. Files can be transferred to/from the remote desktop using the Guacamole menu."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-drive") === "true"}
+                onChange={(e) => setEx("enable-drive", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable drive / file transfer
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop.">
+              Drive Name
+            </label>
+            <input
+              value={ex("drive-name")}
+              onChange={(e) => setEx("drive-name", e.target.value)}
+              placeholder="Shared Drive"
+              title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The directory on the guacd server in which transferred files should be stored.">
+              Drive Path
+            </label>
+            <input
+              value={ex("drive-path")}
+              onChange={(e) => setEx("drive-path", e.target.value)}
+              placeholder="/var/lib/guacamole/drive"
+              title="The directory on the guacd server in which transferred files should be stored."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Automatically creates the drive path directory if it does not already exist on the guacd server."
+            >
+              <input
+                type="checkbox"
+                checked={ex("create-drive-path") === "true"}
+                onChange={(e) => setEx("create-drive-path", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Auto-create drive path
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables file downloads from the remote desktop to the local browser."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-download") === "true"}
+                onChange={(e) => setEx("disable-download", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable file download
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables file uploads from the local browser to the remote desktop."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-upload") === "true"}
+                onChange={(e) => setEx("disable-upload", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable file upload
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Performance">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables rendering of the desktop wallpaper. By default wallpaper is disabled to reduce bandwidth usage."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-wallpaper") === "true"}
+                onChange={(e) => setEx("enable-wallpaper", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable wallpaper
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables use of theming of windows and controls. By default theming within RDP sessions is disabled."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-theming") === "true"}
+                onChange={(e) => setEx("enable-theming", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable theming
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Renders text with smooth edges (ClearType). By default text is rendered with rough edges to reduce bandwidth."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-font-smoothing") === "true"}
+                onChange={(e) => setEx("enable-font-smoothing", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable font smoothing (ClearType)
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Displays window contents as windows are moved. By default only the window border is drawn while dragging."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-full-window-drag") === "true"}
+                onChange={(e) => setEx("enable-full-window-drag", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable full-window drag
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Allows graphical effects such as transparent windows and shadows (Aero). Disabled by default."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-desktop-composition") === "true"}
+                onChange={(e) =>
+                  setEx("enable-desktop-composition", e.target.checked ? "true" : "")
+                }
+                className="checkbox"
+              />
+              Enable desktop composition (Aero)
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Allows menu open and close animations. Disabled by default."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-menu-animations") === "true"}
+                onChange={(e) => setEx("enable-menu-animations", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable menu animations
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables RDP's built-in bitmap caching. Usually only needed to work around bugs in specific RDP server implementations."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-bitmap-caching") === "true"}
+                onChange={(e) => setEx("disable-bitmap-caching", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable bitmap caching
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables caching of off-screen regions. RDP normally caches regions not currently visible to accelerate retrieval when they come into view."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-offscreen-caching") === "true"}
+                onChange={(e) => setEx("disable-offscreen-caching", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable offscreen caching
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables caching of frequently used symbols and fonts (glyphs). Usually only needed to work around bugs in specific RDP implementations."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-glyph-caching") === "true"}
+                onChange={(e) => setEx("disable-glyph-caching", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable glyph caching
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables the Graphics Pipeline Extension (GFX) which accelerates display rendering. Enabled by default; disable if the server does not support it."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-gfx") === "true"}
+                onChange={(e) => setEx("disable-gfx", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable graphics pipeline (GFX)
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="RemoteApp">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server.">
+              Program
+            </label>
+            <input
+              value={ex("remote-app")}
+              onChange={(e) => setEx("remote-app", e.target.value)}
+              placeholder="||notepad"
+              title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The working directory for the RemoteApp, if any.">
+              Working Directory
+            </label>
+            <input
+              value={ex("remote-app-dir")}
+              onChange={(e) => setEx("remote-app-dir", e.target.value)}
+              placeholder="C:\Users\user"
+              title="The working directory for the RemoteApp, if any."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="Command-line parameters to pass to the RemoteApp.">Parameters</label>
+            <input
+              value={ex("remote-app-args")}
+              onChange={(e) => setEx("remote-app-args", e.target.value)}
+              title="Command-line parameters to pass to the RemoteApp."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Load Balancing / Preconnection">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm.">
+              Load Balance Info
+            </label>
+            <input
+              value={ex("load-balance-info")}
+              onChange={(e) => setEx("load-balance-info", e.target.value)}
+              title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs.">
+              Preconnection ID
+            </label>
+            <input
+              type="number"
+              value={ex("preconnection-id")}
+              onChange={(e) => setEx("preconnection-id", e.target.value)}
+              title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs.">
+              Preconnection BLOB
+            </label>
+            <input
+              value={ex("preconnection-blob")}
+              onChange={(e) => setEx("preconnection-blob", e.target.value)}
+              title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">
+          Recording path and filename are managed automatically by the system. Use the Recordings
+          tab to enable/disable recording globally.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Exclude graphical output from the recording, producing a recording that contains only user input events."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-exclude-output") === "true"}
+                onChange={(e) => setEx("recording-exclude-output", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Exclude graphical output
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Exclude user mouse events from the recording, producing a recording without a visible mouse cursor."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-exclude-mouse") === "true"}
+                onChange={(e) => setEx("recording-exclude-mouse", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Exclude mouse events
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Exclude user touch events from the recording."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-exclude-touch") === "true"}
+                onChange={(e) => setEx("recording-exclude-touch", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Exclude touch events
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-include-keys") === "true"}
+                onChange={(e) => setEx("recording-include-keys", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Include key events
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="SFTP">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables SFTP-based file transfer. Files can be transferred to/from the RDP server using the Guacamole menu."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-sftp") === "true"}
+                onChange={(e) => setEx("enable-sftp", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable SFTP file transfer
+            </label>
+          </div>
+          <div className="form-group !mb-0" />
+          <div className="form-group !mb-0">
+            <label title="The hostname of the SSH/SFTP server to use for file transfer. If omitted, the RDP server hostname is used.">
+              SFTP Hostname
+            </label>
+            <input
+              value={ex("sftp-hostname")}
+              onChange={(e) => setEx("sftp-hostname", e.target.value)}
+              placeholder="Same as RDP host"
+              title="The hostname of the SSH/SFTP server to use for file transfer. If omitted, the RDP server hostname is used."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The port of the SSH/SFTP server. Defaults to 22.">SFTP Port</label>
+            <input
+              type="number"
+              value={ex("sftp-port")}
+              onChange={(e) => setEx("sftp-port", e.target.value)}
+              placeholder="22"
+              title="The port of the SSH/SFTP server. Defaults to 22."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The username to authenticate as when connecting to the SFTP server.">
+              SFTP Username
+            </label>
+            <input
+              value={ex("sftp-username")}
+              onChange={(e) => setEx("sftp-username", e.target.value)}
+              title="The username to authenticate as when connecting to the SFTP server."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The password to use when authenticating with the SFTP server.">
+              SFTP Password
+            </label>
+            <input
+              type="password"
+              value={ex("sftp-password")}
+              onChange={(e) => setEx("sftp-password", e.target.value)}
+              title="The password to use when authenticating with the SFTP server."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The entire contents of the SSH private key to use when authenticating with the SFTP server, in OpenSSH format.">
+              SFTP Private Key
+            </label>
+            <textarea
+              value={ex("sftp-private-key")}
+              onChange={(e) => setEx("sftp-private-key", e.target.value)}
+              rows={3}
+              className="font-mono text-[0.8rem]"
+              title="The entire contents of the SSH private key to use when authenticating with the SFTP server, in OpenSSH format."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The passphrase to use to decrypt the SSH private key, if it is encrypted.">
+              SFTP Passphrase
+            </label>
+            <input
+              type="password"
+              value={ex("sftp-passphrase")}
+              onChange={(e) => setEx("sftp-passphrase", e.target.value)}
+              title="The passphrase to use to decrypt the SSH private key, if it is encrypted."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The default location for file uploads. If not specified, the user's home directory will be used.">
+              Default Upload Directory
+            </label>
+            <input
+              value={ex("sftp-directory")}
+              onChange={(e) => setEx("sftp-directory", e.target.value)}
+              title="The default location for file uploads. If not specified, the user's home directory will be used."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The directory to expose to connected users via SFTP. If omitted, '/' will be used by default.">
+              SFTP Root Directory
+            </label>
+            <input
+              value={ex("sftp-root-directory")}
+              onChange={(e) => setEx("sftp-root-directory", e.target.value)}
+              placeholder="/"
+              title="The directory to expose to connected users via SFTP. If omitted, '/' will be used by default."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Wake-on-LAN">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Send a Wake-on-LAN (WoL) magic packet to the remote host before attempting to connect. Useful for waking machines that are powered off."
+            >
+              <input
+                type="checkbox"
+                checked={ex("wol-send-packet") === "true"}
+                onChange={(e) => setEx("wol-send-packet", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Send WoL packet before connecting
+            </label>
+          </div>
+          <div className="form-group !mb-0" />
+          <div className="form-group !mb-0">
+            <label title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF.">
+              MAC Address
+            </label>
+            <input
+              value={ex("wol-mac-addr")}
+              onChange={(e) => setEx("wol-mac-addr", e.target.value)}
+              placeholder="AA:BB:CC:DD:EE:FF"
+              title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The broadcast address to which the WoL magic packet should be sent. Defaults to 255.255.255.255 (local broadcast).">
+              Broadcast Address
+            </label>
+            <input
+              value={ex("wol-broadcast-addr")}
+              onChange={(e) => setEx("wol-broadcast-addr", e.target.value)}
+              placeholder="255.255.255.255"
+              title="The broadcast address to which the WoL magic packet should be sent. Defaults to 255.255.255.255 (local broadcast)."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The UDP port to use when sending the WoL magic packet. Defaults to 9.">
+              UDP Port
+            </label>
+            <input
+              type="number"
+              value={ex("wol-udp-port")}
+              onChange={(e) => setEx("wol-udp-port", e.target.value)}
+              placeholder="9"
+              title="The UDP port to use when sending the WoL magic packet. Defaults to 9."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The number of seconds to wait after sending the WoL magic packet before attempting the connection.">
+              Wait Time (seconds)
+            </label>
+            <input
+              type="number"
+              value={ex("wol-wait-time")}
+              onChange={(e) => setEx("wol-wait-time", e.target.value)}
+              placeholder="0"
+              title="The number of seconds to wait after sending the WoL magic packet before attempting the connection."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Kerberos / NLA">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The authentication package to use for Network Level Authentication (NLA).">
+              Auth Package
+            </label>
+            <Select
+              value={ex("auth-pkg")}
+              onChange={(v) => setEx("auth-pkg", v)}
+              placeholder="Default (auto-detect)"
+              options={[
+                { value: "", label: "Default (auto-detect)" },
+                { value: "kerberos", label: "Kerberos only" },
+                { value: "ntlm", label: "NTLM only" },
+              ]}
+            />
+          </div>
+          {ex("auth-pkg") === "kerberos" && (
+            <>
+              <div className="form-group !mb-0">
+                <label title="The URL of the Kerberos Key Distribution Center (KDC) to use for obtaining Kerberos tickets. Only needed if not using the global Kerberos realm configuration.">
+                  KDC URL
+                </label>
+                <input
+                  value={ex("kdc-url")}
+                  onChange={(e) => setEx("kdc-url", e.target.value)}
+                  placeholder="kdc.example.com"
+                  title="The URL of the Kerberos Key Distribution Center (KDC). Leave blank to use the KDC from the matching Kerberos realm."
+                />
+              </div>
+              <div className="form-group !mb-0">
+                <label title="The file path for the Kerberos credential cache. The cache stores obtained tickets for reuse.">
+                  Kerberos Cache Path
+                </label>
+                <input
+                  value={ex("kerberos-cache")}
+                  onChange={(e) => setEx("kerberos-cache", e.target.value)}
+                  placeholder="/tmp/krb5cc_guacd"
+                  title="The file path for the Kerberos credential cache. Leave blank for default."
+                />
+              </div>
+            </>
+          )}
+        </FieldGrid>
+        {(!ex("auth-pkg") || ex("auth-pkg") === "") && (
+          <p className="text-xs text-zinc-400 mt-2">
+            When set to <strong>Default (auto-detect)</strong>, the client and server negotiate the
+            best authentication method via SPNEGO. Realms configured in the{" "}
+            <strong>Kerberos</strong> tab are written to the shared{" "}
+            <code className="text-zinc-300">krb5.conf</code> which guacd uses automatically —
+            Kerberos-only servers will use Kerberos; servers that support NTLM will negotiate
+            normally.
+          </p>
+        )}
+      </Section>
+    </>
+  );
+}
+
+// ── SSH Parameter Sections ──────────────────────────────────────────
+
+export function SshSections({
+  ex,
+  setEx,
+}: {
+  ex: (k: string) => string;
+  setEx: (k: string, v: string) => void;
+}) {
+  return (
+    <>
+      <Section title="Authentication" defaultOpen>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The entire contents of the SSH private key to use for public key authentication. Must be in OpenSSH format.">
+              Private Key
+            </label>
+            <textarea
+              value={ex("private-key")}
+              onChange={(e) => setEx("private-key", e.target.value)}
+              rows={3}
+              className="font-mono text-[0.8rem]"
+              title="The entire contents of the SSH private key to use for public key authentication. Must be in OpenSSH format."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The passphrase to use to decrypt the SSH private key, if it is encrypted.">
+              Passphrase
+            </label>
+            <input
+              type="password"
+              value={ex("passphrase")}
+              onChange={(e) => setEx("passphrase", e.target.value)}
+              title="The passphrase to use to decrypt the SSH private key, if it is encrypted."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The known public key of the SSH server, in OpenSSH format. If provided, the server's identity will be verified against this key.">
+              Host Key
+            </label>
+            <input
+              value={ex("host-key")}
+              onChange={(e) => setEx("host-key", e.target.value)}
+              placeholder="Server public key (optional)"
+              title="The known public key of the SSH server, in OpenSSH format. If provided, the server's identity will be verified against this key."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Display">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The color scheme to use for the terminal display.">Color Scheme</label>
+            <Select
+              value={ex("color-scheme")}
+              onChange={(v) => setEx("color-scheme", v)}
+              placeholder="Default (black on white)"
+              options={[
+                { value: "", label: "Default (black on white)" },
+                { value: "green-black", label: "Green on black" },
+                { value: "white-black", label: "White on black" },
+                { value: "gray-black", label: "Gray on black" },
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The name of the font to use in the terminal. This must be a font available on the guacd server.">
+              Font Name
+            </label>
+            <input
+              value={ex("font-name")}
+              onChange={(e) => setEx("font-name", e.target.value)}
+              placeholder="monospace"
+              title="The name of the font to use in the terminal. This must be a font available on the guacd server."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The size of the font to use in the terminal, in points.">Font Size</label>
+            <input
+              type="number"
+              value={ex("font-size")}
+              onChange={(e) => setEx("font-size", e.target.value)}
+              placeholder="12"
+              title="The size of the font to use in the terminal, in points."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The maximum number of lines of terminal scrollback to allow. Each line requires additional memory. Defaults to 1000.">
+              Scrollback (lines)
+            </label>
+            <input
+              type="number"
+              value={ex("scrollback")}
+              onChange={(e) => setEx("scrollback", e.target.value)}
+              placeholder="1000"
+              title="The maximum number of lines of terminal scrollback to allow. Each line requires additional memory. Defaults to 1000."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Prevents any user input from being sent to the SSH server. The session is view-only."
+            >
+              <input
+                type="checkbox"
+                checked={ex("read-only") === "true"}
+                onChange={(e) => setEx("read-only", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Read-only
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Terminal Behavior">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The command to execute on the remote server upon connecting, instead of the default shell.">
+              Command
+            </label>
+            <input
+              value={ex("command")}
+              onChange={(e) => setEx("command", e.target.value)}
+              placeholder="Execute on connect"
+              title="The command to execute on the remote server upon connecting, instead of the default shell."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The locale to use for the SSH session (e.g. en_US.UTF-8). Controls character encoding.">
+              Locale
+            </label>
+            <input
+              value={ex("locale")}
+              onChange={(e) => setEx("locale", e.target.value)}
+              placeholder="en_US.UTF-8"
+              title="The locale to use for the SSH session (e.g. en_US.UTF-8). Controls character encoding."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The timezone to pass to the SSH server via the TZ environment variable, in IANA format (e.g. America/New_York).">
+              Timezone
+            </label>
+            <Select
+              value={ex("timezone")}
+              onChange={(v) => setEx("timezone", v)}
+              placeholder="System default"
+              options={[
+                { value: "", label: "System default" },
+                ...getTimezones().map((tz) => ({ value: tz, label: tz })),
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The terminal emulator type string to send to the SSH server (e.g. xterm-256color, vt100). This determines which escape sequences are supported.">
+              Terminal Type
+            </label>
+            <input
+              value={ex("terminal-type")}
+              onChange={(e) => setEx("terminal-type", e.target.value)}
+              placeholder="xterm-256color"
+              title="The terminal emulator type string to send to the SSH server (e.g. xterm-256color, vt100). This determines which escape sequences are supported."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The interval in seconds at which to send keepalive packets to the SSH server. Set to 0 to disable. Useful for preventing idle timeouts.">
+              Server Alive Interval
+            </label>
+            <input
+              type="number"
+              value={ex("server-alive-interval")}
+              onChange={(e) => setEx("server-alive-interval", e.target.value)}
+              placeholder="0"
+              title="The interval in seconds at which to send keepalive packets to the SSH server. Set to 0 to disable. Useful for preventing idle timeouts."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="SFTP">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Enables SFTP file transfer within the SSH connection. Files can be transferred using the Guacamole menu."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-sftp") === "true"}
+                onChange={(e) => setEx("enable-sftp", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Enable SFTP
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The root directory to expose to connected users via SFTP. If omitted, '/' will be used.">
+              SFTP Root Directory
+            </label>
+            <input
+              value={ex("sftp-root-directory")}
+              onChange={(e) => setEx("sftp-root-directory", e.target.value)}
+              placeholder="/"
+              title="The root directory to expose to connected users via SFTP. If omitted, '/' will be used."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables file downloads from the remote server to the local browser."
+            >
+              <input
+                type="checkbox"
+                checked={ex("sftp-disable-download") === "true"}
+                onChange={(e) => setEx("sftp-disable-download", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable file download
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Disables file uploads from the local browser to the remote server."
+            >
+              <input
+                type="checkbox"
+                checked={ex("sftp-disable-upload") === "true"}
+                onChange={(e) => setEx("sftp-disable-upload", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable file upload
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">
+          Recording path and filename are managed automatically by the system. Use the Recordings
+          tab to enable/disable recording globally.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-include-keys") === "true"}
+                onChange={(e) => setEx("recording-include-keys", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Include key events
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Wake-on-LAN">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Send a Wake-on-LAN (WoL) magic packet to the remote host before attempting to connect."
+            >
+              <input
+                type="checkbox"
+                checked={ex("wol-send-packet") === "true"}
+                onChange={(e) => setEx("wol-send-packet", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Send WoL packet
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF.">
+              MAC Address
+            </label>
+            <input
+              value={ex("wol-mac-addr")}
+              onChange={(e) => setEx("wol-mac-addr", e.target.value)}
+              placeholder="AA:BB:CC:DD:EE:FF"
+              title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+    </>
+  );
+}
+
+// ── VNC Parameter Sections ──────────────────────────────────────────
+
+export function VncSections({
+  ex,
+  setEx,
+}: {
+  ex: (k: string) => string;
+  setEx: (k: string, v: string) => void;
+}) {
+  return (
+    <>
+      <Section title="Authentication" defaultOpen>
+        <FieldGrid>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label title="The password to use when connecting to the VNC server.">Password</label>
+            <input
+              type="password"
+              value={ex("password")}
+              onChange={(e) => setEx("password", e.target.value)}
+              title="The password to use when connecting to the VNC server."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Display">
+        <FieldGrid>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label title="The color depth to request from the VNC server, in bits per pixel.">
+              Color Depth
+            </label>
+            <Select
+              value={ex("color-depth")}
+              onChange={(v) => setEx("color-depth", v)}
+              placeholder="Auto"
+              options={[
+                { value: "", label: "Auto" },
+                { value: "8", label: "8-bit" },
+                { value: "16", label: "16-bit" },
+                { value: "24", label: "24-bit" },
+                { value: "32", label: "32-bit" },
+              ]}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label title="Controls how the mouse cursor is displayed. 'Local' renders the cursor on the client for performance. 'Remote' shows the VNC server's cursor.">
+              Cursor
+            </label>
+            <Select
+              value={ex("cursor")}
+              onChange={(v) => setEx("cursor", v)}
+              placeholder="Local"
+              options={[
+                { value: "", label: "Local" },
+                { value: "remote", label: "Remote" },
+              ]}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>&nbsp;</label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+              title="Prevents any user input from being sent to the VNC server. The session is view-only."
+            >
+              <input
+                type="checkbox"
+                checked={ex("read-only") === "true"}
+                onChange={(e) => setEx("read-only", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Read-only
+            </label>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>&nbsp;</label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+              title="Swap the red and blue color components in the received image data. May be needed for certain VNC servers that report colors incorrectly."
+            >
+              <input
+                type="checkbox"
+                checked={ex("swap-red-blue") === "true"}
+                onChange={(e) => setEx("swap-red-blue", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Swap red/blue
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Clipboard">
+        <FieldGrid>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>&nbsp;</label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+              title="Prevents text from being copied from the remote desktop to the local clipboard."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-copy") === "true"}
+                onChange={(e) => setEx("disable-copy", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable copy from remote
+            </label>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>&nbsp;</label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+              title="Prevents text from being pasted from the local clipboard to the remote desktop."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-paste") === "true"}
+                onChange={(e) => setEx("disable-paste", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable paste to remote
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">
+          Recording path and filename are managed automatically by the system. Use the Recordings
+          tab to enable/disable recording globally.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Exclude graphical output from the recording, producing a recording that contains only user input events."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-exclude-output") === "true"}
+                onChange={(e) => setEx("recording-exclude-output", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Exclude graphical output
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Exclude user mouse events from the recording, producing a recording without a visible mouse cursor."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-exclude-mouse") === "true"}
+                onChange={(e) => setEx("recording-exclude-mouse", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Exclude mouse events
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Exclude user touch events from the recording."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-exclude-touch") === "true"}
+                onChange={(e) => setEx("recording-exclude-touch", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Exclude touch events
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-include-keys") === "true"}
+                onChange={(e) => setEx("recording-include-keys", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Include key events
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+    </>
+  );
+}

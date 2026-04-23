@@ -67,29 +67,13 @@ pub async fn create_share(
     }
 
     // Verify user has access to this connection
-    let has_access: bool = if user.can_access_all_connections() {
-        // Users with connection management permissions can share any connection
-        sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)",
-        )
-        .bind(connection_id)
-        .fetch_one(&db.pool)
-        .await?
-    } else {
-        // Non-admins must have a role assignment to the connection
-        sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM connections c
-                JOIN role_connections rc ON rc.connection_id = c.id
-                JOIN users u ON u.role_id = rc.role_id
-                WHERE c.id = $1 AND u.id = $2 AND c.soft_deleted_at IS NULL
-            )",
-        )
-        .bind(connection_id)
-        .bind(user.id)
-        .fetch_one(&db.pool)
-        .await?
-    };
+    let has_access = crate::services::shares::connection_visible_to_user(
+        &db.pool,
+        connection_id,
+        user.id,
+        user.can_access_all_connections(),
+    )
+    .await?;
     if !has_access {
         return Err(AppError::NotFound("Connection not found".into()));
     }
@@ -103,17 +87,15 @@ pub async fn create_share(
     let read_only = mode == "view";
 
     // Insert the share record with mandatory expiry
-    sqlx::query(
-        "INSERT INTO connection_shares (connection_id, owner_user_id, share_token, read_only, mode, expires_at)
-         VALUES ($1, $2, $3, $4, $5, now() + make_interval(hours => $6))",
+    crate::services::shares::insert_share(
+        &db.pool,
+        connection_id,
+        user.id,
+        &share_token,
+        read_only,
+        &mode,
+        DEFAULT_SHARE_EXPIRY_HOURS,
     )
-    .bind(connection_id)
-    .bind(user.id)
-    .bind(&share_token)
-    .bind(read_only)
-    .bind(&mode)
-    .bind(DEFAULT_SHARE_EXPIRY_HOURS)
-    .execute(&db.pool)
     .await?;
 
     crate::services::audit::log(
@@ -147,15 +129,9 @@ pub async fn revoke_share(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
-    let result = sqlx::query(
-        "UPDATE connection_shares SET revoked = true WHERE id = $1 AND owner_user_id = $2 AND NOT revoked",
-    )
-    .bind(share_id)
-    .bind(user.id)
-    .execute(&db.pool)
-    .await?;
+    let revoked = crate::services::shares::revoke_owned(&db.pool, share_id, user.id).await?;
 
-    if result.rows_affected() == 0 {
+    if !revoked {
         return Err(AppError::NotFound(
             "Share not found or already revoked".into(),
         ));
@@ -200,16 +176,7 @@ pub async fn ws_shared_tunnel(
     };
 
     // Look up the share and verify it's valid
-    let share: Option<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, connection_id, owner_user_id, mode
-         FROM connection_shares
-         WHERE share_token = $1
-           AND NOT revoked
-           AND (expires_at IS NULL OR expires_at > now())",
-    )
-    .bind(&share_token)
-    .fetch_optional(&db.pool)
-    .await?;
+    let share = crate::services::shares::find_active_by_token(&db.pool, &share_token).await?;
 
     let (_share_id, connection_id, owner_user_id, mode) =
         share.ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;

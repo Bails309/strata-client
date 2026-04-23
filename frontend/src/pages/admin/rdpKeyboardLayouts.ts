@@ -1,0 +1,25 @@
+// Shared RDP keyboard layout options used by the RDP connection form and the
+// AD Sync connection defaults section.
+export const RDP_KEYBOARD_LAYOUTS: { value: string; label: string }[] = [
+  { value: "", label: "Default (US English)" },
+  { value: "en-us-qwerty", label: "US English (Qwerty)" },
+  { value: "en-gb-qwerty", label: "UK English (Qwerty)" },
+  { value: "de-de-qwertz", label: "German (Qwertz)" },
+  { value: "de-ch-qwertz", label: "Swiss German (Qwertz)" },
+  { value: "fr-fr-azerty", label: "French (Azerty)" },
+  { value: "fr-ch-qwertz", label: "Swiss French (Qwertz)" },
+  { value: "fr-be-azerty", label: "Belgian French (Azerty)" },
+  { value: "it-it-qwerty", label: "Italian (Qwerty)" },
+  { value: "es-es-qwerty", label: "Spanish (Qwerty)" },
+  { value: "es-latam-qwerty", label: "Latin American (Qwerty)" },
+  { value: "pt-br-qwerty", label: "Brazilian Portuguese (Qwerty)" },
+  { value: "pt-pt-qwerty", label: "Portuguese (Qwerty)" },
+  { value: "sv-se-qwerty", label: "Swedish (Qwerty)" },
+  { value: "da-dk-qwerty", label: "Danish (Qwerty)" },
+  { value: "no-no-qwerty", label: "Norwegian (Qwerty)" },
+  { value: "fi-fi-qwerty", label: "Finnish (Qwerty)" },
+  { value: "hu-hu-qwertz", label: "Hungarian (Qwertz)" },
+  { value: "ja-jp-qwerty", label: "Japanese (Qwerty)" },
+  { value: "tr-tr-qwerty", label: "Turkish-Q (Qwerty)" },
+  { value: "failsafe", label: "Failsafe (Unicode events)" },
+];

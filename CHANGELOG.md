@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.1] — 2026-04-23
+
+### Changed
+- **`AdminSettings.tsx` refactor complete (W4-4)**: The historical 8,402-line monolith has been broken into one dedicated module per tab under `frontend/src/pages/admin/`. `AdminSettings.tsx` is now a thin **258-line dispatcher** that loads settings and renders the selected tab:
+  - `SecurityTab`, `NetworkTab`, `DisplayTab`, `SsoTab`, `KerberosTab`, `RecordingsTab`, `VaultTab`, `TagsTab`, `HealthTab` (with co-located `GuacdCapacityGauge`), `SessionsTab`, `PasswordsTab` (with co-located `parseDN`), `AdSyncTab`, `AccessTab`.
+  - Shared form helpers (`Section`, `FieldGrid`, `RdpSections`, `SshSections`, `VncSections`) moved to `frontend/src/pages/admin/connectionForm.tsx`.
+  - Shared RDP keyboard layout list moved to `frontend/src/pages/admin/rdpKeyboardLayouts.ts`.
+  - Net reduction across the admin surface: **−8,144 lines** from the parent; zero behavioural changes; all 1,162 frontend tests and backend test suites pass green on every extraction step.
+- **Documentation refresh**: Architecture doc now reflects the admin sub-tab split. Runbook index statuses flipped from "Planned" to "Active". PR template, `docs/runbooks/README.md`, and ADR-0001 no longer reference the retired compliance tracker.
+
+### Removed
+- **`docs/compliance-tracker.md`**: Retired after reaching 62 / 62 items closed. Every wave (W0 – W5) is complete; the ADRs and runbooks that grew out of the tracker remain under `docs/adr/` and `docs/runbooks/` as the permanent record. Historical mentions in `CHANGELOG.md` and `WHATSNEW.md` are preserved as point-in-time records.
+
 ## [0.23.0] — 2026-04-22
 
 ### Changed

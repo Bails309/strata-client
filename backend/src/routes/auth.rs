@@ -236,24 +236,6 @@ fn get_base_url(headers: &HeaderMap) -> String {
     format!("{}://{}", protocol, host)
 }
 
-#[derive(sqlx::FromRow)]
-struct UserAuthRow {
-    id: Uuid,
-    username: String,
-    password_hash: Option<String>,
-    #[sqlx(rename = "name")]
-    role: String,
-    can_manage_system: bool,
-    can_manage_users: bool,
-    can_manage_connections: bool,
-    can_view_audit_logs: bool,
-    can_create_users: bool,
-    can_create_user_groups: bool,
-    can_create_connections: bool,
-    can_create_connection_folders: bool,
-    can_create_sharing_profiles: bool,
-}
-
 /// POST /api/auth/login – authenticate with local username/password.
 /// Returns a signed JWT for subsequent API calls.
 pub async fn login(
@@ -332,18 +314,12 @@ pub async fn login(
             .to_string()
     });
 
-    let row: Option<UserAuthRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.password_hash, r.name,
-                r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
-                r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles
-         FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE (LOWER(u.username) = LOWER($1) OR LOWER(u.email) = LOWER($1)) AND u.auth_type = 'local' AND u.deleted_at IS NULL",
-    )
-    .bind(&body.username)
-    .fetch_optional(&db.pool)
-    .await
-    .map_err(AppError::Database)?;
+    let row = crate::services::users::find_local_by_username_or_email(&db.pool, &body.username)
+        .await
+        .map_err(|e| match e {
+            AppError::Database(err) => AppError::Database(err),
+            other => other,
+        })?;
 
     let user = row.ok_or_else(|| {
         // Perform a dummy Argon2 verification so the response time is
@@ -424,15 +400,14 @@ pub async fn login(
 
     // Record the session for per-user tracking
     let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ACCESS_TOKEN_TTL as i64);
-    let _ = sqlx::query(
-        "INSERT INTO active_sessions (jti, user_id, expires_at, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5)",
+    let _ = crate::services::active_sessions::record(
+        &db.pool,
+        access_jti,
+        user.id,
+        expires_at,
+        &client_ip,
+        &user_agent,
     )
-    .bind(access_jti)
-    .bind(user.id)
-    .bind(expires_at)
-    .bind(&client_ip)
-    .bind(&user_agent)
-    .execute(&db.pool)
     .await;
 
     audit::log(
@@ -651,13 +626,12 @@ pub async fn change_password(
     };
 
     // Fetch current password hash
-    let hash: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND auth_type = 'local' AND deleted_at IS NULL")
-            .bind(user.id)
-            .fetch_optional(&db.pool)
-            .await
-            .map_err(AppError::Database)?
-            .flatten();
+    let hash = crate::services::users::local_password_hash(&db.pool, user.id)
+        .await
+        .map_err(|e| match e {
+            AppError::Database(err) => AppError::Database(err),
+            other => other,
+        })?;
 
     let hash = hash.ok_or_else(|| {
         AppError::Validation("Password change is only available for local accounts".into())
@@ -680,12 +654,12 @@ pub async fn change_password(
         .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
         .to_string();
 
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-        .bind(&new_hash)
-        .bind(user.id)
-        .execute(&db.pool)
+    crate::services::users::set_password_hash(&db.pool, user.id, &new_hash)
         .await
-        .map_err(AppError::Database)?;
+        .map_err(|e| match e {
+            AppError::Database(err) => AppError::Database(err),
+            other => other,
+        })?;
 
     // Revoke the current token so the user must re-authenticate
     let token = headers
@@ -701,10 +675,7 @@ pub async fn change_password(
         crate::services::token_revocation::revoke(token, exp);
         crate::services::token_revocation::persist_revocation(&db.pool, token, exp).await;
     }
-    let _ = sqlx::query("DELETE FROM active_sessions WHERE user_id = $1")
-        .bind(user.id)
-        .execute(&db.pool)
-        .await;
+    let _ = crate::services::active_sessions::delete_for_user(&db.pool, user.id).await;
 
     audit::log(
         &db.pool,
@@ -810,40 +781,12 @@ pub async fn check_auth(
         None => return not_auth(),
     };
 
-    #[derive(sqlx::FromRow)]
-    struct UserRow {
-        id: uuid::Uuid,
-        username: String,
-        full_name: Option<String>,
-        #[sqlx(rename = "name")]
-        role: String,
-        can_manage_system: bool,
-        can_manage_users: bool,
-        can_manage_connections: bool,
-        can_view_audit_logs: bool,
-        can_create_users: bool,
-        can_create_user_groups: bool,
-        can_create_connections: bool,
-        can_create_connection_folders: bool,
-        can_create_sharing_profiles: bool,
-        can_view_sessions: bool,
-        terms_accepted_at: Option<chrono::DateTime<chrono::Utc>>,
-        terms_accepted_version: Option<i32>,
-    }
+    #[allow(unused)]
+    use crate::services::users::AuthStatusRow as UserRow;
 
-    let row: Option<UserRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.full_name, r.name,
-                r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
-                r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions,
-                u.terms_accepted_at, u.terms_accepted_version
-         FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.id = $1 AND u.deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&db.pool)
-    .await
-    .unwrap_or(None);
+    let row: Option<UserRow> = crate::services::users::find_auth_status(&db.pool, user_id)
+        .await
+        .unwrap_or(None);
 
     let user = match row {
         Some(u) => u,
@@ -875,13 +818,9 @@ pub async fn check_auth(
     };
 
     // Is the user an approver?
-    let is_approver: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM approval_role_assignments WHERE user_id = $1)",
-    )
-    .bind(user_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
+    let is_approver = crate::services::users::is_approver(&db.pool, user_id)
+        .await
+        .unwrap_or(false);
 
     Json(json!({
         "authenticated": true,
@@ -968,15 +907,12 @@ pub async fn refresh(
 
     // Re-read username and role from the database to pick up any changes
     // since the refresh token was issued (e.g. role change, rename).
-    let user_row: Option<(String, String)> = sqlx::query_as(
-        "SELECT u.username, r.name AS role_name
-         FROM users u JOIN roles r ON r.id = u.role_id
-         WHERE u.id = $1 AND u.deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&db.pool)
-    .await
-    .map_err(AppError::Database)?;
+    let user_row = crate::services::users::username_and_role(&db.pool, user_id)
+        .await
+        .map_err(|e| match e {
+            AppError::Database(err) => AppError::Database(err),
+            other => other,
+        })?;
 
     let (username, role) =
         user_row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
@@ -1157,25 +1093,14 @@ pub async fn sso_callback(
     })?;
 
     // Find user by email. We match by email to link pre-created SSO users.
-    #[derive(sqlx::FromRow)]
-    struct SsoUserRow {
-        id: Uuid,
-        username: String,
-        role_name: String,
-        sub: Option<String>,
-        #[allow(dead_code)]
-        full_name: Option<String>,
-    }
+    use crate::services::users::SsoUserRow;
 
-    let row: Option<SsoUserRow> = sqlx::query_as(
-        "SELECT u.id, u.username, r.name as role_name, u.sub, u.full_name
-         FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE LOWER(u.email) = LOWER($1) AND u.deleted_at IS NULL",
-    )
-    .bind(user_email)
-    .fetch_optional(&db.pool)
-    .await
-    .map_err(AppError::Database)?;
+    let row: Option<SsoUserRow> = crate::services::users::find_sso_by_email(&db.pool, user_email)
+        .await
+        .map_err(|e| match e {
+            AppError::Database(err) => AppError::Database(err),
+            other => other,
+        })?;
 
     let row = row.ok_or_else(|| {
         AppError::Auth(format!("No Strata user found for email {}. Registration via SSO is not enabled. Please contact your administrator.", user_email))
@@ -1190,12 +1115,13 @@ pub async fn sso_callback(
         }
     } else {
         // Link this user to the OIDC subject on first login
-        sqlx::query("UPDATE users SET sub = $1, full_name = COALESCE(full_name, $2) WHERE id = $3")
-            .bind(&claims.sub)
-            .bind(&claims.name)
-            .bind(row.id)
-            .execute(&db.pool)
-            .await?;
+        crate::services::users::link_sso_subject(
+            &db.pool,
+            row.id,
+            &claims.sub,
+            claims.name.as_deref(),
+        )
+        .await?;
     }
 
     // Success — generate access + refresh tokens

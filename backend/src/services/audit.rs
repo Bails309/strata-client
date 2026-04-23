@@ -1,6 +1,43 @@
+use crate::error::AppError;
 use sha2::{Digest, Sha256};
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;
+
+/// Paginated audit-log row as returned to admin clients. Joins the author's
+/// username and any connection referenced via `details->>'connection_id'`.
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct AuditLogRow {
+    pub id: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub user_id: Option<Uuid>,
+    pub username: Option<String>,
+    pub action_type: String,
+    pub details: serde_json::Value,
+    pub current_hash: String,
+    pub connection_name: Option<String>,
+}
+
+/// Fetch audit rows in reverse-chronological order (newest first), joined
+/// with `users` and `connections` for display.
+pub async fn list_paginated(
+    pool: &Pool<Postgres>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuditLogRow>, AppError> {
+    let rows = sqlx::query_as(
+        "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash,
+                c.name AS connection_name
+         FROM audit_logs a
+         LEFT JOIN users u ON u.id = a.user_id
+         LEFT JOIN connections c ON c.id = (a.details->>'connection_id')::uuid
+         ORDER BY a.id DESC LIMIT $1 OFFSET $2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
 
 /// Compute the chain hash: SHA-256(previous_hash || action_type || details).
 pub fn compute_chain_hash(previous_hash: &str, action_type: &str, details: &str) -> String {

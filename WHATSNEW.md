@@ -1,4 +1,51 @@
-# What's New in v0.22.0
+# What's New in v0.23.1
+
+> **Maintenance release — zero user-facing changes.** v0.23.1 closes out the final front-end complexity item and retires the compliance tracker that has guided the last six waves of work.
+
+---
+
+## 🧱 `AdminSettings.tsx` is no longer a monolith
+
+The Admin Settings page used to live in a single **8,402-line** React file. That file has been broken up into one module per tab under `frontend/src/pages/admin/`:
+
+| Tab | Module |
+|---|---|
+| Health · Display · Network · SSO · Kerberos · Recordings · Vault · Access · Tags · AD Sync · Password Mgmt · Sessions · Security | one file each under `frontend/src/pages/admin/` |
+| Connection-form helpers (`Section`, `FieldGrid`, `RdpSections`, `SshSections`, `VncSections`) | `admin/connectionForm.tsx` |
+| Shared RDP keyboard layouts | `admin/rdpKeyboardLayouts.ts` |
+
+`AdminSettings.tsx` itself is now a **258-line** dispatcher that loads settings once and renders the currently-selected tab. Net reduction across the admin surface: **−8,144 lines**. No behavioural changes; **1,162 / 1,162 frontend tests pass** and the backend suite is green.
+
+### Why you care (even though nothing looks different)
+
+- **Faster reviews**: each tab is now reviewed and tested in isolation.
+- **Smaller edits**: touching the Vault tab no longer churns the whole file.
+- **Lower recompile cost**: Vite HMR only reloads the affected tab.
+- **Easier onboarding**: the admin surface is now self-documenting via its directory layout.
+
+---
+
+## 🗂️ Compliance tracker retired — 62 / 62 items closed
+
+`docs/compliance-tracker.md` has been deleted. Every item across W0 – W5 is complete, and the artefacts that the tracker produced live on in their proper homes:
+
+- **Seven ADRs** under `docs/adr/` (rate limiting, CSRF, feature flags, guacd model, JWT/refresh, Vault envelope, emergency bypass).
+- **Five runbooks** under `docs/runbooks/` (disaster recovery, security incident, certificate rotation, vault operations, database operations).
+- **Architecture baseline** captured in `docs/adrs/0001-architecture-baseline.md`.
+
+Live references to the tracker (PR template, runbook index, ADR-0001) have been updated. Historical mentions in `CHANGELOG.md` and earlier `WHATSNEW.md` sections are preserved as point-in-time records.
+
+---
+
+## 🛠️ Under the hood
+
+- No migrations, no config changes, no service restart semantics.
+- Version bumped: `VERSION`, `frontend/package.json`, `backend/Cargo.toml` all now read **0.23.1**.
+- Rust 1.95 / React 19 / TypeScript 6 toolchain from 0.23.0 is unchanged.
+
+---
+
+
 
 > **Compliance & operations release.** No feature-facing changes for end users — v0.22.0 closes out the data-retention and operational-documentation items from the compliance tracker so administrators and on-call engineers have runtime-configurable retention windows, concrete runbooks, and a documented design record.
 

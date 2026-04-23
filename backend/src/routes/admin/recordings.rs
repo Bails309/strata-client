@@ -38,28 +38,12 @@ pub struct TopConnection {
     pub total_hours: f64,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct TopConnectionRow {
-    name: String,
-    protocol: String,
-    sessions: i64,
-    total_hours: f64,
-}
-
 #[derive(Serialize)]
 pub struct TopUser {
     pub username: String,
     pub sessions: i64,
     pub total_hours: f64,
     pub last_session: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-struct TopUserRow {
-    username: String,
-    sessions: i64,
-    total_hours: f64,
-    last_session: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Serialize)]
@@ -70,14 +54,6 @@ pub struct DailyTrend {
     pub unique_users: i64,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct DailyTrendRow {
-    date: chrono::NaiveDate,
-    sessions: i64,
-    hours: f64,
-    unique_users: i64,
-}
-
 #[derive(Serialize)]
 pub struct ProtocolDistribution {
     pub protocol: String,
@@ -85,23 +61,10 @@ pub struct ProtocolDistribution {
     pub total_hours: f64,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-struct ProtocolDistributionRow {
-    protocol: String,
-    sessions: i64,
-    total_hours: f64,
-}
-
 #[derive(Serialize)]
 pub struct PeakHour {
     pub hour: i32,
     pub sessions: i64,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-struct PeakHourRow {
-    hour: f64,
-    sessions: i64,
 }
 
 /// GET /api/admin/session-stats – aggregate session statistics for the dashboard.
@@ -119,87 +82,28 @@ pub async fn session_stats(
     };
 
     // Combine scalar aggregates into a single query using a CTE
-    let (total_sessions, total_hours, unique_users, avg_duration_mins, median_duration_mins, total_bandwidth_bytes): (i64, f64, i64, f64, f64, i64) = sqlx::query_as(
-        "WITH cutoff_data AS (
-            SELECT * FROM recordings WHERE started_at >= NOW() - INTERVAL '30 days'
-        )
-        SELECT
-            (SELECT COUNT(*) FROM cutoff_data),
-            (SELECT COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) FROM cutoff_data),
-            (SELECT COUNT(DISTINCT user_id) FROM cutoff_data),
-            (SELECT COALESCE(AVG(duration_secs::float) / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
-            (SELECT COALESCE((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_secs))::float / 60.0, 0.0) FROM cutoff_data WHERE duration_secs IS NOT NULL),
-            (SELECT COALESCE(SUM(COALESCE(bytes_from_guacd, 0) + COALESCE(bytes_to_guacd, 0)), 0)::bigint FROM cutoff_data)"
-    )
-    .fetch_one(&db.pool)
-    .await?;
+    let (
+        total_sessions,
+        total_hours,
+        unique_users,
+        avg_duration_mins,
+        median_duration_mins,
+        total_bandwidth_bytes,
+    ) = crate::services::recordings::fetch_session_stats_scalars(&db.pool).await?;
 
     // Daily trend (last 30 days)
-    let daily_trend: Vec<DailyTrendRow> = sqlx::query_as(
-        "SELECT started_at::date AS date,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS hours,
-                COUNT(DISTINCT user_id) AS unique_users
-         FROM recordings
-         WHERE started_at >= NOW() - INTERVAL '30 days'
-         GROUP BY started_at::date
-         ORDER BY date",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let daily_trend = crate::services::recordings::fetch_daily_trend(&db.pool).await?;
 
     // Protocol distribution
-    let protocol_distribution: Vec<ProtocolDistributionRow> = sqlx::query_as(
-        "SELECT COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'unknown') AS protocol,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
-         FROM recordings r
-         WHERE started_at >= NOW() - INTERVAL '30 days'
-         GROUP BY protocol
-         ORDER BY sessions DESC"
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let protocol_distribution =
+        crate::services::recordings::fetch_protocol_distribution(&db.pool).await?;
 
     // Peak hours (0-23)
-    let peak_hours: Vec<PeakHourRow> = sqlx::query_as(
-        "SELECT EXTRACT(HOUR FROM started_at)::float AS hour,
-                COUNT(*) AS sessions
-         FROM recordings
-         WHERE started_at >= NOW() - INTERVAL '30 days'
-         GROUP BY hour
-         ORDER BY hour",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let peak_hours = crate::services::recordings::fetch_peak_hours(&db.pool).await?;
 
-    let top_connections: Vec<TopConnectionRow> = sqlx::query_as(
-        "SELECT connection_name AS name,
-                COALESCE((SELECT protocol FROM connections c WHERE c.id = r.connection_id), 'rdp') AS protocol,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours
-         FROM recordings r
-         WHERE started_at >= NOW() - INTERVAL '30 days'
-         GROUP BY connection_id, connection_name
-         ORDER BY sessions DESC
-         LIMIT 10",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let top_connections = crate::services::recordings::fetch_top_connections(&db.pool).await?;
 
-    let top_users: Vec<TopUserRow> = sqlx::query_as(
-        "SELECT username,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(duration_secs)::float / 3600.0, 0.0) AS total_hours,
-                MAX(started_at) AS last_session
-         FROM recordings
-         WHERE started_at >= NOW() - INTERVAL '30 days'
-         GROUP BY user_id, username
-         ORDER BY sessions DESC
-         LIMIT 10",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let top_users = crate::services::recordings::fetch_top_users(&db.pool).await?;
 
     Ok(Json(SessionStats {
         total_sessions,
@@ -272,18 +176,13 @@ pub async fn list_recordings(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
-    let recordings = sqlx::query_as::<_, Recording>(
-        "SELECT * FROM recordings 
-         WHERE ($1::uuid IS NULL OR user_id = $1)
-           AND ($2::uuid IS NULL OR connection_id = $2)
-         ORDER BY started_at DESC
-         LIMIT $3 OFFSET $4",
+    let recordings = crate::services::recordings::list_admin(
+        &db.pool,
+        query.user_id,
+        query.connection_id,
+        query.limit.unwrap_or(50),
+        query.offset.unwrap_or(0),
     )
-    .bind(query.user_id)
-    .bind(query.connection_id)
-    .bind(query.limit.unwrap_or(50))
-    .bind(query.offset.unwrap_or(0))
-    .fetch_all(&db.pool)
     .await?;
 
     Ok(Json(recordings))
@@ -307,9 +206,7 @@ pub async fn stream_recording(
     };
 
     // Fetch recording metadata
-    let recording: Recording = sqlx::query_as("SELECT * FROM recordings WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&db.pool)
+    let recording: Recording = crate::services::recordings::get_by_id(&db.pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
 

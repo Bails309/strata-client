@@ -138,8 +138,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
     // ── Schema ──
     let expected_migrations = sqlx::migrate!("./migrations").migrations.len() as i64;
     let (applied_migrations, schema_status) = if let Some(ref db) = s.db {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
-            .fetch_one(&db.pool)
+        let count = crate::services::schema::count_applied_migrations(&db.pool)
             .await
             .unwrap_or(0);
         let status = if count == expected_migrations {

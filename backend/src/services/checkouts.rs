@@ -1216,6 +1216,486 @@ async fn run_auto_rotation(state: SharedState) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ── User-facing checkout queries & mutations ──────────────────────────
+
+use sqlx::PgPool;
+
+/// Tuple shape returned by [`list_managed_accounts_for_user`].
+/// Fields: (mapping_id, user_id, managed_ad_dn, can_self_approve,
+///          ad_sync_config_id, created_at, friendly_name, pm_allow_emergency_bypass)
+pub type ManagedAccountRow = (
+    Uuid,
+    Uuid,
+    String,
+    bool,
+    Option<Uuid>,
+    chrono::DateTime<chrono::Utc>,
+    Option<String>,
+    Option<bool>,
+);
+
+/// Managed-account mappings for a user, joined with their AD-sync config
+/// to expose `pm_allow_emergency_bypass`.
+pub async fn list_managed_accounts_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<ManagedAccountRow>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT m.id, m.user_id, m.managed_ad_dn, m.can_self_approve, m.ad_sync_config_id,
+                m.created_at, m.friendly_name, c.pm_allow_emergency_bypass
+         FROM user_account_mappings m
+         LEFT JOIN ad_sync_configs c ON c.id = m.ad_sync_config_id
+         WHERE m.user_id = $1
+         ORDER BY m.managed_ad_dn",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn find_mapping(
+    pool: &PgPool,
+    user_id: Uuid,
+    managed_ad_dn: &str,
+) -> Result<Option<UserAccountMapping>, crate::error::AppError> {
+    let row = sqlx::query_as(
+        "SELECT * FROM user_account_mappings WHERE user_id = $1 AND managed_ad_dn = $2",
+    )
+    .bind(user_id)
+    .bind(managed_ad_dn)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Does the user already have a Pending/Approved/Scheduled/Active checkout
+/// for the given managed AD DN?
+pub async fn has_open_checkout(
+    pool: &PgPool,
+    user_id: Uuid,
+    managed_ad_dn: &str,
+) -> Result<bool, crate::error::AppError> {
+    let existing: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM password_checkout_requests
+         WHERE requester_user_id = $1 AND managed_ad_dn = $2 AND status IN ('Pending','Approved','Scheduled','Active')",
+    )
+    .bind(user_id)
+    .bind(managed_ad_dn)
+    .fetch_optional(pool)
+    .await?;
+    Ok(existing.is_some())
+}
+
+/// Returns whether emergency bypass is allowed for the given AD-sync config.
+/// Returns `false` if the config is missing or the flag is unset.
+pub async fn emergency_bypass_allowed(
+    pool: &PgPool,
+    ad_sync_config_id: Option<Uuid>,
+) -> Result<bool, crate::error::AppError> {
+    let Some(cfg_id) = ad_sync_config_id else {
+        return Ok(false);
+    };
+    let allow: Option<bool> =
+        sqlx::query_scalar("SELECT pm_allow_emergency_bypass FROM ad_sync_configs WHERE id = $1")
+            .bind(cfg_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(allow.unwrap_or(false))
+}
+
+/// Insert a new checkout request and return its ID.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_request(
+    pool: &PgPool,
+    requester_user_id: Uuid,
+    managed_ad_dn: &str,
+    ad_sync_config_id: Option<Uuid>,
+    status: &str,
+    requested_duration_mins: i32,
+    justification_comment: &str,
+    friendly_name: Option<&str>,
+    emergency_bypass: bool,
+    scheduled_start_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Uuid, crate::error::AppError> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO password_checkout_requests
+         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment, friendly_name, emergency_bypass, scheduled_start_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+    )
+    .bind(requester_user_id)
+    .bind(managed_ad_dn)
+    .bind(ad_sync_config_id)
+    .bind(status)
+    .bind(requested_duration_mins)
+    .bind(justification_comment)
+    .bind(friendly_name)
+    .bind(emergency_bypass)
+    .bind(scheduled_start_at)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// List the requesting user's recent checkouts (most recent first, capped at 100).
+pub async fn list_for_user(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<CheckoutRequest>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE requester_user_id = $1 ORDER BY created_at DESC LIMIT 100",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Fetch a checkout if it belongs to `user_id`.
+pub async fn get_owned_by_user(
+    pool: &PgPool,
+    checkout_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<CheckoutRequest>, crate::error::AppError> {
+    let row = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
+    )
+    .bind(checkout_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Fetch a checkout by id (any requester).
+pub async fn get_by_id(
+    pool: &PgPool,
+    checkout_id: Uuid,
+) -> Result<Option<CheckoutRequest>, crate::error::AppError> {
+    let row = sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
+        .bind(checkout_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+// ── Approval flow ─────────────────────────────────────────────────────
+
+/// All role IDs that `user_id` holds as an approver.
+pub async fn approver_role_ids(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, crate::error::AppError> {
+    let rows =
+        sqlx::query_scalar("SELECT role_id FROM approval_role_assignments WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows)
+}
+
+/// Pending checkout requests visible to approvers holding any of `role_ids`.
+pub async fn pending_for_roles(
+    pool: &PgPool,
+    role_ids: &[Uuid],
+) -> Result<Vec<CheckoutRequest>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT pcr.*, u.username AS requester_username
+         FROM password_checkout_requests pcr
+         LEFT JOIN users u ON u.id = pcr.requester_user_id
+         WHERE pcr.status = 'Pending'
+         AND EXISTS (
+             SELECT 1 FROM approval_role_accounts ara
+             WHERE ara.role_id = ANY($1)
+             AND ara.managed_ad_dn = pcr.managed_ad_dn
+         )
+         ORDER BY pcr.created_at ASC LIMIT 200",
+    )
+    .bind(role_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Does any of the approver's roles cover the given managed account DN?
+pub async fn roles_cover_account(
+    pool: &PgPool,
+    role_ids: &[Uuid],
+    managed_ad_dn: &str,
+) -> Result<bool, crate::error::AppError> {
+    let covers: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM approval_role_accounts
+         WHERE role_id = ANY($1) AND managed_ad_dn = $2",
+    )
+    .bind(role_ids)
+    .bind(managed_ad_dn)
+    .fetch_one(pool)
+    .await?;
+    Ok(covers > 0)
+}
+
+/// Mark a pending checkout as Approved/Denied by the given approver.
+pub async fn set_decision(
+    pool: &PgPool,
+    checkout_id: Uuid,
+    approver_user_id: Uuid,
+    approved: bool,
+) -> Result<(), crate::error::AppError> {
+    let status = if approved { "Approved" } else { "Denied" };
+    let sql = format!(
+        "UPDATE password_checkout_requests SET status = '{status}', approved_by_user_id = $1, updated_at = now() WHERE id = $2"
+    );
+    sqlx::query(&sql)
+        .bind(approver_user_id)
+        .bind(checkout_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ── User Account Mapping administration ────────────────────────────────
+
+pub async fn list_account_mappings(
+    pool: &PgPool,
+) -> Result<Vec<UserAccountMapping>, crate::error::AppError> {
+    let rows = sqlx::query_as("SELECT * FROM user_account_mappings ORDER BY created_at")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+/// List all `managed_ad_dn` values already mapped for the given config.
+pub async fn list_mapped_dns_for_config(
+    pool: &PgPool,
+    config_id: Uuid,
+) -> Result<Vec<String>, crate::error::AppError> {
+    let rows = sqlx::query_scalar(
+        "SELECT managed_ad_dn FROM user_account_mappings WHERE ad_sync_config_id = $1",
+    )
+    .bind(config_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Most-recent checkout requests across the whole system (admin view).
+pub async fn list_all_recent(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<CheckoutRequest>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT * FROM password_checkout_requests ORDER BY created_at DESC LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn upsert_account_mapping(
+    pool: &PgPool,
+    user_id: Uuid,
+    managed_ad_dn: &str,
+    can_self_approve: bool,
+    ad_sync_config_id: Option<Uuid>,
+    friendly_name: Option<&str>,
+) -> Result<Uuid, crate::error::AppError> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO user_account_mappings (user_id, managed_ad_dn, can_self_approve, ad_sync_config_id, friendly_name)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, managed_ad_dn) DO UPDATE SET can_self_approve = $3, ad_sync_config_id = $4, friendly_name = $5
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(managed_ad_dn)
+    .bind(can_self_approve)
+    .bind(ad_sync_config_id)
+    .bind(friendly_name)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn delete_account_mapping(
+    pool: &PgPool,
+    mapping_id: Uuid,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query("DELETE FROM user_account_mappings WHERE id = $1")
+        .bind(mapping_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_account_mapping(
+    pool: &PgPool,
+    mapping_id: Uuid,
+    can_self_approve: Option<bool>,
+    friendly_name: Option<&str>,
+) -> Result<bool, crate::error::AppError> {
+    let res = sqlx::query(
+        "UPDATE user_account_mappings SET
+            can_self_approve = COALESCE($2, can_self_approve),
+            friendly_name    = COALESCE($3, friendly_name)
+         WHERE id = $1",
+    )
+    .bind(mapping_id)
+    .bind(can_self_approve)
+    .bind(friendly_name)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() > 0)
+}
+
+// ── Approval Role administration ──────────────────────────────────────
+
+pub async fn list_approval_roles(
+    pool: &PgPool,
+) -> Result<Vec<ApprovalRole>, crate::error::AppError> {
+    let rows = sqlx::query_as("SELECT * FROM approval_roles ORDER BY name")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+pub async fn create_approval_role(
+    pool: &PgPool,
+    name: &str,
+    description: &str,
+) -> Result<Uuid, crate::error::AppError> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO approval_roles (name, description) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(name)
+    .bind(description)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_approval_role_name(
+    pool: &PgPool,
+    role_id: Uuid,
+    name: &str,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query("UPDATE approval_roles SET name = $1, updated_at = now() WHERE id = $2")
+        .bind(name)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_approval_role_description(
+    pool: &PgPool,
+    role_id: Uuid,
+    description: &str,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query("UPDATE approval_roles SET description = $1, updated_at = now() WHERE id = $2")
+        .bind(description)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_approval_role(
+    pool: &PgPool,
+    role_id: Uuid,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query("DELETE FROM approval_roles WHERE id = $1")
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// (user_id, username) pairs for users assigned to an approval role.
+pub async fn list_role_assignments(
+    pool: &PgPool,
+    role_id: Uuid,
+) -> Result<Vec<(Uuid, String)>, crate::error::AppError> {
+    let rows = sqlx::query_as(
+        "SELECT u.id, u.username
+         FROM approval_role_assignments ara
+         JOIN users u ON u.id = ara.user_id
+         WHERE ara.role_id = $1
+         ORDER BY u.username",
+    )
+    .bind(role_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Replace the set of users assigned to an approval role (transactional).
+pub async fn set_role_assignments(
+    pool: &PgPool,
+    role_id: Uuid,
+    user_ids: &[Uuid],
+) -> Result<(), crate::error::AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM approval_role_assignments WHERE role_id = $1")
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    for uid in user_ids {
+        sqlx::query(
+            "INSERT INTO approval_role_assignments (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(uid)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Managed AD account DNs in the scope of an approval role.
+pub async fn list_role_accounts(
+    pool: &PgPool,
+    role_id: Uuid,
+) -> Result<Vec<String>, crate::error::AppError> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT managed_ad_dn FROM approval_role_accounts WHERE role_id = $1 ORDER BY managed_ad_dn",
+    )
+    .bind(role_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(dn,)| dn).collect())
+}
+
+/// Replace the set of managed accounts attached to an approval role
+/// (transactional). `entries` supplies `(dn, friendly_name)` pairs; empty
+/// DNs are skipped. The caller is responsible for trimming/validating.
+pub async fn set_role_accounts(
+    pool: &PgPool,
+    role_id: Uuid,
+    entries: &[(String, Option<String>)],
+) -> Result<(), crate::error::AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM approval_role_accounts WHERE role_id = $1")
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    for (dn, friendly_name) in entries {
+        if dn.is_empty() {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO approval_role_accounts (role_id, managed_ad_dn, friendly_name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        )
+        .bind(role_id)
+        .bind(dn)
+        .bind(friendly_name)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

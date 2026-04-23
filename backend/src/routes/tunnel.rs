@@ -136,23 +136,12 @@ pub async fn create_tunnel_ticket(
 
     // Users with can_manage_connections or can_manage_system bypass role-based access check
     if !user.can_access_all_connections() {
-        let has_access: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM role_connections rc
-                JOIN users u ON u.role_id = rc.role_id
-                WHERE u.id = $1 AND rc.connection_id = $2
-            ) OR EXISTS(
-                SELECT 1 FROM role_folders rf
-                JOIN connections c ON c.folder_id = rf.folder_id
-                JOIN users u ON u.role_id = rf.role_id
-                WHERE u.id = $1 AND c.id = $2
-            )",
+        let has_access = crate::services::connections::user_has_role_access(
+            &db.pool,
+            user.id,
+            body.connection_id,
         )
-        .bind(user.id)
-        .bind(body.connection_id)
-        .fetch_one(&db.pool)
         .await?;
-
         if !has_access {
             return Err(AppError::Forbidden);
         }
@@ -223,43 +212,19 @@ pub async fn ws_tunnel(
     // Verify the user has access to this connection via their role
     // Users with connection management permissions bypass role-based access check
     if !user.can_access_all_connections() {
-        let has_access: bool = sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM role_connections rc
-                JOIN users u ON u.role_id = rc.role_id
-                WHERE u.id = $1 AND rc.connection_id = $2
-            ) OR EXISTS(
-                SELECT 1 FROM role_folders rf
-                JOIN connections c ON c.folder_id = rf.folder_id
-                JOIN users u ON u.role_id = rf.role_id
-                WHERE u.id = $1 AND c.id = $2
-            )",
-        )
-        .bind(user.id)
-        .bind(connection_id)
-        .fetch_one(&db.pool)
-        .await?;
-
+        let has_access =
+            crate::services::connections::user_has_role_access(&db.pool, user.id, connection_id)
+                .await?;
         if !has_access {
             return Err(AppError::Forbidden);
         }
     }
 
     // Fetch connection details
-    let (protocol, hostname, port, domain, connection_name, extra_json): (
-        String,
-        String,
-        i32,
-        Option<String>,
-        String,
-        serde_json::Value,
-    ) = sqlx::query_as(
-        "SELECT protocol, hostname, port, domain, name, extra FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
-    )
-    .bind(connection_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let (protocol, hostname, port, domain, connection_name, extra_json) =
+        crate::services::connections::fetch_tunnel_details(&db.pool, connection_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Parse extra JSONB into a HashMap for guacd params
     let extra = crate::tunnel::json_to_string_map(&extra_json);
@@ -270,20 +235,11 @@ pub async fn ws_tunnel(
     // credentials — the user expects to connect AS the managed account.
     let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {
         // Check if the profile is linked to an active checkout with a managed credential
-        let managed_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-            "SELECT managed.encrypted_password, managed.encrypted_dek, managed.nonce
-             FROM credential_mappings cm
-             JOIN credential_profiles cp ON cp.id = cm.credential_id
-             JOIN password_checkout_requests pcr
-                    ON pcr.id = cp.checkout_id AND pcr.status = 'Active'
-             JOIN credential_profiles managed
-                    ON managed.id = pcr.vault_credential_id
-             WHERE cm.connection_id = $1 AND cp.user_id = $2
-               AND cp.expires_at > now()",
+        let managed_cred = crate::services::user_credentials::load_mapping_managed(
+            &db.pool,
+            connection_id,
+            user.id,
         )
-        .bind(connection_id)
-        .bind(user.id)
-        .fetch_optional(&db.pool)
         .await?;
 
         if let Some((enc_payload, enc_dek, nonce)) = managed_cred {
@@ -312,16 +268,11 @@ pub async fn ws_tunnel(
             )
         } else {
             // No active checkout — fall back to the user's own profile credentials
-            let own_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-                "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
-                 FROM credential_mappings cm
-                 JOIN credential_profiles cp ON cp.id = cm.credential_id
-                 WHERE cm.connection_id = $1 AND cp.user_id = $2
-                   AND cp.expires_at > now()",
+            let own_cred = crate::services::user_credentials::load_mapping_own(
+                &db.pool,
+                connection_id,
+                user.id,
             )
-            .bind(connection_id)
-            .bind(user.id)
-            .fetch_optional(&db.pool)
             .await?;
 
             if let Some((enc_payload, enc_dek, nonce)) = own_cred {
@@ -381,78 +332,61 @@ pub async fn ws_tunnel(
     // vault credentials directly (no permanent mapping required).
     // Same checkout-aware logic: prefer the managed profile's password but keep the profile's username.
     let oneoff_profile_id = ticket_creds.as_ref().and_then(|t| t.credential_profile_id);
-    let (oneoff_username, oneoff_password) =
-        if let (Some(profile_id), Some(vault_cfg)) = (oneoff_profile_id, &config.vault) {
-            // Load the profile's own credentials
-            let own_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-                "SELECT cp.encrypted_password, cp.encrypted_dek, cp.nonce
-                 FROM credential_profiles cp
-                 WHERE cp.id = $1 AND cp.user_id = $2
-                   AND cp.expires_at > now()",
-            )
-            .bind(profile_id)
-            .bind(user.id)
-            .fetch_optional(&db.pool)
-            .await?;
+    let (oneoff_username, oneoff_password) = if let (Some(profile_id), Some(vault_cfg)) =
+        (oneoff_profile_id, &config.vault)
+    {
+        // Load the profile's own credentials
+        let own_cred =
+            crate::services::user_credentials::load_profile_own(&db.pool, profile_id, user.id)
+                .await?;
 
-            // Check for managed checkout credential
-            let managed_cred: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-                "SELECT managed.encrypted_password, managed.encrypted_dek, managed.nonce
-                 FROM credential_profiles cp
-                 JOIN password_checkout_requests pcr
-                        ON pcr.id = cp.checkout_id AND pcr.status = 'Active'
-                 JOIN credential_profiles managed
-                        ON managed.id = pcr.vault_credential_id
-                 WHERE cp.id = $1 AND cp.user_id = $2
-                   AND cp.expires_at > now()",
-            )
-            .bind(profile_id)
-            .bind(user.id)
-            .fetch_optional(&db.pool)
-            .await?;
+        // Check for managed checkout credential
+        let managed_cred =
+            crate::services::user_credentials::load_profile_managed(&db.pool, profile_id, user.id)
+                .await?;
 
-            if let Some((enc_payload, enc_dek, nonce)) = managed_cred {
-                // Managed checkout active — use its username and password directly
-                let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
-                let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-                let parsed: serde_json::Value = serde_json::from_str(&plain_str)
-                    .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
-                let managed_user = parsed["u"].as_str().unwrap_or("").to_string();
-                let managed_pass = parsed["p"].as_str().unwrap_or("").to_string();
-                tracing::info!(
-                    "Tunnel (one-off) using managed checkout credentials, managed username={:?}",
-                    managed_user
-                );
-                (
-                    if managed_user.is_empty() {
-                        None
-                    } else {
-                        Some(managed_user)
-                    },
-                    if managed_pass.is_empty() {
-                        None
-                    } else {
-                        Some(managed_pass)
-                    },
-                )
-            } else if let Some((enc_payload, enc_dek, nonce)) = own_cred {
-                // No active checkout — fall back to the profile's own credentials
-                let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
-                let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-                let parsed: serde_json::Value = serde_json::from_str(&plain_str)
-                    .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
-                let u = parsed["u"].as_str().unwrap_or("").to_string();
-                let p = parsed["p"].as_str().unwrap_or("").to_string();
-                (
-                    if u.is_empty() { None } else { Some(u) },
-                    if p.is_empty() { None } else { Some(p) },
-                )
-            } else {
-                (None, None)
-            }
+        if let Some((enc_payload, enc_dek, nonce)) = managed_cred {
+            // Managed checkout active — use its username and password directly
+            let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+            let managed_user = parsed["u"].as_str().unwrap_or("").to_string();
+            let managed_pass = parsed["p"].as_str().unwrap_or("").to_string();
+            tracing::info!(
+                "Tunnel (one-off) using managed checkout credentials, managed username={:?}",
+                managed_user
+            );
+            (
+                if managed_user.is_empty() {
+                    None
+                } else {
+                    Some(managed_user)
+                },
+                if managed_pass.is_empty() {
+                    None
+                } else {
+                    Some(managed_pass)
+                },
+            )
+        } else if let Some((enc_payload, enc_dek, nonce)) = own_cred {
+            // No active checkout — fall back to the profile's own credentials
+            let plaintext = vault::unseal(vault_cfg, &enc_dek, &enc_payload, &nonce).await?;
+            let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+            let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                .unwrap_or_else(|_| serde_json::json!({ "u": "", "p": plain_str }));
+            let u = parsed["u"].as_str().unwrap_or("").to_string();
+            let p = parsed["p"].as_str().unwrap_or("").to_string();
+            (
+                if u.is_empty() { None } else { Some(u) },
+                if p.is_empty() { None } else { Some(p) },
+            )
         } else {
             (None, None)
-        };
+        }
+    } else {
+        (None, None)
+    };
     // If ticket provided dimensions, use them
     let effective_width = clamp_dimension(
         ticket_creds
@@ -515,18 +449,11 @@ pub async fn ws_tunnel(
     // cause account lockout.  Only block when no other credential source
     // (ticket, query-string) provided a password.
     if final_password.is_none() {
-        let has_expired_managed: bool = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(
-                SELECT 1 FROM credential_mappings cm
-                JOIN credential_profiles cp ON cp.id = cm.credential_id
-                WHERE cm.connection_id = $1 AND cp.user_id = $2
-                  AND cp.checkout_id IS NOT NULL
-                  AND cp.expires_at <= now()
-            )",
+        let has_expired_managed = crate::services::user_credentials::has_expired_mapped_managed(
+            &db.pool,
+            connection_id,
+            user.id,
         )
-        .bind(connection_id)
-        .bind(user.id)
-        .fetch_one(&db.pool)
         .await
         .unwrap_or(false);
 
@@ -599,15 +526,7 @@ pub async fn ws_tunnel(
     .await?;
 
     // Update per-user last_accessed timestamp
-    sqlx::query(
-        "INSERT INTO user_connection_access (user_id, connection_id, last_accessed)
-         VALUES ($1, $2, now())
-         ON CONFLICT (user_id, connection_id) DO UPDATE SET last_accessed = now()",
-    )
-    .bind(user_id)
-    .bind(connection_id)
-    .execute(&db.pool)
-    .await?;
+    crate::services::connections::touch_user_access(&db.pool, user_id, connection_id).await?;
 
     // Extract client IP using the shared helper with ConnectInfo fallback
     let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
@@ -640,21 +559,18 @@ pub async fn ws_tunnel(
         let rname = rn.clone();
 
         tokio::spawn(async move {
-            let res = sqlx::query(
-                "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, 'local', $7)"
+            if let Err(e) = recordings::insert_start(
+                &pool_for_init,
+                sid,
+                cid,
+                cname,
+                uid,
+                uname,
+                rname,
+                started_at,
             )
-            .bind(sid)
-            .bind(cid)
-            .bind(cname)
-            .bind(uid)
-            .bind(uname)
-            .bind(rname)
-            .bind(started_at)
-            .execute(&pool_for_init)
-            .await;
-
-            if let Err(e) = res {
+            .await
+            {
                 tracing::error!("Failed to log recording start: {e}");
             }
         });

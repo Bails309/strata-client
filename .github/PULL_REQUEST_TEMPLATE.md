@@ -53,7 +53,7 @@ If this PR adds a file in `backend/migrations/`:
 ## Related
 
 <!--
-Link ADRs, runbooks, compliance-tracker items, or issues:
-  - docs/compliance-tracker.md — W2-3
+Link ADRs, runbooks, or issues:
   - docs/adrs/0001-architecture-baseline.md
+  - docs/runbooks/disaster-recovery.md
 -->

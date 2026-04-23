@@ -3,7 +3,7 @@ use axum::http::HeaderMap;
 use axum::Extension;
 use axum::Json;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -167,12 +167,12 @@ fn paginate(page: Option<i64>, per_page: Option<i64>, max_per_page: i64) -> (i64
 }
 
 /// Normalise the `extra` JSON field: turn `null` into an empty object `{}`.
+///
+/// Thin re-export of [`crate::services::connections::normalize_extra`] so
+/// existing tests inside this module compile unchanged.
+#[cfg(test)]
 fn normalize_extra(extra: &serde_json::Value) -> serde_json::Value {
-    if extra.is_null() {
-        serde_json::json!({})
-    } else {
-        extra.clone()
-    }
+    crate::services::connections::normalize_extra(extra)
 }
 
 /// Build a share URL string from a token and mode.
@@ -925,40 +925,16 @@ pub async fn update_kerberos(
 
 // ── Kerberos Realms (multi-domain) ─────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct KerberosRealmRow {
-    pub id: Uuid,
-    pub realm: String,
-    pub kdc_servers: String,
-    pub admin_server: String,
-    pub ticket_lifetime: String,
-    pub renew_lifetime: String,
-    pub is_default: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
+use crate::services::kerberos_realms::{
+    self, CreateKerberosRealmRequest, KerberosRealmRow, UpdateKerberosRealmRequest,
+};
 
 pub async fn list_kerberos_realms(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<KerberosRealmRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<KerberosRealmRow> = sqlx::query_as(
-        "SELECT id, realm, kdc_servers, admin_server, ticket_lifetime, renew_lifetime, is_default, created_at, updated_at
-         FROM kerberos_realms ORDER BY is_default DESC, realm",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = kerberos_realms::list_all(&db.pool).await?;
     Ok(Json(rows))
-}
-
-#[derive(Deserialize)]
-pub struct CreateKerberosRealmRequest {
-    pub realm: String,
-    pub kdc_servers: Vec<String>,
-    pub admin_server: String,
-    pub ticket_lifetime: Option<String>,
-    pub renew_lifetime: Option<String>,
-    pub is_default: Option<bool>,
 }
 
 pub async fn create_kerberos_realm(
@@ -969,42 +945,13 @@ pub async fn create_kerberos_realm(
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
-    // Validate hostname-like values
     validate_kerberos_hostnames(
         Some(&body.realm),
         Some(&body.kdc_servers),
         Some(&body.admin_server),
     )?;
 
-    let ticket_lifetime = body.ticket_lifetime.as_deref().unwrap_or("10h");
-    let renew_lifetime = body.renew_lifetime.as_deref().unwrap_or("7d");
-    let is_default = body.is_default.unwrap_or(false);
-
-    // Use a transaction so unset-others + insert is atomic
-    let mut tx = db.pool.begin().await?;
-
-    // If marking as default, unset other defaults
-    if is_default {
-        sqlx::query("UPDATE kerberos_realms SET is_default = false WHERE is_default = true")
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO kerberos_realms (realm, kdc_servers, admin_server, ticket_lifetime, renew_lifetime, is_default)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id",
-    )
-    .bind(&body.realm)
-    .bind(body.kdc_servers.join(","))
-    .bind(&body.admin_server)
-    .bind(ticket_lifetime)
-    .bind(renew_lifetime)
-    .bind(is_default)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
+    let id = kerberos_realms::create(&db.pool, &body).await?;
 
     // Keep kerberos_enabled in sync
     settings::set(&db.pool, "kerberos_enabled", "true").await?;
@@ -1020,16 +967,6 @@ pub async fn create_kerberos_realm(
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
-#[derive(Deserialize)]
-pub struct UpdateKerberosRealmRequest {
-    pub realm: Option<String>,
-    pub kdc_servers: Option<Vec<String>>,
-    pub admin_server: Option<String>,
-    pub ticket_lifetime: Option<String>,
-    pub renew_lifetime: Option<String>,
-    pub is_default: Option<bool>,
-}
-
 pub async fn update_kerberos_realm(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
@@ -1039,54 +976,16 @@ pub async fn update_kerberos_realm(
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
-    // Validate hostname-like values (parity with create)
     validate_kerberos_hostnames(
         body.realm.as_deref(),
         body.kdc_servers.as_deref(),
         body.admin_server.as_deref(),
     )?;
 
-    // Use a transaction so unset-others + field update are atomic
-    let mut tx = db.pool.begin().await?;
-
-    // If marking as default, unset other defaults
-    if body.is_default == Some(true) {
-        sqlx::query(
-            "UPDATE kerberos_realms SET is_default = false WHERE is_default = true AND id != $1",
-        )
-        .bind(realm_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    // Single UPDATE with COALESCE for each optional field
-    let kdc_csv = body.kdc_servers.as_ref().map(|v| v.join(","));
-    let result = sqlx::query(
-        "UPDATE kerberos_realms SET
-            realm = COALESCE($2, realm),
-            kdc_servers = COALESCE($3, kdc_servers),
-            admin_server = COALESCE($4, admin_server),
-            ticket_lifetime = COALESCE($5, ticket_lifetime),
-            renew_lifetime = COALESCE($6, renew_lifetime),
-            is_default = COALESCE($7, is_default),
-            updated_at = now()
-         WHERE id = $1",
-    )
-    .bind(realm_id)
-    .bind(body.realm.as_deref())
-    .bind(kdc_csv.as_deref())
-    .bind(body.admin_server.as_deref())
-    .bind(body.ticket_lifetime.as_deref())
-    .bind(body.renew_lifetime.as_deref())
-    .bind(body.is_default)
-    .execute(&mut *tx)
-    .await?;
-
-    if result.rows_affected() == 0 {
+    let updated = kerberos_realms::update(&db.pool, realm_id, &body).await?;
+    if !updated {
         return Err(AppError::NotFound("Kerberos realm not found".into()));
     }
-
-    tx.commit().await?;
 
     regenerate_krb5_conf(&db.pool).await?;
     audit::log(
@@ -1107,20 +1006,11 @@ pub async fn delete_kerberos_realm(
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
-    let deleted = sqlx::query("DELETE FROM kerberos_realms WHERE id = $1")
-        .bind(realm_id)
-        .execute(&db.pool)
-        .await?;
-    if deleted.rows_affected() == 0 {
+    if !kerberos_realms::delete(&db.pool, realm_id).await? {
         return Err(AppError::NotFound("Kerberos realm not found".into()));
     }
 
-    // Check if any realms remain
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM kerberos_realms")
-        .fetch_one(&db.pool)
-        .await
-        .unwrap_or(0);
-    if count == 0 {
+    if kerberos_realms::count(&db.pool).await == 0 {
         settings::set(&db.pool, "kerberos_enabled", "false").await?;
     }
 
@@ -1137,12 +1027,7 @@ pub async fn delete_kerberos_realm(
 
 /// Re-read all realms from DB and regenerate krb5.conf.
 async fn regenerate_krb5_conf(pool: &sqlx::Pool<sqlx::Postgres>) -> Result<(), AppError> {
-    let rows: Vec<KerberosRealmRow> = sqlx::query_as(
-        "SELECT id, realm, kdc_servers, admin_server, ticket_lifetime, renew_lifetime, is_default, created_at, updated_at
-         FROM kerberos_realms ORDER BY is_default DESC, realm",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows = kerberos_realms::list_all(pool).await?;
 
     let configs = realm_rows_to_configs(&rows);
 
@@ -1222,44 +1107,12 @@ pub async fn update_recordings(
 
 // ── Roles ──────────────────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct RoleRow {
-    pub id: Uuid,
-    pub name: String,
-    pub can_manage_system: bool,
-    pub can_manage_users: bool,
-    pub can_manage_connections: bool,
-    pub can_view_audit_logs: bool,
-    pub can_create_users: bool,
-    pub can_create_user_groups: bool,
-    pub can_create_connections: bool,
-    pub can_create_connection_folders: bool,
-    pub can_create_sharing_profiles: bool,
-    pub can_view_sessions: bool,
-}
+use crate::services::roles::{self, CreateRoleRequest, RoleRow, UpdateRoleRequest};
 
 pub async fn list_roles(State(state): State<SharedState>) -> Result<Json<Vec<RoleRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<RoleRow> =
-        sqlx::query_as("SELECT id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions FROM roles ORDER BY name")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = roles::list_all(&db.pool).await?;
     Ok(Json(rows))
-}
-
-#[derive(Deserialize)]
-pub struct CreateRoleRequest {
-    pub name: String,
-    pub can_manage_system: Option<bool>,
-    pub can_manage_users: Option<bool>,
-    pub can_manage_connections: Option<bool>,
-    pub can_view_audit_logs: Option<bool>,
-    pub can_create_users: Option<bool>,
-    pub can_create_user_groups: Option<bool>,
-    pub can_create_connections: Option<bool>,
-    pub can_create_connection_folders: Option<bool>,
-    pub can_create_sharing_profiles: Option<bool>,
-    pub can_view_sessions: Option<bool>,
 }
 
 pub async fn create_role(
@@ -1269,24 +1122,7 @@ pub async fn create_role(
 ) -> Result<Json<RoleRow>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let row: RoleRow = sqlx::query_as(
-        "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
-         RETURNING id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, can_create_connection_folders, can_create_sharing_profiles, can_view_sessions",
-    )
-    .bind(&body.name)
-    .bind(body.can_manage_system.unwrap_or(false))
-    .bind(body.can_manage_users.unwrap_or(false))
-    .bind(body.can_manage_connections.unwrap_or(false))
-    .bind(body.can_view_audit_logs.unwrap_or(false))
-    .bind(body.can_create_users.unwrap_or(false))
-    .bind(body.can_create_user_groups.unwrap_or(false))
-    .bind(body.can_create_connections.unwrap_or(false))
-    .bind(body.can_create_connection_folders.unwrap_or(false))
-    .bind(body.can_create_sharing_profiles.unwrap_or(false))
-    .bind(body.can_view_sessions.unwrap_or(false))
-    .fetch_one(&db.pool)
-    .await?;
+    let row = roles::create(&db.pool, &body).await?;
     audit::log(
         &db.pool,
         Some(user.id),
@@ -1295,21 +1131,6 @@ pub async fn create_role(
     )
     .await?;
     Ok(Json(row))
-}
-
-#[derive(Deserialize)]
-pub struct UpdateRoleRequest {
-    pub name: Option<String>,
-    pub can_manage_system: Option<bool>,
-    pub can_manage_users: Option<bool>,
-    pub can_manage_connections: Option<bool>,
-    pub can_view_audit_logs: Option<bool>,
-    pub can_create_users: Option<bool>,
-    pub can_create_user_groups: Option<bool>,
-    pub can_create_connections: Option<bool>,
-    pub can_create_connection_folders: Option<bool>,
-    pub can_create_sharing_profiles: Option<bool>,
-    pub can_view_sessions: Option<bool>,
 }
 
 pub async fn update_role(
@@ -1321,40 +1142,7 @@ pub async fn update_role(
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
-    // Single UPDATE with COALESCE for each optional field
-    let row: RoleRow = sqlx::query_as(
-        "UPDATE roles SET
-            name = COALESCE($2, name),
-            can_manage_system = COALESCE($3, can_manage_system),
-            can_manage_users = COALESCE($4, can_manage_users),
-            can_manage_connections = COALESCE($5, can_manage_connections),
-            can_view_audit_logs = COALESCE($6, can_view_audit_logs),
-            can_create_users = COALESCE($7, can_create_users),
-            can_create_user_groups = COALESCE($8, can_create_user_groups),
-            can_create_connections = COALESCE($9, can_create_connections),
-            can_create_connection_folders = COALESCE($10, can_create_connection_folders),
-            can_create_sharing_profiles = COALESCE($11, can_create_sharing_profiles),
-            can_view_sessions = COALESCE($12, can_view_sessions)
-         WHERE id = $1
-         RETURNING id, name, can_manage_system, can_manage_users, can_manage_connections,
-                   can_view_audit_logs, can_create_users, can_create_user_groups,
-                   can_create_connections, can_create_connection_folders,
-                   can_create_sharing_profiles, can_view_sessions",
-    )
-    .bind(id)
-    .bind(body.name.as_deref())
-    .bind(body.can_manage_system)
-    .bind(body.can_manage_users)
-    .bind(body.can_manage_connections)
-    .bind(body.can_view_audit_logs)
-    .bind(body.can_create_users)
-    .bind(body.can_create_user_groups)
-    .bind(body.can_create_connections)
-    .bind(body.can_create_connection_folders)
-    .bind(body.can_create_sharing_profiles)
-    .bind(body.can_view_sessions)
-    .fetch_one(&db.pool)
-    .await?;
+    let row = roles::update(&db.pool, id, &body).await?;
 
     audit::log(
         &db.pool,
@@ -1376,9 +1164,7 @@ pub async fn delete_role(
     let db = require_running(&state).await?;
 
     // Protect system roles
-    let role_name: String = sqlx::query_scalar("SELECT name FROM roles WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&db.pool)
+    let role_name = roles::find_name(&db.pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound("Role not found".into()))?;
 
@@ -1389,21 +1175,13 @@ pub async fn delete_role(
     }
 
     // Check if any users are using this role
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role_id = $1")
-        .bind(id)
-        .fetch_one(&db.pool)
-        .await?;
-
-    if count > 0 {
+    if roles::count_users_in_role(&db.pool, id).await? > 0 {
         return Err(AppError::Validation(
             "Cannot delete role while users are assigned to it".into(),
         ));
     }
 
-    sqlx::query("DELETE FROM roles WHERE id = $1")
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
+    roles::delete_by_id(&db.pool, id).await?;
 
     audit::log(
         &db.pool,
@@ -1418,53 +1196,14 @@ pub async fn delete_role(
 
 // ── Connections ────────────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct ConnectionRow {
-    pub id: Uuid,
-    pub name: String,
-    pub protocol: String,
-    pub hostname: String,
-    pub port: i32,
-    pub domain: Option<String>,
-    pub description: String,
-    pub folder_id: Option<Uuid>,
-    pub extra: serde_json::Value,
-    pub last_accessed: Option<chrono::DateTime<chrono::Utc>>,
-    pub watermark: String,
-    pub health_status: String,
-    pub health_checked_at: Option<chrono::DateTime<chrono::Utc>>,
-}
+use crate::services::connections::{self, ConnectionRow, CreateConnectionRequest};
 
 pub async fn list_connections(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<ConnectionRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<ConnectionRow> = sqlx::query_as(
-        "SELECT id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark, health_status, health_checked_at FROM connections WHERE soft_deleted_at IS NULL ORDER BY name",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = connections::list_all(&db.pool).await?;
     Ok(Json(rows))
-}
-
-#[derive(Deserialize)]
-pub struct CreateConnectionRequest {
-    pub name: String,
-    pub protocol: String,
-    pub hostname: String,
-    pub port: Option<i32>,
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub description: String,
-    pub folder_id: Option<Uuid>,
-    #[serde(default)]
-    pub extra: serde_json::Value,
-    #[serde(default = "default_watermark")]
-    pub watermark: String,
-}
-
-fn default_watermark() -> String {
-    "inherit".to_string()
 }
 
 pub async fn create_connection(
@@ -1474,29 +1213,13 @@ pub async fn create_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let port = body.port.unwrap_or(3389);
-    let extra = normalize_extra(&body.extra);
-    let row: ConnectionRow = sqlx::query_as(
-        "INSERT INTO connections (name, protocol, hostname, port, domain, description, folder_id, extra, watermark)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark, health_status, health_checked_at",
-    )
-    .bind(&body.name)
-    .bind(&body.protocol)
-    .bind(&body.hostname)
-    .bind(port)
-    .bind(&body.domain)
-    .bind(&body.description)
-    .bind(body.folder_id)
-    .bind(&extra)
-    .bind(&body.watermark)
-    .fetch_one(&db.pool)
-    .await?;
+    let name = body.name.clone();
+    let row = connections::create(&db.pool, &body).await?;
     audit::log(
         &db.pool,
         Some(user.id),
         "connection.created",
-        &json!({ "name": body.name }),
+        &json!({ "name": name }),
     )
     .await?;
     Ok(Json(row))
@@ -1510,31 +1233,15 @@ pub async fn update_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let port = body.port.unwrap_or(3389);
-    let extra = normalize_extra(&body.extra);
-    let row: ConnectionRow = sqlx::query_as(
-        "UPDATE connections SET name = $1, protocol = $2, hostname = $3, port = $4, domain = $5, description = $6, folder_id = $7, extra = $8, watermark = $9, updated_at = now()
-         WHERE id = $10 AND soft_deleted_at IS NULL
-         RETURNING id, name, protocol, hostname, port, domain, description, folder_id, extra, last_accessed, watermark, health_status, health_checked_at",
-    )
-    .bind(&body.name)
-    .bind(&body.protocol)
-    .bind(&body.hostname)
-    .bind(port)
-    .bind(&body.domain)
-    .bind(&body.description)
-    .bind(body.folder_id)
-    .bind(&extra)
-    .bind(&body.watermark)
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let name = body.name.clone();
+    let row = connections::update(&db.pool, id, &body)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
     audit::log(
         &db.pool,
         Some(user.id),
         "connection.updated",
-        &json!({ "id": id.to_string(), "name": body.name }),
+        &json!({ "id": id.to_string(), "name": name }),
     )
     .await?;
     Ok(Json(row))
@@ -1547,13 +1254,7 @@ pub async fn delete_connection(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let result = sqlx::query(
-        "UPDATE connections SET soft_deleted_at = now() WHERE id = $1 AND soft_deleted_at IS NULL",
-    )
-    .bind(id)
-    .execute(&db.pool)
-    .await?;
-    if result.rows_affected() == 0 {
+    if !connections::soft_delete(&db.pool, id).await? {
         return Err(AppError::NotFound("Connection not found".into()));
     }
     audit::log(
@@ -1568,40 +1269,15 @@ pub async fn delete_connection(
 
 // ── Role-Connection mapping ────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct RoleMappingUpdate {
-    pub connection_ids: Vec<Uuid>,
-    pub folder_ids: Vec<Uuid>,
-}
-
-#[derive(Serialize)]
-pub struct RoleMappings {
-    pub connection_ids: Vec<Uuid>,
-    pub folder_ids: Vec<Uuid>,
-}
+pub use crate::services::roles::{RoleMappingUpdate, RoleMappings};
 
 pub async fn get_role_mappings(
     State(state): State<SharedState>,
     axum::extract::Path(role_id): axum::extract::Path<Uuid>,
 ) -> Result<Json<RoleMappings>, AppError> {
     let db = require_running(&state).await?;
-
-    let connection_ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT connection_id FROM role_connections WHERE role_id = $1")
-            .bind(role_id)
-            .fetch_all(&db.pool)
-            .await?;
-
-    let folder_ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT folder_id FROM role_folders WHERE role_id = $1")
-            .bind(role_id)
-            .fetch_all(&db.pool)
-            .await?;
-
-    Ok(Json(RoleMappings {
-        connection_ids,
-        folder_ids,
-    }))
+    let mappings = roles::get_mappings(&db.pool, role_id).await?;
+    Ok(Json(mappings))
 }
 
 pub async fn update_role_mappings(
@@ -1613,36 +1289,7 @@ pub async fn update_role_mappings(
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
 
-    // Replace all mappings for this role
-    let mut tx = db.pool.begin().await?;
-
-    // Connections
-    sqlx::query("DELETE FROM role_connections WHERE role_id = $1")
-        .bind(role_id)
-        .execute(&mut *tx)
-        .await?;
-    for cid in &body.connection_ids {
-        sqlx::query("INSERT INTO role_connections (role_id, connection_id) VALUES ($1, $2)")
-            .bind(role_id)
-            .bind(cid)
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    // Folders
-    sqlx::query("DELETE FROM role_folders WHERE role_id = $1")
-        .bind(role_id)
-        .execute(&mut *tx)
-        .await?;
-    for fid in &body.folder_ids {
-        sqlx::query("INSERT INTO role_folders (role_id, folder_id) VALUES ($1, $2)")
-            .bind(role_id)
-            .bind(fid)
-            .execute(&mut *tx)
-            .await?;
-    }
-
-    tx.commit().await?;
+    roles::replace_mappings(&db.pool, role_id, &body).await?;
 
     audit::log(
         &db.pool,
@@ -1657,36 +1304,8 @@ pub async fn update_role_mappings(
 
 // ── Users ──────────────────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct UserRow {
-    pub id: Uuid,
-    pub username: String,
-    pub email: String,
-    pub full_name: Option<String>,
-    pub auth_type: String,
-    pub sub: Option<String>,
-    pub role_name: String,
-    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-#[derive(Deserialize)]
-pub struct CreateUserRequest {
-    pub username: String,
-    pub email: String,
-    pub full_name: Option<String>,
-    pub role_id: Uuid,
-    pub auth_type: String, // "local" or "sso"
-}
-
-#[derive(Deserialize)]
-pub struct UpdateUserRequest {
-    pub role_id: Uuid,
-}
-
-#[derive(Deserialize)]
-pub struct UserListQuery {
-    pub include_deleted: Option<bool>,
-}
+use crate::services::users as users_svc;
+pub use crate::services::users::{CreateUserRequest, UpdateUserRequest, UserListQuery, UserRow};
 
 pub async fn list_users(
     State(state): State<SharedState>,
@@ -1696,26 +1315,7 @@ pub async fn list_users(
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
     let include_deleted = query.include_deleted.unwrap_or(false);
-
-    let rows: Vec<UserRow> = if include_deleted {
-        sqlx::query_as(
-            "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at
-             FROM users u JOIN roles r ON u.role_id = r.id
-             WHERE u.deleted_at IS NOT NULL
-             ORDER BY u.deleted_at DESC",
-        )
-        .fetch_all(&db.pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at
-             FROM users u JOIN roles r ON u.role_id = r.id
-             WHERE u.deleted_at IS NULL
-             ORDER BY u.email",
-        )
-        .fetch_all(&db.pool)
-        .await?
-    };
+    let rows = users_svc::list_all(&db.pool, include_deleted).await?;
     Ok(Json(rows))
 }
 
@@ -1726,13 +1326,8 @@ pub async fn restore_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let result =
-        sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = $1 AND deleted_at IS NOT NULL")
-            .bind(id)
-            .execute(&db.pool)
-            .await?;
 
-    if result.rows_affected() == 0 {
+    if !users_svc::restore(&db.pool, id).await? {
         return Err(AppError::NotFound("Deleted user not found".into()));
     }
 
@@ -1754,13 +1349,8 @@ pub async fn delete_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let result =
-        sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
-            .bind(id)
-            .execute(&db.pool)
-            .await?;
 
-    if result.rows_affected() == 0 {
+    if !users_svc::soft_delete(&db.pool, id).await? {
         return Err(AppError::NotFound("User not found".into()));
     }
 
@@ -1784,23 +1374,11 @@ pub async fn update_user(
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
 
-    // Verify the target role exists
-    let role_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM roles WHERE id = $1")
-        .bind(body.role_id)
-        .fetch_optional(&db.pool)
-        .await?;
-
-    if role_exists.is_none() {
+    if !users_svc::role_exists(&db.pool, body.role_id).await? {
         return Err(AppError::NotFound("Role not found".into()));
     }
 
-    let result = sqlx::query("UPDATE users SET role_id = $1 WHERE id = $2 AND deleted_at IS NULL")
-        .bind(body.role_id)
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
-
-    if result.rows_affected() == 0 {
+    if !users_svc::set_role(&db.pool, id, body.role_id).await? {
         return Err(AppError::NotFound("User not found".into()));
     }
 
@@ -1827,15 +1405,7 @@ pub async fn create_user(
     let email = body.email.to_lowercase();
     let username = body.username.to_lowercase();
 
-    // Check if user already exists
-    let existing: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE LOWER(email) = $1 OR LOWER(username) = $2")
-            .bind(&email)
-            .bind(&username)
-            .fetch_optional(&db.pool)
-            .await?;
-
-    if existing.is_some() {
+    if users_svc::exists_by_email_or_username(&db.pool, &email, &username).await? {
         return Err(AppError::Validation(format!(
             "User with email {} already exists",
             email
@@ -1866,18 +1436,16 @@ pub async fn create_user(
     };
 
     let user_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO users (id, username, email, full_name, password_hash, auth_type, role_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    users_svc::insert(
+        &db.pool,
+        user_id,
+        &username,
+        &email,
+        body.full_name.as_deref(),
+        password_hash.as_deref(),
+        &body.auth_type,
+        body.role_id,
     )
-    .bind(user_id)
-    .bind(&username)
-    .bind(&email)
-    .bind(&body.full_name)
-    .bind(&password_hash)
-    .bind(&body.auth_type)
-    .bind(body.role_id)
-    .execute(&db.pool)
     .await?;
 
     audit::log(
@@ -1945,13 +1513,9 @@ pub async fn reset_user_password(
     }
 
     // Verify user exists and is a local account
-    let auth_type: Option<String> =
-        sqlx::query_scalar("SELECT auth_type FROM users WHERE id = $1 AND deleted_at IS NULL")
-            .bind(id)
-            .fetch_optional(&db.pool)
-            .await?;
-
-    let auth_type = auth_type.ok_or_else(|| AppError::NotFound("User not found".into()))?;
+    let auth_type = users_svc::auth_type_of(&db.pool, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
     if auth_type != "local" {
         return Err(AppError::Validation(
             "Password reset is only available for local accounts".into(),
@@ -1974,11 +1538,7 @@ pub async fn reset_user_password(
         .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
         .to_string();
 
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-        .bind(&hash)
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
+    users_svc::set_password_hash(&db.pool, id, &hash).await?;
 
     audit::log(
         &db.pool,
@@ -1995,17 +1555,7 @@ pub async fn reset_user_password(
 
 // ── Audit Logs ─────────────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct AuditLogRow {
-    pub id: i64,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub user_id: Option<Uuid>,
-    pub username: Option<String>,
-    pub action_type: String,
-    pub details: serde_json::Value,
-    pub current_hash: String,
-    pub connection_name: Option<String>,
-}
+use crate::services::audit::AuditLogRow;
 
 #[derive(Deserialize)]
 pub struct AuditLogQuery {
@@ -2022,45 +1572,24 @@ pub async fn list_audit_logs(
     let db = require_running(&state).await?;
     let (per_page, offset) = paginate(query.page, query.per_page, 200);
 
-    let rows: Vec<AuditLogRow> = sqlx::query_as(
-        "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash,
-                c.name AS connection_name
-         FROM audit_logs a
-         LEFT JOIN users u ON u.id = a.user_id
-         LEFT JOIN connections c ON c.id = (a.details->>'connection_id')::uuid
-         ORDER BY a.id DESC LIMIT $1 OFFSET $2",
-    )
-    .bind(per_page)
-    .bind(offset)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = crate::services::audit::list_paginated(&db.pool, per_page, offset).await?;
     Ok(Json(rows))
 }
 
 // ── Connection Folders ──────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct ConnectionFolderRow {
-    pub id: Uuid,
-    pub name: String,
-    pub parent_id: Option<Uuid>,
-}
+use crate::services::connections::{ConnectionFolderRow, FolderRequest};
+
+// Keep legacy test-facing names as aliases of the unified service DTO.
+pub type CreateFolderRequest = FolderRequest;
+pub type UpdateFolderRequest = FolderRequest;
 
 pub async fn list_connection_folders(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<ConnectionFolderRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<ConnectionFolderRow> =
-        sqlx::query_as("SELECT id, name, parent_id FROM connection_folders ORDER BY name")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = connections::list_folders(&db.pool).await?;
     Ok(Json(rows))
-}
-
-#[derive(Deserialize)]
-pub struct CreateFolderRequest {
-    pub name: String,
-    pub parent_id: Option<Uuid>,
 }
 
 pub async fn create_connection_folder(
@@ -2070,27 +1599,16 @@ pub async fn create_connection_folder(
 ) -> Result<Json<ConnectionFolderRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let row: ConnectionFolderRow = sqlx::query_as(
-        "INSERT INTO connection_folders (name, parent_id) VALUES ($1, $2) RETURNING id, name, parent_id",
-    )
-    .bind(&body.name)
-    .bind(body.parent_id)
-    .fetch_one(&db.pool)
-    .await?;
+    let name = body.name.clone();
+    let row = connections::create_folder(&db.pool, &body).await?;
     audit::log(
         &db.pool,
         Some(user.id),
         "connection_folder.created",
-        &json!({ "name": body.name }),
+        &json!({ "name": name }),
     )
     .await?;
     Ok(Json(row))
-}
-
-#[derive(Deserialize)]
-pub struct UpdateFolderRequest {
-    pub name: String,
-    pub parent_id: Option<Uuid>,
 }
 
 pub async fn update_connection_folder(
@@ -2099,15 +1617,9 @@ pub async fn update_connection_folder(
     Json(body): Json<UpdateFolderRequest>,
 ) -> Result<Json<ConnectionFolderRow>, AppError> {
     let db = require_running(&state).await?;
-    let row: ConnectionFolderRow = sqlx::query_as(
-        "UPDATE connection_folders SET name = $1, parent_id = $2 WHERE id = $3 RETURNING id, name, parent_id",
-    )
-    .bind(&body.name)
-    .bind(body.parent_id)
-    .bind(id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Folder not found".into()))?;
+    let row = connections::update_folder(&db.pool, id, &body)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Folder not found".into()))?;
     Ok(Json(row))
 }
 
@@ -2118,11 +1630,7 @@ pub async fn delete_connection_folder(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let result = sqlx::query("DELETE FROM connection_folders WHERE id = $1")
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if !connections::delete_folder(&db.pool, id).await? {
         return Err(AppError::NotFound("Folder not found".into()));
     }
     audit::log(
@@ -2567,10 +2075,7 @@ pub async fn list_ad_sync_configs(
 ) -> Result<Json<Vec<AdSyncConfig>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let mut rows: Vec<AdSyncConfig> =
-        sqlx::query_as("SELECT * FROM ad_sync_configs ORDER BY label")
-            .fetch_all(&db.pool)
-            .await?;
+    let mut rows = crate::services::ad_sync_admin::list_all(&db.pool).await?;
     // Redact bind_password — never expose encrypted or plaintext secrets to clients
     for r in &mut rows {
         if !r.bind_password.is_empty() {
@@ -2649,12 +2154,9 @@ pub async fn create_ad_sync_config(
     // Resolve password if it's a mask and we are cloning
     if bind_password == DOT_MASK || bind_password == STAR_MASK {
         if let Some(id) = body.clone_from {
-            let existing: Option<String> =
-                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if let Some(pw) = existing {
+            if let Some(pw) =
+                crate::services::ad_sync_admin::get_bind_password(&db.pool, id).await?
+            {
                 bind_password = pw;
             }
         }
@@ -2701,43 +2203,45 @@ pub async fn create_ad_sync_config(
         None
     };
 
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO ad_sync_configs (label, ldap_url, bind_dn, bind_password, search_bases, search_filter, search_scope, protocol, default_port, domain_override, folder_id, tls_skip_verify, sync_interval_minutes, enabled, auth_method, keytab_path, krb5_principal, ca_cert_pem, connection_defaults, pm_enabled, pm_bind_user, pm_bind_password, pm_target_filter, pm_pwd_min_length, pm_pwd_require_uppercase, pm_pwd_require_lowercase, pm_pwd_require_numbers, pm_pwd_require_symbols, pm_auto_rotate_enabled, pm_auto_rotate_interval_days, pm_search_bases, pm_allow_emergency_bypass)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32) RETURNING id",
+    let empty_vec: Vec<String> = vec![];
+    let default_cd = serde_json::json!({});
+    let id = crate::services::ad_sync_admin::insert_config(
+        &db.pool,
+        crate::services::ad_sync_admin::InsertConfigArgs {
+            label: &body.label,
+            ldap_url: &body.ldap_url,
+            bind_dn: body.bind_dn.as_deref().unwrap_or(""),
+            bind_password: &stored_password,
+            search_bases: &body.search_bases,
+            search_filter: body.search_filter.as_deref().unwrap_or("(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))"),
+            search_scope: body.search_scope.as_deref().unwrap_or("subtree"),
+            protocol: body.protocol.as_deref().unwrap_or("rdp"),
+            default_port: body.default_port.unwrap_or(3389),
+            domain_override: body.domain_override.as_deref(),
+            folder_id: body.folder_id,
+            tls_skip_verify: body.tls_skip_verify.unwrap_or(false),
+            sync_interval_minutes: body.sync_interval_minutes.unwrap_or(60),
+            enabled: body.enabled.unwrap_or(true),
+            auth_method: body.auth_method.as_deref().unwrap_or("simple"),
+            keytab_path: body.keytab_path.as_deref(),
+            krb5_principal: body.krb5_principal.as_deref(),
+            ca_cert_pem: body.ca_cert_pem.as_deref(),
+            connection_defaults: body.connection_defaults.as_ref().unwrap_or(&default_cd),
+            pm_enabled: body.pm_enabled.unwrap_or(false),
+            pm_bind_user: body.pm_bind_user.as_deref(),
+            pm_bind_password: stored_pm_password.as_deref(),
+            pm_target_filter: body.pm_target_filter.as_deref().unwrap_or("(&(objectCategory=person)(objectClass=user))"),
+            pm_pwd_min_length: body.pm_pwd_min_length.unwrap_or(16),
+            pm_pwd_require_uppercase: body.pm_pwd_require_uppercase.unwrap_or(true),
+            pm_pwd_require_lowercase: body.pm_pwd_require_lowercase.unwrap_or(true),
+            pm_pwd_require_numbers: body.pm_pwd_require_numbers.unwrap_or(true),
+            pm_pwd_require_symbols: body.pm_pwd_require_symbols.unwrap_or(true),
+            pm_auto_rotate_enabled: body.pm_auto_rotate_enabled.unwrap_or(false),
+            pm_auto_rotate_interval_days: body.pm_auto_rotate_interval_days.unwrap_or(30),
+            pm_search_bases: body.pm_search_bases.as_ref().unwrap_or(&empty_vec),
+            pm_allow_emergency_bypass: body.pm_allow_emergency_bypass.unwrap_or(false),
+        },
     )
-    .bind(&body.label)
-    .bind(&body.ldap_url)
-    .bind(body.bind_dn.as_deref().unwrap_or(""))
-    .bind(&stored_password)
-    .bind(&body.search_bases)
-    .bind(body.search_filter.as_deref().unwrap_or("(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))"))
-    .bind(body.search_scope.as_deref().unwrap_or("subtree"))
-    .bind(body.protocol.as_deref().unwrap_or("rdp"))
-    .bind(body.default_port.unwrap_or(3389))
-    .bind(body.domain_override.as_deref())
-    .bind(body.folder_id)
-    .bind(body.tls_skip_verify.unwrap_or(false))
-    .bind(body.sync_interval_minutes.unwrap_or(60))
-    .bind(body.enabled.unwrap_or(true))
-    .bind(body.auth_method.as_deref().unwrap_or("simple"))
-    .bind(body.keytab_path.as_deref())
-    .bind(body.krb5_principal.as_deref())
-    .bind(body.ca_cert_pem.as_deref())
-    .bind(body.connection_defaults.as_ref().unwrap_or(&serde_json::json!({})))
-    .bind(body.pm_enabled.unwrap_or(false))
-    .bind(body.pm_bind_user.as_deref())
-    .bind(stored_pm_password.as_deref())
-    .bind(body.pm_target_filter.as_deref().unwrap_or("(&(objectCategory=person)(objectClass=user))"))
-    .bind(body.pm_pwd_min_length.unwrap_or(16))
-    .bind(body.pm_pwd_require_uppercase.unwrap_or(true))
-    .bind(body.pm_pwd_require_lowercase.unwrap_or(true))
-    .bind(body.pm_pwd_require_numbers.unwrap_or(true))
-    .bind(body.pm_pwd_require_symbols.unwrap_or(true))
-    .bind(body.pm_auto_rotate_enabled.unwrap_or(false))
-    .bind(body.pm_auto_rotate_interval_days.unwrap_or(30))
-    .bind(body.pm_search_bases.as_ref().unwrap_or(&vec![]))
-    .bind(body.pm_allow_emergency_bypass.unwrap_or(false))
-    .fetch_one(&db.pool)
     .await?;
 
     settings::set(&db.pool, "ad_sync_enabled", "true").await?;
@@ -2800,12 +2304,7 @@ pub async fn update_ad_sync_config(
     let db = require_running(&state).await?;
 
     // Verify exists
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ad_sync_configs WHERE id = $1)")
-            .bind(id)
-            .fetch_one(&db.pool)
-            .await?;
-    if !exists {
+    if !crate::services::ad_sync_admin::config_exists(&db.pool, id).await? {
         return Err(AppError::NotFound("AD sync config not found".into()));
     }
 
@@ -2819,331 +2318,93 @@ pub async fn update_ad_sync_config(
         validate_ldap_filter(filter)?;
     }
 
-    // Apply partial updates within a transaction for atomicity
-    let mut tx = db.pool.begin().await?;
-
-    if let Some(ref v) = body.label {
-        sqlx::query("UPDATE ad_sync_configs SET label = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(ref v) = body.ldap_url {
-        sqlx::query("UPDATE ad_sync_configs SET ldap_url = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(ref v) = body.bind_dn {
-        sqlx::query("UPDATE ad_sync_configs SET bind_dn = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(ref v) = body.bind_password {
-        // Only update if not one of the redaction markers
+    // Pre-seal passwords (requires runtime VaultConfig from state).
+    // Stored values are bound to locals so UpdateFields can borrow them.
+    let sealed_bind_password: Option<String> = if let Some(ref v) = body.bind_password {
         if v != DOT_MASK && v != STAR_MASK {
-            // Encrypt bind_password via Vault if configured
-            let stored = if !v.is_empty() {
-                if v.starts_with("vault:") {
-                    v.clone()
-                } else {
-                    let vault_cfg = {
-                        let s = state.read().await;
-                        s.config.as_ref().and_then(|c| c.vault.clone())
-                    };
-                    if let Some(ref vc) = vault_cfg {
-                        crate::services::vault::seal_setting(vc, v).await?
-                    } else {
-                        v.clone()
-                    }
-                }
-            } else {
+            Some(if v.is_empty() {
                 String::new()
-            };
-            sqlx::query(
-                "UPDATE ad_sync_configs SET bind_password = $1, updated_at = now() WHERE id = $2",
-            )
-            .bind(&stored)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
-    if let Some(ref v) = body.search_bases {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET search_bases = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.search_filter {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET search_filter = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.search_scope {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET search_scope = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.protocol {
-        sqlx::query("UPDATE ad_sync_configs SET protocol = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.default_port {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET default_port = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.domain_override {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET domain_override = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.folder_id {
-        sqlx::query("UPDATE ad_sync_configs SET folder_id = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(v) = body.tls_skip_verify {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET tls_skip_verify = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.sync_interval_minutes {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET sync_interval_minutes = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.enabled {
-        sqlx::query("UPDATE ad_sync_configs SET enabled = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(ref v) = body.auth_method {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET auth_method = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.keytab_path {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET keytab_path = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.krb5_principal {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET krb5_principal = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.ca_cert_pem {
-        let val = if v.is_empty() { None } else { Some(v.as_str()) };
-        sqlx::query(
-            "UPDATE ad_sync_configs SET ca_cert_pem = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(val)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.connection_defaults {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET connection_defaults = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    // ── Password Management fields ──
-    if let Some(v) = body.pm_enabled {
-        sqlx::query("UPDATE ad_sync_configs SET pm_enabled = $1, updated_at = now() WHERE id = $2")
-            .bind(v)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if let Some(ref v) = body.pm_bind_user {
-        let val = if v.is_empty() { None } else { Some(v.as_str()) };
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_bind_user = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(val)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(ref v) = body.pm_bind_password {
-        if v != DOT_MASK && v != STAR_MASK {
-            let stored = if !v.is_empty() {
-                if v.starts_with("vault:") {
-                    Some(v.clone())
-                } else {
-                    let vault_cfg = {
-                        let s = state.read().await;
-                        s.config.as_ref().and_then(|c| c.vault.clone())
-                    };
-                    if let Some(ref vc) = vault_cfg {
-                        Some(crate::services::vault::seal_setting(vc, v).await?)
-                    } else {
-                        Some(v.clone())
-                    }
-                }
+            } else if v.starts_with("vault:") {
+                v.clone()
             } else {
-                None
-            };
-            sqlx::query(
-                "UPDATE ad_sync_configs SET pm_bind_password = $1, updated_at = now() WHERE id = $2",
-            )
-            .bind(stored.as_deref())
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+                let vault_cfg = {
+                    let s = state.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                if let Some(ref vc) = vault_cfg {
+                    crate::services::vault::seal_setting(vc, v).await?
+                } else {
+                    v.clone()
+                }
+            })
+        } else {
+            None
         }
-    }
-    if let Some(ref v) = body.pm_target_filter {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_target_filter = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_pwd_min_length {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_pwd_min_length = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_pwd_require_uppercase {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_pwd_require_uppercase = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_pwd_require_lowercase {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_pwd_require_lowercase = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_pwd_require_numbers {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_pwd_require_numbers = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_pwd_require_symbols {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_pwd_require_symbols = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_auto_rotate_enabled {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_auto_rotate_enabled = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if let Some(v) = body.pm_auto_rotate_interval_days {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_auto_rotate_interval_days = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
+    } else {
+        None
+    };
 
-    if let Some(v) = body.pm_search_bases {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_search_bases = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
+    // pm_bind_password: outer Option = "present in update", inner Option = "set/clear".
+    let sealed_pm_bind_password: Option<Option<String>> = if let Some(ref v) = body.pm_bind_password
+    {
+        if v != DOT_MASK && v != STAR_MASK {
+            Some(if v.is_empty() {
+                None
+            } else if v.starts_with("vault:") {
+                Some(v.clone())
+            } else {
+                let vault_cfg = {
+                    let s = state.read().await;
+                    s.config.as_ref().and_then(|c| c.vault.clone())
+                };
+                if let Some(ref vc) = vault_cfg {
+                    Some(crate::services::vault::seal_setting(vc, v).await?)
+                } else {
+                    Some(v.clone())
+                }
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
-    if let Some(v) = body.pm_allow_emergency_bypass {
-        sqlx::query(
-            "UPDATE ad_sync_configs SET pm_allow_emergency_bypass = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(v)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    tx.commit().await?;
+    let fields = crate::services::ad_sync_admin::UpdateFields {
+        label: body.label.as_deref(),
+        ldap_url: body.ldap_url.as_deref(),
+        bind_dn: body.bind_dn.as_deref(),
+        bind_password: sealed_bind_password.as_deref(),
+        search_bases: body.search_bases.as_deref(),
+        search_filter: body.search_filter.as_deref(),
+        search_scope: body.search_scope.as_deref(),
+        protocol: body.protocol.as_deref(),
+        default_port: body.default_port,
+        domain_override: body.domain_override.as_deref(),
+        folder_id: body.folder_id,
+        tls_skip_verify: body.tls_skip_verify,
+        sync_interval_minutes: body.sync_interval_minutes,
+        enabled: body.enabled,
+        auth_method: body.auth_method.as_deref(),
+        keytab_path: body.keytab_path.as_deref(),
+        krb5_principal: body.krb5_principal.as_deref(),
+        ca_cert_pem: body.ca_cert_pem.as_deref(),
+        connection_defaults: body.connection_defaults.as_ref(),
+        pm_enabled: body.pm_enabled,
+        pm_bind_user: body.pm_bind_user.as_deref(),
+        pm_bind_password: sealed_pm_bind_password.as_ref().map(|o| o.as_deref()),
+        pm_target_filter: body.pm_target_filter.as_deref(),
+        pm_pwd_min_length: body.pm_pwd_min_length,
+        pm_pwd_require_uppercase: body.pm_pwd_require_uppercase,
+        pm_pwd_require_lowercase: body.pm_pwd_require_lowercase,
+        pm_pwd_require_numbers: body.pm_pwd_require_numbers,
+        pm_pwd_require_symbols: body.pm_pwd_require_symbols,
+        pm_auto_rotate_enabled: body.pm_auto_rotate_enabled,
+        pm_auto_rotate_interval_days: body.pm_auto_rotate_interval_days,
+        pm_search_bases: body.pm_search_bases.clone(),
+        pm_allow_emergency_bypass: body.pm_allow_emergency_bypass,
+    };
+    crate::services::ad_sync_admin::apply_update(&db.pool, id, fields).await?;
 
     audit::log(
         &db.pool,
@@ -3162,18 +2423,12 @@ pub async fn delete_ad_sync_config(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let result = sqlx::query("DELETE FROM ad_sync_configs WHERE id = $1")
-        .bind(id)
-        .execute(&db.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if !crate::services::ad_sync_admin::delete_by_id(&db.pool, id).await? {
         return Err(AppError::NotFound("AD sync config not found".into()));
     }
 
     // Disable global sync if no configs remaining
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ad_sync_configs")
-        .fetch_one(&db.pool)
-        .await?;
+    let count = crate::services::ad_sync_admin::count_configs(&db.pool).await?;
     if count == 0 {
         settings::set(&db.pool, "ad_sync_enabled", "false").await?;
     }
@@ -3197,9 +2452,7 @@ pub async fn trigger_ad_sync(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let mut config: AdSyncConfig = sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&db.pool)
+    let mut config = crate::services::ad_sync_admin::get_by_id(&db.pool, id)
         .await?
         .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
@@ -3236,21 +2489,15 @@ pub async fn test_ad_sync_connection(
     let mut bind_password = body.bind_password.clone().unwrap_or_default();
     if bind_password == DOT_MASK || bind_password == STAR_MASK {
         if let Some(id) = body.id {
-            let existing: Option<String> =
-                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if let Some(pw) = existing {
+            if let Some(pw) =
+                crate::services::ad_sync_admin::get_bind_password(&db.pool, id).await?
+            {
                 bind_password = pw;
             }
         } else if let Some(clone_id) = body.clone_from {
-            let existing: Option<String> =
-                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-                    .bind(clone_id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if let Some(pw) = existing {
+            if let Some(pw) =
+                crate::services::ad_sync_admin::get_bind_password(&db.pool, clone_id).await?
+            {
                 bind_password = pw;
             }
         }
@@ -3337,12 +2584,9 @@ pub async fn test_pm_target_filter(
     let mut bind_password = body.bind_password.clone().unwrap_or_default();
     if bind_password == DOT_MASK || bind_password == STAR_MASK {
         if let Some(id) = body.id {
-            let existing: Option<String> =
-                sqlx::query_scalar("SELECT bind_password FROM ad_sync_configs WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if let Some(pw) = existing {
+            if let Some(pw) =
+                crate::services::ad_sync_admin::get_bind_password(&db.pool, id).await?
+            {
                 bind_password = pw;
             }
         }
@@ -3352,12 +2596,9 @@ pub async fn test_pm_target_filter(
     let mut pm_bind_pw = body.pm_bind_password.clone().unwrap_or_default();
     if pm_bind_pw == DOT_MASK || pm_bind_pw == STAR_MASK {
         if let Some(id) = body.id {
-            let existing: Option<String> =
-                sqlx::query_scalar("SELECT pm_bind_password FROM ad_sync_configs WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            if let Some(pw) = existing {
+            if let Some(pw) =
+                crate::services::ad_sync_admin::get_pm_bind_password(&db.pool, id).await?
+            {
                 pm_bind_pw = pw;
             }
         }
@@ -3522,24 +2763,13 @@ pub async fn list_ad_sync_runs(
 ) -> Result<Json<Vec<AdSyncRun>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows: Vec<AdSyncRun> = sqlx::query_as(
-        "SELECT * FROM ad_sync_runs WHERE config_id = $1 ORDER BY started_at DESC LIMIT 50",
-    )
-    .bind(config_id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = crate::services::ad_sync_admin::list_runs(&db.pool, config_id).await?;
     Ok(Json(rows))
 }
 
 // ── Admin Tags (global, forced to all users) ──────────────────────────
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct AdminTag {
-    pub id: Uuid,
-    pub name: String,
-    pub color: String,
-    pub created_at: chrono::DateTime<Utc>,
-}
+use crate::services::admin_tags::AdminTag;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateAdminTagReq {
@@ -3563,10 +2793,7 @@ pub async fn list_admin_tags(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<AdminTag>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<AdminTag> =
-        sqlx::query_as("SELECT id, name, color, created_at FROM admin_tags ORDER BY name")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = crate::services::admin_tags::list_tags(&db.pool).await?;
     Ok(Json(rows))
 }
 
@@ -3589,13 +2816,7 @@ pub async fn create_admin_tag(
             "Color must be a valid hex color (e.g. #ff00aa)".into(),
         ));
     }
-    let tag: AdminTag = sqlx::query_as(
-        "INSERT INTO admin_tags (name, color) VALUES ($1, $2) RETURNING id, name, color, created_at",
-    )
-    .bind(&name)
-    .bind(&color)
-    .fetch_one(&db.pool)
-    .await?;
+    let tag = crate::services::admin_tags::create_tag(&db.pool, &name, &color).await?;
     Ok(Json(tag))
 }
 
@@ -3622,13 +2843,12 @@ pub async fn update_admin_tag(
             ));
         }
     }
-    let tag: AdminTag = sqlx::query_as(
-        "UPDATE admin_tags SET name = COALESCE($2, name), color = COALESCE($3, color) WHERE id = $1 RETURNING id, name, color, created_at",
+    let tag = crate::services::admin_tags::update_tag(
+        &db.pool,
+        tag_id,
+        body.name.as_deref(),
+        body.color.as_deref(),
     )
-    .bind(tag_id)
-    .bind(&body.name)
-    .bind(&body.color)
-    .fetch_one(&db.pool)
     .await?;
     Ok(Json(tag))
 }
@@ -3638,10 +2858,7 @@ pub async fn delete_admin_tag(
     Path(tag_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    sqlx::query("DELETE FROM admin_tags WHERE id = $1")
-        .bind(tag_id)
-        .execute(&db.pool)
-        .await?;
+    crate::services::admin_tags::delete_tag(&db.pool, tag_id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -3649,10 +2866,7 @@ pub async fn list_admin_connection_tags(
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<(Uuid, Uuid)> =
-        sqlx::query_as("SELECT connection_id, tag_id FROM admin_connection_tags")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = crate::services::admin_tags::list_all_connection_tag_pairs(&db.pool).await?;
 
     let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for (conn_id, tag_id) in rows {
@@ -3670,23 +2884,8 @@ pub async fn set_admin_connection_tags(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
-    let mut tx = db.pool.begin().await?;
-    sqlx::query("DELETE FROM admin_connection_tags WHERE connection_id = $1")
-        .bind(body.connection_id)
-        .execute(&mut *tx)
+    crate::services::admin_tags::set_connection_tags(&db.pool, body.connection_id, &body.tag_ids)
         .await?;
-    if !body.tag_ids.is_empty() {
-        sqlx::query(
-            "INSERT INTO admin_connection_tags (connection_id, tag_id)
-             SELECT $1, unnest($2::uuid[])
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(body.connection_id)
-        .bind(&body.tag_ids)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -3704,9 +2903,7 @@ pub async fn list_approval_roles(
 ) -> Result<Json<Vec<ApprovalRole>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows: Vec<ApprovalRole> = sqlx::query_as("SELECT * FROM approval_roles ORDER BY name")
-        .fetch_all(&db.pool)
-        .await?;
+    let rows = crate::services::checkouts::list_approval_roles(&db.pool).await?;
     Ok(Json(rows))
 }
 
@@ -3729,12 +2926,11 @@ pub async fn create_approval_role(
             "Role name must be 1-255 characters".into(),
         ));
     }
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO approval_roles (name, description) VALUES ($1, $2) RETURNING id",
+    let id = crate::services::checkouts::create_approval_role(
+        &db.pool,
+        name,
+        body.description.as_deref().unwrap_or(""),
     )
-    .bind(name)
-    .bind(body.description.as_deref().unwrap_or(""))
-    .fetch_one(&db.pool)
     .await?;
     audit::log(
         &db.pool,
@@ -3767,17 +2963,10 @@ pub async fn update_approval_role(
                 "Role name must be 1-255 characters".into(),
             ));
         }
-        sqlx::query("UPDATE approval_roles SET name = $1, updated_at = now() WHERE id = $2")
-            .bind(name)
-            .bind(role_id)
-            .execute(&db.pool)
-            .await?;
+        crate::services::checkouts::update_approval_role_name(&db.pool, role_id, name).await?;
     }
     if let Some(ref desc) = body.description {
-        sqlx::query("UPDATE approval_roles SET description = $1, updated_at = now() WHERE id = $2")
-            .bind(desc)
-            .bind(role_id)
-            .execute(&db.pool)
+        crate::services::checkouts::update_approval_role_description(&db.pool, role_id, desc)
             .await?;
     }
     Ok(Json(json!({ "status": "updated" })))
@@ -3790,10 +2979,7 @@ pub async fn delete_approval_role(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    sqlx::query("DELETE FROM approval_roles WHERE id = $1")
-        .bind(role_id)
-        .execute(&db.pool)
-        .await?;
+    crate::services::checkouts::delete_approval_role(&db.pool, role_id).await?;
     audit::log(
         &db.pool,
         Some(user.id),
@@ -3813,16 +2999,7 @@ pub async fn list_role_assignments(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT u.id, u.username
-         FROM approval_role_assignments ara
-         JOIN users u ON u.id = ara.user_id
-         WHERE ara.role_id = $1
-         ORDER BY u.username",
-    )
-    .bind(role_id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = crate::services::checkouts::list_role_assignments(&db.pool, role_id).await?;
     let result: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(id, username)| json!({ "id": id, "username": username }))
@@ -3843,21 +3020,7 @@ pub async fn set_role_assignments(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let mut tx = db.pool.begin().await?;
-    sqlx::query("DELETE FROM approval_role_assignments WHERE role_id = $1")
-        .bind(role_id)
-        .execute(&mut *tx)
-        .await?;
-    for uid in &body.user_ids {
-        sqlx::query(
-            "INSERT INTO approval_role_assignments (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        )
-        .bind(uid)
-        .bind(role_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
+    crate::services::checkouts::set_role_assignments(&db.pool, role_id, &body.user_ids).await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -3870,13 +3033,8 @@ pub async fn list_role_accounts(
 ) -> Result<Json<Vec<String>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT managed_ad_dn FROM approval_role_accounts WHERE role_id = $1 ORDER BY managed_ad_dn",
-    )
-    .bind(role_id)
-    .fetch_all(&db.pool)
-    .await?;
-    Ok(Json(rows.into_iter().map(|(dn,)| dn).collect()))
+    let rows = crate::services::checkouts::list_role_accounts(&db.pool, role_id).await?;
+    Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
@@ -3898,26 +3056,12 @@ pub async fn set_role_accounts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let mut tx = db.pool.begin().await?;
-    sqlx::query("DELETE FROM approval_role_accounts WHERE role_id = $1")
-        .bind(role_id)
-        .execute(&mut *tx)
-        .await?;
-    for entry in &body.managed_accounts {
-        let dn = entry.dn.trim();
-        if dn.is_empty() {
-            continue;
-        }
-        sqlx::query(
-            "INSERT INTO approval_role_accounts (role_id, managed_ad_dn, friendly_name) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        )
-        .bind(role_id)
-        .bind(dn)
-        .bind(&entry.friendly_name)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
+    let entries: Vec<(String, Option<String>)> = body
+        .managed_accounts
+        .into_iter()
+        .map(|e| (e.dn.trim().to_string(), e.friendly_name))
+        .collect();
+    crate::services::checkouts::set_role_accounts(&db.pool, role_id, &entries).await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -3932,9 +3076,7 @@ pub async fn list_unmapped_accounts(
     let db = require_running(&state).await?;
 
     // Load the AD sync config and decrypt bind passwords
-    let config: AdSyncConfig = sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
-        .bind(config_id)
-        .fetch_optional(&db.pool)
+    let config = crate::services::ad_sync_admin::get_by_id(&db.pool, config_id)
         .await?
         .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
@@ -3985,12 +3127,8 @@ pub async fn list_unmapped_accounts(
     .await?;
 
     // Load existing mappings
-    let existing_dns: Vec<String> = sqlx::query_scalar(
-        "SELECT managed_ad_dn FROM user_account_mappings WHERE ad_sync_config_id = $1",
-    )
-    .bind(config_id)
-    .fetch_all(&db.pool)
-    .await?;
+    let existing_dns =
+        crate::services::checkouts::list_mapped_dns_for_config(&db.pool, config_id).await?;
     let existing_set: std::collections::HashSet<String> = existing_dns.into_iter().collect();
 
     // Return unmapped accounts
@@ -4125,10 +3263,7 @@ pub async fn list_account_mappings(
 ) -> Result<Json<Vec<UserAccountMapping>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows: Vec<UserAccountMapping> =
-        sqlx::query_as("SELECT * FROM user_account_mappings ORDER BY created_at")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = crate::services::checkouts::list_account_mappings(&db.pool).await?;
     Ok(Json(rows))
 }
 
@@ -4148,18 +3283,14 @@ pub async fn create_account_mapping(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO user_account_mappings (user_id, managed_ad_dn, can_self_approve, ad_sync_config_id, friendly_name)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (user_id, managed_ad_dn) DO UPDATE SET can_self_approve = $3, ad_sync_config_id = $4, friendly_name = $5
-         RETURNING id",
+    let id = crate::services::checkouts::upsert_account_mapping(
+        &db.pool,
+        body.user_id,
+        &body.managed_ad_dn,
+        body.can_self_approve.unwrap_or(false),
+        body.ad_sync_config_id,
+        body.friendly_name.as_deref(),
     )
-    .bind(body.user_id)
-    .bind(&body.managed_ad_dn)
-    .bind(body.can_self_approve.unwrap_or(false))
-    .bind(body.ad_sync_config_id)
-    .bind(&body.friendly_name)
-    .fetch_one(&db.pool)
     .await?;
     audit::log(
         &db.pool,
@@ -4178,10 +3309,7 @@ pub async fn delete_account_mapping(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    sqlx::query("DELETE FROM user_account_mappings WHERE id = $1")
-        .bind(mapping_id)
-        .execute(&db.pool)
-        .await?;
+    crate::services::checkouts::delete_account_mapping(&db.pool, mapping_id).await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -4199,18 +3327,14 @@ pub async fn update_account_mapping(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let res = sqlx::query(
-        "UPDATE user_account_mappings SET
-            can_self_approve = COALESCE($2, can_self_approve),
-            friendly_name    = COALESCE($3, friendly_name)
-         WHERE id = $1",
+    let updated = crate::services::checkouts::update_account_mapping(
+        &db.pool,
+        mapping_id,
+        body.can_self_approve,
+        body.friendly_name.as_deref(),
     )
-    .bind(mapping_id)
-    .bind(body.can_self_approve)
-    .bind(body.friendly_name.as_deref())
-    .execute(&db.pool)
     .await?;
-    if res.rows_affected() == 0 {
+    if !updated {
         return Err(AppError::NotFound("Account mapping not found".into()));
     }
     audit::log(
@@ -4274,11 +3398,7 @@ pub async fn list_checkout_requests(
 ) -> Result<Json<Vec<CheckoutRequest>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let rows: Vec<CheckoutRequest> = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests ORDER BY created_at DESC LIMIT 200",
-    )
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = crate::services::checkouts::list_all_recent(&db.pool, 200).await?;
     Ok(Json(rows))
 }
 

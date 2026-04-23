@@ -72,21 +72,13 @@ pub async fn me(
     };
 
     // Check whether the user has accepted the terms / disclaimer
-    let terms_row: Option<(Option<chrono::DateTime<chrono::Utc>>, Option<i32>)> =
-        sqlx::query_as("SELECT terms_accepted_at, terms_accepted_version FROM users WHERE id = $1")
-            .bind(user.id)
-            .fetch_optional(&db.pool)
-            .await?;
-    let (terms_accepted_at, terms_accepted_version) = terms_row.unwrap_or((None, None));
+    let (terms_accepted_at, terms_accepted_version) =
+        crate::services::users::terms_status(&db.pool, user.id).await?;
 
     // Check whether the user has any approval roles assigned
-    let is_approver: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM approval_role_assignments WHERE user_id = $1)",
-    )
-    .bind(user.id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
+    let is_approver = crate::services::users::is_approver(&db.pool, user.id)
+        .await
+        .unwrap_or(false);
 
     Ok(Json(json!({
         "id": user.id,
@@ -124,94 +116,38 @@ pub async fn accept_terms(
     if !(1..=1000).contains(&version) {
         return Err(AppError::Validation("Invalid terms version".into()));
     }
-    sqlx::query(
-        "UPDATE users SET terms_accepted_at = NOW(), terms_accepted_version = $2 WHERE id = $1",
-    )
-    .bind(user.id)
-    .bind(version)
-    .execute(&db.pool)
-    .await?;
+    crate::services::users::accept_terms(&db.pool, user.id, version).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 // ── User's connections ─────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct UserConnectionRow {
-    pub id: Uuid,
-    pub name: String,
-    pub protocol: String,
-    pub hostname: String,
-    pub port: i32,
-    pub description: String,
-    pub folder_id: Option<Uuid>,
-    pub folder_name: Option<String>,
-    pub last_accessed: Option<chrono::DateTime<chrono::Utc>>,
-    pub watermark: String,
-    pub health_status: String,
-    pub health_checked_at: Option<chrono::DateTime<chrono::Utc>>,
-}
+pub use crate::services::connections::UserConnectionRow;
 
 pub async fn my_connections(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<UserConnectionRow>>, AppError> {
     let db = require_running(&state).await?;
-
-    let rows: Vec<UserConnectionRow> = if user.can_access_all_connections() {
-        // Users with connection management permissions see all connections.
-        // History is fetched from user_connection_access (per-user). Note: migration 026
-        // seeded this table from global data; subsequent connections update this per-user.
-        sqlx::query_as(
-            "SELECT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark,
-                    c.health_status, c.health_checked_at
-             FROM connections c
-             LEFT JOIN connection_folders cf ON cf.id = c.folder_id
-             LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
-             WHERE c.soft_deleted_at IS NULL
-             ORDER BY c.name",
-        )
-        .bind(user.id)
-        .fetch_all(&db.pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT DISTINCT c.id, c.name, c.protocol, c.hostname, c.port, c.description,
-                    c.folder_id, cf.name AS folder_name, uca.last_accessed, c.watermark,
-                    c.health_status, c.health_checked_at
-             FROM connections c
-             LEFT JOIN connection_folders cf ON cf.id = c.folder_id
-             LEFT JOIN user_connection_access uca ON uca.connection_id = c.id AND uca.user_id = $1
-             JOIN users u ON u.id = $1
-             WHERE c.soft_deleted_at IS NULL
-             AND (
-                 EXISTS (SELECT 1 FROM role_connections rc WHERE rc.role_id = u.role_id AND rc.connection_id = c.id)
-                 OR
-                 EXISTS (SELECT 1 FROM role_folders rf WHERE rf.role_id = u.role_id AND rf.folder_id = c.folder_id)
-             )
-             ORDER BY c.name",
-        )
-        .bind(user.id)
-        .fetch_all(&db.pool)
-        .await?
-    };
-
+    let rows = crate::services::connections::list_for_user(
+        &db.pool,
+        user.id,
+        user.can_access_all_connections(),
+    )
+    .await?;
     Ok(Json(rows))
 }
 
 // ── Favorites ─────────────────────────────────────────────────────────
+
+use crate::services::favorites;
 
 pub async fn list_favorites(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<Uuid>>, AppError> {
     let db = require_running(&state).await?;
-    let ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT connection_id FROM user_favorites WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_all(&db.pool)
-            .await?;
+    let ids = favorites::list(&db.pool, user.id).await?;
     Ok(Json(ids))
 }
 
@@ -227,44 +163,21 @@ pub async fn toggle_favorite(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    // Check if already favorited
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM user_favorites WHERE user_id = $1 AND connection_id = $2)",
-    )
-    .bind(user.id)
-    .bind(body.connection_id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
-
-    if exists {
-        sqlx::query("DELETE FROM user_favorites WHERE user_id = $1 AND connection_id = $2")
-            .bind(user.id)
-            .bind(body.connection_id)
-            .execute(&db.pool)
-            .await?;
+    if favorites::is_favorite(&db.pool, user.id, body.connection_id).await? {
+        favorites::remove(&db.pool, user.id, body.connection_id).await?;
         Ok(Json(json!({ "favorited": false })))
     } else {
-        sqlx::query(
-            "INSERT INTO user_favorites (user_id, connection_id) VALUES ($1, $2)
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(user.id)
-        .bind(body.connection_id)
-        .execute(&db.pool)
-        .await?;
+        favorites::add(&db.pool, user.id, body.connection_id).await?;
         Ok(Json(json!({ "favorited": true })))
     }
 }
 
 // ── User Tags ─────────────────────────────────────────────────────────
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct UserTag {
-    pub id: Uuid,
-    pub name: String,
-    pub color: String,
-}
+use crate::services::user_tags as tags_svc;
+pub use crate::services::user_tags::{
+    CreateTagRequest, SetConnectionTagsRequest, SetDisplayTagRequest, UpdateTagRequest, UserTag,
+};
 
 /// List all tags owned by the current user.
 pub async fn list_tags(
@@ -272,18 +185,8 @@ pub async fn list_tags(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<UserTag>>, AppError> {
     let db = require_running(&state).await?;
-    let tags: Vec<UserTag> =
-        sqlx::query_as("SELECT id, name, color FROM user_tags WHERE user_id = $1 ORDER BY name")
-            .bind(user.id)
-            .fetch_all(&db.pool)
-            .await?;
+    let tags = tags_svc::list_for_user(&db.pool, user.id).await?;
     Ok(Json(tags))
-}
-
-#[derive(Deserialize)]
-pub struct CreateTagRequest {
-    pub name: String,
-    pub color: Option<String>,
 }
 
 /// Create a new tag for the current user.
@@ -305,22 +208,8 @@ pub async fn create_tag(
             "Color must be a valid hex color (e.g. #ff00aa)".into(),
         ));
     }
-    let tag: UserTag = sqlx::query_as(
-        "INSERT INTO user_tags (user_id, name, color) VALUES ($1, $2, $3)
-         RETURNING id, name, color",
-    )
-    .bind(user.id)
-    .bind(&name)
-    .bind(&color)
-    .fetch_one(&db.pool)
-    .await?;
+    let tag = tags_svc::create(&db.pool, user.id, &name, &color).await?;
     Ok(Json(tag))
-}
-
-#[derive(Deserialize)]
-pub struct UpdateTagRequest {
-    pub name: Option<String>,
-    pub color: Option<String>,
 }
 
 /// Update an existing tag (name and/or color).
@@ -346,18 +235,14 @@ pub async fn update_tag(
             ));
         }
     }
-    let tag: UserTag = sqlx::query_as(
-        "UPDATE user_tags SET
-            name  = COALESCE($3, name),
-            color = COALESCE($4, color)
-         WHERE id = $1 AND user_id = $2
-         RETURNING id, name, color",
+    let name_trimmed = body.name.as_deref().map(|s| s.trim());
+    let tag = tags_svc::update(
+        &db.pool,
+        tag_id,
+        user.id,
+        name_trimmed,
+        body.color.as_deref(),
     )
-    .bind(tag_id)
-    .bind(user.id)
-    .bind(body.name.as_deref().map(|s| s.trim()))
-    .bind(body.color.as_deref())
-    .fetch_optional(&db.pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Tag not found".into()))?;
     Ok(Json(tag))
@@ -370,12 +255,7 @@ pub async fn delete_tag(
     Path(tag_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let result = sqlx::query("DELETE FROM user_tags WHERE id = $1 AND user_id = $2")
-        .bind(tag_id)
-        .bind(user.id)
-        .execute(&db.pool)
-        .await?;
-    if result.rows_affected() == 0 {
+    if !tags_svc::delete(&db.pool, tag_id, user.id).await? {
         return Err(AppError::NotFound("Tag not found".into()));
     }
     Ok(Json(json!({ "ok": true })))
@@ -388,18 +268,7 @@ pub async fn list_connection_tags(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        connection_id: Uuid,
-        tag_id: Uuid,
-    }
-
-    let rows: Vec<Row> =
-        sqlx::query_as("SELECT connection_id, tag_id FROM user_connection_tags WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = tags_svc::list_connection_tags(&db.pool, user.id).await?;
 
     let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for r in rows {
@@ -410,12 +279,6 @@ pub async fn list_connection_tags(
     Ok(Json(json!(map)))
 }
 
-#[derive(Deserialize)]
-pub struct SetConnectionTagsRequest {
-    pub connection_id: Uuid,
-    pub tag_ids: Vec<Uuid>,
-}
-
 /// Replace all tags on a connection for the current user.
 pub async fn set_connection_tags(
     State(state): State<SharedState>,
@@ -423,33 +286,7 @@ pub async fn set_connection_tags(
     Json(body): Json<SetConnectionTagsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-
-    // Wrap delete + insert in a transaction for atomicity
-    let mut tx = db.pool.begin().await?;
-
-    // Delete existing tags for this connection
-    sqlx::query("DELETE FROM user_connection_tags WHERE user_id = $1 AND connection_id = $2")
-        .bind(user.id)
-        .bind(body.connection_id)
-        .execute(&mut *tx)
-        .await?;
-
-    // Bulk-insert new tags using unnest to avoid N+1 inserts
-    if !body.tag_ids.is_empty() {
-        sqlx::query(
-            "INSERT INTO user_connection_tags (user_id, connection_id, tag_id)
-             SELECT $1, $2, unnest($3::uuid[])
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(user.id)
-        .bind(body.connection_id)
-        .bind(&body.tag_ids)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    tx.commit().await?;
-
+    tags_svc::set_connection_tags(&db.pool, user.id, body.connection_id, &body.tag_ids).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -462,24 +299,7 @@ pub async fn list_display_tags(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        connection_id: Uuid,
-        id: Uuid,
-        name: String,
-        color: String,
-    }
-
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT d.connection_id, t.id, t.name, t.color
-         FROM user_connection_display_tags d
-         JOIN user_tags t ON t.id = d.tag_id
-         WHERE d.user_id = $1",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = tags_svc::list_display_tags(&db.pool, user.id).await?;
 
     let mut map = serde_json::Map::new();
     for r in rows {
@@ -491,12 +311,6 @@ pub async fn list_display_tags(
     Ok(Json(serde_json::Value::Object(map)))
 }
 
-#[derive(Deserialize)]
-pub struct SetDisplayTagRequest {
-    pub connection_id: Uuid,
-    pub tag_id: Uuid,
-}
-
 /// Set or replace the display tag for a connection (one per connection per user).
 pub async fn set_display_tag(
     State(state): State<SharedState>,
@@ -505,29 +319,11 @@ pub async fn set_display_tag(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    // Verify the tag belongs to the user
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_tags WHERE id = $1 AND user_id = $2)")
-            .bind(body.tag_id)
-            .bind(user.id)
-            .fetch_one(&db.pool)
-            .await?;
-
-    if !exists {
+    if !tags_svc::user_owns_tag(&db.pool, body.tag_id, user.id).await? {
         return Err(AppError::NotFound("Tag not found".into()));
     }
 
-    sqlx::query(
-        "INSERT INTO user_connection_display_tags (user_id, connection_id, tag_id)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, connection_id)
-         DO UPDATE SET tag_id = $3",
-    )
-    .bind(user.id)
-    .bind(body.connection_id)
-    .bind(body.tag_id)
-    .execute(&db.pool)
-    .await?;
+    tags_svc::upsert_display_tag(&db.pool, user.id, body.connection_id, body.tag_id).await?;
 
     Ok(Json(json!({ "ok": true })))
 }
@@ -539,13 +335,7 @@ pub async fn remove_display_tag(
     Path(connection_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    sqlx::query(
-        "DELETE FROM user_connection_display_tags WHERE user_id = $1 AND connection_id = $2",
-    )
-    .bind(user.id)
-    .bind(connection_id)
-    .execute(&db.pool)
-    .await?;
+    tags_svc::remove_display_tag(&db.pool, user.id, connection_id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -577,9 +367,7 @@ pub async fn list_admin_tags(
     State(state): State<SharedState>,
 ) -> Result<Json<Vec<UserTag>>, AppError> {
     let db = require_running(&state).await?;
-    let tags: Vec<UserTag> = sqlx::query_as("SELECT id, name, color FROM admin_tags ORDER BY name")
-        .fetch_all(&db.pool)
-        .await?;
+    let tags = tags_svc::list_admin_tags(&db.pool).await?;
     Ok(Json(tags))
 }
 
@@ -588,10 +376,7 @@ pub async fn list_admin_connection_tags(
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<(Uuid, Uuid)> =
-        sqlx::query_as("SELECT connection_id, tag_id FROM admin_connection_tags")
-            .fetch_all(&db.pool)
-            .await?;
+    let rows = crate::services::admin_tags::list_all_connection_tag_pairs(&db.pool).await?;
 
     let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     for (conn_id, tag_id) in rows {
@@ -629,19 +414,8 @@ pub async fn update_credential(
     // Envelope-encrypt the password
     let sealed = vault::seal(&vault_cfg, body.password.as_bytes()).await?;
 
-    sqlx::query(
-        "INSERT INTO user_credentials (user_id, connection_id, encrypted_password, encrypted_dek, nonce)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (user_id, connection_id) DO UPDATE
-         SET encrypted_password = $3, encrypted_dek = $4, nonce = $5, updated_at = now()",
-    )
-    .bind(user.id)
-    .bind(body.connection_id)
-    .bind(&sealed.ciphertext)
-    .bind(&sealed.encrypted_dek)
-    .bind(&sealed.nonce)
-    .execute(&db.pool)
-    .await?;
+    crate::services::user_credentials::upsert(&db.pool, user.id, body.connection_id, &sealed)
+        .await?;
 
     crate::services::audit::log(
         &db.pool,
@@ -653,19 +427,16 @@ pub async fn update_credential(
 
     // Revoke active share links for this connection owned by this user,
     // since the underlying credentials have changed
-    sqlx::query(
-        "UPDATE connection_shares SET revoked = true
-         WHERE owner_user_id = $1 AND connection_id = $2 AND NOT revoked",
-    )
-    .bind(user.id)
-    .bind(body.connection_id)
-    .execute(&db.pool)
-    .await?;
+    crate::services::user_credentials::revoke_user_shares(&db.pool, user.id, body.connection_id)
+        .await?;
 
     Ok(Json(json!({ "status": "credential_saved" })))
 }
 
 // ── Credential Profiles (envelope-encrypted username+password) ────────
+
+use crate::services::credential_profiles as cp_svc;
+pub use crate::services::credential_profiles::{CredentialProfileRow, MappingRow};
 
 #[derive(Deserialize)]
 pub struct CreateCredentialProfileRequest {
@@ -675,31 +446,12 @@ pub struct CreateCredentialProfileRequest {
     pub ttl_hours: Option<i32>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct CredentialProfileRow {
-    pub id: Uuid,
-    pub label: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub expired: bool,
-    pub ttl_hours: i32,
-    pub checkout_id: Option<Uuid>,
-}
-
 pub async fn list_credential_profiles(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<CredentialProfileRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<CredentialProfileRow> = sqlx::query_as(
-        "SELECT id, label, created_at, updated_at, expires_at,
-                (expires_at < now()) AS expired, ttl_hours, checkout_id
-         FROM credential_profiles WHERE user_id = $1 ORDER BY label",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = cp_svc::list_for_user(&db.pool, user.id).await?;
     Ok(Json(rows))
 }
 
@@ -723,32 +475,17 @@ pub async fn create_credential_profile(
         "u": body.username,
         "p": body.password,
     });
-    let sealed = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
+    let sealed_raw = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
+    let sealed = cp_svc::SealedPayload {
+        ciphertext: sealed_raw.ciphertext,
+        encrypted_dek: sealed_raw.encrypted_dek,
+        nonce: sealed_raw.nonce,
+    };
 
-    // Resolve effective TTL: user preference capped by admin max (which is itself capped at 12)
-    let admin_max: i64 = crate::services::settings::get(&db.pool, "credential_ttl_hours")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(12)
-        .clamp(1, 12);
+    let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
     let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
 
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(hours => $7))
-         RETURNING id",
-    )
-    .bind(user.id)
-    .bind(&body.label)
-    .bind(&[] as &[u8])         // encrypted_username: unused, combined payload in encrypted_password
-    .bind(&sealed.ciphertext)
-    .bind(&sealed.encrypted_dek)
-    .bind(&sealed.nonce)
-    .bind(ttl_hours as i32)
-    .fetch_one(&db.pool)
-    .await?;
+    let id = cp_svc::insert(&db.pool, user.id, &body.label, &sealed, ttl_hours).await?;
 
     crate::services::audit::log(
         &db.pool,
@@ -777,19 +514,11 @@ pub async fn update_credential_profile(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    // Verify ownership
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM credential_profiles WHERE id = $1 AND user_id = $2)",
-    )
-    .bind(profile_id)
-    .bind(user.id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
-
-    if !exists {
+    if !cp_svc::user_owns(&db.pool, profile_id, user.id).await? {
         return Err(AppError::NotFound("Credential profile not found".into()));
     }
+
+    let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
 
     // If credentials are being updated, re-encrypt
     if body.username.is_some() || body.password.is_some() {
@@ -806,21 +535,19 @@ pub async fn update_credential_profile(
         let (username, password) = match (&body.username, &body.password) {
             (Some(u), Some(p)) => (u.clone(), p.clone()),
             _ => {
-                // Decrypt existing
-                let existing: (Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
-                    "SELECT encrypted_password, encrypted_dek, nonce
-                     FROM credential_profiles WHERE id = $1",
-                )
-                .bind(profile_id)
-                .fetch_one(&db.pool)
-                .await?;
+                let existing = cp_svc::get_sealed(&db.pool, profile_id).await?;
 
-                let plaintext = vault::unseal(&vault_cfg, &existing.1, &existing.0, &existing.2)
-                    .await
-                    .map_err(|e| {
-                        tracing::error!("Failed to decrypt existing credential profile: {e}");
-                        AppError::Validation("Existing profile data uses outdated encryption. To update this profile, please re-type both your Username and Password to securely overwrite it.".into())
-                    })?;
+                let plaintext = vault::unseal(
+                    &vault_cfg,
+                    &existing.encrypted_dek,
+                    &existing.ciphertext,
+                    &existing.nonce,
+                )
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to decrypt existing credential profile: {e}");
+                    AppError::Validation("Existing profile data uses outdated encryption. To update this profile, please re-type both your Username and Password to securely overwrite it.".into())
+                })?;
                 let plain_str = String::from_utf8(plaintext).unwrap_or_default();
                 let parsed: serde_json::Value = serde_json::from_str(&plain_str)
                     .unwrap_or_else(|_| json!({ "u": "", "p": plain_str }));
@@ -836,60 +563,26 @@ pub async fn update_credential_profile(
         };
 
         let combined = serde_json::json!({ "u": username, "p": password });
-        let sealed = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
+        let sealed_raw = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
+        let sealed = cp_svc::SealedPayload {
+            ciphertext: sealed_raw.ciphertext,
+            encrypted_dek: sealed_raw.encrypted_dek,
+            nonce: sealed_raw.nonce,
+        };
 
-        // Resolve effective TTL: user preference capped by admin max (which is itself capped at 12)
-        let admin_max: i64 = crate::services::settings::get(&db.pool, "credential_ttl_hours")
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(12)
-            .clamp(1, 12);
         let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
-
-        sqlx::query(
-            "UPDATE credential_profiles
-             SET encrypted_username = $1, encrypted_password = $2, encrypted_dek = $3, nonce = $4,
-                 ttl_hours = $5, updated_at = now(), expires_at = now() + make_interval(hours => $5),
-                 label = COALESCE($7, label)
-             WHERE id = $6",
+        cp_svc::update_sealed(
+            &db.pool,
+            profile_id,
+            &sealed,
+            ttl_hours,
+            body.label.as_deref(),
         )
-        .bind(&[] as &[u8])
-        .bind(&sealed.ciphertext)
-        .bind(&sealed.encrypted_dek)
-        .bind(&sealed.nonce)
-        .bind(ttl_hours)
-        .bind(profile_id)
-        .bind(body.label.as_deref())
-        .execute(&db.pool)
         .await?;
     } else {
-        // No credential change — update label and/or TTL in a single query
-        let admin_max: i64 = crate::services::settings::get(&db.pool, "credential_ttl_hours")
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(12)
-            .clamp(1, 12);
+        // No credential change — update label and/or TTL
         let ttl_hours = body.ttl_hours.map(|h| resolve_ttl(Some(h), admin_max));
-
-        if body.label.is_some() || ttl_hours.is_some() {
-            sqlx::query(
-                "UPDATE credential_profiles SET
-                    label = COALESCE($2, label),
-                    ttl_hours = COALESCE($3, ttl_hours),
-                    expires_at = CASE WHEN $3 IS NOT NULL THEN now() + make_interval(hours => $3) ELSE expires_at END,
-                    updated_at = now()
-                 WHERE id = $1",
-            )
-            .bind(profile_id)
-            .bind(body.label.as_deref())
-            .bind(ttl_hours)
-            .execute(&db.pool)
-            .await?;
-        }
+        cp_svc::update_metadata(&db.pool, profile_id, body.label.as_deref(), ttl_hours).await?;
     }
 
     crate::services::audit::log(
@@ -902,16 +595,7 @@ pub async fn update_credential_profile(
 
     // Revoke active share links for connections using this profile
     if body.username.is_some() || body.password.is_some() {
-        sqlx::query(
-            "UPDATE connection_shares SET revoked = true
-             WHERE owner_user_id = $1 AND connection_id IN (
-                 SELECT connection_id FROM credential_mappings WHERE credential_id = $2
-             ) AND NOT revoked",
-        )
-        .bind(user.id)
-        .bind(profile_id)
-        .execute(&db.pool)
-        .await?;
+        cp_svc::revoke_shares_for_profile(&db.pool, user.id, profile_id).await?;
     }
 
     Ok(Json(json!({ "status": "updated" })))
@@ -925,24 +609,9 @@ pub async fn delete_credential_profile(
     let db = require_running(&state).await?;
 
     // Revoke active share links for connections using this profile BEFORE deleting
-    sqlx::query(
-        "UPDATE connection_shares SET revoked = true
-         WHERE owner_user_id = $1 AND connection_id IN (
-             SELECT connection_id FROM credential_mappings WHERE credential_id = $2
-         ) AND NOT revoked",
-    )
-    .bind(user.id)
-    .bind(profile_id)
-    .execute(&db.pool)
-    .await?;
+    cp_svc::revoke_shares_for_profile(&db.pool, user.id, profile_id).await?;
 
-    let deleted = sqlx::query("DELETE FROM credential_profiles WHERE id = $1 AND user_id = $2")
-        .bind(profile_id)
-        .bind(user.id)
-        .execute(&db.pool)
-        .await?;
-
-    if deleted.rows_affected() == 0 {
+    if !cp_svc::delete(&db.pool, profile_id, user.id).await? {
         return Err(AppError::NotFound("Credential profile not found".into()));
     }
 
@@ -973,36 +642,22 @@ pub async fn link_checkout_to_profile(
     let db = require_running(&state).await?;
 
     // Verify profile belongs to user
-    let _: (Uuid,) =
-        sqlx::query_as("SELECT id FROM credential_profiles WHERE id = $1 AND user_id = $2")
-            .bind(profile_id)
-            .bind(user.id)
-            .fetch_optional(&db.pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Credential profile not found".into()))?;
+    if !cp_svc::user_owns(&db.pool, profile_id, user.id).await? {
+        return Err(AppError::NotFound("Credential profile not found".into()));
+    }
 
     // Unlink
     if body.checkout_id.is_none() {
-        sqlx::query(
-            "UPDATE credential_profiles SET checkout_id = NULL, updated_at = now() WHERE id = $1",
-        )
-        .bind(profile_id)
-        .execute(&db.pool)
-        .await?;
+        cp_svc::clear_checkout_link(&db.pool, profile_id).await?;
         return Ok(Json(json!({ "status": "unlinked" })));
     }
 
     let checkout_id = body.checkout_id.unwrap();
 
     // Verify checkout belongs to user and is active
-    let checkout: crate::services::checkouts::CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
-    )
-    .bind(checkout_id)
-    .bind(user.id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
+    let checkout = crate::services::checkouts::get_owned_by_user(&db.pool, checkout_id, user.id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
 
     if checkout.status != "Active" {
         return Err(AppError::Validation(
@@ -1015,33 +670,17 @@ pub async fn link_checkout_to_profile(
         .ok_or_else(|| AppError::Internal("Checkout has no credential stored".into()))?;
 
     // Copy encrypted credentials from the checkout's managed credential to this profile
-    let (enc_pw, enc_dek, nonce): (Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
-        "SELECT encrypted_password, encrypted_dek, nonce FROM credential_profiles WHERE id = $1",
-    )
-    .bind(cred_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::Internal("Checkout credential profile not found".into()))?;
+    let sealed = cp_svc::get_sealed(&db.pool, cred_id)
+        .await
+        .map_err(|_| AppError::Internal("Checkout credential profile not found".into()))?;
 
-    // Update the profile with the checkout's credentials and expiry
-    sqlx::query(
-        "UPDATE credential_profiles
-         SET encrypted_password = $1,
-             encrypted_dek = $2,
-             nonce = $3,
-             encrypted_username = NULL,
-             checkout_id = $4,
-             expires_at = $5,
-             updated_at = now()
-         WHERE id = $6",
+    cp_svc::link_to_checkout(
+        &db.pool,
+        profile_id,
+        &sealed,
+        checkout_id,
+        checkout.expires_at,
     )
-    .bind(&enc_pw)
-    .bind(&enc_dek)
-    .bind(&nonce)
-    .bind(checkout_id)
-    .bind(checkout.expires_at)
-    .bind(profile_id)
-    .execute(&db.pool)
     .await?;
 
     crate::services::audit::log(
@@ -1072,13 +711,6 @@ pub struct SetMappingRequest {
     pub connection_id: Uuid,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
-pub struct MappingRow {
-    pub connection_id: Uuid,
-    pub connection_name: String,
-    pub protocol: String,
-}
-
 pub async fn get_profile_mappings(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
@@ -1086,31 +718,11 @@ pub async fn get_profile_mappings(
 ) -> Result<Json<Vec<MappingRow>>, AppError> {
     let db = require_running(&state).await?;
 
-    // Verify ownership
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM credential_profiles WHERE id = $1 AND user_id = $2)",
-    )
-    .bind(profile_id)
-    .bind(user.id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
-
-    if !exists {
+    if !cp_svc::user_owns(&db.pool, profile_id, user.id).await? {
         return Err(AppError::NotFound("Credential profile not found".into()));
     }
 
-    let rows: Vec<MappingRow> = sqlx::query_as(
-        "SELECT cm.connection_id, c.name AS connection_name, c.protocol
-         FROM credential_mappings cm
-         JOIN connections c ON c.id = cm.connection_id
-         WHERE cm.credential_id = $1
-         ORDER BY c.name",
-    )
-    .bind(profile_id)
-    .fetch_all(&db.pool)
-    .await?;
-
+    let rows = cp_svc::list_mappings(&db.pool, profile_id).await?;
     Ok(Json(rows))
 }
 
@@ -1121,70 +733,26 @@ pub async fn set_credential_mapping(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    // Verify profile ownership
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM credential_profiles WHERE id = $1 AND user_id = $2)",
-    )
-    .bind(body.profile_id)
-    .bind(user.id)
-    .fetch_one(&db.pool)
-    .await
-    .unwrap_or(false);
-
-    if !exists {
+    if !cp_svc::user_owns(&db.pool, body.profile_id, user.id).await? {
         return Err(AppError::NotFound("Credential profile not found".into()));
     }
 
-    // Verify user has access to this connection via their role (or has connection management permissions)
-    let has_access: bool = if user.can_access_all_connections() {
-        sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM connections WHERE id = $1 AND soft_deleted_at IS NULL)",
-        )
-        .bind(body.connection_id)
-        .fetch_one(&db.pool)
-        .await?
-    } else {
-        sqlx::query_scalar(
-            "SELECT EXISTS(
-                SELECT 1 FROM connections c
-                JOIN users u ON u.id = $2
-                WHERE c.id = $1 AND c.soft_deleted_at IS NULL
-                AND (
-                    EXISTS (SELECT 1 FROM role_connections rc WHERE rc.role_id = u.role_id AND rc.connection_id = c.id)
-                    OR
-                    EXISTS (SELECT 1 FROM role_folders rf WHERE rf.role_id = u.role_id AND rf.folder_id = c.folder_id)
-                )
-            )",
-        )
-        .bind(body.connection_id)
-        .bind(user.id)
-        .fetch_one(&db.pool)
-        .await?
-    };
+    let has_access = cp_svc::user_has_connection_access(
+        &db.pool,
+        body.connection_id,
+        user.id,
+        user.can_access_all_connections(),
+    )
+    .await?;
     if !has_access {
         return Err(AppError::NotFound("Connection not found".into()));
     }
 
     // Remove any existing mapping for this user+connection (different profile)
-    sqlx::query(
-        "DELETE FROM credential_mappings
-         WHERE connection_id = $1
-           AND credential_id IN (SELECT id FROM credential_profiles WHERE user_id = $2)",
-    )
-    .bind(body.connection_id)
-    .bind(user.id)
-    .execute(&db.pool)
-    .await?;
+    cp_svc::clear_connection_mapping(&db.pool, body.connection_id, user.id).await?;
 
     // Insert new mapping
-    sqlx::query(
-        "INSERT INTO credential_mappings (credential_id, connection_id) VALUES ($1, $2)
-         ON CONFLICT (credential_id, connection_id) DO NOTHING",
-    )
-    .bind(body.profile_id)
-    .bind(body.connection_id)
-    .execute(&db.pool)
-    .await?;
+    cp_svc::insert_mapping(&db.pool, body.profile_id, body.connection_id).await?;
 
     Ok(Json(json!({ "status": "mapped" })))
 }
@@ -1195,17 +763,7 @@ pub async fn remove_credential_mapping(
     Path(connection_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-
-    sqlx::query(
-        "DELETE FROM credential_mappings
-         WHERE connection_id = $1
-           AND credential_id IN (SELECT id FROM credential_profiles WHERE user_id = $2)",
-    )
-    .bind(connection_id)
-    .bind(user.id)
-    .execute(&db.pool)
-    .await?;
-
+    cp_svc::clear_connection_mapping(&db.pool, connection_id, user.id).await?;
     Ok(Json(json!({ "status": "removed" })))
 }
 
@@ -1227,13 +785,10 @@ pub async fn connection_info(
     };
 
     // Fetch protocol, extra params, and watermark setting for this connection
-    let (protocol, extra, watermark): (String, Option<serde_json::Value>, String) = sqlx::query_as(
-        "SELECT protocol, extra, watermark FROM connections WHERE id = $1 AND soft_deleted_at IS NULL",
-    )
-    .bind(connection_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
+    let (protocol, extra, watermark) =
+        crate::services::connections::get_session_info(&db.pool, connection_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Check if a credential profile is mapped to this user+connection.
     // A profile is considered "live" when:
@@ -1245,24 +800,7 @@ pub async fn connection_info(
     let has_vault_creds: bool = if !has_vault {
         false
     } else {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(
-                SELECT 1 FROM credential_mappings cm
-                JOIN credential_profiles cp ON cp.id = cm.credential_id
-                LEFT JOIN password_checkout_requests pcr ON pcr.id = cp.checkout_id
-                WHERE cm.connection_id = $1 AND cp.user_id = $2
-                  AND cp.expires_at > now()
-                  AND (
-                        cp.checkout_id IS NULL
-                     OR (pcr.status = 'Active' AND (pcr.expires_at IS NULL OR pcr.expires_at > now()))
-                  )
-            )",
-        )
-        .bind(connection_id)
-        .bind(user.id)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap_or(false)
+        cp_svc::has_live_creds_for_connection(&db.pool, connection_id, user.id).await
     };
 
     // If no active credentials, check for an expired-or-stale profile mapped
@@ -1270,38 +808,11 @@ pub async fn connection_info(
     // profiles whose backing checkout is no longer live (CheckedIn, Expired,
     // Denied, Cancelled, etc.) so the user can re-request / re-enter creds.
     // Also check if it's a managed account with self-approval rights.
-    #[allow(clippy::type_complexity)]
-    let expired_profile: Option<(String, String, i32, Option<String>, Option<Uuid>, bool)> =
-        if !has_vault_creds && has_vault {
-            sqlx::query_as::<_, (String, String, i32, Option<String>, Option<Uuid>, bool)>(
-            "SELECT 
-                cp.id::text, 
-                cp.label, 
-                cp.ttl_hours,
-                pcr.managed_ad_dn,
-                pcr.ad_sync_config_id,
-                COALESCE(uam.can_self_approve, false) as can_self_approve
-             FROM credential_mappings cm
-             JOIN credential_profiles cp ON cp.id = cm.credential_id
-             LEFT JOIN password_checkout_requests pcr ON pcr.id = cp.checkout_id
-             LEFT JOIN user_account_mappings uam ON uam.user_id = cp.user_id AND uam.managed_ad_dn = pcr.managed_ad_dn
-             WHERE cm.connection_id = $1 AND cp.user_id = $2
-               AND (
-                     cp.expires_at <= now()
-                  OR (cp.checkout_id IS NOT NULL
-                      AND (pcr.status <> 'Active'
-                           OR (pcr.expires_at IS NOT NULL AND pcr.expires_at <= now())))
-               )
-             LIMIT 1",
-        )
-        .bind(connection_id)
-        .bind(user.id)
-        .fetch_optional(&db.pool)
-        .await
-        .unwrap_or(None)
-        } else {
-            None
-        };
+    let expired_profile = if !has_vault_creds && has_vault {
+        cp_svc::expired_profile_for_connection(&db.pool, connection_id, user.id).await
+    } else {
+        None
+    };
 
     let ignore_cert = if protocol == "rdp" {
         parse_ignore_cert(&extra)
@@ -1490,18 +1001,13 @@ pub async fn my_recordings(
 ) -> Result<Json<Vec<crate::db::Recording>>, AppError> {
     let db = require_running(&state).await?;
 
-    let recordings = sqlx::query_as::<_, crate::db::Recording>(
-        "SELECT * FROM recordings
-         WHERE user_id = $1
-           AND ($2::uuid IS NULL OR connection_id = $2)
-         ORDER BY started_at DESC
-         LIMIT $3 OFFSET $4",
+    let recordings = crate::services::recordings::list_for_user(
+        &db.pool,
+        auth.id,
+        query.connection_id,
+        query.limit.unwrap_or(50),
+        query.offset.unwrap_or(0),
     )
-    .bind(auth.id)
-    .bind(query.connection_id)
-    .bind(query.limit.unwrap_or(50))
-    .bind(query.offset.unwrap_or(0))
-    .fetch_all(&db.pool)
     .await?;
 
     Ok(Json(recordings))
@@ -1521,13 +1027,9 @@ pub async fn my_recording_stream(
     let speed = query.speed.unwrap_or(1.0).clamp(0.25, 16.0);
 
     // Fetch recording and verify ownership
-    let recording: crate::db::Recording =
-        sqlx::query_as("SELECT * FROM recordings WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(auth.id)
-            .fetch_optional(&db.pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
+    let recording = crate::services::recordings::get_owned_by_user(&db.pool, id, auth.id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
 
     Ok(ws
         .protocols(["guacamole"])
@@ -1548,37 +1050,14 @@ pub async fn my_recording_stream(
 
 use crate::services::checkouts::CheckoutRequest;
 
-/// Row shape for `my_managed_accounts` query.
-/// (id, user_id, managed_ad_dn, can_self_approve, ad_sync_config_id,
-///  created_at, friendly_name, pm_allow_emergency_bypass)
-type ManagedAccountRow = (
-    Uuid,
-    Uuid,
-    String,
-    bool,
-    Option<Uuid>,
-    chrono::DateTime<chrono::Utc>,
-    Option<String>,
-    Option<bool>,
-);
-
 /// My managed account mappings (accounts I can request checkout for).
 pub async fn my_managed_accounts(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<ManagedAccountRow> = sqlx::query_as(
-        "SELECT m.id, m.user_id, m.managed_ad_dn, m.can_self_approve, m.ad_sync_config_id,
-                m.created_at, m.friendly_name, c.pm_allow_emergency_bypass
-         FROM user_account_mappings m
-         LEFT JOIN ad_sync_configs c ON c.id = m.ad_sync_config_id
-         WHERE m.user_id = $1
-         ORDER BY m.managed_ad_dn",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows =
+        crate::services::checkouts::list_managed_accounts_for_user(&db.pool, user.id).await?;
 
     let out: Vec<serde_json::Value> = rows
         .into_iter()
@@ -1631,26 +1110,13 @@ pub async fn request_checkout(
     }
 
     // Verify user has a mapping for this DN
-    let mapping: Option<crate::services::checkouts::UserAccountMapping> = sqlx::query_as(
-        "SELECT * FROM user_account_mappings WHERE user_id = $1 AND managed_ad_dn = $2",
-    )
-    .bind(user.id)
-    .bind(dn)
-    .fetch_optional(&db.pool)
-    .await?;
-    let mapping = mapping.ok_or(AppError::Forbidden)?;
+    let mapping = crate::services::checkouts::find_mapping(&db.pool, user.id, dn)
+        .await?
+        .ok_or(AppError::Forbidden)?;
 
     let mut duration = body.requested_duration_mins.unwrap_or(60).clamp(1, 720);
     // Check for active/pending checkout on same DN by same user
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM password_checkout_requests
-         WHERE requester_user_id = $1 AND managed_ad_dn = $2 AND status IN ('Pending','Approved','Scheduled','Active')",
-    )
-    .bind(user.id)
-    .bind(dn)
-    .fetch_optional(&db.pool)
-    .await?;
-    if existing.is_some() {
+    if crate::services::checkouts::has_open_checkout(&db.pool, user.id, dn).await? {
         return Err(AppError::Validation(
             "You already have a pending or active checkout for this account".into(),
         ));
@@ -1693,19 +1159,13 @@ pub async fn request_checkout(
                 ));
             }
 
-            let allow_bypass: Option<bool> = match mapping.ad_sync_config_id {
-                Some(cfg_id) => {
-                    sqlx::query_scalar(
-                        "SELECT pm_allow_emergency_bypass FROM ad_sync_configs WHERE id = $1",
-                    )
-                    .bind(cfg_id)
-                    .fetch_optional(&db.pool)
-                    .await?
-                }
-                None => None,
-            };
+            let allow_bypass = crate::services::checkouts::emergency_bypass_allowed(
+                &db.pool,
+                mapping.ad_sync_config_id,
+            )
+            .await?;
 
-            if !allow_bypass.unwrap_or(false) {
+            if !allow_bypass {
                 return Err(AppError::Forbidden);
             }
 
@@ -1741,21 +1201,18 @@ pub async fn request_checkout(
         initial_status = "Scheduled";
     }
 
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO password_checkout_requests
-         (requester_user_id, managed_ad_dn, ad_sync_config_id, status, requested_duration_mins, justification_comment, friendly_name, emergency_bypass, scheduled_start_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+    let id = crate::services::checkouts::insert_request(
+        &db.pool,
+        user.id,
+        dn,
+        mapping.ad_sync_config_id,
+        initial_status,
+        duration,
+        body.justification_comment.as_deref().unwrap_or(""),
+        mapping.friendly_name.as_deref(),
+        emergency_bypass && initial_status == "Approved" && !mapping.can_self_approve,
+        scheduled_start_at,
     )
-    .bind(user.id)
-    .bind(dn)
-    .bind(mapping.ad_sync_config_id)
-    .bind(initial_status)
-    .bind(duration)
-    .bind(body.justification_comment.as_deref().unwrap_or(""))
-    .bind(mapping.friendly_name)
-    .bind(emergency_bypass && initial_status == "Approved" && !mapping.can_self_approve)
-    .bind(scheduled_start_at)
-    .fetch_one(&db.pool)
     .await?;
 
     let emergency_logged = emergency_bypass && !mapping.can_self_approve;
@@ -1815,12 +1272,7 @@ pub async fn my_checkouts(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<CheckoutRequest>>, AppError> {
     let db = require_running(&state).await?;
-    let rows: Vec<CheckoutRequest> = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE requester_user_id = $1 ORDER BY created_at DESC LIMIT 100",
-    )
-    .bind(user.id)
-    .fetch_all(&db.pool)
-    .await?;
+    let rows = crate::services::checkouts::list_for_user(&db.pool, user.id).await?;
     Ok(Json(rows))
 }
 
@@ -1830,34 +1282,13 @@ pub async fn pending_approvals(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<CheckoutRequest>>, AppError> {
     let db = require_running(&state).await?;
-    // Get all role IDs for the current user
-    let role_ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT role_id FROM approval_role_assignments WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_all(&db.pool)
-            .await?;
+    let role_ids = crate::services::checkouts::approver_role_ids(&db.pool, user.id).await?;
 
     if role_ids.is_empty() {
         return Ok(Json(vec![]));
     }
 
-    // Get pending requests whose managed_ad_dn is in the scope of the user's approval roles
-    let pending: Vec<CheckoutRequest> = sqlx::query_as(
-        "SELECT pcr.*, u.username AS requester_username
-         FROM password_checkout_requests pcr
-         LEFT JOIN users u ON u.id = pcr.requester_user_id
-         WHERE pcr.status = 'Pending'
-         AND EXISTS (
-             SELECT 1 FROM approval_role_accounts ara
-             WHERE ara.role_id = ANY($1)
-             AND ara.managed_ad_dn = pcr.managed_ad_dn
-         )
-         ORDER BY pcr.created_at ASC LIMIT 200",
-    )
-    .bind(&role_ids)
-    .fetch_all(&db.pool)
-    .await?;
-
+    let pending = crate::services::checkouts::pending_for_roles(&db.pool, &role_ids).await?;
     Ok(Json(pending))
 }
 
@@ -1875,23 +1306,14 @@ pub async fn decide_checkout(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    // Get the user's approval role IDs
-    let role_ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT role_id FROM approval_role_assignments WHERE user_id = $1")
-            .bind(user.id)
-            .fetch_all(&db.pool)
-            .await?;
+    let role_ids = crate::services::checkouts::approver_role_ids(&db.pool, user.id).await?;
     if role_ids.is_empty() {
         return Err(AppError::Forbidden);
     }
 
-    // Fetch the checkout
-    let checkout: CheckoutRequest =
-        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
-            .bind(checkout_id)
-            .fetch_optional(&db.pool)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
+    let checkout = crate::services::checkouts::get_by_id(&db.pool, checkout_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
     if checkout.status != "Pending" {
         return Err(AppError::Validation(format!(
@@ -1900,27 +1322,18 @@ pub async fn decide_checkout(
         )));
     }
 
-    // Verify the approver's roles cover this account's DN
-    let covers: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM approval_role_accounts
-         WHERE role_id = ANY($1) AND managed_ad_dn = $2",
+    if !crate::services::checkouts::roles_cover_account(
+        &db.pool,
+        &role_ids,
+        &checkout.managed_ad_dn,
     )
-    .bind(&role_ids)
-    .bind(&checkout.managed_ad_dn)
-    .fetch_one(&db.pool)
-    .await?;
-    if covers == 0 {
+    .await?
+    {
         return Err(AppError::Forbidden);
     }
 
     if body.approved {
-        sqlx::query(
-            "UPDATE password_checkout_requests SET status = 'Approved', approved_by_user_id = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(user.id)
-        .bind(checkout_id)
-        .execute(&db.pool)
-        .await?;
+        crate::services::checkouts::set_decision(&db.pool, checkout_id, user.id, true).await?;
 
         crate::services::audit::log(
             &db.pool,
@@ -1952,13 +1365,7 @@ pub async fn decide_checkout(
 
         Ok(Json(json!({ "status": "Approved" })))
     } else {
-        sqlx::query(
-            "UPDATE password_checkout_requests SET status = 'Denied', approved_by_user_id = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(user.id)
-        .bind(checkout_id)
-        .execute(&db.pool)
-        .await?;
+        crate::services::checkouts::set_decision(&db.pool, checkout_id, user.id, false).await?;
 
         crate::services::audit::log(
             &db.pool,
@@ -1980,14 +1387,9 @@ pub async fn reveal_checkout_password(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
 
-    let checkout: CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
-    )
-    .bind(checkout_id)
-    .bind(user.id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
+    let checkout = crate::services::checkouts::get_owned_by_user(&db.pool, checkout_id, user.id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
 
     if checkout.status != "Active" {
         return Err(AppError::Validation(
@@ -2008,15 +1410,17 @@ pub async fn reveal_checkout_password(
     };
 
     // Fetch the credential profile
-    let row: (Vec<u8>, Vec<u8>, Vec<u8>) = sqlx::query_as(
-        "SELECT encrypted_password, encrypted_dek, nonce FROM credential_profiles WHERE id = $1",
-    )
-    .bind(cred_id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::Internal("Credential profile not found".into()))?;
+    let sealed = cp_svc::get_sealed(&db.pool, cred_id)
+        .await
+        .map_err(|_| AppError::Internal("Credential profile not found".into()))?;
 
-    let plaintext = vault::unseal(&vault_cfg, &row.1, &row.0, &row.2).await?;
+    let plaintext = vault::unseal(
+        &vault_cfg,
+        &sealed.encrypted_dek,
+        &sealed.ciphertext,
+        &sealed.nonce,
+    )
+    .await?;
     let plain_str = String::from_utf8(plaintext).unwrap_or_default();
     let parsed: serde_json::Value =
         serde_json::from_str(&plain_str).unwrap_or_else(|_| json!({ "p": plain_str }));
@@ -2064,14 +1468,9 @@ pub async fn retry_checkout_activation(
         }
     }
 
-    let checkout: CheckoutRequest = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE id = $1 AND requester_user_id = $2",
-    )
-    .bind(checkout_id)
-    .bind(user.id)
-    .fetch_optional(&db.pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
+    let checkout = crate::services::checkouts::get_owned_by_user(&db.pool, checkout_id, user.id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Checkout not found".into()))?;
 
     if checkout.status != "Approved" {
         return Err(AppError::Validation(format!(

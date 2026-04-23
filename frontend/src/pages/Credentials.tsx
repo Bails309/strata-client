@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import { createPortal } from "react-dom";
 import Select from "../components/Select";
+import RequestCheckoutForm from "./credentials/RequestCheckoutForm";
+import ProfileEditor, { type EditingProfile } from "./credentials/ProfileEditor";
 import {
   getCredentialProfiles,
   createCredentialProfile,
@@ -24,16 +26,6 @@ import {
   CheckoutRequest,
   UserAccountMapping,
 } from "../api";
-
-interface EditingProfile {
-  id?: string;
-  label: string;
-  username: string;
-  password: string;
-  ttl_hours: number;
-  managed_ad_dn?: string;
-  friendly_name?: string;
-}
 
 export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
   type Tab = "profiles" | "request" | "my-checkouts";
@@ -370,8 +362,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   };
 
   // Is this checkout truly active (Active status AND not past expires_at)
-  const isCheckoutLive = (c: CheckoutRequest) => {
-    return c.status === "Active" && c.expires_at && new Date(c.expires_at!).getTime() > Date.now();
+  const isCheckoutLive = (c: CheckoutRequest): boolean => {
+    return c.status === "Active" && !!c.expires_at && new Date(c.expires_at).getTime() > Date.now();
   };
 
   // Effective display status
@@ -505,260 +497,25 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
 
       {/* ── Request Checkout ── */}
       {tab === "request" && (
-        <div className="card p-6">
-          <h2 className="text-lg font-semibold mb-4">Request Password Checkout</h2>
-          {managedAccounts.length === 0 ? (
-            <p className="text-txt-secondary">
-              No managed accounts assigned to you. Contact an administrator.
-            </p>
-          ) : managedAccounts.every((a) =>
-              allCheckouts.some(
-                (c) =>
-                  c.managed_ad_dn === a.managed_ad_dn &&
-                  !isCheckoutExpired(c) &&
-                  (c.status === "Active" ||
-                    c.status === "Approved" ||
-                    c.status === "Pending" ||
-                    c.status === "Scheduled")
-              )
-            ) ? (
-            <p className="text-txt-secondary">
-              All managed accounts already have active checkouts. Wait for current checkouts to
-              expire before requesting new ones.
-            </p>
-          ) : (
-            <>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Managed Account</label>
-                <Select
-                  value={selectedDn}
-                  onChange={setSelectedDn}
-                  placeholder="Select account..."
-                  options={managedAccounts
-                    .filter(
-                      (a) =>
-                        !allCheckouts.some(
-                          (c) =>
-                            c.managed_ad_dn === a.managed_ad_dn &&
-                            !isCheckoutExpired(c) &&
-                            (c.status === "Active" ||
-                              c.status === "Approved" ||
-                              c.status === "Pending" ||
-                              c.status === "Scheduled")
-                        )
-                    )
-                    .map((a) => ({
-                      value: a.managed_ad_dn,
-                      label: a.managed_ad_dn + (a.can_self_approve ? " (self-approve)" : ""),
-                    }))}
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">
-                  Duration (minutes, 1–{emergencyBypass ? 30 : 720})
-                </label>
-                {(() => {
-                  const durationMax = emergencyBypass ? 30 : 720;
-                  const clampDuration = (n: number) =>
-                    Math.min(durationMax, Math.max(1, Math.round(n || 0)));
-                  return (
-                    <div className="inline-flex items-stretch rounded-md border border-border bg-bg-primary overflow-hidden focus-within:border-accent/60 transition-colors">
-                      <button
-                        type="button"
-                        className="px-3 text-lg leading-none text-txt-secondary hover:bg-border/30 hover:text-txt-primary active:bg-border/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        onClick={() =>
-                          setDuration((d) => clampDuration(d - (d > 60 ? 15 : d > 10 ? 5 : 1)))
-                        }
-                        disabled={duration <= 1}
-                        aria-label="Decrease duration"
-                      >
-                        −
-                      </button>
-                      <input
-                        type="number"
-                        className="no-spinner w-20 text-center border-0 bg-transparent focus:shadow-none focus:border-0 tabular-nums"
-                        min={1}
-                        max={durationMax}
-                        value={duration}
-                        onChange={(e) => setDuration(clampDuration(Number(e.target.value)))}
-                        onBlur={(e) => setDuration(clampDuration(Number(e.target.value)))}
-                      />
-                      <button
-                        type="button"
-                        className="px-3 text-lg leading-none text-txt-secondary hover:bg-border/30 hover:text-txt-primary active:bg-border/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                        onClick={() =>
-                          setDuration((d) => clampDuration(d + (d >= 60 ? 15 : d >= 10 ? 5 : 1)))
-                        }
-                        disabled={duration >= durationMax}
-                        aria-label="Increase duration"
-                      >
-                        +
-                      </button>
-                      <span className="px-3 flex items-center text-xs text-txt-tertiary border-l border-border bg-bg-secondary/40 select-none">
-                        min
-                      </span>
-                    </div>
-                  );
-                })()}
-                {emergencyBypass && (
-                  <p className="text-xs text-warning mt-1">
-                    Emergency bypass checkouts are capped at 30 minutes.
-                  </p>
-                )}
-              </div>
-              <div className="mb-4">
-                {(() => {
-                  const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
-                  const approvalRequired = !!acct && !acct.can_self_approve;
-                  const isEmergencyActive =
-                    emergencyBypass &&
-                    !!acct &&
-                    !acct.can_self_approve &&
-                    !!acct.pm_allow_emergency_bypass;
-                  const justificationRequired = approvalRequired;
-                  const justificationTooShort =
-                    justificationRequired && justification.trim().length < 10;
-                  return (
-                    <>
-                      <label className="block text-sm font-medium mb-1">
-                        Justification{" "}
-                        {justificationRequired ? (
-                          <span className={isEmergencyActive ? "text-warning" : "text-danger"}>
-                            (required, min 10 characters)
-                          </span>
-                        ) : (
-                          <span className="text-txt-tertiary">(optional)</span>
-                        )}
-                      </label>
-                      <textarea
-                        className={`input w-full ${justificationTooShort ? (isEmergencyActive ? "border-warning/60" : "border-danger/60") : ""}`}
-                        rows={2}
-                        value={justification}
-                        onChange={(e) => setJustification(e.target.value)}
-                        placeholder={
-                          isEmergencyActive
-                            ? "Describe the incident and why approval cannot wait…"
-                            : justificationRequired
-                              ? "Explain why you need this account — approvers will see this…"
-                              : "Reason for checkout..."
-                        }
-                      />
-                      {justificationTooShort && (
-                        <p
-                          className={`text-xs mt-1 ${isEmergencyActive ? "text-warning" : "text-danger"}`}
-                        >
-                          {isEmergencyActive
-                            ? "Emergency bypass requires a justification of at least 10 characters."
-                            : "Approval-required checkouts need a justification of at least 10 characters."}
-                          {justification.trim().length > 0 &&
-                            ` (${justification.trim().length}/10)`}
-                        </p>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-              <div className="mb-4">
-                <label className="flex items-center gap-2 cursor-pointer text-sm font-medium mb-1">
-                  <input
-                    type="checkbox"
-                    className="checkbox"
-                    checked={scheduleEnabled}
-                    onChange={(e) => {
-                      setScheduleEnabled(e.target.checked);
-                      if (e.target.checked && !scheduledStart) {
-                        // Default to 15 minutes from now, rounded to next 5
-                        const d = new Date(Date.now() + 15 * 60 * 1000);
-                        d.setSeconds(0, 0);
-                        // Format as local datetime-local (YYYY-MM-DDTHH:mm)
-                        const pad = (n: number) => n.toString().padStart(2, "0");
-                        setScheduledStart(
-                          `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-                        );
-                      }
-                    }}
-                  />
-                  Schedule release for a future time
-                </label>
-                {scheduleEnabled && (
-                  <div className="ml-6 mt-2">
-                    <input
-                      type="datetime-local"
-                      className="input w-64"
-                      value={scheduledStart}
-                      onChange={(e) => setScheduledStart(e.target.value)}
-                      min={(() => {
-                        const d = new Date(Date.now() + 60 * 1000);
-                        const pad = (n: number) => n.toString().padStart(2, "0");
-                        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                      })()}
-                    />
-                    <p className="text-xs text-txt-tertiary mt-1">
-                      Password will be held until the chosen time, then released automatically. Max
-                      14 days ahead.
-                    </p>
-                  </div>
-                )}
-              </div>
-              {(() => {
-                const acct = managedAccounts.find((a) => a.managed_ad_dn === selectedDn);
-                if (
-                  !acct ||
-                  acct.can_self_approve ||
-                  !acct.pm_allow_emergency_bypass ||
-                  scheduleEnabled
-                )
-                  return null;
-                return (
-                  <div className="mb-4 p-3 rounded border border-warning/40 bg-warning/5">
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="checkbox mt-1"
-                        checked={emergencyBypass}
-                        onChange={(e) => {
-                          setEmergencyBypass(e.target.checked);
-                          if (e.target.checked && duration > 30) setDuration(30);
-                        }}
-                      />
-                      <div>
-                        <div className="text-sm font-semibold text-warning">
-                          Emergency Approval Bypass (Break-Glass)
-                        </div>
-                        <div className="text-xs text-txt-secondary mt-0.5">
-                          Skip the approval workflow and release the password immediately. A
-                          justification of at least 10 characters is required, and every use is
-                          recorded in the audit log.
-                        </div>
-                      </div>
-                    </label>
-                  </div>
-                );
-              })()}
-              <button
-                className={`btn ${emergencyBypass ? "btn-warning" : "btn-primary"}`}
-                onClick={handleRequestCheckout}
-                disabled={
-                  !selectedDn ||
-                  submitting ||
-                  (scheduleEnabled && !scheduledStart) ||
-                  (!!managedAccounts.find(
-                    (a) => a.managed_ad_dn === selectedDn && !a.can_self_approve
-                  ) &&
-                    justification.trim().length < 10)
-                }
-              >
-                {submitting
-                  ? "Submitting..."
-                  : emergencyBypass
-                    ? "Emergency Checkout"
-                    : scheduleEnabled
-                      ? "Schedule Checkout"
-                      : "Request Checkout"}
-              </button>
-            </>
-          )}
-        </div>
+        <RequestCheckoutForm
+          managedAccounts={managedAccounts}
+          allCheckouts={allCheckouts}
+          selectedDn={selectedDn}
+          setSelectedDn={setSelectedDn}
+          duration={duration}
+          setDuration={setDuration}
+          justification={justification}
+          setJustification={setJustification}
+          emergencyBypass={emergencyBypass}
+          setEmergencyBypass={setEmergencyBypass}
+          scheduleEnabled={scheduleEnabled}
+          setScheduleEnabled={setScheduleEnabled}
+          scheduledStart={scheduledStart}
+          setScheduledStart={setScheduledStart}
+          submitting={submitting}
+          isCheckoutExpired={isCheckoutExpired}
+          onRequest={handleRequestCheckout}
+        />
       )}
 
       {/* ── My Checkouts ── */}
@@ -900,195 +657,20 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         <>
           {/* ── Create / Edit modal ── */}
           {editing && (
-            <div
-              className="card mb-6"
-              style={{ border: "1px solid var(--color-accent)", boxShadow: "var(--shadow-accent)" }}
-            >
-              <h2 className="!mb-4">{editing.id ? "Edit Profile" : "New Credential Profile"}</h2>
-              <div className="form-group">
-                <label>Label</label>
-                <input
-                  value={editing.label}
-                  onChange={(e) => setEditing({ ...editing, label: e.target.value })}
-                  placeholder="e.g. Domain Admin, SSH Dev Server"
-                  autoFocus
-                />
-              </div>
-              {editing.managed_ad_dn ? (
-                <div className="bg-accent/5 border border-accent/20 rounded-lg px-4 py-3 mb-2">
-                  <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">
-                    Managed Account
-                  </div>
-                  <div className="text-sm font-medium text-accent">
-                    {editing.friendly_name || editing.managed_ad_dn}
-                  </div>
-                  <div className="text-xs text-txt-secondary mt-1">
-                    This profile is automatically managed by the password checkout system.
-                  </div>
-                </div>
-              ) : editing.label.startsWith("[managed]") ? (
-                <div className="bg-accent/5 border border-accent/20 rounded-lg px-4 py-3 mb-2">
-                  <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">
-                    Managed Account
-                  </div>
-                  <div className="text-xs text-txt-secondary">Linked to system checkout</div>
-                  <div className="text-xs text-txt-secondary mt-1">
-                    This profile is automatically managed by the password checkout system. Username,
-                    password, and expiry are controlled by the active checkout.
-                  </div>
-                </div>
-              ) : null}
-
-              {(() => {
-                const currentProfile = editing.id
-                  ? profiles.find((p) => p.id === editing.id)
-                  : null;
-                const editLinkedCheckout = currentProfile?.checkout_id
-                  ? allCheckouts.find((c) => c.id === currentProfile.checkout_id)
-                  : null;
-                const hasLinkedCheckout = !!editLinkedCheckout;
-                return hasLinkedCheckout ? (
-                  <div className="form-group">
-                    <div className="bg-success/5 border border-success/20 rounded-lg px-4 py-3">
-                      <div className="text-xs font-medium text-txt-secondary uppercase tracking-wider mb-1">
-                        Managed Account Linked
-                      </div>
-                      <div className="text-sm font-medium">{editLinkedCheckout.managed_ad_dn}</div>
-                      <div className="text-xs text-txt-secondary mt-1">
-                        Username and password are managed by the checked-out account.
-                        {isCheckoutLive(editLinkedCheckout)
-                          ? ` Expires ${formatDateTime(editLinkedCheckout.expires_at ?? null)} · ${getTimeRemaining(editLinkedCheckout.expires_at)}`
-                          : editLinkedCheckout.status === "CheckedIn"
-                            ? " Checked in — password scrambled"
-                            : editLinkedCheckout.status === "Expired" ||
-                                isCheckoutExpired(editLinkedCheckout)
-                              ? " Checkout expired"
-                              : ` ${editLinkedCheckout.status}`}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                      <div className="form-group">
-                        <label>Username</label>
-                        <input
-                          value={editing.username}
-                          onChange={(e) => setEditing({ ...editing, username: e.target.value })}
-                          placeholder={editing.id ? "(unchanged)" : "sAMAccountName (e.g. jsmith)"}
-                          autoComplete="off"
-                        />
-                        <p className="text-txt-tertiary text-[0.6875rem] mt-1">
-                          Note: Use sAMAccountName format (e.g. jsmith), not UPN or full email
-                          address.
-                        </p>
-                      </div>
-                      <div className="form-group">
-                        <label>Password</label>
-                        <input
-                          type="password"
-                          value={editing.password}
-                          onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-                          placeholder={editing.id ? "(unchanged)" : "Enter password"}
-                          autoComplete="new-password"
-                        />
-                      </div>
-                    </div>
-                    <div className="form-group">
-                      <label>Password Expiry</label>
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="range"
-                          min={1}
-                          max={12}
-                          step={1}
-                          value={editing.ttl_hours}
-                          onChange={(e) =>
-                            setEditing({ ...editing, ttl_hours: Number(e.target.value) })
-                          }
-                          className="flex-1"
-                          style={{ accentColor: "var(--color-accent)" }}
-                        />
-                        <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
-                          {editing.ttl_hours} {editing.ttl_hours === 1 ? "hour" : "hours"}
-                        </span>
-                      </div>
-                      <p className="text-txt-tertiary text-xs mt-1">
-                        Credentials expire after this duration and must be updated. Maximum 12
-                        hours.
-                      </p>
-                    </div>
-                  </>
-                );
-              })()}
-              {/* Checkout linking */}
-              {editing.id &&
-                (activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 ||
-                  profiles.find((p) => p.id === editing.id)?.checkout_id) && (
-                  <div className="form-group">
-                    <label>Link Checked-Out Account</label>
-                    <p className="text-txt-tertiary text-xs mb-2">
-                      Populate this profile with credentials from an active password checkout. The
-                      profile's expiry will match the checkout duration.
-                    </p>
-                    {(() => {
-                      const currentProfile = profiles.find((p) => p.id === editing.id);
-                      const linkedCheckout = currentProfile?.checkout_id
-                        ? allCheckouts.find((c) => c.id === currentProfile.checkout_id)
-                        : null;
-                      return linkedCheckout ? (
-                        <div className="flex items-center justify-between bg-success/5 border border-success/20 rounded-lg px-4 py-2.5">
-                          <div>
-                            <div className="text-sm font-medium">
-                              {linkedCheckout.managed_ad_dn}
-                            </div>
-                            <div className="text-xs text-txt-secondary">
-                              {isCheckoutLive(linkedCheckout)
-                                ? `Expires ${formatDateTime(linkedCheckout.expires_at ?? null)} · ${getTimeRemaining(linkedCheckout.expires_at!)}`
-                                : linkedCheckout.status === "CheckedIn"
-                                  ? "Checked in — password scrambled"
-                                  : linkedCheckout.status === "Expired" ||
-                                      isCheckoutExpired(linkedCheckout)
-                                    ? "Checkout expired"
-                                    : linkedCheckout.status}
-                            </div>
-                          </div>
-                          <button
-                            className="btn !px-2 !py-1 text-xs text-danger"
-                            onClick={async () => {
-                              await handleLinkCheckout(editing.id!, null);
-                            }}
-                          >
-                            Unlink
-                          </button>
-                        </div>
-                      ) : (
-                        <Select
-                          value=""
-                          onChange={async (val) => {
-                            if (val) await handleLinkCheckout(editing.id!, val);
-                          }}
-                          placeholder="— Select a checked-out account —"
-                          options={activeCheckouts
-                            .filter((c) => isCheckoutLive(c))
-                            .map((c) => ({
-                              value: c.id,
-                              label: `${c.managed_ad_dn} — ${getTimeRemaining(c.expires_at)}`,
-                            }))}
-                        />
-                      );
-                    })()}
-                  </div>
-                )}
-              <div className="flex items-center gap-3 mt-2">
-                <button className="btn-primary" onClick={handleSaveProfile} disabled={saving}>
-                  {saving ? "Saving…" : editing.id ? "Update" : "Create Profile"}
-                </button>
-                <button className="btn" onClick={() => setEditing(null)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
+            <ProfileEditor
+              editing={editing}
+              setEditing={setEditing}
+              saving={saving}
+              profiles={profiles}
+              activeCheckouts={activeCheckouts}
+              allCheckouts={allCheckouts}
+              onSave={handleSaveProfile}
+              onLinkCheckout={handleLinkCheckout}
+              isCheckoutLive={isCheckoutLive}
+              isCheckoutExpired={isCheckoutExpired}
+              getTimeRemaining={getTimeRemaining}
+              formatDateTime={formatDateTime}
+            />
           )}
 
           {/* ── Active Checkouts ── */}

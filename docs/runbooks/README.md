@@ -45,17 +45,12 @@ Every runbook in this directory should contain, at minimum:
 
 ## Index
 
-The runbooks listed below are tracked in
-[`docs/compliance-tracker.md`](../compliance-tracker.md) Wave 5 (§26/§28 of
-the Coding Standards).
+The runbooks listed below cover §26/§28 of the Coding Standards.
 
 | Runbook | Scope | Status |
 |---------|-------|--------|
-| disaster-recovery.md | Backup/restore, RTO/RPO | Planned (W5-5) |
-| security-incident.md | Security incident response | Planned (W5-6) |
-| certificate-rotation.md | ACME + internal CA rotation | Planned (W5-7) |
-| vault-operations.md | Vault unseal, rekey, rotate keys | Planned (W5-8) |
-| database-operations.md | Postgres failover, migration rollback | Planned (W5-9) |
-
-As runbooks are authored, replace "Planned" with "Active" and update the
-tracker.
+| disaster-recovery.md | Backup/restore, RTO/RPO | Active |
+| security-incident.md | Security incident response | Active |
+| certificate-rotation.md | ACME + internal CA rotation | Active |
+| vault-operations.md | Vault unseal, rekey, rotate keys | Active |
+| database-operations.md | Postgres failover, migration rollback | Active |

@@ -9,8 +9,8 @@
 Strata Client is a browser-based privileged access / remote session broker
 that has been in active development for multiple releases (current: **0.21.0**).
 The Coding Standards v1.4 compliance audit on 2026-04-21 identified 62
-follow-up items across six waves (see
-[`docs/compliance-tracker.md`](../compliance-tracker.md)). Several of those
+follow-up items across six waves (all since closed; the original
+`docs/compliance-tracker.md` has been retired). Several of those
 waves — notably supply-chain integrity (W1), runtime resilience (W2), and
 external-call hardening (W3) — will modify foundational components such as
 the database pool, background workers, and HTTP clients.
@@ -188,7 +188,6 @@ failure.
 
 - [../architecture.md](../architecture.md) — current (evolving) architecture overview
 - [../security.md](../security.md) — security posture reference
-- [../compliance-tracker.md](../compliance-tracker.md) — compliance follow-up waves
 - Planned: ADR-0002 (guacd connection model), ADR-0003 (JWT + refresh
   design), ADR-0004 (Vault Transit envelope), ADR-0005 (emergency bypass &
   scheduled-start checkouts)

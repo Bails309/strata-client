@@ -164,6 +164,10 @@ pub async fn create_tunnel_ticket(
     Ok(Json(serde_json::json!({ "ticket": ticket_id })))
 }
 
+// CodeQL note: `rust/unused-variable` misfires here on `e` bindings that are
+// interpolated into `tracing::error!("… {e}")` macros inside `async move`
+// closures; see alerts #81, #74. The variables are used; suppress the lint.
+#[allow(unused_variables)]
 pub async fn ws_tunnel(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,

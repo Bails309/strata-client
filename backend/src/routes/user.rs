@@ -1014,6 +1014,9 @@ pub async fn my_recordings(
 }
 
 /// GET /api/user/recordings/:id/stream — stream a recording that belongs to the authenticated user.
+// CodeQL note: `rust/unused-variable` misfires on `e` interpolated into
+// `tracing::error!("… {e}")` inside the `on_upgrade` closure (alert #75).
+#[allow(unused_variables)]
 pub async fn my_recording_stream(
     ws: axum::extract::ws::WebSocketUpgrade,
     State(state): State<SharedState>,

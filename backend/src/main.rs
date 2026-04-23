@@ -460,6 +460,9 @@ fn write_admin_password_file(path: &std::path::Path, password: &str) -> std::io:
 /// W3-10 — spawn a best-effort background task that unlinks the transient
 /// admin-password file after `ttl`. Failure to delete is logged but does not
 /// abort startup; the operator can still remove the file manually.
+// CodeQL note: `rust/unused-variable` misfires on `e` interpolated in the
+// `tracing::warn!("… {e}")` arm inside `async move` (alert #70).
+#[allow(unused_variables)]
 fn schedule_admin_password_deletion(path: std::path::PathBuf, ttl: std::time::Duration) {
     tokio::spawn(async move {
         tokio::time::sleep(ttl).await;

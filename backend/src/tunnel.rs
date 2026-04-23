@@ -329,6 +329,9 @@ pub async fn proxy(
     handle_guac_handshake(stream, ws, handshake, nvr, display_timezone).await
 }
 
+// CodeQL note: `rust/unused-variable` misfires on the `res` binding used by
+// `if let Err(e) = res` inside an `async move` block (alert #79). Suppress.
+#[allow(unused_variables)]
 async fn handle_guac_handshake(
     stream: TcpStream,
     mut ws: WebSocket,

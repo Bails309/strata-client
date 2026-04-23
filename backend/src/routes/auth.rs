@@ -691,6 +691,9 @@ pub async fn change_password(
 // ── Token Refresh ──────────────────────────────────────────────────────
 
 /// Extract a named cookie value from the Cookie header.
+// CodeQL note: `rust/unused-variable` misfires on the `pair` rebinding in the
+// `find_map` closure (alert #71). The rebinding shadows to strip whitespace.
+#[allow(unused_variables)]
 fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get(axum::http::header::COOKIE)

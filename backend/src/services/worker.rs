@@ -62,6 +62,9 @@ impl PeriodicConfig {
 ///
 /// The returned [`JoinHandle`] completes when the supplied
 /// `CancellationToken` is cancelled.
+// CodeQL note: `rust/unused-variable` misfires on `_elapsed` bindings inside
+// `tokio::select!` expansion (alert #78). Suppress.
+#[allow(unused_variables)]
 pub fn spawn_periodic<F, Fut, E>(
     cfg: PeriodicConfig,
     shutdown: CancellationToken,

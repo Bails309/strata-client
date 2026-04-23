@@ -189,6 +189,9 @@ pub async fn list_recordings(
 }
 
 /// Stream a historical recording via WebSocket with pacing
+// CodeQL note: `rust/unused-variable` misfires on `e` interpolated in
+// `tracing::error!("… {e}")` inside the `on_upgrade` closure (alert #69).
+#[allow(unused_variables)]
 pub async fn stream_recording(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,

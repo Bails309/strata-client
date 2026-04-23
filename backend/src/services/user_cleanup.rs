@@ -24,6 +24,10 @@ pub fn spawn_cleanup_task(state: SharedState, shutdown: CancellationToken) -> Jo
     )
 }
 
+// CodeQL note: `rust/unused-variable` misfires on `e` bindings interpolated
+// into `tracing::warn!("… {e}")` inside `async move` blocks (alerts #76, #77).
+// Suppress.
+#[allow(unused_variables)]
 async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     let (db, vault) = {
         let s = state.read().await;

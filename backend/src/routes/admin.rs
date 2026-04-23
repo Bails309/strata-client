@@ -1738,6 +1738,9 @@ pub async fn observe_session(
 }
 
 /// Core observe logic shared by admin and user observe endpoints.
+// CodeQL note: `rust/unused-variable` misfires on destructured bindings in
+// the `let (size_inst, all_frames, mut rx) = { … }` block (alert #72).
+#[allow(unused_variables)]
 pub async fn observe_session_ws(
     ws: axum::extract::WebSocketUpgrade,
     session: std::sync::Arc<crate::services::session_registry::ActiveSession>,

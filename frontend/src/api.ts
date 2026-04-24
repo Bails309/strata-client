@@ -143,7 +143,7 @@ export interface LoginResponse {
     can_create_users: boolean;
     can_create_user_groups: boolean;
     can_create_connections: boolean;
-    can_create_connection_folders: boolean;
+    can_use_quick_share: boolean;
     can_create_sharing_profiles: boolean;
     can_view_sessions: boolean;
   };
@@ -215,7 +215,7 @@ export interface MeResponse {
   can_create_users: boolean;
   can_create_user_groups: boolean;
   can_create_connections: boolean;
-  can_create_connection_folders: boolean;
+  can_use_quick_share: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
   is_approver: boolean;
@@ -679,7 +679,7 @@ export interface Role {
   can_create_users: boolean;
   can_create_user_groups: boolean;
   can_create_connections: boolean;
-  can_create_connection_folders: boolean;
+  can_use_quick_share: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
 }

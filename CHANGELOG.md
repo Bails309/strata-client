@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.23.1] — 2026-04-23
+## [0.24.0] — 2026-04-24
+
+### Added
+- **Quick Share role permission (`can_use_quick_share`)**: Introduces a dedicated RBAC flag controlling access to the in-session **Quick Share** feature (ephemeral file upload / share-link). The Quick Share button on the session bar is now gated by this permission, and the backend `POST /api/files/upload` endpoint rejects requests from users whose role does not have it. Administrators retain full access (`can_manage_system` bypasses the check, consistent with the rest of the RBAC surface). ([`backend/migrations/054_unify_connection_folder_perm_add_quick_share.sql`](backend/migrations/054_unify_connection_folder_perm_add_quick_share.sql), [`backend/src/services/middleware.rs`](backend/src/services/middleware.rs), [`backend/src/routes/files.rs`](backend/src/routes/files.rs), [`frontend/src/pages/admin/AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx), [`frontend/src/components/SessionBar.tsx`](frontend/src/components/SessionBar.tsx))
+
+### Changed
+- **Unified "Create connections" permission**: The two separate flags `can_create_connections` and `can_create_connection_folders` have been consolidated into a single `can_create_connections` permission. The role-editor checkbox for "Create connection folders" is removed; users with **Create new connections** can now create and organise both connections *and* their folders. Migration 054 OR's the old `can_create_connection_folders` into `can_create_connections` before dropping the column, so no existing role loses capability.
+- **RBAC surface narrowed from 10 permissions to 10 (one retired, one added)**: The permission matrix documented in [`docs/security.md`](docs/security.md) now reflects the consolidated `can_create_connections` and the new `can_use_quick_share`. All API response payloads (`GET /api/user/me`, `POST /api/auth/login`, `GET /api/admin/roles`) emit `can_use_quick_share` in place of `can_create_connection_folders`; external API consumers should update their field mappings accordingly.
+- **Upgrade note**: Migration 054 grants `can_use_quick_share = true` to every existing role for non-breaking behaviour (Quick Share remains available to anyone who had it before). Administrators who want to restrict Quick Share to a subset of roles should untick the new **Use Quick Share** checkbox on the relevant roles via **Admin → Access → Roles** after the upgrade.
+
+### Fixed
+- **Session quick actions respect file-transfer toggle**: The admin form's **Enable drive / file transfer** and **Enable SFTP** checkboxes now fully gate the runtime file-transfer channels. Previously the tunnel layer force-enabled `enable-drive` for every RDP connection and `enable-sftp` for every SSH connection regardless of the stored extras, and the `cleanExtra()` helper in the admin form stripped `"false"` values before save so unticking the box was silently discarded. Now:
+  - The admin form preserves explicit `"false"` for a whitelist of boolean toggles (`enable-drive`, `enable-sftp`, `enable-printing`, `enable-wallpaper`, `enable-theming`, `enable-font-smoothing`, `enable-full-window-drag`, `enable-desktop-composition`, `enable-menu-animations`, `enable-audio`, `enable-audio-input`, `disable-audio`, `disable-copy`, `disable-paste`, `read-only`, `ignore-cert`). ([`frontend/src/pages/admin/AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx))
+  - The backend tunnel layer treats only `"true"` as enabled (absent/`"false"`/any other value → disabled), matching what the admin sees in the UI. ([`backend/src/tunnel.rs`](backend/src/tunnel.rs))
+  - `/user/connections/:id/info` reports `file_transfer_enabled` using the same strict rule. ([`backend/src/routes/user.rs`](backend/src/routes/user.rs))
+  - `SessionBar` Browse Files button and the `SessionMenu` File Transfer section require `fileTransferEnabled`. **Quick Share is always shown while a session is active** — it uses the backend file-store and is independent of guacd's drive/SFTP channels, so it must not share gating with Browse Files. ([`frontend/src/components/SessionBar.tsx`](frontend/src/components/SessionBar.tsx), [`frontend/src/components/SessionMenu.tsx`](frontend/src/components/SessionMenu.tsx))
+  - **Upgrade note**: existing RDP/SSH connections that relied on the implicit legacy default now appear with file transfer off. Admins should edit those connections, tick the box, and save to re-enable.
 
 ### Changed
 - **`AdminSettings.tsx` refactor complete (W4-4)**: The historical 8,402-line monolith has been broken into one dedicated module per tab under `frontend/src/pages/admin/`. `AdminSettings.tsx` is now a thin **258-line dispatcher** that loads settings and renders the selected tab:

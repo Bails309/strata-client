@@ -196,7 +196,10 @@ Browser                    Backend                   guacd              Target
 ```
 system_settings ──── key/value config store
 users ──────────────── OIDC subject, username, role FK
-roles ──────────────── granular permissions (can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, can_view_sessions, etc.)
+roles ────────────── granular permissions (can_manage_system, can_manage_users, can_manage_connections,
+                       can_view_audit_logs, can_view_sessions, can_create_users, can_create_user_groups,
+                       can_create_connections [unified with folders], can_create_sharing_profiles,
+                       can_use_quick_share — user-facing, excluded from admin-surface checks)
 connections ──────── target host, protocol, port, domain, description, group FK, ad_source FK, health_status, health_checked_at
 connection_groups ── folder hierarchy with parent_id self-reference
 role_connections ──── many-to-many role ↔ connection

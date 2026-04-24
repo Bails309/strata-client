@@ -51,7 +51,6 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
           user.can_create_users ||
           user.can_create_user_groups ||
           user.can_create_connections ||
-          user.can_create_connection_folders ||
           user.can_create_sharing_profiles
         ? "access"
         : user.can_view_audit_logs
@@ -123,7 +122,6 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
                 user.can_create_users ||
                 user.can_create_user_groups ||
                 user.can_create_connections ||
-                user.can_create_connection_folders ||
                 user.can_create_sharing_profiles
               );
             if (t === "tags") return user.can_manage_system || user.can_manage_connections;

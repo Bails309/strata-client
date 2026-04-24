@@ -61,7 +61,7 @@ export default function AccessTab({
     can_create_users: boolean;
     can_create_user_groups: boolean;
     can_create_connections: boolean;
-    can_create_connection_folders: boolean;
+    can_use_quick_share: boolean;
     can_create_sharing_profiles: boolean;
     can_view_sessions: boolean;
   }>({
@@ -73,7 +73,7 @@ export default function AccessTab({
     can_create_users: false,
     can_create_user_groups: false,
     can_create_connections: false,
-    can_create_connection_folders: false,
+    can_use_quick_share: false,
     can_create_sharing_profiles: false,
     can_view_sessions: false,
   });
@@ -102,7 +102,7 @@ export default function AccessTab({
       can_create_users: r.can_create_users,
       can_create_user_groups: r.can_create_user_groups,
       can_create_connections: r.can_create_connections,
-      can_create_connection_folders: r.can_create_connection_folders,
+      can_use_quick_share: r.can_use_quick_share,
       can_create_sharing_profiles: r.can_create_sharing_profiles,
       can_view_sessions: r.can_view_sessions,
     });
@@ -228,10 +228,39 @@ export default function AccessTab({
   const ex = (k: string) => formExtra[k] || "";
   const setEx = (k: string, v: string) => setFormExtra({ ...formExtra, [k]: v });
 
-  // Strip empty values from extra before saving
+  // Keys whose "false" / "" state must be persisted verbatim so the backend
+  // can distinguish "admin disabled it" from "legacy connection, key never set".
+  // Without this, unchecking e.g. `enable-drive` would strip the key and the
+  // tunnel layer would re-apply the RDP default of enabling the drive channel.
+  const PRESERVE_FALSE_KEYS = new Set([
+    "enable-drive",
+    "enable-sftp",
+    "enable-printing",
+    "enable-wallpaper",
+    "enable-theming",
+    "enable-font-smoothing",
+    "enable-full-window-drag",
+    "enable-desktop-composition",
+    "enable-menu-animations",
+    "enable-audio",
+    "enable-audio-input",
+    "disable-audio",
+    "disable-copy",
+    "disable-paste",
+    "read-only",
+    "ignore-cert",
+  ]);
+
+  // Strip empty values from extra before saving, except for a whitelist of
+  // boolean toggles whose "false" state is semantically meaningful.
   function cleanExtra(): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(formExtra)) {
+      if (PRESERVE_FALSE_KEYS.has(k)) {
+        // Persist as "true" or "false" — never empty string.
+        out[k] = v === "true" ? "true" : "false";
+        continue;
+      }
       if (v !== "" && v !== "false") out[k] = v;
     }
     return out;
@@ -334,9 +363,9 @@ export default function AccessTab({
                           Connections
                         </span>
                       )}
-                      {r.can_create_connection_folders && (
+                      {r.can_use_quick_share && (
                         <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">
-                          Folders
+                          Quick Share
                         </span>
                       )}
                       {r.can_create_sharing_profiles && (
@@ -356,7 +385,7 @@ export default function AccessTab({
                         !r.can_create_users &&
                         !r.can_create_user_groups &&
                         !r.can_create_connections &&
-                        !r.can_create_connection_folders &&
+                        !r.can_use_quick_share &&
                         !r.can_create_sharing_profiles &&
                         !r.can_view_sessions && (
                           <span className="text-txt-tertiary text-[10px] italic">
@@ -419,7 +448,7 @@ export default function AccessTab({
                   can_create_users: false,
                   can_create_user_groups: false,
                   can_create_connections: false,
-                  can_create_connection_folders: false,
+                  can_use_quick_share: false,
                   can_create_sharing_profiles: false,
                   can_view_sessions: false,
                 });
@@ -569,18 +598,18 @@ export default function AccessTab({
                         <input
                           type="checkbox"
                           className="checkbox"
-                          checked={newRole.can_create_connection_folders}
+                          checked={newRole.can_use_quick_share}
                           onChange={(e) =>
                             setNewRole({
                               ...newRole,
-                              can_create_connection_folders: e.target.checked,
+                              can_use_quick_share: e.target.checked,
                             })
                           }
                         />
                         <div className="flex flex-col">
-                          <span className="text-sm font-medium">Create connection folders</span>
+                          <span className="text-sm font-medium">Use Quick Share</span>
                           <span className="text-[10px] text-txt-tertiary">
-                            Organize connections into folders
+                            Upload and share files during a session
                           </span>
                         </div>
                       </label>
@@ -981,7 +1010,7 @@ export default function AccessTab({
       )}
 
       {/* Connection Folders */}
-      {(user.can_manage_system || user.can_create_connection_folders) && (
+      {(user.can_manage_system || user.can_create_connections) && (
         <div className="card">
           <div className="flex items-center justify-between mb-3">
             <h2 className="!mb-0">Connection Folders</h2>

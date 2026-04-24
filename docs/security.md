@@ -82,7 +82,7 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/admin/*` | `require_auth` + `require_admin` + granular permission checks |
 | `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` + `can_manage_users` |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
-| `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` (delete = owner-only) |
+| `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` + `can_use_quick_share` (POST only; `can_manage_system` bypass); delete = owner-only |
 | `/api/user/sessions` | `require_auth` (filtered to own sessions) |
 | `/api/user/recordings` | `require_auth` (filtered to own recordings) |
 
@@ -101,6 +101,16 @@ All admin API endpoints enforce fine-grained permission checks beyond the `requi
 | `can_manage_connections` | Connection CRUD, connection folders, sharing profiles, admin tags, AD sync config, Kerberos realms |
 | `can_view_audit_logs` | Audit log listing and export |
 | `can_view_sessions` | Active session listing, session observation (NVR), session kill, recording stats |
+| `can_create_users` | Provisioning new user accounts |
+| `can_create_user_groups` | Role (user-group) create / update / delete |
+| `can_create_connections` | Create and manage connections **and** their folder hierarchy (unified as of v0.24.0) |
+| `can_create_sharing_profiles` | Generate live session share links |
+
+**User-facing permissions** (non-administrative, explicitly excluded from `has_any_admin_permission()`):
+
+| Permission | Runtime Effect |
+|---|---|
+| `can_use_quick_share` | Permits `POST /api/files/upload` (ephemeral in-session file CDN). Gate enforced by `services::middleware::check_quick_share_permission()`. `can_manage_system` bypasses this check. |
 
 Endpoints that do not match a specific permission category (e.g. role CRUD) require `can_manage_system`.
 

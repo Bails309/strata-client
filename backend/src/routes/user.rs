@@ -98,7 +98,7 @@ pub async fn me(
         "can_create_users": user.can_create_users,
         "can_create_user_groups": user.can_create_user_groups,
         "can_create_connections": user.can_create_connections,
-        "can_create_connection_folders": user.can_create_connection_folders,
+        "can_use_quick_share": user.can_use_quick_share,
         "can_create_sharing_profiles": user.can_create_sharing_profiles,
         "can_view_sessions": user.can_view_sessions,
         "is_approver": is_approver,
@@ -820,15 +820,12 @@ pub async fn connection_info(
         false
     };
 
-    // Check if any file transfer mechanism is enabled in the connection's extra settings
-    let file_transfer_enabled = extra
-        .as_ref()
-        .and_then(|e| e.as_object())
-        .map(|obj| {
-            obj.get("enable-drive").and_then(|v| v.as_str()) == Some("true")
-                || obj.get("enable-sftp").and_then(|v| v.as_str()) == Some("true")
-        })
-        .unwrap_or(false);
+    // Match the strict "only explicit true = enabled" semantics used by
+    // `tunnel.rs::full_param_map` so the UI, backend, and guacd all agree.
+    let extra_obj = extra.as_ref().and_then(|e| e.as_object());
+    let drive_setting = extra_obj.and_then(|o| o.get("enable-drive")).and_then(|v| v.as_str());
+    let sftp_setting = extra_obj.and_then(|o| o.get("enable-sftp")).and_then(|v| v.as_str());
+    let file_transfer_enabled = drive_setting == Some("true") || sftp_setting == Some("true");
 
     let mut resp = json!({
         "protocol": protocol,

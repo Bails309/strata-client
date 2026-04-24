@@ -183,7 +183,7 @@ export default function SessionMenu({
             </section>
 
             {/* ── File Transfer ── */}
-            {session.filesystems.length > 0 && (
+            {session.fileTransferEnabled && session.filesystems.length > 0 && (
               <section>
                 <div className="text-[0.7rem] uppercase text-txt-tertiary font-semibold tracking-wide mb-1">
                   File Transfer

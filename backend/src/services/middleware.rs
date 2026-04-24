@@ -26,9 +26,10 @@ pub struct AuthUser {
     pub can_create_users: bool,
     pub can_create_user_groups: bool,
     pub can_create_connections: bool,
-    pub can_create_connection_folders: bool,
     pub can_create_sharing_profiles: bool,
     pub can_view_sessions: bool,
+    /// Whether the user may use Quick Share (file-store quick-action).
+    pub can_use_quick_share: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -45,13 +46,15 @@ struct UserPermissionsRow {
     pub can_create_users: bool,
     pub can_create_user_groups: bool,
     pub can_create_connections: bool,
-    pub can_create_connection_folders: bool,
     pub can_create_sharing_profiles: bool,
     pub can_view_sessions: bool,
+    pub can_use_quick_share: bool,
 }
 
 impl AuthUser {
     /// Returns `true` if the user holds at least one admin-level permission.
+    /// `can_use_quick_share` is intentionally NOT included — Quick Share is
+    /// a user-level feature, not an admin privilege.
     pub fn has_any_admin_permission(&self) -> bool {
         self.can_manage_system
             || self.can_manage_users
@@ -60,7 +63,6 @@ impl AuthUser {
             || self.can_create_users
             || self.can_create_user_groups
             || self.can_create_connections
-            || self.can_create_connection_folders
             || self.can_create_sharing_profiles
             || self.can_view_sessions
     }
@@ -107,6 +109,15 @@ pub fn check_audit_permission(user: &AuthUser) -> Result<(), crate::error::AppEr
 
 pub fn check_session_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
     if !user.can_view_sessions && !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+/// Quick Share is a user-level feature: allow when the role flag is set, or
+/// when the user is a super-admin (`can_manage_system`).
+pub fn check_quick_share_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
+    if !user.can_use_quick_share && !user.can_manage_system {
         return Err(crate::error::AppError::Forbidden);
     }
     Ok(())
@@ -266,7 +277,7 @@ async fn try_local_jwt(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_use_quick_share, r.can_create_sharing_profiles, r.can_view_sessions
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
@@ -291,7 +302,7 @@ async fn try_local_jwt(
         can_create_users: user.can_create_users,
         can_create_user_groups: user.can_create_user_groups,
         can_create_connections: user.can_create_connections,
-        can_create_connection_folders: user.can_create_connection_folders,
+        can_use_quick_share: user.can_use_quick_share,
         can_create_sharing_profiles: user.can_create_sharing_profiles,
         can_view_sessions: user.can_view_sessions,
     }))
@@ -318,7 +329,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_use_quick_share, r.can_create_sharing_profiles, r.can_view_sessions
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.sub = $1 AND u.deleted_at IS NULL",
     )
@@ -347,7 +358,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         can_create_users: user.can_create_users,
         can_create_user_groups: user.can_create_user_groups,
         can_create_connections: user.can_create_connections,
-        can_create_connection_folders: user.can_create_connection_folders,
+        can_use_quick_share: user.can_use_quick_share,
         can_create_sharing_profiles: user.can_create_sharing_profiles,
         can_view_sessions: user.can_view_sessions,
     })
@@ -388,7 +399,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -414,7 +425,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -439,7 +450,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -464,7 +475,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -491,7 +502,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -503,7 +514,7 @@ mod tests {
             "can_create_users" => user.can_create_users = true,
             "can_create_user_groups" => user.can_create_user_groups = true,
             "can_create_connections" => user.can_create_connections = true,
-            "can_create_connection_folders" => user.can_create_connection_folders = true,
+            "can_use_quick_share" => user.can_use_quick_share = true,
             "can_create_sharing_profiles" => user.can_create_sharing_profiles = true,
             "can_view_sessions" => user.can_view_sessions = true,
             _ => {}
@@ -512,6 +523,8 @@ mod tests {
     }
 
     /// Checks that any single permission satisfies the admin check logic.
+    /// `can_use_quick_share` is deliberately excluded \u2014 it's a user-level
+    /// feature rather than an admin privilege.
     #[test]
     fn has_any_admin_perm_per_field() {
         let perms = [
@@ -522,8 +535,8 @@ mod tests {
             "can_create_users",
             "can_create_user_groups",
             "can_create_connections",
-            "can_create_connection_folders",
             "can_create_sharing_profiles",
+            "can_view_sessions",
         ];
         for field in perms {
             let user = make_user_with_perm(field);
@@ -533,6 +546,15 @@ mod tests {
                 field
             );
         }
+    }
+
+    #[test]
+    fn has_any_admin_perm_excludes_quick_share() {
+        let user = make_user_with_perm("can_use_quick_share");
+        assert!(
+            !user.has_any_admin_permission(),
+            "can_use_quick_share must not count as an admin permission"
+        );
     }
 
     /// User with zero permissions has no admin access.
@@ -557,7 +579,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -579,7 +601,7 @@ mod tests {
             can_create_users: true,
             can_create_user_groups: true,
             can_create_connections: true,
-            can_create_connection_folders: true,
+            can_use_quick_share: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
         };
@@ -674,7 +696,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: sessions,
         }

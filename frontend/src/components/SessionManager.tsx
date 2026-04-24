@@ -65,6 +65,7 @@ interface SessionManagerValue {
   setSessionBarCollapsed: (collapsed: boolean) => void;
   barWidth: number;
   canShare: boolean;
+  canUseQuickShare: boolean;
 }
 
 interface CreateSessionOpts {
@@ -86,9 +87,11 @@ export function useSessionManager() {
 export function SessionManagerProvider({
   children,
   canShare = false,
+  canUseQuickShare = false,
 }: {
   children: React.ReactNode;
   canShare?: boolean;
+  canUseQuickShare?: boolean;
 }) {
   const [sessions, setSessions] = useState<GuacSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -423,6 +426,7 @@ export function SessionManagerProvider({
         setSessionBarCollapsed,
         barWidth,
         canShare,
+        canUseQuickShare,
       }}
     >
       {children}

@@ -77,6 +77,9 @@ pub async fn upload(
     Extension(user): Extension<AuthUser>,
     mut multipart: axum::extract::Multipart,
 ) -> Result<axum::Json<FileUploadResponse>, AppError> {
+    // RBAC: Quick Share must be explicitly enabled on the user's role.
+    crate::services::middleware::check_quick_share_permission(&user)?;
+
     let file_store = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {

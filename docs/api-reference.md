@@ -387,23 +387,52 @@ Detailed service health status.
 
 #### `GET /api/admin/roles`
 
-List all roles.
+List all roles with their full permission matrix.
 
 **Response** `200 OK`
 ```json
 [
-  { "id": "uuid", "name": "admin" },
-  { "id": "uuid", "name": "user" }
+  {
+    "id": "uuid",
+    "name": "admin",
+    "can_manage_system": true,
+    "can_manage_users": true,
+    "can_manage_connections": true,
+    "can_view_audit_logs": true,
+    "can_create_users": true,
+    "can_create_user_groups": true,
+    "can_create_connections": true,
+    "can_use_quick_share": true,
+    "can_create_sharing_profiles": true,
+    "can_view_sessions": true
+  }
 ]
 ```
 
+| Field | Type | Description |
+|---|---|---|
+| `can_manage_system` | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks |
+| `can_manage_users` | boolean | User CRUD, role assignment, password resets |
+| `can_manage_connections` | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos |
+| `can_view_audit_logs` | boolean | Audit log listing and export |
+| `can_create_users` | boolean | Provision new user accounts |
+| `can_create_user_groups` | boolean | Role CRUD |
+| `can_create_connections` | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0) |
+| `can_use_quick_share` | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin) |
+| `can_create_sharing_profiles` | boolean | Generate live session share links |
+| `can_view_sessions` | boolean | NVR observation, active session listing, kill session |
+
 #### `POST /api/admin/roles`
 
-Create a new role.
+Create a new role. All permission fields are optional and default to `false`.
 
 **Request Body**
 ```json
-{ "name": "operators" }
+{
+  "name": "operators",
+  "can_view_sessions": true,
+  "can_use_quick_share": true
+}
 ```
 
 ### Connections
@@ -685,7 +714,7 @@ Current authenticated user profile, including all role permissions.
   "can_create_users": false,
   "can_create_user_groups": false,
   "can_create_connections": false,
-  "can_create_connection_folders": false,
+  "can_use_quick_share": false,
   "can_create_sharing_profiles": false,
   "can_view_sessions": true,
   "is_approver": true
@@ -1046,7 +1075,7 @@ Session-scoped temporary file hosting. Upload a file and get a random, unguessab
 
 ### `POST /api/files/upload`
 
-Upload a file via multipart form data. Requires authentication.
+Upload a file via multipart form data. Requires authentication **and** the `can_use_quick_share` role permission (or `can_manage_system` as a super-admin bypass). Users whose role lacks Quick Share will receive `403 Forbidden`.
 
 **Content-Type**: `multipart/form-data`
 

@@ -234,7 +234,7 @@ pub struct UserAuthRow {
     pub can_create_users: bool,
     pub can_create_user_groups: bool,
     pub can_create_connections: bool,
-    pub can_create_connection_folders: bool,
+    pub can_use_quick_share: bool,
     pub can_create_sharing_profiles: bool,
 }
 
@@ -247,7 +247,7 @@ pub async fn find_local_by_username_or_email(
         "SELECT u.id, u.username, u.password_hash, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles
+                r.can_use_quick_share, r.can_create_sharing_profiles
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE (LOWER(u.username) = LOWER($1) OR LOWER(u.email) = LOWER($1)) AND u.auth_type = 'local' AND u.deleted_at IS NULL",
     )
@@ -273,7 +273,7 @@ pub struct AuthStatusRow {
     pub can_create_users: bool,
     pub can_create_user_groups: bool,
     pub can_create_connections: bool,
-    pub can_create_connection_folders: bool,
+    pub can_use_quick_share: bool,
     pub can_create_sharing_profiles: bool,
     pub can_view_sessions: bool,
     pub terms_accepted_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -288,7 +288,7 @@ pub async fn find_auth_status(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_create_connection_folders, r.can_create_sharing_profiles, r.can_view_sessions,
+                r.can_use_quick_share, r.can_create_sharing_profiles, r.can_view_sessions,
                 u.terms_accepted_at, u.terms_accepted_version
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",

@@ -1,3 +1,70 @@
+# What's New in v0.24.0
+
+> **RBAC refinement release.** v0.24.0 introduces a dedicated permission for the in-session Quick Share feature and consolidates the two "create connections" permissions into a single, clearer flag. Zero-downtime, non-breaking upgrade for every existing role.
+
+---
+
+## 🔐 New permission: **Use Quick Share** (`can_use_quick_share`)
+
+Quick Share — the ephemeral file CDN exposed on the Session Bar for handing files into a remote desktop — previously relied on implicit "if the button is visible, the user can use it" gating with no backend enforcement. In v0.24.0 it is a first-class role permission:
+
+| Surface | Behaviour before v0.24.0 | Behaviour in v0.24.0 |
+|---|---|---|
+| **Session Bar button** | Always visible while a session was active | Visible only when the user's role grants `can_use_quick_share` (or `can_manage_system`) |
+| **`POST /api/files/upload`** | Any authenticated user | Requires `can_use_quick_share`; returns `403 Forbidden` otherwise |
+| **Admin role editor** | No checkbox | New **Use Quick Share** checkbox under **Admin → Access → Roles** |
+
+> [!NOTE]
+> **Upgrade behaviour is non-breaking.** Migration 054 sets `can_use_quick_share = true` on every existing role on first boot. Administrators who want to restrict Quick Share should untick the new checkbox on the relevant roles after the upgrade.
+
+### Why a separate permission?
+
+Quick Share writes to the backend file-store and is **independent of the guacd drive / SFTP channels** (which remain gated by the per-connection `enable-drive` / `enable-sftp` extras fixed in v0.23.1). That makes it a distinct capability from "Browse Files", and cleaner to govern separately — some tenants want to grant drive access but forbid link-sharing, or vice versa.
+
+`can_use_quick_share` is treated as a **user-facing feature flag**, not an administrative permission. It is deliberately **excluded** from `has_any_admin_permission()`, so granting a role only Quick Share does **not** unlock any admin UI or endpoint. A dedicated regression test (`has_any_admin_perm_excludes_quick_share`) guards this invariant.
+
+---
+
+## 🧩 Unified "Create connections" permission
+
+The role editor used to carry two almost-always-identical permissions:
+
+- **Create new connections** (`can_create_connections`)
+- **Create connection folders** (`can_create_connection_folders`)
+
+In every review those two checkboxes ended up ticked together; the separation produced confusion more often than it produced value. v0.24.0 consolidates them:
+
+- The `can_create_connection_folders` column is dropped from the `roles` table.
+- Before dropping, migration 054 OR's its value **into** `can_create_connections`, so any role that had folders-only keeps connection-creation rights.
+- The role-editor checkbox for "Create connection folders" is removed. Users with **Create new connections** can now create and organise both connections *and* their folder hierarchy.
+
+> [!TIP]
+> **No one loses a capability.** Roles that previously had only the folders flag are silently upgraded to full connection creation — consistent with the practical reality that folders are meaningless without connections to put in them.
+
+---
+
+## 📡 API surface changes
+
+Every user / auth / role API now emits `can_use_quick_share` in place of `can_create_connection_folders`:
+
+- `GET /api/user/me`
+- `POST /api/auth/login` (response payload's `user` object)
+- `GET /api/admin/roles`, `POST /api/admin/roles`, `PUT /api/admin/roles/:id`
+
+External API consumers should update their field mappings. The JSON field **count and shape are preserved** — only the semantic meaning of the retired slot has changed. See [`docs/api-reference.md`](docs/api-reference.md) for the full updated schemas.
+
+---
+
+## 🛠️ Under the hood
+
+- **Migration**: `backend/migrations/054_unify_connection_folder_perm_add_quick_share.sql` performs the OR-rollup and column swap in a single transaction.
+- **New middleware helper**: `services::middleware::check_quick_share_permission(&AuthUser)` — reusable gate for any future Quick-Share-adjacent endpoint.
+- **Frontend context**: `SessionManagerProvider` now exposes `canUseQuickShare: boolean`; `App.tsx` seeds it from the authenticated user.
+- **Version bump**: `VERSION`, `frontend/package.json`, and `backend/Cargo.toml` all now read **0.24.0**.
+- **Validation**: 1,165 / 1,165 Vitest tests pass; backend `cargo check --all-targets` clean; TypeScript strict mode clean.
+
+---
+
 # What's New in v0.23.1
 
 > **Maintenance release — zero user-facing changes.** v0.23.1 closes out the final front-end complexity item and retires the compliance tracker that has guided the last six waves of work.

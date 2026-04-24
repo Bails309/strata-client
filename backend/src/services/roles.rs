@@ -18,10 +18,14 @@ pub struct RoleRow {
     pub can_view_audit_logs: bool,
     pub can_create_users: bool,
     pub can_create_user_groups: bool,
+    /// Unified flag — governs creation of both connections and connection
+    /// folders.  Prior to migration 054 these were two separate columns.
     pub can_create_connections: bool,
-    pub can_create_connection_folders: bool,
     pub can_create_sharing_profiles: bool,
     pub can_view_sessions: bool,
+    /// Whether members of this role may use the Quick Share upload
+    /// quick-action.  Added in migration 054.
+    pub can_use_quick_share: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -34,9 +38,9 @@ pub struct CreateRoleRequest {
     pub can_create_users: Option<bool>,
     pub can_create_user_groups: Option<bool>,
     pub can_create_connections: Option<bool>,
-    pub can_create_connection_folders: Option<bool>,
     pub can_create_sharing_profiles: Option<bool>,
     pub can_view_sessions: Option<bool>,
+    pub can_use_quick_share: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -49,15 +53,15 @@ pub struct UpdateRoleRequest {
     pub can_create_users: Option<bool>,
     pub can_create_user_groups: Option<bool>,
     pub can_create_connections: Option<bool>,
-    pub can_create_connection_folders: Option<bool>,
     pub can_create_sharing_profiles: Option<bool>,
     pub can_view_sessions: Option<bool>,
+    pub can_use_quick_share: Option<bool>,
 }
 
 const SELECT_COLUMNS: &str =
     "id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, \
      can_create_users, can_create_user_groups, can_create_connections, \
-     can_create_connection_folders, can_create_sharing_profiles, can_view_sessions";
+     can_create_sharing_profiles, can_view_sessions, can_use_quick_share";
 
 pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<RoleRow>, AppError> {
     let rows: Vec<RoleRow> =
@@ -71,7 +75,7 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     let row: RoleRow = sqlx::query_as(&format!(
         "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, \
          can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, \
-         can_create_connection_folders, can_create_sharing_profiles, can_view_sessions) \
+         can_create_sharing_profiles, can_view_sessions, can_use_quick_share) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
          RETURNING {SELECT_COLUMNS}"
     ))
@@ -83,9 +87,9 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     .bind(body.can_create_users.unwrap_or(false))
     .bind(body.can_create_user_groups.unwrap_or(false))
     .bind(body.can_create_connections.unwrap_or(false))
-    .bind(body.can_create_connection_folders.unwrap_or(false))
     .bind(body.can_create_sharing_profiles.unwrap_or(false))
     .bind(body.can_view_sessions.unwrap_or(false))
+    .bind(body.can_use_quick_share.unwrap_or(false))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -106,9 +110,9 @@ pub async fn update(
             can_create_users = COALESCE($7, can_create_users),
             can_create_user_groups = COALESCE($8, can_create_user_groups),
             can_create_connections = COALESCE($9, can_create_connections),
-            can_create_connection_folders = COALESCE($10, can_create_connection_folders),
-            can_create_sharing_profiles = COALESCE($11, can_create_sharing_profiles),
-            can_view_sessions = COALESCE($12, can_view_sessions)
+            can_create_sharing_profiles = COALESCE($10, can_create_sharing_profiles),
+            can_view_sessions = COALESCE($11, can_view_sessions),
+            can_use_quick_share = COALESCE($12, can_use_quick_share)
          WHERE id = $1
          RETURNING {SELECT_COLUMNS}"
     ))
@@ -121,9 +125,9 @@ pub async fn update(
     .bind(body.can_create_users)
     .bind(body.can_create_user_groups)
     .bind(body.can_create_connections)
-    .bind(body.can_create_connection_folders)
     .bind(body.can_create_sharing_profiles)
     .bind(body.can_view_sessions)
+    .bind(body.can_use_quick_share)
     .fetch_one(pool)
     .await?;
     Ok(row)

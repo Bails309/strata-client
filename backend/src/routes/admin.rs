@@ -3658,7 +3658,7 @@ mod tests {
             can_create_users: false,
             can_create_user_groups: false,
             can_create_connections: false,
-            can_create_connection_folders: false,
+            can_use_quick_share: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -3943,7 +3943,7 @@ mod tests {
         assert!(r.can_create_users.is_none());
         assert!(r.can_create_user_groups.is_none());
         assert!(r.can_create_connections.is_none());
-        assert!(r.can_create_connection_folders.is_none());
+        assert!(r.can_use_quick_share.is_none());
         assert!(r.can_create_sharing_profiles.is_none());
     }
 
@@ -4390,7 +4390,7 @@ mod tests {
             can_create_users: true,
             can_create_user_groups: true,
             can_create_connections: true,
-            can_create_connection_folders: true,
+            can_use_quick_share: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
         };
@@ -4402,7 +4402,7 @@ mod tests {
         assert_eq!(v["can_create_users"], true);
         assert_eq!(v["can_create_user_groups"], true);
         assert_eq!(v["can_create_connections"], true);
-        assert_eq!(v["can_create_connection_folders"], true);
+        assert_eq!(v["can_use_quick_share"], true);
         assert_eq!(v["can_create_sharing_profiles"], true);
     }
 

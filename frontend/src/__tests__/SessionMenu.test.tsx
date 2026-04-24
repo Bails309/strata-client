@@ -32,6 +32,7 @@ function createMockSession(overrides = {}) {
       })),
     },
     filesystems: [],
+    fileTransferEnabled: true,
     remoteClipboard: "",
     ...overrides,
   };

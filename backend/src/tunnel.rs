@@ -111,16 +111,22 @@ impl HandshakeParams {
         let mut m: std::collections::HashMap<String, String> =
             base.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
-        // RDP virtual drive — enables file transfer via RDPDR channel
+        // RDP virtual drive — enables file transfer via RDPDR channel.
+        // Only enable when the admin has explicitly set `enable-drive=true` in
+        // the connection's extras.  The admin form's checkbox renders as
+        // unchecked for both absent and non-"true" values, so treating absent
+        // as "enabled" would diverge from what the admin sees in the UI.
         if self.protocol == "rdp" {
-            m.entry("enable-drive".into())
-                .or_insert_with(|| "true".into());
-            m.entry("drive-path".into())
-                .or_insert_with(|| "/var/lib/guacamole/drive".into());
-            m.entry("drive-name".into())
-                .or_insert_with(|| "Guacamole".into());
-            m.entry("create-drive-path".into())
-                .or_insert_with(|| "true".into());
+            let drive_enabled = self.extra.get("enable-drive").map(String::as_str) == Some("true");
+            if drive_enabled {
+                m.insert("enable-drive".into(), "true".into());
+                m.entry("drive-path".into())
+                    .or_insert_with(|| "/var/lib/guacamole/drive".into());
+                m.entry("drive-name".into())
+                    .or_insert_with(|| "Guacamole".into());
+                m.entry("create-drive-path".into())
+                    .or_insert_with(|| "true".into());
+            }
 
             // FreeRDP 3 GFX pipeline — enables H.264 hardware/software encoding
             // for significantly lower bandwidth usage on modern RDP hosts.
@@ -134,10 +140,12 @@ impl HandshakeParams {
                 .or_insert_with(|| "8388608".into());
         }
 
-        // SFTP for SSH connections
+        // SFTP for SSH connections — only when explicitly enabled in extras.
         if self.protocol == "ssh" {
-            m.entry("enable-sftp".into())
-                .or_insert_with(|| "true".into());
+            let sftp_enabled = self.extra.get("enable-sftp").map(String::as_str) == Some("true");
+            if sftp_enabled {
+                m.insert("enable-sftp".into(), "true".into());
+            }
         }
 
         // Clipboard — enable for all protocols
@@ -915,14 +923,41 @@ mod tests {
             extra: std::collections::HashMap::new(),
         };
         let m = hp.full_param_map();
-        // RDP-specific defaults
-        assert_eq!(m["enable-drive"], "true");
-        assert_eq!(m["drive-path"], "/var/lib/guacamole/drive");
+        // RDP: drive is NOT enabled unless admin sets `enable-drive=true` explicitly.
+        assert!(!m.contains_key("enable-drive"));
+        assert!(!m.contains_key("drive-path"));
+        // Non-drive defaults still applied
         assert_eq!(m["enable-gfx"], "true");
         assert_eq!(m["enable-gfx-h264"], "true");
         // Clipboard
         assert_eq!(m["disable-copy"], "false");
         assert_eq!(m["disable-paste"], "false");
+    }
+
+    #[test]
+    fn full_param_map_rdp_drive_enabled_via_extras() {
+        let mut extras = std::collections::HashMap::new();
+        extras.insert("enable-drive".to_string(), "true".to_string());
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: extras,
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["enable-drive"], "true");
+        assert_eq!(m["drive-path"], "/var/lib/guacamole/drive");
     }
 
     #[test]
@@ -945,10 +980,91 @@ mod tests {
             extra: std::collections::HashMap::new(),
         };
         let m = hp.full_param_map();
-        assert_eq!(m["enable-sftp"], "true");
+        // SSH: SFTP is NOT enabled unless admin sets `enable-sftp=true` explicitly.
+        assert!(!m.contains_key("enable-sftp"));
         // Should NOT have RDP-specific params
         assert!(!m.contains_key("enable-drive"));
         assert!(!m.contains_key("enable-gfx"));
+    }
+
+    #[test]
+    fn full_param_map_ssh_sftp_enabled_via_extras() {
+        let mut extras = std::collections::HashMap::new();
+        extras.insert("enable-sftp".to_string(), "true".to_string());
+        let hp = HandshakeParams {
+            protocol: "ssh".into(),
+            hostname: "h".into(),
+            port: 22,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 800,
+            height: 600,
+            dpi: 96,
+            extra: extras,
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["enable-sftp"], "true");
+    }
+
+    #[test]
+    fn full_param_map_rdp_drive_disabled_via_extras() {
+        // Admin cleared the `enable-drive` checkbox → empty-string value in extras.
+        // The tunnel must NOT enable the virtual drive for guacd.
+        let mut extras = std::collections::HashMap::new();
+        extras.insert("enable-drive".to_string(), String::new());
+        let hp = HandshakeParams {
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            extra: extras,
+        };
+        let m = hp.full_param_map();
+        assert!(!m.contains_key("enable-drive"));
+        assert!(!m.contains_key("drive-path"));
+        assert!(!m.contains_key("drive-name"));
+        assert!(!m.contains_key("create-drive-path"));
+    }
+
+    #[test]
+    fn full_param_map_ssh_sftp_disabled_via_extras() {
+        let mut extras = std::collections::HashMap::new();
+        extras.insert("enable-sftp".to_string(), String::new());
+        let hp = HandshakeParams {
+            protocol: "ssh".into(),
+            hostname: "h".into(),
+            port: 22,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 800,
+            height: 600,
+            dpi: 96,
+            extra: extras,
+        };
+        let m = hp.full_param_map();
+        assert!(!m.contains_key("enable-sftp"));
     }
 
     #[test]

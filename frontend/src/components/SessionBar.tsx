@@ -24,6 +24,7 @@ export default function SessionBar() {
     sessionBarCollapsed,
     setSessionBarCollapsed,
     canShare,
+    canUseQuickShare,
   } = useSessionManager();
 
   const navigate = useNavigate();
@@ -349,8 +350,8 @@ export default function SessionBar() {
                   </button>
                 )}
 
-                {/* Files */}
-                {activeSession.filesystems.length > 0 && (
+                {/* Files — only when file transfer is enabled AND guacd exposed a filesystem */}
+                {activeSession.fileTransferEnabled && activeSession.filesystems.length > 0 && (
                   <button
                     className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${fileBrowserOpen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}
                     onClick={() => setFileBrowserOpen(!fileBrowserOpen)}
@@ -371,8 +372,9 @@ export default function SessionBar() {
                   </button>
                 )}
 
-                {/* Quick Share */}
-                {activeSession.fileTransferEnabled && (
+                {/* Quick Share — gated by the role permission `can_use_quick_share`.
+                    Uses the backend file-store, independent of guacd drive/SFTP. */}
+                {canUseQuickShare && (
                   <button
                     className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${quickShareOpen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}
                     onClick={() => setQuickShareOpen(!quickShareOpen)}

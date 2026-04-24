@@ -64,6 +64,7 @@ function defaultManagerMock(overrides = {}) {
     setSessionBarCollapsed: vi.fn(),
     barWidth: 200,
     canShare: false,
+    canUseQuickShare: true,
     ...overrides,
   };
 }
@@ -286,9 +287,10 @@ describe("SessionBar", () => {
     expect(screen.getByText("Connection Lost")).toBeInTheDocument();
   });
 
-  it("shows file browser button when session has filesystems", () => {
+  it("shows file browser button when session has filesystems and file transfer enabled", () => {
     const session = makeMockSession("s1", "Server A");
     (session as any).filesystems = [{}];
+    (session as any).fileTransferEnabled = true;
     renderSessionBar("/", false, [session]);
     expect(screen.getByTitle("Browse files")).toBeInTheDocument();
   });
@@ -297,6 +299,33 @@ describe("SessionBar", () => {
     const sessions = [makeMockSession("s1", "Server A")];
     renderSessionBar("/", false, sessions);
     expect(screen.queryByTitle("Browse files")).not.toBeInTheDocument();
+  });
+
+  it("hides file browser button when file transfer is disabled even if filesystems exist", () => {
+    const session = makeMockSession("s1", "Server A");
+    (session as any).filesystems = [{}];
+    (session as any).fileTransferEnabled = false;
+    renderSessionBar("/", false, [session]);
+    expect(screen.queryByTitle("Browse files")).not.toBeInTheDocument();
+  });
+
+  it("shows quick share button whenever a session is active", () => {
+    const session = makeMockSession("s1", "Server A");
+    renderSessionBar("/", false, [session]);
+    expect(
+      screen.getByTitle("Quick Share – upload files for download in remote session")
+    ).toBeInTheDocument();
+  });
+
+  it("shows quick share button even when file transfer is disabled", () => {
+    // Quick Share uses the backend file-store and is independent of
+    // guacd's enable-drive / enable-sftp channels.
+    const session = makeMockSession("s1", "Server A");
+    (session as any).fileTransferEnabled = false;
+    renderSessionBar("/", false, [session]);
+    expect(
+      screen.getByTitle("Quick Share – upload files for download in remote session")
+    ).toBeInTheDocument();
   });
 
   it("opens share popover on share click and shows mode buttons", async () => {

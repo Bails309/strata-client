@@ -95,6 +95,7 @@ export default function App() {
     <SettingsProvider>
       <SessionManagerProvider
         canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
+        canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
       >
         {!authenticated ? (
           <Routes>
@@ -141,7 +142,6 @@ export default function App() {
                     user?.can_create_users ||
                     user?.can_create_user_groups ||
                     user?.can_create_connections ||
-                    user?.can_create_connection_folders ||
                     user?.can_create_sharing_profiles ? (
                       <AdminSettings user={user} />
                     ) : (

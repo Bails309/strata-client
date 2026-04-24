@@ -444,7 +444,7 @@ pub async fn login(
                     "can_create_users": user.can_create_users,
                     "can_create_user_groups": user.can_create_user_groups,
                     "can_create_connections": user.can_create_connections,
-                    "can_create_connection_folders": user.can_create_connection_folders,
+                    "can_use_quick_share": user.can_use_quick_share,
                     "can_create_sharing_profiles": user.can_create_sharing_profiles,
                 }
             }))
@@ -845,7 +845,7 @@ pub async fn check_auth(
             "can_create_users": user.can_create_users,
             "can_create_user_groups": user.can_create_user_groups,
             "can_create_connections": user.can_create_connections,
-            "can_create_connection_folders": user.can_create_connection_folders,
+            "can_use_quick_share": user.can_use_quick_share,
             "can_create_sharing_profiles": user.can_create_sharing_profiles,
             "can_view_sessions": user.can_view_sessions,
             "is_approver": is_approver,

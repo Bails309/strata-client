@@ -197,8 +197,7 @@ export default function Layout({
                     user?.can_manage_connections ||
                     user?.can_create_users ||
                     user?.can_create_user_groups ||
-                    user?.can_create_connections ||
-                    user?.can_create_connection_folders
+                    user?.can_create_connections
                   );
                 }
                 if (item.to === "/audit") {

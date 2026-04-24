@@ -689,10 +689,28 @@ export default function SessionClient() {
       const dh = display.getHeight();
       if (cw <= 0 || ch <= 0 || dw <= 0 || dh <= 0) return;
       const baseScale = Math.min(cw / dw, ch / dh);
-      // A 1e-4 delta is below the display element's integer pixel
-      // rounding threshold, but it still changes the transform string,
-      // which is all the compositor needs to invalidate.
-      display.scale(baseScale + 1e-4);
+      // Sub-pixel nudge: scale slightly off base so the CSS transform
+      // string differs, then restore on the next frame. This is the
+      // cheapest way to force the browser compositor to invalidate its
+      // cached tile for the display layer.
+      //
+      // Why `1 / dw` rather than a fixed `1e-4`: on hardware-accelerated
+      // compositors some Chromium builds round transforms to device
+      // pixels before deciding whether to repaint, so a fixed tiny
+      // delta can be collapsed to a no-op. `1 / dw` guarantees the
+      // delta is exactly one source pixel when the display is
+      // rendered at 1:1, which is below the visible threshold at any
+      // realistic viewport size but always crosses the rounding gate.
+      //
+      // The synchronous read of `offsetHeight` between the two scale()
+      // calls forces a layout flush, so the intermediate scale is
+      // actually committed to the layer tree before we restore. Without
+      // this, browsers are free to collapse the pair into a single
+      // no-op transform.
+      const displayEl = display.getElement();
+      display.scale(baseScale + 1 / Math.max(dw, 1));
+      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+      displayEl.offsetHeight; // force synchronous layout
       requestAnimationFrame(() => display.scale(baseScale));
     }
 
@@ -776,6 +794,52 @@ export default function SessionClient() {
       scheduleGhostSweep();
     };
 
+    // Hook `display.onflush` to auto-clear ghost pixels after any burst
+    // of drawing activity settles — this covers minimise/maximise and
+    // window-move animations *inside* the remote session, which do NOT
+    // change the desktop resolution and therefore do NOT fire onresize.
+    //
+    // Behaviour:
+    //  - Every flush reschedules the sweep timers (50/200/500ms cascade).
+    //  - Continuous activity (video playback, scrolling) keeps rescheduling
+    //    the 50ms timer so the first sweep in the cascade never runs until
+    //    activity actually settles. No flicker during video.
+    //  - Once activity stops, the 50ms timer fires and does a sub-pixel
+    //    compositor nudge (one source pixel of scale delta + forced
+    //    reflow) — imperceptible visually but forces the browser to
+    //    discard any stale cached tile.
+    //  - The 200/500ms follow-ups catch the occasional slow animation.
+    //
+    // Per-sweep cost is a single CSS transform change, not a canvas
+    // repaint, so even pathological "flush every frame" clients stay
+    // cheap. Ghost frames from `copy`/`rect` animation artefacts now
+    // self-heal without any user interaction.
+    const prevOnFlush = display.onflush;
+    display.onflush = () => {
+      if (prevOnFlush) prevOnFlush();
+      scheduleGhostSweep();
+    };
+
+    // Safety-net sweep on user input. Covers the residual case where
+    // guacd coalesces `sync` instructions under load so `onflush` never
+    // fires for a batch that produced a ghost frame. When the user is
+    // actively interacting with the session (mouse movement, keystroke),
+    // any visible ghost gets swept within 50ms of the next input event.
+    //
+    // `scheduleGhostSweep` already debounces via timer cancellation:
+    //  - Continuous mouse movement → timers keep resetting → no flicker.
+    //  - User pauses → 50ms later the sweep runs once → ghost cleared.
+    //  - Idle → no input → no sweeps → no cost.
+    //
+    // We listen on the display element itself (not `container`) so we
+    // don't fire sweeps for movements over the sidebar or session bar.
+    // `passive: true` guarantees we never delay scroll/input handling.
+    const displayEl = display.getElement();
+    const onInputActivity = () => scheduleGhostSweep();
+    displayEl.addEventListener("pointermove", onInputActivity, { passive: true });
+    displayEl.addEventListener("pointerdown", onInputActivity, { passive: true });
+    window.addEventListener("keydown", onInputActivity, { passive: true });
+
     const observer = new ResizeObserver(() => {
       handleResize();
     });
@@ -792,9 +856,13 @@ export default function SessionClient() {
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("keydown", onInputActivity);
+      displayEl.removeEventListener("pointermove", onInputActivity);
+      displayEl.removeEventListener("pointerdown", onInputActivity);
       ghostSweepTimers.forEach((id) => window.clearTimeout(id));
-      // Restore previous handler (if any) to avoid leaking our closure.
+      // Restore previous handlers (if any) to avoid leaking our closures.
       display.onresize = prevOnResize ?? null;
+      display.onflush = prevOnFlush ?? null;
       if (currentSession.refreshDisplay === forceDisplayRepaint) {
         currentSession.refreshDisplay = undefined;
       }

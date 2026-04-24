@@ -61,6 +61,13 @@ declare module "guacamole-common-js" {
       /** Returns a canvas containing the entire display with all layers composited. */
       flatten(): HTMLCanvasElement;
       onresize: ((width: number, height: number) => void) | null;
+      /**
+       * Fires after the display has finished processing a batch of draw
+       * instructions and committed them to its layers. Used by Strata to
+       * auto-schedule ghost-pixel sweeps after in-session window animations
+       * (minimise/maximise) that don't change the desktop resolution.
+       */
+      onflush: (() => void) | null;
     }
 
     namespace Display {

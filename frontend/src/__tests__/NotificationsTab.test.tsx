@@ -219,9 +219,33 @@ describe("NotificationsTab", () => {
     await userEvent.type(recipient, "probe@corp.local");
     await userEvent.click(screen.getByRole("button", { name: /Send test/i }));
     expect(
-      await screen.findByText(/Test message accepted by the relay for probe@corp.local/)
+      await screen.findByText(
+        /Test message \(Generic probe.*\) accepted by the relay for probe@corp.local/
+      )
     ).toBeInTheDocument();
-    expect(testSmtpSend).toHaveBeenCalledWith("probe@corp.local");
+    expect(testSmtpSend).toHaveBeenCalledWith("probe@corp.local", undefined);
+  });
+
+  it("forwards the selected template key when running a template-specific test send", async () => {
+    vi.mocked(getSmtpConfig).mockResolvedValue(
+      defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" })
+    );
+    render(<NotificationsTab onSave={onSave} />);
+    await screen.findByDisplayValue("h");
+    await userEvent.type(screen.getByPlaceholderText("you@corp.example.com"), "probe@corp.local");
+
+    // Open the template picker and choose "Checkout approved"
+    const tplTrigger = screen.getByRole("button", { name: /Generic probe/i });
+    await userEvent.click(tplTrigger);
+    await userEvent.click(await screen.findByRole("option", { name: /Checkout approved/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: /Send test/i }));
+    await waitFor(() => {
+      expect(testSmtpSend).toHaveBeenCalledWith("probe@corp.local", "checkout_approved");
+    });
+    expect(
+      await screen.findByText(/Test message \(Checkout approved\) accepted by the relay/i)
+    ).toBeInTheDocument();
   });
 
   it("surfaces the SMTP response on a failed test-send", async () => {
@@ -255,9 +279,12 @@ describe("NotificationsTab", () => {
     expect(await screen.findByText("checkout_pending")).toBeInTheDocument();
     expect(screen.getByText("approver@corp.local")).toBeInTheDocument();
 
-    // Change filter → the API should be re-called with the new status
-    const filter = screen.getByRole("combobox");
-    await userEvent.selectOptions(filter, "sent");
+    // Change filter → the API should be re-called with the new status.
+    // The status filter is now the shared Select component (button-based dropdown),
+    // so open it and click the "Sent" option rather than using selectOptions.
+    const filterTrigger = screen.getAllByRole("button", { name: /All statuses/i })[0];
+    await userEvent.click(filterTrigger);
+    await userEvent.click(await screen.findByRole("option", { name: "Sent" }));
     await waitFor(() => {
       expect(listEmailDeliveries).toHaveBeenCalledWith("sent", 50);
     });

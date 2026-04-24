@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Select from "../../components/Select";
 import {
   getSmtpConfig,
   updateSmtpConfig,
@@ -25,6 +26,21 @@ import {
  *   - Sending `password: undefined` leaves the existing value; `""` clears it;
  *     any non-empty string replaces it.
  */
+
+/**
+ * Options surfaced in the "Send test email" template picker.  Values must
+ * match the server-side `TemplateKey::as_str()` mapping in
+ * `backend/src/services/email/templates.rs`.  The empty-string value is the
+ * generic SMTP probe (no template rendering, just a connectivity check).
+ */
+const TEST_TEMPLATES = [
+  { value: "", label: "Generic probe (connectivity only)" },
+  { value: "checkout_pending", label: "Checkout pending — awaiting approval" },
+  { value: "checkout_approved", label: "Checkout approved" },
+  { value: "checkout_rejected", label: "Checkout rejected" },
+  { value: "checkout_self_approved", label: "Checkout self-approved (audit)" },
+];
+
 export default function NotificationsTab({ onSave }: { onSave: () => void }) {
   const [cfg, setCfg] = useState<SmtpConfig | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -43,8 +59,42 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
   // `null` → leave existing sealed value; string → change it (empty = clear)
   const [newPassword, setNewPassword] = useState<string | null>(null);
 
+  // Port is chosen via a preset dropdown tied to the TLS mode; `custom` unlocks the number input.
+  const [portMode, setPortMode] = useState<"25" | "465" | "587" | "custom">("587");
+
+  function defaultPortForTls(mode: string): number {
+    if (mode === "implicit") return 465;
+    if (mode === "none") return 25;
+    return 587; // starttls
+  }
+
+  function presetForPort(p: number): "25" | "465" | "587" | "custom" {
+    if (p === 25) return "25";
+    if (p === 465) return "465";
+    if (p === 587) return "587";
+    return "custom";
+  }
+
+  function handleTlsModeChange(mode: string) {
+    setTlsMode(mode);
+    // Snap to the canonical port for that TLS mode unless the user explicitly
+    // chose a custom port (in which case we leave their value alone).
+    if (portMode !== "custom") {
+      const next = defaultPortForTls(mode);
+      setPort(next);
+      setPortMode(presetForPort(next));
+    }
+  }
+
+  function handlePortModeChange(next: string) {
+    const mode = next as "25" | "465" | "587" | "custom";
+    setPortMode(mode);
+    if (mode !== "custom") setPort(Number(mode));
+  }
+
   // Test-send state
   const [testRecipient, setTestRecipient] = useState("");
+  const [testTemplate, setTestTemplate] = useState<string>(""); // "" = generic probe
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -64,6 +114,7 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
       setPort(c.port);
       setUsername(c.username);
       setTlsMode(c.tls_mode || "starttls");
+      setPortMode(presetForPort(c.port));
       setFromAddress(c.from_address);
       setFromName(c.from_name || "Strata Client");
       setAccent(c.branding_accent_color || "#2563eb");
@@ -142,8 +193,12 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
     setTesting(true);
     setTestResult(null);
     try {
-      await testSmtpSend(recipient);
-      setTestResult({ ok: true, msg: `Test message accepted by the relay for ${recipient}.` });
+      await testSmtpSend(recipient, testTemplate || undefined);
+      const label = TEST_TEMPLATES.find((t) => t.value === testTemplate)?.label ?? "Generic probe";
+      setTestResult({
+        ok: true,
+        msg: `Test message (${label}) accepted by the relay for ${recipient}.`,
+      });
       reloadDeliveries();
     } catch (e) {
       setTestResult({
@@ -218,30 +273,44 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
 
               <div className="form-group">
                 <label className="form-label">Port</label>
-                <input
-                  type="number"
-                  className="input"
-                  min={1}
-                  max={65535}
-                  value={port}
-                  onChange={(e) => setPort(Number(e.target.value))}
+                <Select
+                  value={portMode}
+                  onChange={handlePortModeChange}
+                  options={[
+                    { value: "25", label: "25 — SMTP (unauthenticated relay)" },
+                    { value: "587", label: "587 — submission (STARTTLS)" },
+                    { value: "465", label: "465 — SMTPS (implicit TLS)" },
+                    { value: "custom", label: "Other — custom port…" },
+                  ]}
                 />
+                {portMode === "custom" && (
+                  <input
+                    type="number"
+                    className="input mt-2"
+                    min={1}
+                    max={65535}
+                    value={port}
+                    onChange={(e) => setPort(Number(e.target.value))}
+                    placeholder="e.g. 2525"
+                  />
+                )}
               </div>
 
               <div className="form-group">
                 <label className="form-label">TLS mode</label>
-                <select
-                  className="input"
+                <Select
                   value={tlsMode}
-                  onChange={(e) => setTlsMode(e.target.value)}
-                >
-                  <option value="starttls">STARTTLS (port 587)</option>
-                  <option value="implicit">Implicit TLS (port 465)</option>
-                  <option value="none">None — plaintext (internal relays only)</option>
-                </select>
+                  onChange={handleTlsModeChange}
+                  options={[
+                    { value: "starttls", label: "STARTTLS (port 587)" },
+                    { value: "implicit", label: "Implicit TLS (port 465)" },
+                    { value: "none", label: "None — plaintext port 25 (internal relays only)" },
+                  ]}
+                />
                 <p className="text-sm text-txt-secondary mt-1">
                   Use <code>STARTTLS</code> for most corporate relays, <code>Implicit TLS</code> for
-                  legacy "SMTPS" on port 465, or <code>None</code> only for trusted in-VPC relays.
+                  legacy "SMTPS" on port 465, or <code>None</code> for unauthenticated in-VPC relays
+                  on port 25. The port auto-syncs unless you pick <code>Other</code>.
                 </p>
               </div>
 
@@ -386,6 +455,14 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
             placeholder="you@corp.example.com"
             disabled={!cfg.enabled}
           />
+          <div className="md:w-72">
+            <Select
+              value={testTemplate}
+              onChange={setTestTemplate}
+              options={TEST_TEMPLATES}
+              disabled={!cfg.enabled}
+            />
+          </div>
           <button
             className="btn btn-primary whitespace-nowrap"
             onClick={handleTestSend}
@@ -397,6 +474,10 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
             {testing ? "Sending…" : "Send test"}
           </button>
         </div>
+        <p className="text-sm text-txt-secondary mt-2">
+          Pick a template to preview the real rendered HTML with sample data, or leave on{" "}
+          <em>Generic probe</em> to send a plain connectivity test.
+        </p>
         {!cfg.enabled && (
           <p className="text-sm text-txt-secondary mt-2">
             Enable SMTP and save before running a test.
@@ -425,18 +506,20 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <select
-              className="input h-9"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="">All statuses</option>
-              <option value="queued">Queued</option>
-              <option value="sent">Sent</option>
-              <option value="failed">Failed</option>
-              <option value="bounced">Bounced</option>
-              <option value="suppressed">Suppressed</option>
-            </select>
+            <div className="w-44">
+              <Select
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: "", label: "All statuses" },
+                  { value: "queued", label: "Queued" },
+                  { value: "sent", label: "Sent" },
+                  { value: "failed", label: "Failed" },
+                  { value: "bounced", label: "Bounced" },
+                  { value: "suppressed", label: "Suppressed" },
+                ]}
+              />
+            </div>
             <button
               className="btn btn-secondary"
               onClick={reloadDeliveries}

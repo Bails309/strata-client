@@ -1365,10 +1365,10 @@ export const updateSmtpConfig = (body: SmtpConfigUpdate) =>
     body: JSON.stringify(body),
   });
 
-export const testSmtpSend = (recipient: string) =>
+export const testSmtpSend = (recipient: string, templateKey?: string) =>
   request<{ status: string }>("/admin/notifications/test-send", {
     method: "POST",
-    body: JSON.stringify({ recipient }),
+    body: JSON.stringify(templateKey ? { recipient, template_key: templateKey } : { recipient }),
   });
 
 export const listEmailDeliveries = (status?: string, limit = 50) => {

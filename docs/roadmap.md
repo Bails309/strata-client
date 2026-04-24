@@ -11,6 +11,21 @@ Status legend:
 - **In progress** — on a development branch
 - **Shipped** — released (see *What's New*)
 
+## Lifecycle of shipped items
+
+Shipped entries stay on the roadmap for **one minor version** after the
+release that delivered them, then are removed. In practice:
+
+- An item marked **Shipped** during the `0.N.x` line (any patch release)
+  remains visible for the rest of that line.
+- When `0.(N+1).0` is cut, every entry that was flagged **Shipped** during
+  `0.N.x` is deleted from this document, and any matching override rows in
+  `system_settings.roadmap_statuses` are cleared in the same change.
+- The canonical record of past releases lives in
+  [`CHANGELOG.md`](../CHANGELOG.md) and
+  [`WHATSNEW.md`](../WHATSNEW.md); the roadmap is intentionally
+  forward-looking.
+
 ---
 
 ## Recording Enhancements

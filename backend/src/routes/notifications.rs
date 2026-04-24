@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::services::app_state::{BootPhase, SharedState};
-use crate::services::email::{EmailAddress, EmailMessage, EmailTransport, SmtpTransport};
+use crate::services::email::{
+    self, EmailAddress, EmailMessage, EmailTransport, SmtpTransport, TemplateKey,
+};
 use crate::services::middleware::AuthUser;
 use crate::services::{audit, settings};
 
@@ -236,6 +238,43 @@ pub async fn update_smtp_config(
 pub struct TestSendRequest {
     /// Address to deliver the test message to.  Required.
     pub recipient: String,
+    /// Optional template identifier (`checkout_pending`, `checkout_approved`,
+    /// `checkout_rejected`, `checkout_self_approved`).  When present, the
+    /// template is rendered with a canned sample context so admins can
+    /// preview each notification.  When omitted, a generic SMTP probe
+    /// body is used.
+    #[serde(default)]
+    pub template_key: Option<String>,
+}
+
+fn parse_template_key(raw: &str) -> Result<TemplateKey, AppError> {
+    match raw {
+        "checkout_pending" => Ok(TemplateKey::CheckoutPending),
+        "checkout_approved" => Ok(TemplateKey::CheckoutApproved),
+        "checkout_rejected" => Ok(TemplateKey::CheckoutRejected),
+        "checkout_self_approved" => Ok(TemplateKey::CheckoutSelfApproved),
+        other => Err(AppError::Validation(format!(
+            "unknown template_key: {other}"
+        ))),
+    }
+}
+
+/// Synthetic context for template previews.  Every field referenced by
+/// any of the four MJML/text templates is populated with a clearly-
+/// fake but realistic sample value so admins can eyeball each variant.
+fn sample_context(accent: &str) -> serde_json::Value {
+    json!({
+        "accent": accent,
+        "approve_url": "https://strata.example.com/admin/checkouts",
+        "profile_url": "https://strata.example.com/profile",
+        "requester_display_name": "Sample Requester",
+        "requester_username": "sample.requester",
+        "approver_display_name": "Sample Approver",
+        "target_account_cn": "svc-sample-db",
+        "justification": "Sample justification: investigating an incident ticket.",
+        "requested_ttl_minutes": 60,
+        "expiry_human": "2026-04-24 18:00 UTC",
+    })
 }
 
 pub async fn test_send(
@@ -252,6 +291,12 @@ pub async fn test_send(
             "recipient must be a valid email address".into(),
         ));
     }
+
+    let template = body
+        .template_key
+        .as_deref()
+        .map(|k| parse_template_key(k.trim()))
+        .transpose()?;
 
     let vault_cfg = {
         let s = state.read().await;
@@ -273,21 +318,40 @@ pub async fn test_send(
         )
     };
 
-    let html = format!(
-        "<html><body style=\"font-family:system-ui;background:#f3f4f6;padding:24px;\">\
-            <h1 style=\"color:{accent}\">Strata Client — SMTP test</h1>\
-            <p>This is a delivery probe sent by an administrator.</p>\
-            <p style=\"color:#6b7280;font-size:12px\">Tenant: {tenant}</p>\
-        </body></html>",
-        accent = html_escape(&smtp_settings.from_name),
-        tenant = html_escape(&smtp_settings.from_address),
-    );
-    let text = format!(
-        "Strata Client — SMTP test\n\nThis is a delivery probe sent by an administrator.\nTenant: {}\n",
-        smtp_settings.from_address
-    );
+    // Build the message body: either the real template (with sample data)
+    // or a generic probe paragraph.
+    let (subject, html, text) = if let Some(tpl) = template {
+        let accent = settings::get(&db.pool, "branding_accent_color")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "#2563eb".into());
+        let ctx = sample_context(&accent);
+        let rendered = email::render(tpl, &ctx)
+            .map_err(|e| AppError::Internal(format!("render template: {e}")))?;
+        (
+            format!("[TEST] {}", tpl.default_subject()),
+            rendered.html_body,
+            rendered.text_body,
+        )
+    } else {
+        let html = format!(
+            "<html><body style=\"font-family:system-ui;background:#f3f4f6;padding:24px;\">\
+                <h1 style=\"color:{accent}\">Strata Client — SMTP test</h1>\
+                <p>This is a delivery probe sent by an administrator.</p>\
+                <p style=\"color:#6b7280;font-size:12px\">Tenant: {tenant}</p>\
+            </body></html>",
+            accent = html_escape(&smtp_settings.from_name),
+            tenant = html_escape(&smtp_settings.from_address),
+        );
+        let text = format!(
+            "Strata Client — SMTP test\n\nThis is a delivery probe sent by an administrator.\nTenant: {}\n",
+            smtp_settings.from_address
+        );
+        ("Strata SMTP test".to_string(), html, text)
+    };
 
-    let msg = EmailMessage::builder(from, EmailAddress::new(recipient), "Strata SMTP test")
+    let msg = EmailMessage::builder(from, EmailAddress::new(recipient), &subject)
         .html(html)
         .text(text)
         .build();
@@ -305,6 +369,7 @@ pub async fn test_send(
             "recipient": recipient,
             "host": smtp_settings.host,
             "tls_mode": format!("{:?}", smtp_settings.tls_mode),
+            "template_key": body.template_key,
         }),
     )
     .await?;

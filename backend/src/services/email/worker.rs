@@ -54,7 +54,6 @@ struct DeliveryToRetry {
     recipient_email: String,
     related_entity_id: Option<Uuid>,
     #[allow(dead_code)] // Selected so future logic can decide retry strategy by attempt count.
-    #[allow(dead_code)] // Selected so future logic can decide retry strategy by attempt count.
     attempts: i32,
 }
 

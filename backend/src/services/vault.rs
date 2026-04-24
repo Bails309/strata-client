@@ -123,7 +123,11 @@ async fn vault_post_with_retry_inner<T: Serialize>(
             Ok(resp) if resp.status().is_server_error() => {
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_default();
-                last_err = Some(format!("Vault {status}: {body_text}"));
+                // Log the full body at debug only — it can contain diagnostic
+                // data that we do not want bubbling up into AppError messages
+                // (which may surface in 500 responses or operator dashboards).
+                tracing::debug!("Vault {status} body: {body_text}");
+                last_err = Some(format!("Vault {status}"));
                 tracing::warn!(
                     "Vault request failed (attempt {}/{}): {status}",
                     attempt + 1,
@@ -133,7 +137,10 @@ async fn vault_post_with_retry_inner<T: Serialize>(
             }
             Ok(resp) => return Ok(resp),
             Err(e) => {
-                last_err = Some(format!("Vault request failed: {e}"));
+                // Network/transport errors rarely embed secrets but we sanitize
+                // the user-facing message anyway; the detail is still in logs.
+                tracing::debug!("Vault request transport error: {e}");
+                last_err = Some("Vault request transport error".to_string());
                 tracing::warn!(
                     "Vault request error (attempt {}/{}): {e}",
                     attempt + 1,

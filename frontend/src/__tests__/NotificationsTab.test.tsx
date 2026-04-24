@@ -140,7 +140,7 @@ describe("NotificationsTab", () => {
     await waitFor(() => expect(updateSmtpConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateSmtpConfig).mock.calls[0][0];
     expect(body.host).toBe("smtp.corp.local");
-    expect(body.password).toBe("sekret");
+    expect(body.password).toEqual({ action: "set", value: "sekret" });
     expect(onSave).toHaveBeenCalled();
   });
 
@@ -160,7 +160,7 @@ describe("NotificationsTab", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it('"Clear" button sets password to empty string; "Keep existing" reverts to undefined', async () => {
+  it('"Clear" button sets password to clear action; "Keep existing" reverts to keep action', async () => {
     vi.mocked(getSmtpConfig).mockResolvedValue(
       defaultCfg({
         enabled: true,
@@ -172,20 +172,20 @@ describe("NotificationsTab", () => {
     render(<NotificationsTab onSave={onSave} />);
     await screen.findByPlaceholderText(/sealed in Vault/i);
 
-    // Click Clear → password becomes ""
+    // Click Clear → password becomes clear action
     await userEvent.click(screen.getByRole("button", { name: /Clear/i }));
     await userEvent.click(screen.getByRole("button", { name: /Save SMTP Settings/i }));
     await waitFor(() => expect(updateSmtpConfig).toHaveBeenCalled());
-    expect(vi.mocked(updateSmtpConfig).mock.calls[0][0].password).toBe("");
+    expect(vi.mocked(updateSmtpConfig).mock.calls[0][0].password).toEqual({ action: "clear" });
 
-    // Type a value, then Keep existing → password becomes undefined
+    // Type a value, then Keep existing → password becomes keep action
     vi.mocked(updateSmtpConfig).mockClear();
     const pwInput = screen.getByPlaceholderText(/sealed in Vault/i);
     await userEvent.type(pwInput, "new");
     await userEvent.click(screen.getByRole("button", { name: /Keep existing/i }));
     await userEvent.click(screen.getByRole("button", { name: /Save SMTP Settings/i }));
     await waitFor(() => expect(updateSmtpConfig).toHaveBeenCalled());
-    expect(vi.mocked(updateSmtpConfig).mock.calls[0][0].password).toBeUndefined();
+    expect(vi.mocked(updateSmtpConfig).mock.calls[0][0].password).toEqual({ action: "keep" });
   });
 
   it("test-send button is disabled until SMTP is enabled in the saved config", async () => {

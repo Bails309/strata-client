@@ -83,17 +83,24 @@ pub async fn revoke_owned(
 /// Active share lookup row: (share_id, connection_id, owner_user_id, mode).
 pub type ActiveShareRow = (Uuid, Uuid, Uuid, String);
 
-/// Look up an active (non-revoked, non-expired) share by token.
+/// Look up an active (non-revoked, non-expired) share by token. The share is
+/// considered **invalid** (returns `None`) whenever the underlying connection
+/// has been soft-deleted — an admin revoking a connection must take every
+/// outstanding share with it, even ones whose owner still holds an active
+/// session. Enforced by a JOIN rather than a trigger so the check survives
+/// even if ACL plumbing regresses.
 pub async fn find_active_by_token(
     pool: &Pool<Postgres>,
     token: &str,
 ) -> Result<Option<ActiveShareRow>, AppError> {
     let row = sqlx::query_as(
-        "SELECT id, connection_id, owner_user_id, mode
-         FROM connection_shares
-         WHERE share_token = $1
-           AND NOT revoked
-           AND (expires_at IS NULL OR expires_at > now())",
+        "SELECT cs.id, cs.connection_id, cs.owner_user_id, cs.mode
+         FROM connection_shares cs
+         JOIN connections c ON c.id = cs.connection_id
+         WHERE cs.share_token = $1
+           AND NOT cs.revoked
+           AND (cs.expires_at IS NULL OR cs.expires_at > now())
+           AND c.soft_deleted_at IS NULL",
     )
     .bind(token)
     .fetch_optional(pool)

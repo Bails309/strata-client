@@ -117,6 +117,13 @@ pub async fn accept_terms(
         return Err(AppError::Validation("Invalid terms version".into()));
     }
     crate::services::users::accept_terms(&db.pool, user.id, version).await?;
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "user.terms_accepted",
+        &json!({ "version": version }),
+    )
+    .await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -754,6 +761,17 @@ pub async fn set_credential_mapping(
     // Insert new mapping
     cp_svc::insert_mapping(&db.pool, body.profile_id, body.connection_id).await?;
 
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "user.credential_mapping_set",
+        &json!({
+            "profile_id": body.profile_id.to_string(),
+            "connection_id": body.connection_id.to_string(),
+        }),
+    )
+    .await?;
+
     Ok(Json(json!({ "status": "mapped" })))
 }
 
@@ -764,6 +782,13 @@ pub async fn remove_credential_mapping(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
     cp_svc::clear_connection_mapping(&db.pool, connection_id, user.id).await?;
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "user.credential_mapping_removed",
+        &json!({ "connection_id": connection_id.to_string() }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "removed" })))
 }
 
@@ -1628,6 +1653,14 @@ pub async fn retry_checkout_activation(
             AppError::Validation(format!("Activation failed: {e}"))
         })?;
 
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "checkout.retry_activation",
+        &json!({ "checkout_id": checkout_id.to_string() }),
+    )
+    .await?;
+
     let body = json!({ "status": "Active" });
     if let Some(ref key) = idem_key {
         if let Err(e) =
@@ -1656,6 +1689,14 @@ pub async fn checkin_checkout(
 
     crate::services::checkouts::checkin_checkout(&db.pool, &vault_cfg, checkout_id, user.id)
         .await?;
+
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "checkout.checkin",
+        &json!({ "checkout_id": checkout_id.to_string() }),
+    )
+    .await?;
 
     Ok(Json(json!({ "status": "CheckedIn" })))
 }

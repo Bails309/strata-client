@@ -25,6 +25,62 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.26.0",
+    subtitle: "Security, audit & reliability hardening sweep",
+    sections: [
+      {
+        title: "Share tokens now respect connection soft-deletes",
+        description:
+          "Before v0.26.0, a share link minted against a connection that was subsequently soft-deleted would continue resolving. find_active_by_token now JOINs connections and filters soft_deleted_at IS NULL, so a deleted connection's shares stop working the moment the delete commits.",
+      },
+      {
+        title: "Brute-force isolation on shared tunnel rate-limit",
+        description:
+          "The rate-limit overflow path used to call map.clear(), letting an attacker spamming unique tokens reset every legitimate token's counter. It now does a two-step LRU eviction: drop expired-window entries first, then only if still over the cap evict the oldest-attempt entries. Real users' rate-limit state is unaffected by noise.",
+      },
+      {
+        title: "New audit events for share & self-service paths",
+        description:
+          "connection.share_rate_limited, connection.share_invalid_token (with SHA-256-prefix token fingerprint + client IP), plus user.terms_accepted, user.credential_mapping_set/removed, checkout.retry_activation, checkout.checkin — self-service mutations that were previously silent now leave an audit trail.",
+      },
+      {
+        title: "Vault error sanitization",
+        description:
+          "Vault server-error bodies and transport-error details are now logged at tracing::debug! only; API callers see a generic 'Vault <status>' / 'Vault request transport error' message. No more raw Vault JSON leaking through to the client on a misconfigured instance.",
+      },
+      {
+        title: "Tunnel overflow emits a proper error frame",
+        description:
+          "When guacd sends an instruction larger than the pending-byte ceiling, the tunnel used to silently call pending.clear(). It now dispatches Guacamole error '…' '521' to the websocket and closes the stream cleanly, so clients see exactly why the session ended.",
+      },
+      {
+        title: "Indexed email retry sweep (migration 056)",
+        description:
+          "The retry worker's SELECT … WHERE status='failed' AND attempts<3 ORDER BY created_at query went from a seq-scan over all deliveries to an indexed lookup of the small retryable subset via a new partial index. The index stays tiny because the retryable population is tiny.",
+      },
+      {
+        title: "Settings cache TTL: 30 s → 5 s",
+        description:
+          "Operator toggles (feature flags, branding, SMTP enable) now propagate in ≤5 seconds across replicas, while the cache still absorbs the hot-path read burst from auth middleware. A pg NOTIFY-based invalidator remains on the roadmap for zero-staleness.",
+      },
+      {
+        title: "Notifications tab — test-send template picker & real-settings preview",
+        description:
+          "The SMTP test-send panel gained a dropdown letting admins dry-run any of the real notification templates against their live relay. The preview now uses the live tenant_base_url and branding_accent_color so links and colours reflect the operator's actual config. Subject is prefixed with [TEST] so previews can't masquerade as real notifications.",
+      },
+      {
+        title: "Port & TLS dropdowns are bidirectionally symmetric",
+        description:
+          "Picking a canonical port (25 / 465 / 587) now also snaps the TLS mode to the conventional pairing (port 465 → Implicit TLS, 587 → STARTTLS), mirroring the pre-existing TLS-mode-snaps-port behaviour. The two dropdowns can no longer drift into nonsensical combinations.",
+      },
+      {
+        title: "SMTP password update is a discriminated union",
+        description:
+          "Frontend callers now pass password: { action: 'keep' | 'clear' | { action: 'set', value } } instead of the ambiguous undefined | '' | string. The wire format is unchanged — the API client serializes back at the request boundary.",
+      },
+    ],
+  },
+  {
     version: "0.25.2",
     subtitle: "Admin → Notifications tab — the SMTP configuration UI",
     sections: [

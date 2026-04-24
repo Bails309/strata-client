@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] — 2026-04-25
+
+### Security & correctness
+
+- **Share tokens can no longer grant access to soft-deleted connections.** `services::shares::find_active_by_token` now JOINs `connections` and filters `c.soft_deleted_at IS NULL`. Prior to v0.26.0 a share minted against a connection that was subsequently soft-deleted would keep routing viewers to the stale session metadata. ([`backend/src/services/shares.rs`](backend/src/services/shares.rs))
+- **Shared-tunnel rate-limit evictions no longer reset counters for legitimate tokens.** The `SHARE_RATE_LIMIT` overflow path replaces the previous `map.clear()` with a two-step LRU eviction (drop entries with expired windows, then evict the oldest-attempt entries if still over the cap). An attacker spamming unique tokens can no longer indirectly reset the limits for real share links. ([`backend/src/routes/share.rs`](backend/src/routes/share.rs))
+- **Share rejection paths now emit audit events.** Rate-limit rejections and invalid-token lookups on `GET /api/share/:token` now write `connection.share_rate_limited` and `connection.share_invalid_token` audit rows with a SHA-256-prefix token fingerprint (raw token is never persisted) plus client IP. ([`backend/src/routes/share.rs`](backend/src/routes/share.rs))
+- **User-route audit coverage gaps closed.** Self-service mutations that were previously silent now emit audit events: `user.terms_accepted`, `user.credential_mapping_set`, `user.credential_mapping_removed`, `checkout.retry_activation`, `checkout.checkin`. ([`backend/src/routes/user.rs`](backend/src/routes/user.rs))
+- **Vault error paths no longer leak response bodies.** `services::vault` now logs server bodies and transport errors at `tracing::debug!` and returns only a generic `"Vault <status>"` / `"Vault request transport error"` to callers. Previously a misconfigured Vault instance could surface raw error JSON (potentially including policy hints) in API responses. ([`backend/src/services/vault.rs`](backend/src/services/vault.rs))
+- **StubTransport is now compiled out of release binaries.** The in-memory email transport used by unit tests is gated behind `#[cfg(test)]` so no code path in a release build can retain rendered message bodies (which can include justification strings and ephemeral credentials) in a growable `Vec`. ([`backend/src/services/email/transport.rs`](backend/src/services/email/transport.rs))
+
+### Reliability
+
+- **Tunnel overflow emits a proper protocol error instead of silently truncating.** When guacd sends a single instruction that exceeds the pending-byte ceiling, the tunnel now dispatches a Guacamole `error "…" "521"` to the websocket and closes the stream instead of calling `pending.clear()`. Clients see a clean error frame; no more "missing pixels after a chatty operation" symptom. ([`backend/src/tunnel.rs`](backend/src/tunnel.rs))
+- **Email retry sweep now uses a partial index.** New migration `056_email_deliveries_retry_idx.sql` adds `CREATE INDEX … WHERE status = 'failed' AND attempts < 3`. The worker query went from a seq-scan over all deliveries to an indexed lookup of the small retryable subset. ([`backend/migrations/056_email_deliveries_retry_idx.sql`](backend/migrations/056_email_deliveries_retry_idx.sql))
+- **Settings cache TTL dropped from 30 s → 5 s.** Operator toggles (SSO flags, branding accent, SMTP enable) now propagate much faster across replicas while still absorbing the hot-path read burst. A pg NOTIFY-based invalidator remains on the roadmap for zero-staleness. ([`backend/src/services/settings.rs`](backend/src/services/settings.rs))
+
+### Admin UX
+
+- **Notifications tab — SMTP test-send template picker.** The test-send panel gained a dropdown next to the recipient input letting admins dry-run any of the real notification templates (checkout requested / approved / denied / expiring) against their live SMTP relay. The backend renders the real MJML template with a synthetic sample context (requester, approver, justification, expiry) and prefixes the subject with `[TEST]` so it never masquerades as a real notification. ([`backend/src/routes/notifications.rs`](backend/src/routes/notifications.rs), [`frontend/src/pages/admin/NotificationsTab.tsx`](frontend/src/pages/admin/NotificationsTab.tsx))
+- **Template previews now use real tenant settings.** The synthetic sample context reads `tenant_base_url` and `branding_accent_color` from the database so the preview's approve / profile URLs and accent colour reflect the operator's production configuration, not hard-coded `strata.example.com` placeholders. ([`backend/src/routes/notifications.rs`](backend/src/routes/notifications.rs))
+- **Notification tab TLS/port dropdowns are bidirectionally symmetric.** Picking a canonical port (25/465/587) now also snaps the TLS mode to the conventional pairing (so port 465 → Implicit TLS, 587 → STARTTLS), mirroring the pre-existing "TLS-mode snaps port" behaviour. The dropdowns can no longer drift into nonsensical combinations. ([`frontend/src/pages/admin/NotificationsTab.tsx`](frontend/src/pages/admin/NotificationsTab.tsx))
+- **`SmtpConfigUpdate.password` is now a discriminated union.** Frontend callers pass `{ action: "keep" | "clear" | { action: "set", value } }` instead of the ambiguous `undefined | "" | string`. The wire format stays backwards compatible; the serializer translates at the request boundary. ([`frontend/src/api.ts`](frontend/src/api.ts))
+
+### Docs
+
+- **Roadmap retention policy codified.** `docs/roadmap.md` now has a "Lifecycle of shipped items" section: shipped items are visible for the minor line in which they landed (e.g. v0.25.x items through v0.25.*) and pruned at the next minor bump. No items in the markdown roadmap were flagged Shipped during the v0.25.x line, so nothing needs removing here — but the policy is now in place for future minor bumps.
+
+### Meta
+
+- No breaking API changes; no migration-replay required on the client side. Migration 056 is additive-only.
+
 ## [0.25.2] — 2026-04-24
 
 ### Added

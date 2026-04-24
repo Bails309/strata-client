@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(test)]
 use tokio::sync::Mutex;
 
 use super::message::EmailMessage;
@@ -53,9 +54,11 @@ pub type BoxedTransport = Arc<dyn EmailTransport>;
 
 /// In-memory transport that records every message it was asked to send.
 ///
-/// Used by unit tests and by the `/api/admin/notifications/test-send`
-/// preview endpoint's dry-run mode.
-#[allow(dead_code)] // Reserved for the P8 test-send dry-run + integration tests.
+/// Used by unit tests only. Gated behind `#[cfg(test)]` so it never ships
+/// in production binaries — messages it retains can contain rendered
+/// credentials/justifications and we don't want any path in a release
+/// build to keep those in a growable in-memory `Vec`.
+#[cfg(test)]
 #[derive(Default, Clone)]
 pub struct StubTransport {
     sent: Arc<Mutex<Vec<EmailMessage>>>,
@@ -63,7 +66,7 @@ pub struct StubTransport {
     fail_with: Arc<Mutex<Option<SendError>>>,
 }
 
-#[allow(dead_code)] // Test/preview helpers; wired in by P8 test-send dry-run.
+#[cfg(test)]
 impl StubTransport {
     pub fn new() -> Self {
         Self::default()
@@ -79,6 +82,7 @@ impl StubTransport {
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl EmailTransport for StubTransport {
     async fn send(&self, message: &EmailMessage) -> Result<(), SendError> {

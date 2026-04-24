@@ -1,3 +1,110 @@
+# What's New in v0.26.0
+
+> **Hardening release.** v0.26.0 is the result of an end-to-end code review across the backend and frontend, followed by a focused sweep of security, audit, and reliability fixes. No breaking API changes, one additive migration (056), drop-in upgrade.
+
+---
+
+## 🔒 Security & audit hardening
+
+### Share tokens respect connection soft-deletes
+
+Before v0.26.0, a share link minted against a connection that was subsequently soft-deleted would continue resolving — viewers hitting the `/share/:token` URL got routed at the stale connection metadata. `services::shares::find_active_by_token` now JOINs `connections` and filters `soft_deleted_at IS NULL`, so a deleted connection's shares stop working the moment the delete commits, even if the share row itself is still live.
+
+### Brute-force isolation on shared tunnel rate limit
+
+The `SHARE_RATE_LIMIT` overflow path used to call `map.clear()`, which meant an attacker spamming unique tokens could **reset every legitimate token's counter as a side-effect**. The new behaviour is a two-step LRU eviction: first drop entries whose windows have fully expired, then — only if still over the cap — evict the oldest-attempt entries. Real users' rate-limit state is unaffected by noise.
+
+### Share rejection paths emit audit events
+
+Two new event types appear in `audit_logs`:
+
+- `connection.share_rate_limited` — emitted when a share URL hits the per-token rate limit
+- `connection.share_invalid_token` — emitted when a lookup misses
+
+Both carry a SHA-256-prefix fingerprint of the token (8 hex chars, the raw token is never persisted) plus the client IP, so operators can see probing activity against their share links without any PII leaks.
+
+### User-route audit coverage gaps closed
+
+Several self-service mutations were previously silent. They now emit audit events:
+
+| Handler | Event |
+|---|---|
+| `POST /api/user/accept-terms` | `user.terms_accepted` |
+| `PUT /api/user/credential-mappings` | `user.credential_mapping_set` |
+| `DELETE /api/user/credential-mappings/:connection_id` | `user.credential_mapping_removed` |
+| `POST /api/user/checkouts/:id/retry` | `checkout.retry_activation` |
+| `POST /api/user/checkouts/:id/checkin` | `checkout.checkin` |
+
+### Vault error paths sanitized
+
+When Vault returns a server error or the HTTP transport fails, the full body / error detail is now emitted at `tracing::debug!` only. API callers see a generic `"Vault <status>"` or `"Vault request transport error"` message — no more raw Vault JSON leaking through to the client on a misconfigured instance.
+
+### StubTransport compiled out of release builds
+
+The in-memory test transport is now gated behind `#[cfg(test)]`. No path in a production binary can retain rendered message bodies (which can include justification strings and ephemeral credentials) in memory.
+
+---
+
+## 🛠️ Reliability
+
+### Tunnel overflow emits a proper error frame
+
+When guacd ever sends a single instruction larger than the pending-byte ceiling, the tunnel used to silently call `pending.clear()` — from the user's perspective the session would drop frames for no apparent reason. It now dispatches a Guacamole `error "…" "521"` to the websocket and closes the stream cleanly, so clients see exactly why the session ended.
+
+### Indexed email retry sweep (migration 056)
+
+The email retry worker runs `SELECT … WHERE status='failed' AND attempts<3 ORDER BY created_at` every 30 seconds. Without an index this became a seq-scan once `email_deliveries` grew. Migration `056_email_deliveries_retry_idx.sql` adds a partial index:
+
+```sql
+CREATE INDEX email_deliveries_retry_idx
+    ON email_deliveries (created_at)
+    WHERE status = 'failed' AND attempts < 3;
+```
+
+The index stays tiny because the retryable population is tiny.
+
+### Settings cache TTL: 30 s → 5 s
+
+Admin toggles (feature flags, branding, SMTP enable) used to take up to 30 seconds to propagate across replicas. The cache TTL is now 5 seconds, keeping operator feedback near-instant while still absorbing the hot-path read burst from auth middleware. A pg NOTIFY-based invalidator remains on the roadmap for zero-staleness.
+
+---
+
+## ✨ Admin UX polish
+
+### Notifications tab — template test-send picker
+
+The SMTP test-send panel gained a dropdown next to the recipient input letting admins dry-run **any of the real notification templates** (checkout requested / approved / denied / expiring) against their live relay. The backend renders the real MJML template with a synthetic sample context (requester, approver, justification, expiry), prefixes the subject with `[TEST]` so it can't masquerade as a real notification, and pulls the `tenant_base_url` and `branding_accent_color` from the live settings so the preview reflects the operator's actual branding.
+
+### Port & TLS dropdowns are now bidirectionally symmetric
+
+Picking a canonical port (25 / 465 / 587) now also snaps the TLS mode to the conventional pairing (so port 465 → Implicit TLS, 587 → STARTTLS), mirroring the pre-existing "TLS mode snaps port" behaviour. The two dropdowns can no longer drift into nonsensical combinations like *port 465 + STARTTLS*.
+
+### Password field: discriminated union
+
+Frontend callers used to pass `password: undefined | "" | string` to `updateSmtpConfig` with a three-way semantic (keep / clear / set). That's now an explicit discriminated union:
+
+```ts
+password: { action: "keep" } | { action: "clear" } | { action: "set", value: string }
+```
+
+The wire format is unchanged — the API client serializes back to the old shape at the request boundary — but the intent is now unambiguous in every caller.
+
+---
+
+## 📚 Docs & roadmap hygiene
+
+- **Roadmap retention policy** codified in `docs/roadmap.md`: shipped items are visible for the minor line in which they landed and pruned at the next minor bump. No items in the markdown roadmap were flagged Shipped during the v0.25.x line, so nothing needs removing here — but the policy is now in place for future minor bumps.
+
+---
+
+## 📦 Upgrade notes
+
+- **Database migration** — one additive migration: `056_email_deliveries_retry_idx.sql`. Safe on every supported Postgres version, no table locks beyond the `CREATE INDEX`.
+- **Breaking API changes** — none. Frontend `SmtpConfigUpdate.password` type changed, but the backend wire format is identical.
+- **Version bump** — `VERSION`, `frontend/package.json` (+ lock), `backend/Cargo.toml` (+ lock), and the README badge now read **0.26.0**.
+
+---
+
 # What's New in v0.25.2
 
 > **The missing admin tab.** v0.25.2 ships the **Admin → Notifications** tab that the v0.25.0 release notes described but — as an observant administrator pointed out — never actually landed in the UI. The backend endpoints have been running since v0.25.0; this release puts a proper front-end on top of them. No migrations, no API changes, drop-in upgrade.

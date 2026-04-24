@@ -262,11 +262,28 @@ fn parse_template_key(raw: &str) -> Result<TemplateKey, AppError> {
 /// Synthetic context for template previews.  Every field referenced by
 /// any of the four MJML/text templates is populated with a clearly-
 /// fake but realistic sample value so admins can eyeball each variant.
-fn sample_context(accent: &str) -> serde_json::Value {
-    json!({
+///
+/// `base_url` is pulled from the live `tenant_base_url` setting so previews
+/// reflect the operator's actual branding / routing, and `accent` is pulled
+/// from `branding_accent_color`. This keeps the preview truthful — admins
+/// see the same links recipients will see in production mail.
+async fn sample_context(pool: &sqlx::PgPool) -> Result<serde_json::Value, AppError> {
+    let accent = settings::get(pool, "branding_accent_color")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "#2563eb".into());
+    let base_url = settings::get(pool, "tenant_base_url")
+        .await
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "https://strata.example.com".into());
+    let base_url = base_url.trim_end_matches('/').to_string();
+    Ok(json!({
         "accent": accent,
-        "approve_url": "https://strata.example.com/admin/checkouts",
-        "profile_url": "https://strata.example.com/profile",
+        "approve_url": format!("{base_url}/admin/checkouts"),
+        "profile_url": format!("{base_url}/profile"),
         "requester_display_name": "Sample Requester",
         "requester_username": "sample.requester",
         "approver_display_name": "Sample Approver",
@@ -274,7 +291,7 @@ fn sample_context(accent: &str) -> serde_json::Value {
         "justification": "Sample justification: investigating an incident ticket.",
         "requested_ttl_minutes": 60,
         "expiry_human": "2026-04-24 18:00 UTC",
-    })
+    }))
 }
 
 pub async fn test_send(
@@ -321,12 +338,7 @@ pub async fn test_send(
     // Build the message body: either the real template (with sample data)
     // or a generic probe paragraph.
     let (subject, html, text) = if let Some(tpl) = template {
-        let accent = settings::get(&db.pool, "branding_accent_color")
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "#2563eb".into());
-        let ctx = sample_context(&accent);
+        let ctx = sample_context(&db.pool).await?;
         let rendered = email::render(tpl, &ctx)
             .map_err(|e| AppError::Internal(format!("render template: {e}")))?;
         (

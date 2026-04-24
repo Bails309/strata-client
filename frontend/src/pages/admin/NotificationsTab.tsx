@@ -89,7 +89,20 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
   function handlePortModeChange(next: string) {
     const mode = next as "25" | "465" | "587" | "custom";
     setPortMode(mode);
-    if (mode !== "custom") setPort(Number(mode));
+    if (mode !== "custom") {
+      const p = Number(mode);
+      setPort(p);
+      // Symmetry with handleTlsModeChange: picking a canonical port should
+      // snap the TLS mode to the conventional pairing so the two dropdowns
+      // never drift into a nonsensical combination (e.g. port 465 + STARTTLS).
+      const canonical: Record<number, string> = {
+        25: "none",
+        465: "implicit",
+        587: "starttls",
+      };
+      const nextTls = canonical[p];
+      if (nextTls && nextTls !== tlsMode) setTlsMode(nextTls);
+    }
   }
 
   // Test-send state
@@ -169,7 +182,12 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
         host: host.trim(),
         port,
         username: username.trim(),
-        password: newPassword === null ? undefined : newPassword,
+        password:
+          newPassword === null
+            ? { action: "keep" }
+            : newPassword === ""
+              ? { action: "clear" }
+              : { action: "set", value: newPassword },
         tls_mode: tlsMode,
         from_address: fromAddress.trim(),
         from_name: fromName.trim(),

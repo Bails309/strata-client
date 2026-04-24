@@ -27,6 +27,22 @@ const MAX_SHARE_RATE_ENTRIES: usize = 10_000;
 /// Default share link expiry: 24 hours.
 const DEFAULT_SHARE_EXPIRY_HOURS: i32 = 24;
 
+/// Short hash prefix of a share token, suitable for audit logs. Keeps the
+/// audit trail correlatable across events without persisting the raw token
+/// (which is effectively a bearer credential for the anonymous share path).
+fn hash_token_prefix(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    // 8 hex chars = 32 bits of prefix; collision-resistant enough for audit
+    // correlation but reveals nothing about the underlying token.
+    format!(
+        "{:x}{:x}{:x}{:x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
+}
+
 // ── Create a share link ──────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -149,24 +165,7 @@ pub async fn ws_shared_tunnel(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
-    // Rate limit shared tunnel connections
-    {
-        let mut map = SHARE_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        // Prune entire map if too large to prevent OOM
-        if map.len() > MAX_SHARE_RATE_ENTRIES {
-            map.clear();
-        }
-        let attempts = map.entry(share_token.clone()).or_default();
-        let cutoff = Instant::now() - std::time::Duration::from_secs(SHARE_WINDOW_SECS);
-        attempts.retain(|t| *t > cutoff);
-        if attempts.len() >= MAX_SHARE_ATTEMPTS {
-            return Err(AppError::Auth(
-                "Too many connection attempts. Please try again later.".into(),
-            ));
-        }
-        attempts.push(Instant::now());
-    }
-
+    // Acquire DB up front so we can emit audit events on rejection paths.
     let db = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
@@ -175,17 +174,91 @@ pub async fn ws_shared_tunnel(
         s.db.clone().ok_or(AppError::SetupRequired)?
     };
 
+    // Extract client IP once — used in every audit event below.
+    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
+        .unwrap_or_else(|| addr.ip().to_string());
+
+    // Rate limit shared tunnel connections.
+    //
+    // On overflow we *do not* nuke every counter — an attacker spamming unique
+    // tokens would otherwise reset legitimate tokens' limits as a side-effect.
+    // Instead we first prune counters whose windows have fully expired (cheap,
+    // removes the bulk of stale entries), and only if still over the cap drop
+    // the handful of oldest still-active entries by their most-recent attempt.
+    let rate_limited = {
+        let mut map = SHARE_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() > MAX_SHARE_RATE_ENTRIES {
+            let cutoff = Instant::now() - std::time::Duration::from_secs(SHARE_WINDOW_SECS);
+            // Step 1: drop any entry whose newest attempt is outside the window.
+            map.retain(|_, attempts| attempts.iter().any(|t| *t > cutoff));
+            // Step 2: if still over the cap, evict the oldest remaining entries.
+            if map.len() > MAX_SHARE_RATE_ENTRIES {
+                let overflow = map.len() - MAX_SHARE_RATE_ENTRIES;
+                let mut by_recency: Vec<(String, Instant)> = map
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            v.iter().copied().max().unwrap_or_else(Instant::now),
+                        )
+                    })
+                    .collect();
+                by_recency.sort_by_key(|(_, ts)| *ts);
+                for (k, _) in by_recency.into_iter().take(overflow) {
+                    map.remove(&k);
+                }
+            }
+        }
+        let attempts = map.entry(share_token.clone()).or_default();
+        let cutoff = Instant::now() - std::time::Duration::from_secs(SHARE_WINDOW_SECS);
+        attempts.retain(|t| *t > cutoff);
+        if attempts.len() >= MAX_SHARE_ATTEMPTS {
+            true
+        } else {
+            attempts.push(Instant::now());
+            false
+        }
+    };
+    if rate_limited {
+        // Emit an audit event so operators can see brute-force style probing
+        // against shared links. Use the token's short hash prefix to keep the
+        // log correlatable without persisting the raw token.
+        let _ = crate::services::audit::log(
+            &db.pool,
+            None,
+            "connection.share_rate_limited",
+            &serde_json::json!({
+                "share_token_prefix": hash_token_prefix(&share_token),
+                "client_ip": &client_ip,
+            }),
+        )
+        .await;
+        return Err(AppError::Auth(
+            "Too many connection attempts. Please try again later.".into(),
+        ));
+    }
+
     // Look up the share and verify it's valid
     let share = crate::services::shares::find_active_by_token(&db.pool, &share_token).await?;
 
-    let (_share_id, connection_id, owner_user_id, mode) =
-        share.ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+    let (_share_id, connection_id, owner_user_id, mode) = match share {
+        Some(s) => s,
+        None => {
+            let _ = crate::services::audit::log(
+                &db.pool,
+                None,
+                "connection.share_invalid_token",
+                &serde_json::json!({
+                    "share_token_prefix": hash_token_prefix(&share_token),
+                    "client_ip": &client_ip,
+                }),
+            )
+            .await;
+            return Err(AppError::NotFound("Invalid or expired share link".into()));
+        }
+    };
 
     let is_control = mode == "control";
-
-    // Extract client IP using the shared helper with ConnectInfo fallback
-    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
-        .unwrap_or_else(|| addr.ip().to_string());
 
     // Find the owner's active session for this connection
     let registry = {

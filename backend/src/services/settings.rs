@@ -8,7 +8,12 @@ use std::time::{Duration, Instant};
 /// on one instance will not invalidate the cache on others until the TTL
 /// expires.  Security-critical settings (e.g. `sso_enabled`,
 /// `local_auth_enabled`) may therefore take up to CACHE_TTL to propagate.
-const CACHE_TTL: Duration = Duration::from_secs(30);
+///
+/// We intentionally keep this short (5s) so operator toggles feel near-instant
+/// in dev and small multi-replica deployments while still absorbing the
+/// hot-path read burst from auth middleware. A future improvement is a
+/// pg NOTIFY-based invalidator for zero-staleness.
+const CACHE_TTL: Duration = Duration::from_secs(5);
 
 struct CacheEntry {
     value: Option<String>,

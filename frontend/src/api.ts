@@ -1332,19 +1332,6 @@ export interface SmtpConfig {
   branding_accent_color: string;
 }
 
-export interface SmtpConfigUpdate {
-  enabled: boolean;
-  host: string;
-  port: number;
-  username: string;
-  /** `undefined` leaves the sealed password untouched; `""` clears it; any non-empty string replaces it. */
-  password?: string;
-  tls_mode: string;
-  from_address: string;
-  from_name: string;
-  branding_accent_color: string;
-}
-
 export interface EmailDelivery {
   id: string;
   template_key: string;
@@ -1359,10 +1346,55 @@ export interface EmailDelivery {
 
 export const getSmtpConfig = () => request<SmtpConfig>("/admin/notifications/smtp");
 
+/**
+ * Explicit three-state action for the SMTP password on update. The wire
+ * format remains a simple optional string (`undefined` = keep, `""` = clear,
+ * non-empty = replace) but callers interact with a discriminated union so
+ * intent is unambiguous — no more "did I mean empty-string-to-clear or
+ * forget-to-send-to-keep?" bugs.
+ */
+export type SmtpPasswordUpdate =
+  | { action: "keep" }
+  | { action: "clear" }
+  | { action: "set"; value: string };
+
+export interface SmtpConfigUpdate {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  password: SmtpPasswordUpdate;
+  tls_mode: string;
+  from_address: string;
+  from_name: string;
+  branding_accent_color: string;
+}
+
+function serializeSmtpPassword(p: SmtpPasswordUpdate): string | undefined {
+  switch (p.action) {
+    case "keep":
+      return undefined;
+    case "clear":
+      return "";
+    case "set":
+      return p.value;
+  }
+}
+
 export const updateSmtpConfig = (body: SmtpConfigUpdate) =>
   request<{ status: string }>("/admin/notifications/smtp", {
     method: "PUT",
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      enabled: body.enabled,
+      host: body.host,
+      port: body.port,
+      username: body.username,
+      password: serializeSmtpPassword(body.password),
+      tls_mode: body.tls_mode,
+      from_address: body.from_address,
+      from_name: body.from_name,
+      branding_accent_color: body.branding_accent_color,
+    }),
   });
 
 export const testSmtpSend = (recipient: string, templateKey?: string) =>

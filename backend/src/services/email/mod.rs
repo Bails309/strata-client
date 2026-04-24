@@ -42,7 +42,10 @@ pub use templates::TemplateKey;
 pub use templates::{render, RenderError, RenderedEmail};
 
 pub use transport::EmailTransport;
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use transport::StubTransport;
 #[allow(unused_imports)] // Ready for P8/P9 dependency-injection + test harness wiring.
-pub use transport::{BoxedTransport, SendError, StubTransport};
+pub use transport::{BoxedTransport, SendError};
 
 pub use worker::spawn_email_retry_worker;

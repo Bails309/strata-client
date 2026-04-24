@@ -539,13 +539,21 @@ async fn handle_guac_handshake(
                     Ok(n) => {
                         pending.extend_from_slice(&tcp_buf[..n]);
 
-                        // Cap pending buffer to prevent OOM from malformed streams
+                        // Cap pending buffer: if guacd floods us with an instruction that
+                        // never terminates, we cannot safely `clear()` and continue — the
+                        // stream would resume mid-token and every subsequent parse would
+                        // be corrupt. Surface an explicit Guac `error` to the client and
+                        // close the tunnel so the browser side knows what happened.
                         if pending.len() > MAX_PENDING_BYTES {
                             tracing::warn!(
-                                "Pending buffer exceeded {}B — dropping data",
+                                "Pending buffer exceeded {}B — closing tunnel",
                                 MAX_PENDING_BYTES
                             );
-                            pending.clear();
+                            let msg = "Protocol error: instruction exceeds pending buffer";
+                            let inst = guac_instruction("error", &[msg, "521"]);
+                            let text = String::from_utf8_lossy(&inst).into_owned();
+                            let _ = ws.send(Message::Text(text.into())).await;
+                            break;
                         }
 
                         // Track bytes from guacd

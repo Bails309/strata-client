@@ -197,7 +197,9 @@ describe("NotificationsTab", () => {
   });
 
   it("rejects an invalid test recipient without calling the API", async () => {
-    vi.mocked(getSmtpConfig).mockResolvedValue(defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" }));
+    vi.mocked(getSmtpConfig).mockResolvedValue(
+      defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" })
+    );
     render(<NotificationsTab onSave={onSave} />);
     await screen.findByDisplayValue("h");
     const recipient = screen.getByPlaceholderText("you@corp.example.com");
@@ -208,18 +210,24 @@ describe("NotificationsTab", () => {
   });
 
   it("runs a successful test-send and shows the accepted banner", async () => {
-    vi.mocked(getSmtpConfig).mockResolvedValue(defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" }));
+    vi.mocked(getSmtpConfig).mockResolvedValue(
+      defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" })
+    );
     render(<NotificationsTab onSave={onSave} />);
     await screen.findByDisplayValue("h");
     const recipient = screen.getByPlaceholderText("you@corp.example.com");
     await userEvent.type(recipient, "probe@corp.local");
     await userEvent.click(screen.getByRole("button", { name: /Send test/i }));
-    expect(await screen.findByText(/Test message accepted by the relay for probe@corp.local/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Test message accepted by the relay for probe@corp.local/)
+    ).toBeInTheDocument();
     expect(testSmtpSend).toHaveBeenCalledWith("probe@corp.local");
   });
 
   it("surfaces the SMTP response on a failed test-send", async () => {
-    vi.mocked(getSmtpConfig).mockResolvedValue(defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" }));
+    vi.mocked(getSmtpConfig).mockResolvedValue(
+      defaultCfg({ enabled: true, host: "h", from_address: "f@x.y" })
+    );
     vi.mocked(testSmtpSend).mockRejectedValue(new ApiError(500, "550 rejected"));
     render(<NotificationsTab onSave={onSave} />);
     await screen.findByDisplayValue("h");

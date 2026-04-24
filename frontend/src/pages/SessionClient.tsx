@@ -714,6 +714,41 @@ export default function SessionClient() {
       requestAnimationFrame(() => display.scale(baseScale));
     }
 
+    // `forceDisplayRepaint` only clears ghosts that are compositor-level
+    // (correct pixel data but stale cached tile). If the canvas pixel
+    // data itself is wrong — e.g. FreeRDP's GFX pipeline dropped the
+    // clear/copy instructions during a window animation and guacd never
+    // told us about it — no amount of compositor nudging will help.
+    //
+    // `forceServerResync` asks the RDP server for a full-frame
+    // retransmit by sending a 1-pixel width nudge followed by a restore.
+    // RDP treats any resize as a "full frame refresh required" hint and
+    // FreeRDP re-requests the entire screen from the remote host. The
+    // fresh bitmap comes back through guacd and overwrites whatever
+    // stale pixels were on our canvas. This is the same mechanism that
+    // naturally clears ghosts when the user manually resizes the
+    // browser window — we just automate it.
+    //
+    // Cost is significant: one full-frame retransmit, ~1–3 MB with H.264
+    // GFX encoding enabled. Use sparingly — only when we have high
+    // confidence of a genuine ghost, or on explicit user request.
+    let lastServerResyncAt = 0;
+    const SERVER_RESYNC_COOLDOWN_MS = 3000;
+    function forceServerResync() {
+      const now = performance.now();
+      if (now - lastServerResyncAt < SERVER_RESYNC_COOLDOWN_MS) return;
+      lastServerResyncAt = now;
+      const dw = display.getWidth();
+      const dh = display.getHeight();
+      if (dw <= 0 || dh <= 0) return;
+      // Nudge the remote by one pixel and immediately restore. RDP treats
+      // the intermediate size as a resize hint and issues a full-frame
+      // refresh. The restore happens fast enough that no layout change
+      // is ever committed to the remote desktop.
+      client.sendSize(dw + 1, dh);
+      client.sendSize(dw, dh);
+    }
+
     // Fire a handful of forced repaints at the timings that cover
     // Windows 10/11's default minimise-animation duration (~200ms) and
     // one late sweep at 500ms for the occasional slow animation. Coarse
@@ -815,8 +850,10 @@ export default function SessionClient() {
     // cheap. Ghost frames from `copy`/`rect` animation artefacts now
     // self-heal without any user interaction.
     const prevOnFlush = display.onflush;
+    let lastFlushAt = performance.now();
     display.onflush = () => {
       if (prevOnFlush) prevOnFlush();
+      lastFlushAt = performance.now();
       scheduleGhostSweep();
     };
 
@@ -831,11 +868,26 @@ export default function SessionClient() {
     //  - User pauses → 50ms later the sweep runs once → ghost cleared.
     //  - Idle → no input → no sweeps → no cost.
     //
+    // Additionally, if no `onflush` has arrived for more than
+    // `STALE_FLUSH_THRESHOLD_MS` *and* the user is now interacting with
+    // the session, we have high confidence of a pixel-data ghost (the
+    // canvas has stale bitmap data that no compositor nudge can fix).
+    // Fire a server-side resync — RDP will retransmit the full frame
+    // and overwrite the stale pixels. The 3-second cooldown inside
+    // `forceServerResync` guarantees we don't hammer the link if the
+    // session is genuinely idle but the user keeps moving the mouse.
+    //
     // We listen on the display element itself (not `container`) so we
     // don't fire sweeps for movements over the sidebar or session bar.
     // `passive: true` guarantees we never delay scroll/input handling.
+    const STALE_FLUSH_THRESHOLD_MS = 1500;
     const displayEl = display.getElement();
-    const onInputActivity = () => scheduleGhostSweep();
+    const onInputActivity = () => {
+      scheduleGhostSweep();
+      if (performance.now() - lastFlushAt > STALE_FLUSH_THRESHOLD_MS) {
+        forceServerResync();
+      }
+    };
     displayEl.addEventListener("pointermove", onInputActivity, { passive: true });
     displayEl.addEventListener("pointerdown", onInputActivity, { passive: true });
     window.addEventListener("keydown", onInputActivity, { passive: true });
@@ -849,9 +901,17 @@ export default function SessionClient() {
     // Fallback for window resize too
     window.addEventListener("resize", handleResize);
 
-    // Expose the manual ghost-sweep as `refreshDisplay` on the session so
-    // the SessionBar can offer a "Refresh display" button.
-    currentSession.refreshDisplay = forceDisplayRepaint;
+    // Expose the manual refresh as `refreshDisplay` on the session so
+    // the SessionBar can offer a "Refresh display" button. An explicit
+    // user click means "something is wrong, fix it at any cost" — so we
+    // do BOTH the cheap compositor nudge (for tile-caching ghosts) AND
+    // the expensive server resync (for pixel-data ghosts). The cooldown
+    // on `forceServerResync` prevents abuse if the user spam-clicks.
+    const manualRefresh = () => {
+      forceDisplayRepaint();
+      forceServerResync();
+    };
+    currentSession.refreshDisplay = manualRefresh;
 
     return () => {
       observer.disconnect();
@@ -863,7 +923,7 @@ export default function SessionClient() {
       // Restore previous handlers (if any) to avoid leaking our closures.
       display.onresize = prevOnResize ?? null;
       display.onflush = prevOnFlush ?? null;
-      if (currentSession.refreshDisplay === forceDisplayRepaint) {
+      if (currentSession.refreshDisplay === manualRefresh) {
         currentSession.refreshDisplay = undefined;
       }
     };

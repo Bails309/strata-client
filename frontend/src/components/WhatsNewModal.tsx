@@ -29,6 +29,11 @@ export const RELEASE_CARDS: ReleaseCard[] = [
     subtitle: "Security, audit & reliability hardening sweep",
     sections: [
       {
+        title: "Input latency eliminated under bitmap bursts",
+        description:
+          "The single biggest user-facing fix in v0.26.0. The WebSocket tunnel used to call ws.send().await inline inside the guacd→browser select arm, so under a burst of draw instructions (e.g. Win+Arrow window snap) browser-side backpressure would block the arm and starve the ws.recv() input path — producing the classic rendering freeze, mouse-acceleration feel, and keyboard lag symptoms. The fix splits the WebSocket into sink + stream, moves the sink behind a bounded mpsc channel owned by a dedicated writer task, and coalesces display.onresize storms on the frontend so input latency is now independent of output-path backpressure.",
+      },
+      {
         title: "Share tokens now respect connection soft-deletes",
         description:
           "Before v0.26.0, a share link minted against a connection that was subsequently soft-deleted would continue resolving. find_active_by_token now JOINs connections and filters soft_deleted_at IS NULL, so a deleted connection's shares stop working the moment the delete commits.",

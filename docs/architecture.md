@@ -169,6 +169,87 @@ Browser                    Backend                   guacd              Target
   │     (bidirectional)      │    (bidirectional)       │                  │
 ```
 
+#### Proxy loop: decoupled sink + bounded channel
+
+The tunnel proxy in [`backend/src/tunnel.rs`](../backend/src/tunnel.rs)
+does not drive the `axum::WebSocket` directly from the main
+`tokio::select!` loop. Doing so would couple output-path backpressure
+to the input path: when guacd floods bitmap updates (e.g. the Windows
+Win+Arrow window-snap animation, which emits a burst of draw
+instructions in ~200 ms), the browser's WebSocket receive buffer
+fills, `ws.send().await` inside the `tcp_read` arm blocks, and *while
+it is blocked* the `ws.recv()` arm cannot run. Mouse/keyboard events
+from the browser then queue up in the kernel TCP buffer and arrive at
+guacd in bursts — users perceive this as rendering freezes, mouse
+"acceleration," and keyboard lag.
+
+The actual architecture decouples the sink from the select loop:
+
+```
+           ┌────────────────────────────────────────────────────┐
+           │                  proxy_session()                   │
+           │                                                    │
+           │   ws ── .split() ──► ws_sink   ws_stream           │
+           │                        │           │                │
+           │                        ▼           │                │
+           │                 ┌──────────────┐   │                │
+           │                 │ writer_task  │   │                │
+           │                 │ (tokio::spawn)│  │                │
+           │                 └──────▲───────┘   │                │
+           │                        │           │                │
+           │           mpsc::<Message>(1024)    │                │
+           │                        │           │                │
+           │                        │           ▼                │
+           │   ┌────────────────────┴───────────────────────┐   │
+           │   │           tokio::select! loop               │   │
+           │   │                                              │   │
+           │   │  tcp_read ─► text assembly ─► ws_tx.send   │   │
+           │   │  ws_stream.next() ────────► tcp_write       │   │
+           │   │  kill_rx ───────────────► ws_tx.send(err)   │   │
+           │   │  shared_input_rx ─────────► tcp_write       │   │
+           │   │  ping_interval ───────────► ws_tx.send(ping)│   │
+           │   │  writer_task join ─────► loop exit          │   │
+           │   └─────────────────────────────────────────────┘   │
+           └────────────────────────────────────────────────────┘
+```
+
+- **`ws.split()`** separates the WebSocket into `ws_sink` (owned
+  permanently by the writer task) and `ws_stream` (polled by the
+  select loop's input arm).
+- **`tokio::sync::mpsc::channel::<Message>(1024)`** is the handoff
+  point. 1024 messages is generous runway for any sustained draw
+  rate; only a pathologically slow browser can back it up, and even
+  then `ws_tx.send().await` yields (the future-returning send gives
+  back control to the executor so the select can continue polling
+  `ws_stream`/`shared_input_rx`).
+- **Writer task** runs a trivial `while let Some(msg) = ws_rx.recv()`
+  → `ws_sink.send(msg).await` loop. All I/O latency on the output
+  path lives inside this task; the main select loop never awaits
+  `ws_sink` directly.
+- **Shutdown path** drops `ws_tx`, which causes `ws_rx.recv()` to
+  return `None` and the writer task to flush + close the sink. A
+  2 s `tokio::time::timeout` + `writer_task.abort()` fallback covers
+  the case where the sink is wedged.
+
+Additional tunnel details:
+
+- Guacamole instructions are delimited by `;` and can be split across
+  TCP reads. The proxy maintains a `pending: Vec<u8>` that is drained
+  up to the last `;` on each read (via `Vec::drain`, which is O(n) on
+  the remainder — meaningfully cheaper than the previous `to_vec()`
+  reallocation on large bitmap floods).
+- The pending buffer is hard-capped at 16 MiB. Exceeding the cap emits
+  a Guacamole `error "Protocol error: instruction exceeds pending
+  buffer" "521"` instruction to the browser and closes the tunnel.
+  The old behaviour of silently calling `pending.clear()` is unsafe
+  because the stream would resume mid-token.
+- The tunnel ingests non-ASCII WS frames via `str::from_utf8` before
+  forwarding; invalid bytes are logged and dropped.
+- Keepalives: `Ping` every 15 s, disconnect if no `Pong` within 30 s.
+- Per-session bandwidth counters (`bytes_from_guacd`, `bytes_to_guacd`)
+  are updated atomically on every read/write for the session-metrics
+  endpoint.
+
 ### Envelope Encryption (Credential Save)
 
 ```

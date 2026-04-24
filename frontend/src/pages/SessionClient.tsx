@@ -754,16 +754,25 @@ export default function SessionClient() {
     // Rescale when the remote display resolution changes (e.g. maximising
     // a window inside the remote desktop triggers a server-side resize).
     const prevOnResize = display.onresize;
+    // `display.onresize` can fire many times in quick succession during a
+    // Windows snap/minimise animation (FreeRDP 3's GFX pipeline emits
+    // partial size updates). Coalesce them: we only need the LAST size,
+    // and we only need to issue one `sendSize` per animation frame.
+    let resizeFramePending = false;
     display.onresize = (width: number, height: number) => {
       if (prevOnResize) prevOnResize(width, height);
-      // Use requestAnimationFrame so the display element has updated its
-      // intrinsic size before we read getWidth()/getHeight().
-      requestAnimationFrame(() => handleResize());
+      if (!resizeFramePending) {
+        resizeFramePending = true;
+        requestAnimationFrame(() => {
+          resizeFramePending = false;
+          handleResize();
+        });
+      }
       // Windows minimise/maximise animations run for roughly 200–250ms.
       // During that window FreeRDP 3's GFX pipeline occasionally sends
       // partial updates that leave ghost pixels in the display canvas.
-      // Schedule a few follow-up forced repaints to clear them without
-      // waiting for the user to resize the browser.
+      // `scheduleGhostSweep` internally cancels any prior pending timers,
+      // so rapid-fire resizes don't stack their repaint sweeps.
       scheduleGhostSweep();
     };
 

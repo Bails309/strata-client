@@ -1,4 +1,5 @@
 use axum::extract::ws::{Message, WebSocket};
+use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -342,7 +343,7 @@ pub async fn proxy(
 #[allow(unused_variables)]
 async fn handle_guac_handshake(
     stream: TcpStream,
-    mut ws: WebSocket,
+    ws: WebSocket,
     handshake: HandshakeParams,
     nvr: Option<NvrContext>,
     display_timezone: String,
@@ -475,6 +476,49 @@ async fn handle_guac_handshake(
     let mut shared_input_rx: Option<tokio::sync::mpsc::Receiver<String>> = None;
 
     // Step 6: Bidirectional proxy loop
+    //
+    // Decoupled architecture:
+    //   - A dedicated **writer task** drains a bounded mpsc channel into the
+    //     WebSocket sink. All `ws_tx.send(Message)` callers push into this
+    //     channel — which is a fast in-memory append when not full.
+    //   - The **main select! loop** handles:
+    //       * ws_stream.next()     — incoming browser frames → tcp_write
+    //       * ping_interval        — periodic keepalive via ws_tx
+    //       * kill_rx              — admin termination
+    //       * shared_input_rx      — viewer-injected control input
+    //       * tcp_read.read()      — guacd → ws_tx (text assembly + NVR)
+    //
+    // Before this refactor the loop held a single `ws: WebSocket` and called
+    // `ws.send(...).await` inline inside the tcp_read arm. Under heavy guacd
+    // load (e.g. Win+Arrow window-snap bitmap burst) the browser's WS receive
+    // buffer would fill, `ws.send().await` would block, and during that block
+    // the `ws.recv()` arm could not run — which meant mouse/keyboard events
+    // from the browser piled up in the kernel TCP buffer and only flushed
+    // once the backpressure relieved. Users perceived this as input "lag"
+    // and mouse "acceleration" (burst of queued movements arriving at once).
+    //
+    // Moving the sink behind a bounded channel + dedicated writer task lets
+    // the input path keep draining independently of the output path. The
+    // channel capacity (1024 messages) provides a generous runway; only a
+    // very slow browser can back it up, in which case `ws_tx.send().await`
+    // will briefly block — but the main loop's other branches (ws_stream,
+    // shared_input) continue to be polled concurrently because the channel
+    // send future yields.
+    const WS_OUTBOUND_CAPACITY: usize = 1024;
+    let (mut ws_sink, mut ws_stream) = ws.split();
+    let (ws_tx, mut ws_rx) = tokio::sync::mpsc::channel::<Message>(WS_OUTBOUND_CAPACITY);
+
+    // Writer task: owns the sink for its lifetime.
+    let mut writer_task = tokio::spawn(async move {
+        while let Some(msg) = ws_rx.recv().await {
+            if ws_sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+        // Graceful close on channel drop.
+        let _ = ws_sink.close().await;
+    });
+
     // guacamole-common-js expects each WebSocket message to contain one or
     // more *complete* Guacamole instructions (terminated by ';').  TCP reads
     // can split an instruction across chunks, so we buffer and only forward
@@ -519,11 +563,17 @@ async fn handle_guac_handshake(
                 let msg = "Session terminated by administrator";
                 let inst = guac_instruction("error", &[msg, "521"]);
                 let text = String::from_utf8_lossy(&inst).into_owned();
-                let _ = ws.send(axum::extract::ws::Message::Text(text.into())).await;
+                let _ = ws_tx.send(Message::Text(text.into())).await;
                 break;
             }
 
-            // TCP (guacd) → WebSocket (frontend)
+            // Writer task exit (browser disconnected or sink errored)
+            _ = &mut writer_task => {
+                tracing::info!("WebSocket writer task exited");
+                break;
+            }
+
+            // TCP (guacd) → mpsc channel → WebSocket (frontend)
             result = tcp_read.read(&mut tcp_buf) => {
                 match result {
                     Ok(0) => {
@@ -533,7 +583,7 @@ async fn handle_guac_handshake(
                         // (as opposed to a network drop).
                         let disc = guac_instruction("disconnect", &[]);
                         let text = String::from_utf8_lossy(&disc).into_owned();
-                        let _ = ws.send(Message::Text(text.into())).await;
+                        let _ = ws_tx.send(Message::Text(text.into())).await;
                         break;
                     }
                     Ok(n) => {
@@ -552,7 +602,7 @@ async fn handle_guac_handshake(
                             let msg = "Protocol error: instruction exceeds pending buffer";
                             let inst = guac_instruction("error", &[msg, "521"]);
                             let text = String::from_utf8_lossy(&inst).into_owned();
-                            let _ = ws.send(Message::Text(text.into())).await;
+                            let _ = ws_tx.send(Message::Text(text.into())).await;
                             break;
                         }
 
@@ -566,8 +616,10 @@ async fn handle_guac_handshake(
                         if let Some(last_semi) = pending.iter().rposition(|&b| b == b';') {
                             let complete = &pending[..=last_semi];
                             let text = String::from_utf8_lossy(complete).into_owned();
-                            let remainder = pending[last_semi + 1..].to_vec();
-                            pending = remainder;
+                            // `drain(..=last_semi)` is O(remainder) but avoids the full
+                            // Vec reallocation that `pending = remainder.to_vec()` used to
+                            // do on every burst — meaningful on Win+Arrow bitmap floods.
+                            pending.drain(..=last_semi);
 
                             // NVR: capture frame into ring buffer + broadcast
                             if let Some((ref tx, ref buffer, _, _, _)) = nvr_handles {
@@ -578,8 +630,8 @@ async fn handle_guac_handshake(
                                 let _ = tx.send(std::sync::Arc::new(text.clone()));
                             }
 
-                            if ws.send(Message::Text(text.into())).await.is_err() {
-                                tracing::info!("WebSocket send failed (client disconnected)");
+                            if ws_tx.send(Message::Text(text.into())).await.is_err() {
+                                tracing::info!("WebSocket send channel closed (writer task exited)");
                                 break;
                             }
                         }
@@ -590,14 +642,20 @@ async fn handle_guac_handshake(
                         // Tell the browser so it doesn't auto-reconnect
                         let disc = guac_instruction("disconnect", &[]);
                         let text = String::from_utf8_lossy(&disc).into_owned();
-                        let _ = ws.send(Message::Text(text.into())).await;
+                        let _ = ws_tx.send(Message::Text(text.into())).await;
                         break;
                     }
                 }
             }
             // WebSocket (frontend) → TCP (guacd)
-            result = ws.recv() => {
-                match result {
+            //
+            // This branch is the input path (mouse/keyboard/resize) and is
+            // the single most latency-sensitive flow in the session. Keeping
+            // the output path off of the select!'s critical section (via the
+            // writer task + channel) is what makes this responsive even when
+            // guacd is flooding draw instructions.
+            next = ws_stream.next() => {
+                match next {
                     Some(Ok(Message::Text(text))) => {
                         // Validate UTF-8 and ensure it only contains valid Guacamole protocol chars
                         if !text.is_ascii() && std::str::from_utf8(text.as_bytes()).is_err() {
@@ -660,8 +718,8 @@ async fn handle_guac_handshake(
                     tracing::info!("WebSocket keepalive timeout (no pong in 30s)");
                     break;
                 }
-                if ws.send(Message::Ping(Vec::new().into())).await.is_err() {
-                    tracing::info!("WebSocket ping send failed");
+                if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    tracing::info!("WebSocket ping send channel closed");
                     break;
                 }
                 // Reset the pong deadline so we measure from ping-sent, not
@@ -671,6 +729,13 @@ async fn handle_guac_handshake(
             }
         }
     }
+
+    // Drop the sender so the writer task's rx.recv() returns None and it can
+    // flush + close the sink cleanly. Abort as a belt-and-braces fallback if
+    // the task hasn't exited within a short grace window.
+    drop(ws_tx);
+    let _ = tokio::time::timeout(Duration::from_secs(2), &mut writer_task).await;
+    writer_task.abort();
 
     // ── NVR: unregister session ──
     if let Some(ref ctx) = nvr {

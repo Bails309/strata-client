@@ -45,7 +45,24 @@ The in-memory test transport is now gated behind `#[cfg(test)]`. No path in a pr
 
 ---
 
-## 🛠️ Reliability
+## 🛠️ Reliability & performance
+
+### Input latency eliminated under bitmap bursts
+
+The single biggest user-facing fix in v0.26.0. The WebSocket tunnel's proxy loop used to call `ws.send(...).await` inline inside the guacd→browser `tokio::select!` arm. Under heavy draw bursts — the classic symptom being a Win+Arrow window snap spewing a lot of bitmap updates in ~200 ms — the browser's WS receive buffer would fill, `ws.send().await` would block, and **while it was blocked the `ws.recv()` arm could not run**. So mouse movements and keystrokes queued up in the kernel TCP buffer and only flushed when the back-pressure relieved, producing three symptoms that were consistently reported together:
+
+- Rendering freezes
+- Mouse movement that felt like mouse acceleration had been turned on (a burst of queued movements arriving at once)
+- Keyboard lag on the same timescale
+
+The fix decouples the WebSocket sender from the select loop:
+
+- `ws.split()` → `ws_sink` + `ws_stream`
+- A bounded mpsc channel (1024 messages) sits in front of the sink
+- A dedicated writer task drains the channel into the sink
+- Every former `ws.send(...).await` call site now pushes to the channel — a fast in-memory append when the channel isn't full
+
+Input-path latency is now independent of output-path backpressure. On the frontend, `display.onresize` events are coalesced to one `handleResize` per animation frame (FreeRDP 3 emits multiple partial size updates during snap animations), and the pending-buffer drain on the backend is now `O(remainder)` instead of `O(n)` via `Vec::drain`.
 
 ### Tunnel overflow emits a proper error frame
 

@@ -1227,8 +1227,16 @@ Render a small probe message and dispatch it through the live `SmtpTransport`. T
 
 **Request Body**
 ```json
-{ "recipient": "ops@contoso.com" }
+{
+  "recipient": "ops@contoso.com",
+  "template_key": "checkout_pending"
+}
 ```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `recipient` | string | Yes | Destination address (must contain `@`) |
+| `template_key` | string | No | When omitted, a generic "SMTP probe" body is sent. When set, the endpoint renders the named template with fixture data so the operator can preview exactly what a real `checkout_pending` (etc.) email looks like end-to-end — including the sealed `branding_accent_color` and `From` name. Unknown keys return `400 Bad Request`. Added in v0.26.0. |
 
 **Response** `200 OK`
 ```json
@@ -1293,7 +1301,14 @@ Return rows from `email_deliveries`, newest first. Use the `status` query parame
 | `notifications.misconfigured` | Dispatcher refused to send (empty `smtp_from_address` or `smtp_enabled = false`) |
 | `notifications.abandoned` | Retry worker abandoned a delivery row after 3 failed attempts |
 | `connection.share_accessed` | External viewer opens a share link (includes client IP) |
+| `connection.share_rate_limited` | Share-tunnel request rejected by per-token rate limit (payload: 8-char SHA-256 prefix + client IP). Added in v0.26.0 |
+| `connection.share_invalid_token` | Share-tunnel request for an unknown, revoked, or soft-deleted share. Added in v0.26.0 |
 | `share.revoked` | User revokes a connection share link |
+| `user.terms_accepted` | User accepted the Terms / recording-consent modal. Added in v0.26.0 |
+| `user.credential_mapping_set` | User mapped a credential profile to a connection. Added in v0.26.0 |
+| `user.credential_mapping_removed` | User cleared a credential-profile mapping. Added in v0.26.0 |
+| `checkout.retry_activation` | User re-triggered activation on an `Approved` checkout after a first activation failure. Added in v0.26.0 |
+| `checkout.checkin` | User voluntarily checked a live checkout in before expiry. Added in v0.26.0 |
 | `ad_sync.config_created` | AD sync source config created |
 | `ad_sync.config_updated` | AD sync source config updated |
 | `ad_sync.config_deleted` | AD sync source config deleted |

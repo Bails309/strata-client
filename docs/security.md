@@ -208,6 +208,13 @@ The `audit_logs` table is designed as an append-only, tamper-evident log:
 | `credential.updated` | User saved/updated an encrypted credential |
 | `tunnel.connected` | User opened a remote desktop session |
 | `share.created` | User generated a session share link |
+| `connection.share_rate_limited` | A share-tunnel request was rejected by the per-token rate limit. Payload includes a SHA-256 8-char prefix of the token (the raw token is never persisted) and the client IP. Useful for spotting share-link brute-forcing (v0.26.0+) |
+| `connection.share_invalid_token` | A share-tunnel request was for a token that does not resolve to an active share (deleted, expired, never existed, or belonging to a soft-deleted connection). Payload includes token-prefix + client IP (v0.26.0+) |
+| `user.terms_accepted` | User accepted the Terms of Service / recording-consent modal (v0.26.0+) |
+| `user.credential_mapping_set` | User mapped a credential profile to a connection (v0.26.0+) |
+| `user.credential_mapping_removed` | User cleared a credential-profile mapping (v0.26.0+) |
+| `checkout.retry_activation` | User re-triggered activation on an `Approved` checkout after an initial activation failure (v0.26.0+) |
+| `checkout.checkin` | User voluntarily checked a live checkout in before its natural expiry (v0.26.0+) |
 | `ad_sync.config_created` | AD sync source configuration created |
 | `ad_sync.config_updated` | AD sync source configuration updated |
 | `ad_sync.config_deleted` | AD sync source configuration deleted |
@@ -619,6 +626,34 @@ The backend applies in-memory rate limiting at multiple layers to prevent abuse:
 | `/api/tunnel/ticket` | User ID | 30 tickets | 60 s |
 
 All rate limiters use a sliding window with automatic OOM protection — entries are pruned when the map exceeds 50,000 (10,000 for share tokens), and cleared entirely if pruning is insufficient.
+
+### Share-link hardening (v0.26.0)
+
+The share-tunnel path receives additional hardening on top of the raw rate limit:
+
+- **Soft-delete filter.** `resolve_share_token()` joins against `connections` with `WHERE connections.deleted_at IS NULL`, so share links for soft-deleted connections are treated as invalid rather than silently proxying to a ghost target.
+- **Token-prefix logging.** Neither the raw share token nor a full hash is written to the audit log. Instead, the first 8 characters of `sha256(token)` are recorded on `connection.share_rate_limited` and `connection.share_invalid_token` events. This preserves the ability to correlate a burst of failed requests to a single token (brute-force detection) without creating a rainbow-table target.
+- **Invalid-token audit event.** Rejected lookups now emit `connection.share_invalid_token` with the token prefix + client IP. Previously these returned 404 silently.
+- **Rate-limit audit event.** Over-the-limit requests emit `connection.share_rate_limited` so operators can see which tokens are being hammered without scraping access logs.
+
+---
+
+## Backend error-message sanitization
+
+As of v0.26.0, every code path that surfaces an `AppError::Vault` or other transport-level failure to an HTTP response goes through a sanitizer that strips:
+
+- Absolute filesystem paths (e.g. `/var/lib/strata/…` in the Vault unseal-key error path)
+- Vault Transit key names and key-ring versions
+- Internal URL components (protocol, host, port) for the embedded Vault
+- Stack frames from nested `anyhow` chains
+
+The sanitized message is always safe to render in the UI; the full chain is still written to the backend log at `error!` level for operators. This closes a class of information-disclosure bugs where a misconfigured Vault would leak paths or internal network topology to the browser.
+
+---
+
+## Test-only transport isolation
+
+The notifications subsystem's `StubTransport` (used by unit tests to assert that emails would have been sent without actually connecting to an SMTP server) is now gated behind `#[cfg(test)]`. In release builds the stub type does not exist and cannot be selected by any configuration path, eliminating the risk of a misconfigured production deployment silently dropping every transactional email into `/dev/null`.
 
 ---
 

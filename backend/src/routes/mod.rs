@@ -2,6 +2,7 @@ pub mod admin;
 pub mod auth;
 pub mod files;
 pub mod health;
+pub mod notifications;
 pub mod roadmap;
 pub mod setup;
 pub mod share;
@@ -93,6 +94,18 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/admin/settings/vault", put(admin::update_vault))
         .route("/api/admin/settings/dns", put(admin::update_dns))
+        .route(
+            "/api/admin/notifications/smtp",
+            get(notifications::get_smtp_config).put(notifications::update_smtp_config),
+        )
+        .route(
+            "/api/admin/notifications/test-send",
+            post(notifications::test_send),
+        )
+        .route(
+            "/api/admin/notifications/deliveries",
+            get(notifications::list_deliveries),
+        )
         .route("/api/admin/health", get(health::service_health))
         .route(
             "/api/admin/roles",

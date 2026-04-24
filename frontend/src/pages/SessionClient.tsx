@@ -666,6 +666,49 @@ export default function SessionClient() {
     const client = currentSession.client;
     const display = client.getDisplay();
 
+    // ── Ghost-pixel mitigation for RDP GFX / H.264 minimise animations ──
+    //
+    // Symptom: minimising / maximising a Windows window over RDP
+    // occasionally leaves stale pixels in the display canvas. The pixel
+    // data is correct at the protocol level (Guacamole.Display has
+    // already processed the draw instructions) but the browser
+    // compositor doesn't know it needs to repaint the affected region
+    // because no CSS property on the display element has changed. Any
+    // browser-side resize (sidebar collapse, window resize) clears the
+    // ghost because it triggers display.scale() with a different factor,
+    // which changes the CSS transform and forces recomposition.
+    //
+    // Fix: re-apply the current scale with a sub-pixel nudge. This
+    // changes the CSS transform (forcing compositor invalidation) but
+    // is imperceptible visually. Much cheaper than toggling a layout
+    // property and safe to call at any time.
+    function forceDisplayRepaint() {
+      const cw = container!.clientWidth;
+      const ch = container!.clientHeight;
+      const dw = display.getWidth();
+      const dh = display.getHeight();
+      if (cw <= 0 || ch <= 0 || dw <= 0 || dh <= 0) return;
+      const baseScale = Math.min(cw / dw, ch / dh);
+      // A 1e-4 delta is below the display element's integer pixel
+      // rounding threshold, but it still changes the transform string,
+      // which is all the compositor needs to invalidate.
+      display.scale(baseScale + 1e-4);
+      requestAnimationFrame(() => display.scale(baseScale));
+    }
+
+    // Fire a handful of forced repaints at the timings that cover
+    // Windows 10/11's default minimise-animation duration (~200ms) and
+    // one late sweep at 500ms for the occasional slow animation. Coarse
+    // but effective; the work per call is trivial (one CSS transform).
+    const ghostSweepTimers: number[] = [];
+    function scheduleGhostSweep() {
+      ghostSweepTimers.forEach((id) => window.clearTimeout(id));
+      ghostSweepTimers.length = 0;
+      for (const delay of [50, 200, 500]) {
+        ghostSweepTimers.push(window.setTimeout(forceDisplayRepaint, delay));
+      }
+    }
+
     function handleResize() {
       const cw = container!.clientWidth;
       const ch = container!.clientHeight;
@@ -716,6 +759,12 @@ export default function SessionClient() {
       // Use requestAnimationFrame so the display element has updated its
       // intrinsic size before we read getWidth()/getHeight().
       requestAnimationFrame(() => handleResize());
+      // Windows minimise/maximise animations run for roughly 200–250ms.
+      // During that window FreeRDP 3's GFX pipeline occasionally sends
+      // partial updates that leave ghost pixels in the display canvas.
+      // Schedule a few follow-up forced repaints to clear them without
+      // waiting for the user to resize the browser.
+      scheduleGhostSweep();
     };
 
     const observer = new ResizeObserver(() => {
@@ -727,11 +776,19 @@ export default function SessionClient() {
     // Fallback for window resize too
     window.addEventListener("resize", handleResize);
 
+    // Expose the manual ghost-sweep as `refreshDisplay` on the session so
+    // the SessionBar can offer a "Refresh display" button.
+    currentSession.refreshDisplay = forceDisplayRepaint;
+
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", handleResize);
+      ghostSweepTimers.forEach((id) => window.clearTimeout(id));
       // Restore previous handler (if any) to avoid leaking our closure.
       display.onresize = prevOnResize ?? null;
+      if (currentSession.refreshDisplay === forceDisplayRepaint) {
+        currentSession.refreshDisplay = undefined;
+      }
     };
   }, [currentSession, isMultiMonitor, getLayout]);
 

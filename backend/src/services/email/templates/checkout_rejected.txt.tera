@@ -1,0 +1,8 @@
+Strata Client - Your checkout request was declined
+
+{{ approver_display_name }} declined your request for {{ target_account_cn }}.
+If you still need access, contact your administrator or submit a new request
+with additional context.
+
+-- Strata Client
+You can opt out of these notifications under Profile then Notifications.

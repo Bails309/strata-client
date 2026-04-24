@@ -25,6 +25,115 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.25.2",
+    subtitle: "Admin → Notifications tab — the SMTP configuration UI",
+    sections: [
+      {
+        title: "Configure SMTP from the Admin UI",
+        description:
+          "The v0.25.0 release notes mentioned an admin SMTP UI that hadn't actually shipped — only the backend endpoints were in place. v0.25.2 delivers the real thing: a new Notifications tab under Admin Settings with the full relay configuration surface (host, port, TLS mode, username, From address, From name, brand accent colour), gated on Manage System.",
+      },
+      {
+        title: "Vault-Aware Password Field",
+        description:
+          'Because the SMTP password is sealed in Vault server-side, the UI never shows the stored value. Instead, an empty input with a "•••••••• (sealed in Vault)" placeholder appears when a password is on file. A "Keep existing" button discards your edit; a "Clear" button (shown only when a value exists and you haven\'t started typing) removes the stored password on save. Three-state PUT semantics wire this end-to-end — undefined keeps, empty string clears, any other value replaces.',
+      },
+      {
+        title: "Send Test Email & Deliveries Table",
+        description:
+          "A dedicated test-send panel round-trips through the live SmtpTransport using the saved settings and surfaces the actual SMTP response on error (connection refused, 550 rejected, certificate problems — all verbatim). Below it, the last 50 rows of email_deliveries are shown with a status filter (Queued / Sent / Failed / Bounced / Suppressed), attempt counts, and last-error tooltips — the same data the backend has been recording since v0.25.0 but previously observable only via curl.",
+      },
+      {
+        title: "No Migrations, No API Changes",
+        description:
+          "Pure UI-layer addition on top of the v0.25.0 backend routes. Drop-in upgrade; nothing to run on the database side.",
+      },
+    ],
+  },
+  {
+    version: "0.25.1",
+    subtitle: "RDP display-refresh patch & zero-warning backend build",
+    sections: [
+      {
+        title: "RDP \"Screen Clipping\" Fix",
+        description:
+          'Some RDP users saw a stale rectangle of pixels remain visible after minimising and restoring the remote window, until they manually resized the browser. v0.25.1 introduces forceDisplayRepaint() — a sub-pixel scale nudge (baseScale + 1e-4) that the compositor treats as a transform change, invalidating every cached tile and forcing a full repaint of the guacamole-common-js display layers. Auto-scheduled at 50 / 200 / 500 ms after every display.onresize so the common minimise/restore/full-screen-toggle cases self-heal with no user action.',
+      },
+      {
+        title: "Manual \"Refresh Display\" Button",
+        description:
+          "For rarer edge cases (GFX pipeline stalls, out-of-order H.264 frames on flaky networks), a Refresh display button on the Session Bar gives users a one-click recovery path. The control only appears for sessions that publish the refresh helper — historical recording playback is unaffected.",
+      },
+      {
+        title: "Zero-Warning Backend Release Build",
+        description:
+          "The 16 unused_imports / dead_code warnings from the v0.25.0 notification pipeline build have been eliminated. API surface reserved for future admin-UI work now carries targeted #[allow(dead_code)] annotations with rationale comments pointing to the consuming phase. cargo check --bin strata-backend --all-targets now reports 0 warnings, 0 errors.",
+      },
+      {
+        title: "No Schema or API Changes",
+        description:
+          "Pure drop-in patch. GuacSession gained an optional refreshDisplay?: () => void field used only by in-memory frontend code. No migrations, no new endpoints, no breaking changes.",
+      },
+    ],
+  },
+  {
+    version: "0.25.0",
+    subtitle: "Modern Managed-Account Notification Emails",
+    sections: [
+      {
+        title: "Mobile-Friendly HTML Emails for Checkout Events",
+        description:
+          "Strata now sends polished MJML-authored HTML emails for the four key managed-account checkout events — pending approval, approved, rejected, and self-approved (audit notice). Every message ships as multipart/related with a plain-text alternative and the Strata logo inlined as cid:strata-logo, tested across Gmail, Outlook, and Apple Mail.",
+      },
+      {
+        title: "Outlook Dark-Mode \"Haze\" Fixed",
+        description:
+          "Outlook desktop's dark-mode engine inverts bgcolor attributes, producing a visible lighter rectangle over HTML emails. v0.25.0 ships a reusable wrap_for_outlook_dark_mode helper that injects the VML namespace, a <v:background fill=\"t\"> conditional block, and an Outlook-only stylesheet. VML backgrounds are immune to the inversion engine, so the result is a clean dark-themed email even in Outlook desktop dark mode. Future templates inherit the fix automatically.",
+      },
+      {
+        title: "SMTP Password Is Vault-Only",
+        description:
+          "The new SMTP routes hard-require the relay password to live in Vault. PUT /api/admin/notifications/smtp refuses to save credentials when Vault is sealed or running in stub mode — SMTP credentials granting outbound mail are a high-value target and must never sit in plaintext on disk.",
+      },
+      {
+        title: "Per-User Opt-Out with Audit Trail",
+        description:
+          "New users.notifications_opt_out boolean column. When set, the dispatcher suppresses all transactional messages for that user and records each suppression as a notifications.skipped_opt_out audit event. Self-approved audit notices intentionally bypass the flag — they exist for security visibility, not user convenience.",
+      },
+      {
+        title: "Retry Worker with Exponential Backoff",
+        description:
+          "A background email retry worker (30 s tick, 60 s warm-up, 120 s per-attempt budget) re-attempts transient SMTP failures with exponential backoff and abandons rows after 3 attempts. Permanent 5xx failures are not retried.",
+      },
+    ],
+  },
+  {
+    version: "0.24.0",
+    subtitle: "Quick Share Permission & Unified Connection-Creation Role",
+    sections: [
+      {
+        title: "New can_use_quick_share RBAC Flag",
+        description:
+          "The in-session Quick Share feature (ephemeral file upload / share-link) is now gated by a dedicated permission. The Quick Share button on the Session Bar and the POST /api/files/upload endpoint both respect it. Administrators (can_manage_system) retain full access.",
+      },
+      {
+        title: "Unified \"Create Connections\" Permission",
+        description:
+          "can_create_connections and can_create_connection_folders have been consolidated into a single can_create_connections flag. Users who can create connections can also organise them into folders — no more two checkboxes for the same mental model.",
+      },
+      {
+        title: "Non-Breaking Migration",
+        description:
+          "Migration 054 OR's the old folder flag into the unified flag before dropping the column, so no existing role loses capability. Every existing role is also granted can_use_quick_share = true at upgrade time to preserve prior behaviour; administrators can restrict the feature to a subset of roles afterwards via Admin → Access → Roles.",
+      },
+      {
+        title: "API Payload Change",
+        description:
+          "All role / user payloads now emit can_use_quick_share in place of can_create_connection_folders. External API consumers should update their field mappings accordingly.",
+      },
+    ],
+  },
+  {
     version: "0.23.1",
     subtitle: "Admin Settings Refactor & Compliance Tracker Retired",
     sections: [

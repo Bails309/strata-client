@@ -1,0 +1,8 @@
+Strata Client - Self-approved checkout (audit notice)
+
+{{ requester_display_name }} self-approved a checkout for {{ target_account_cn }}.
+This message is sent for audit visibility and cannot be opted out of.
+
+Expires: {{ expiry_human }}
+
+-- Strata Client

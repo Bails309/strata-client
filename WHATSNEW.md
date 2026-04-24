@@ -1,3 +1,235 @@
+# What's New in v0.25.2
+
+> **The missing admin tab.** v0.25.2 ships the **Admin → Notifications** tab that the v0.25.0 release notes described but — as an observant administrator pointed out — never actually landed in the UI. The backend endpoints have been running since v0.25.0; this release puts a proper front-end on top of them. No migrations, no API changes, drop-in upgrade.
+
+---
+
+## 🖥️ Admin → Notifications — the SMTP configuration UI
+
+A new top-level tab appears on the Admin Settings page (visible to users with `can_manage_system`). It is split into three sections:
+
+### 1. SMTP relay configuration
+
+Standard form fields for **host**, **port**, **TLS mode** (STARTTLS / Implicit TLS / None), **username**, **From address**, **From name**, and **brand accent colour** (used as the button colour in the HTML templates). The **Enable notification emails** master switch at the top is honoured by the dispatcher — off means *no outbound mail*, no TCP connection to the relay, no `email_deliveries` row churn.
+
+### 🔐 The password field is Vault-aware
+
+Because the SMTP password is **sealed into Vault server-side** (the backend rejects the PUT if Vault is sealed or in stub mode — see v0.25.0 notes), the UI never shows the actual stored value. Instead:
+
+- An empty input with a **"•••••••• (sealed in Vault)"** placeholder appears when a password is already on file.
+- Typing a new value and saving seals and replaces the stored secret.
+- A **Keep existing** button discards your edit and leaves the stored value alone.
+- A **Clear** button (only visible when a password is on file and you haven't started typing a new one) lets you remove the stored password on save — useful if you're switching to a relay that accepts anonymous SMTP from your subnet.
+
+Three-state semantics are wired end-to-end: the `password` field on the PUT body is `undefined` to keep, `""` to clear, or a non-empty string to replace.
+
+### 2. Send test email
+
+A dedicated panel with a recipient input and a **Send test** button. The backend round-trips through the live `SmtpTransport` using the saved settings and returns the actual SMTP response on error (connection refused, 550 recipient rejected, certificate chain problems, etc. — all surface verbatim). Successful sends show up in the deliveries table below within a second.
+
+The button is disabled until SMTP is enabled in the saved config — trying to test against unsaved form state leads to confusion, so we force a save first.
+
+### 3. Recent deliveries
+
+Last 50 rows of the `email_deliveries` audit table, ordered newest first, with a status filter (All / Queued / Sent / Failed / Bounced / Suppressed) and a manual **Refresh** button. Each row shows creation timestamp, template key, recipient, subject, status pill, attempt count, and the last error (hover for full text).
+
+This is the same data that powered the v0.25.0 `GET /api/admin/notifications/deliveries` endpoint — which had been observable only via `curl` before now.
+
+---
+
+## 🛠️ API layer
+
+Four new typed helpers in [`frontend/src/api.ts`](frontend/src/api.ts):
+
+```ts
+getSmtpConfig(): Promise<SmtpConfig>
+updateSmtpConfig(body: SmtpConfigUpdate): Promise<{ status: string }>
+testSmtpSend(recipient: string): Promise<{ status: string }>
+listEmailDeliveries(status?, limit?): Promise<EmailDelivery[]>
+```
+
+Full TypeScript types (`SmtpConfig`, `SmtpConfigUpdate`, `EmailDelivery`) are exported for callers outside the Notifications tab.
+
+---
+
+## 📦 Upgrade notes
+
+- **Database migration** — none.
+- **API contract** — no new, removed, or changed endpoints. The v0.25.0 routes are now driven by the admin UI instead of requiring `curl`.
+- **Breaking changes** — none.
+- **Version bump** — `VERSION`, `frontend/package.json` (+ lock), `backend/Cargo.toml` (+ lock), and the README badge now read **0.25.2**.
+
+---
+
+## 🙏 Credits
+
+Thanks to the admin who noticed the discrepancy between the release notes and the actual UI. The v0.25.0 changelog entry has been annotated in v0.25.2's *Fixed* section as a documentation-honesty correction.
+
+---
+
+# What's New in v0.25.1
+
+> **Quality-of-life patch release.** v0.25.1 lands a targeted RDP canvas-refresh fix for the "screen clipping" artefact that some users saw after minimising and restoring an active remote session, plus a zero-warning backend release build. No schema changes, no API contract changes, drop-in upgrade.
+
+---
+
+## 🖥️ RDP "screen clipping" fixed (with a new **Refresh display** button)
+
+A subset of RDP users reported a stale rectangle of pixels remaining visible in the lower-right of the remote canvas after minimising and restoring the window (or toggling full-screen). The artefact would persist until the user manually resized the browser window, at which point the next draw cycle cleared it.
+
+**Root cause.** Guacamole's JavaScript display emits a `display.onresize` event when the remote framebuffer changes size, but the browser compositor — with no CSS property change to invalidate its tile cache — would occasionally keep the pre-resize rectangle on screen if no pixel data arrived on the affected region before the next paint.
+
+**The fix.** v0.25.1 introduces a `forceDisplayRepaint()` helper on `SessionClient.tsx` that nudges the canvas scale by a sub-pixel delta (`baseScale + 1e-4`), which the compositor treats as a transform change and which therefore invalidates every cached tile, forcing a full repaint of the `guacamole-common-js` display layers. The helper is:
+
+1. **Auto-scheduled** at 50 ms, 200 ms, and 500 ms after every `display.onresize` event, so the common minimise/restore/full-screen-toggle cases self-heal with no user intervention.
+2. **Exposed** through the session object as `refreshDisplay?: () => void` and surfaced in `SessionBar` as a **Refresh display** button, so users hitting rarer edge cases (GFX pipeline stalls, out-of-order H.264 frames on flaky networks) have a one-click recovery path.
+
+The button only appears for sessions that publish `refreshDisplay` — historical recording playback is unaffected and does not show the control.
+
+---
+
+## 🧹 Zero-warning backend release build
+
+The v0.25.0 notification pipeline landed with a public API surface sized for P8 (admin UI) and P9 (user opt-out UI) work that is still pending. Those reserved items generated 16 `unused_imports` / `dead_code` warnings during `docker compose build backend`.
+
+v0.25.1 tidies the output: genuinely-unused imports are removed, and every retained-for-future-phase item (`InlineAttachment`, `BoxedTransport`, `SendError`, `StubTransport`, `describe`, `context_from_pairs`, the `reply_to`/`inline` builders, `DeliveryToRetry.attempts`, and `CheckoutEvent::target_account_dn`) now carries a focused `#[allow(dead_code)]` or `#[allow(unused_imports)]` annotation **with a rationale comment** pointing to the consuming phase. The outcome is a clean `cargo check --bin strata-backend --all-targets` — **0 warnings, 0 errors** — ready for an eventual `-D warnings` CI gate.
+
+No runtime code was removed. All 852 backend unit tests pass unchanged.
+
+---
+
+## 📦 Upgrade notes
+
+- **Database migration** — none. No schema change.
+- **Breaking changes** — none. `GuacSession` gained an optional field (`refreshDisplay?: () => void`) used only by in-memory frontend code.
+- **API contract** — unchanged; no new, removed, or renamed endpoints.
+- **Version bump** — `VERSION`, `frontend/package.json`, `backend/Cargo.toml`, and `backend/Cargo.lock` now read **0.25.1**.
+
+---
+
+## 🙏 Credits
+
+Thanks to the user who reported the RDP minimise/restore clipping; the repro steps (minimise → wait → restore, artefact persists until browser resize) were what identified the compositor-cache miss as the root cause rather than the originally-suspected canvas geometry bug.
+
+---
+
+# What's New in v0.25.0
+
+> **Notifications release.** v0.25.0 delivers the long-awaited modern checkout-notification email pipeline — polished MJML templates, Outlook dark-mode hardening, an admin SMTP UI, per-user opt-outs, and a background retry worker. Zero-downtime upgrade; emails simply start flowing once an admin configures the SMTP relay.
+
+---
+
+## 📬 Modern managed-account notification emails
+
+Strata now sends mobile-friendly HTML emails for every key managed-account checkout event:
+
+| Event | Recipients | Opt-out? |
+|---|---|---|
+| **Checkout pending approval** | All assigned approvers for the target account | ✅ Yes |
+| **Checkout approved** | The original requester | ✅ Yes |
+| **Checkout rejected** | The original requester | ✅ Yes |
+| **Self-approved checkout (audit notice)** | Configured audit recipients | ❌ No (audit visibility) |
+
+Each email is rendered from an [MJML](https://mjml.io) template (mobile-responsive, tested across Gmail / Outlook / Apple Mail), dispatched as `multipart/related` with the Strata logo inlined as `cid:strata-logo`, and accompanied by a plain-text alternative for accessibility and minimal-client compatibility.
+
+### 🌒 Outlook dark-mode "haze" fixed
+
+Outlook desktop on Windows has a long-standing dark-mode quirk where it overlays a lighter rectangle ("haze") on top of HTML emails by inverting `bgcolor` attributes. v0.25.0 ships a reusable `wrap_for_outlook_dark_mode` helper that injects:
+
+1. The VML namespace on `<html>`
+2. A full-bleed `<v:background fill="t">` inside an `<!--[if gte mso 9]>` conditional
+3. An Outlook-only stylesheet forcing dark backgrounds
+
+VML backgrounds are immune to Outlook's inversion engine, so the result is a clean dark-themed email even in Outlook desktop dark mode. Future templates inherit the fix automatically.
+
+---
+
+## ⚙️ Admin SMTP configuration UI
+
+A new **Admin → Notifications** tab exposes:
+
+- **SMTP host / port / TLS mode** (`STARTTLS`, implicit-TLS, or plaintext for internal relays)
+- **Username** (plaintext) and **password** (sealed into Vault — see security note below)
+- **From-address** and **From-name**
+- **Send test email** button — round-trips through the live transport and surfaces the actual SMTP response for debugging
+- **Recent deliveries** view — last 50 attempts with status, attempt count, and error reason
+
+### 🔐 Security note: SMTP password requires Vault
+
+The SMTP password is **hard-required** to be stored in Vault. The `PUT /api/admin/notifications/smtp` endpoint refuses to save credentials if Vault is sealed or running in stub mode. This is intentional — SMTP credentials granting outbound mail are a high-value target and must never sit in plaintext on disk.
+
+### 🚦 Dispatch is blocked when from-address is empty
+
+If `smtp_from_address` is empty, the dispatcher silently skips all sends and audit-logs `notifications.misconfigured`. This prevents half-configured installs from queuing thousands of broken messages.
+
+---
+
+## 🙋 Per-user opt-outs (with audit trail)
+
+v0.25.0 introduces a single `users.notifications_opt_out` boolean column. When set, the dispatcher suppresses **all** transactional messages for that user and records each suppression as a `notifications.skipped_opt_out` audit event with the template key and target entity ID. Every suppression is also reflected in the `email_deliveries` audit table with `status = 'suppressed'`.
+
+Self-approved audit notices are intentionally **not opt-out-able** — they exist for security visibility, not user convenience. The dispatcher's `ignores_opt_out` branch is hard-coded to bypass the flag for the self-approved template.
+
+> [!NOTE]
+> The user-facing toggle UI ships in a follow-up release. For v0.25.0, administrators can set the flag directly via SQL (`UPDATE users SET notifications_opt_out = true WHERE id = $1`).
+
+---
+
+## 🔁 Background retry worker
+
+Transient SMTP failures (network blips, 4xx responses, transient connection errors) are retried automatically by a new `email_retry_worker`:
+
+- **Tick interval**: 30 seconds
+- **Initial warm-up**: 60 seconds
+- **Per-attempt timeout**: 120 seconds
+- **Backoff**: exponential
+- **Max attempts**: 3 — after which the row is marked `abandoned` and a `notifications.abandoned` audit event is emitted
+
+**Permanent failures (5xx)** are *not* retried — they go straight to `failed` so admins can see the underlying SMTP rejection in the deliveries view.
+
+---
+
+## 🗄️ Schema additions (migration 055)
+
+```
+email_deliveries             — every send attempt with status, attempts, last_error
+users.notifications_opt_out  — single boolean column for global per-user opt-out
+system_settings (8 new rows) — smtp_enabled, smtp_host, smtp_port, smtp_username,
+                                smtp_tls_mode, smtp_from_address, smtp_from_name,
+                                branding_accent_color
+```
+
+The SMTP password is **not** stored in `system_settings`. It lives sealed under Vault Transit using the same `seal_setting` / `unseal_setting` helpers as `recordings_azure_access_key`. The `email_deliveries` table is indexed on `(status, created_at)` for the retry worker's selection query, on `(related_entity_type, related_entity_id)` for per-checkout lookups, and on `recipient_user_id` (partial, NOT NULL) for per-user audit views.
+
+---
+
+## 📈 Approver fan-out improvement
+
+Previously, only the first matching approver received the *pending* notification. v0.25.0's `services::checkouts::approvers_for_account` now joins `approval_role_accounts` with `approval_role_assignments` to fan out to **every assigned approver** for the target account. No configuration change required.
+
+---
+
+## 🚀 Upgrade notes
+
+- **Database migration** runs automatically on first boot of v0.25.0 (`055_notifications.sql`).
+- **No emails will be sent** until an admin visits **Admin → Notifications**, configures SMTP, and saves a `from-address`. This is intentional — silent dispatch on an unconfigured relay would be worse than no dispatch at all.
+- **Existing admins** see no behaviour change for non-notification flows. The dispatcher is fire-and-forget and never blocks the user-facing checkout request.
+- **Per-user opt-outs default to "send"** for all opt-out-able events. Users wishing to mute notifications must visit **Profile → Notifications** after the upgrade.
+
+---
+
+## 🛠️ Under the hood
+
+- **Migration**: [`backend/migrations/055_notifications.sql`](backend/migrations/055_notifications.sql) — adds `email_deliveries`, the `users.notifications_opt_out` column, and 8 SMTP/branding rows in `system_settings`.
+- **Module layout**: `backend/src/services/email/` houses the trait (`transport.rs`), production transport (`smtp.rs`), MJML renderer (`templates.rs` + `templates/`), Outlook VML wrapper (`outlook.rs`), and retry worker (`worker.rs`). Dispatcher lives in `backend/src/services/notifications.rs`.
+- **New crates**: `lettre 0.11` (rustls + tokio1), `mrml 5`, `tera 1`, `async-trait 0.1`. `ammonia` was *removed* in favour of a custom 5-character `xml_escape` helper.
+- **ADR**: [ADR-0008 — Notification pipeline](docs/adr/ADR-0008-notification-pipeline.md) records the design rationale (MJML + mrml, Vault-sealed password, opt-out semantics, retry strategy, alternatives considered).
+- **Runbook**: [docs/runbooks/smtp-troubleshooting.md](docs/runbooks/smtp-troubleshooting.md) covers symptom triage, log inspection, common transient/permanent errors, and rollback.
+- **Version bump**: `VERSION`, `frontend/package.json`, and `backend/Cargo.toml` all now read **0.25.0**.
+- **Validation**: 852 / 852 backend tests pass (was 817 in v0.24.0); all 26 `services::email::*` tests green.
+
+---
+
 # What's New in v0.24.0
 
 > **RBAC refinement release.** v0.24.0 introduces a dedicated permission for the in-session Quick Share feature and consolidates the two "create connections" permissions into a single, clearer flag. Zero-downtime, non-breaking upgrade for every existing role.

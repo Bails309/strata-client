@@ -206,6 +206,8 @@ async fn main() -> anyhow::Result<()> {
         services::checkouts::spawn_auto_rotation_worker(state.clone(), shutdown.clone()),
         // ── Spawn connection health-check worker (every 120s) ──
         services::health_check::spawn_health_check_worker(state.clone(), shutdown.clone()),
+        // ── Spawn transactional-email retry worker (every 30s) ──
+        services::email::spawn_email_retry_worker(state.clone(), shutdown.clone()),
         // ── Spawn active_sessions cleanup background task ──
         // (W2-5 / W2-8) moved into a dedicated service so the error path is
         // explicit rather than `let _ = sqlx::query(...)`.

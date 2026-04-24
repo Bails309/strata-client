@@ -394,6 +394,46 @@ To automatically import computer accounts from Active Directory:
 - **Simple Bind** — provide a bind DN and password with appropriate LDAP read permissions
 - **Kerberos Keytab** — provide a keytab file path (mounted into the backend container) and principal; the backend uses `kinit` + `ldapsearch` with GSSAPI
 
+### 9. Notification Email (SMTP)
+
+Strata Client sends transactional email for managed-account checkout events (pending approval, approved, rejected, and self-approved audit notice). All four templates are MJML-rendered, multipart/related (HTML + plain-text alternative + inline `cid:strata-logo`), and pre-hardened against Outlook desktop's dark-mode "haze" via a VML wrapper.
+
+**Prerequisites:**
+
+- A reachable SMTP relay (your tenant relay, AWS SES, SendGrid, Postfix on the docker host, etc.)
+- A verified `From:` address with SPF/DMARC/DKIM aligned for the domain you intend to send from. Most relays will reject (5xx) if SPF or DMARC fails — those rejections are classified as **permanent** and not retried.
+- **Vault must be unsealed and operational.** The `PUT /api/admin/notifications/smtp` endpoint refuses to save the SMTP password when the configured Vault backend is sealed or running in stub mode. This is an intentional hard-fail to prevent plaintext credential storage.
+
+**Configuration steps:**
+
+1. Navigate to **Admin → Notifications**
+2. Fill in the SMTP form:
+   - **Host / Port** — your relay (e.g. `smtp.contoso.com:587`)
+   - **Username / Password** — relay credentials. The password is sealed in Vault before being written to `system_settings`.
+   - **TLS Mode** — `STARTTLS` (port 587, recommended), `Implicit TLS` (port 465), or `None` (plaintext, internal relays only)
+   - **From Address** — must be a verified sender for your domain. **Empty value blocks the dispatcher entirely** (audit event `notifications.misconfigured`).
+   - **From Name** — display name in the `From:` header (default `Strata Client`)
+   - **Branding Accent Color** — used by future templates and surfaced in the SMTP test-send body
+3. Click **Save**
+4. Click **Send Test Email** and provide a recipient. The actual SMTP response (or error) is surfaced verbatim in the UI for debugging.
+5. Toggle **Enabled** to **On** to begin dispatch on real checkout events.
+
+**Per-user opt-out (v0.25.0):**
+
+For v0.25.0 the user-facing toggle UI ships in a follow-up release. Administrators can manually opt a user out via SQL:
+
+```sql
+UPDATE users SET notifications_opt_out = true WHERE email = 'user@contoso.com';
+```
+
+The dispatcher honours the flag for every transactional message **except** the self-approved audit notice (which exists for security visibility and intentionally bypasses the opt-out). Each suppression is logged as `notifications.skipped_opt_out` in the append-only audit log and reflected in `email_deliveries` with `status = 'suppressed'`.
+
+**Monitoring deliveries:**
+
+The **Admin → Notifications → Recent Deliveries** view shows the last 50 attempts with status, attempt count, and last-error text. The same data is available via `GET /api/admin/notifications/deliveries?status=failed&limit=200` for external monitoring scrapers. The retry worker re-attempts `failed` rows where `attempts < 3` with exponential backoff and abandons rows after the third attempt (audit event `notifications.abandoned`).
+
+When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md).
+
 ---
 
 ## Upgrading

@@ -1,0 +1,23 @@
+<mjml>
+  <mj-body background-color="#111827">
+    <mj-section background-color="{{ accent }}" padding="20px 24px">
+      <mj-column>
+        <mj-image src="cid:strata-logo" alt="Strata Client" width="120px" align="left" padding="0" />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="24px 24px 8px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#f9fafb" font-size="20px" font-weight="600">Self-approved checkout audit notice</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#d1d5db" font-size="14px" line-height="1.6">{{ requester_display_name }} self-approved a checkout for {{ target_account_cn }}. This message is sent for audit visibility and cannot be opted out of.</mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#1f2937" padding="20px 24px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px">Target account</mj-text>
+        <mj-text font-family="Courier, monospace" color="#e5e7eb" font-size="13px">{{ target_account_cn }}</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px" padding-top="12px">Expires</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#e5e7eb" font-size="14px">{{ expiry_human }}</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

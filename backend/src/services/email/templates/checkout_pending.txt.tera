@@ -1,0 +1,12 @@
+Strata Client - Checkout request awaiting your approval
+
+{{ requester_display_name }} ({{ requester_username }}) has requested
+temporary access to {{ target_account_cn }} for {{ requested_ttl_minutes }} minutes.
+
+Justification: {{ justification }}
+
+Review in Strata: {{ approve_url }}
+
+-- Strata Client
+You can opt out of these notifications under Profile then Notifications.
+Audit-trail messages will continue regardless.

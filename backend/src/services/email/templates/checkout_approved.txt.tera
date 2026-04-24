@@ -1,0 +1,11 @@
+Strata Client - Your checkout was approved
+
+{{ approver_display_name }} approved your request for {{ target_account_cn }}.
+Credentials are now available in your Strata Profile vault.
+
+Expires: {{ expiry_human }}
+
+Open Strata Profile: {{ profile_url }}
+
+-- Strata Client
+You can opt out of these notifications under Profile then Notifications.

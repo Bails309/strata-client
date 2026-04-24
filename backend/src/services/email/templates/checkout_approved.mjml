@@ -1,0 +1,33 @@
+<mjml>
+  <mj-body background-color="#111827">
+    <mj-section background-color="{{ accent }}" padding="20px 24px">
+      <mj-column>
+        <mj-image src="cid:strata-logo" alt="Strata Client" width="120px" align="left" padding="0" />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="24px 24px 8px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#f9fafb" font-size="20px" font-weight="600">Your checkout was approved</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#d1d5db" font-size="14px" line-height="1.6">{{ approver_display_name }} approved your request for {{ target_account_cn }}. Credentials are now available in your Strata Profile vault.</mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#1f2937" padding="20px 24px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px">Target account</mj-text>
+        <mj-text font-family="Courier, monospace" color="#e5e7eb" font-size="13px">{{ target_account_cn }}</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px" padding-top="12px">Expires</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#e5e7eb" font-size="14px">{{ expiry_human }}</mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="8px 24px 24px">
+      <mj-column>
+        <mj-button href="{{ profile_url }}" background-color="{{ accent }}" color="#ffffff" font-weight="600" border-radius="6px" inner-padding="12px 24px" font-family="Helvetica, Arial, sans-serif">Open Strata Profile</mj-button>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="16px 24px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="11px" align="center" line-height="1.6">You can opt out of these notifications under Profile then Notifications. Audit-trail messages will continue regardless.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

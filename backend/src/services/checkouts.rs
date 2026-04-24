@@ -1434,6 +1434,26 @@ pub async fn roles_cover_account(
     Ok(covers > 0)
 }
 
+/// Return distinct user ids whose approval role covers the given DN.
+///
+/// Used by the notification dispatcher to fan out "Pending approval"
+/// emails — we resolve every approver who could action this request.
+pub async fn approvers_for_account(
+    pool: &PgPool,
+    managed_ad_dn: &str,
+) -> Result<Vec<Uuid>, crate::error::AppError> {
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT ara_users.user_id
+           FROM approval_role_accounts ara
+           JOIN approval_role_assignments ara_users ON ara_users.role_id = ara.role_id
+          WHERE ara.managed_ad_dn = $1",
+    )
+    .bind(managed_ad_dn)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// Mark a pending checkout as Approved/Denied by the given approver.
 pub async fn set_decision(
     pool: &PgPool,

@@ -218,6 +218,9 @@ The `audit_logs` table is designed as an append-only, tamper-evident log:
 | `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
 | `checkout.expired` | Password checkout expired (automatic or manual) |
 | `checkout.scheduled` | User created a future-dated checkout (no credential material exists yet) |
+| `notifications.skipped_opt_out` | Transactional email suppressed because the recipient has `users.notifications_opt_out = true` (audit-only events bypass the flag) |
+| `notifications.misconfigured` | Dispatcher refused to send because `smtp_from_address` is empty or `smtp_enabled` is false |
+| `notifications.abandoned` | Retry worker gave up on a delivery row after 3 failed attempts |
 | `checkout.emergency_bypass` | User invoked break-glass bypass; checkout activated without approver review |
 | `rotation.completed` | Automatic service account password rotation completed |
 | `kerberos_realm.created` | Kerberos realm added |
@@ -481,6 +484,75 @@ The `resolv.conf` file is written to the `backend-config` Docker volume, which i
 ### Audit Trail
 
 DNS configuration changes are logged as `dns.updated` in the append-only audit log, recording which admin made the change, the new DNS server list, and the configured search domains.
+
+---
+
+## Notification Pipeline (Transactional Email)
+
+Strata Client sends transactional email for managed-account checkout events. The pipeline is designed around three security objectives:
+
+1. **No SMTP password ever sits in plaintext on disk.**
+2. **No PII (justification text, passwords) leaks into the delivery audit table.**
+3. **Opt-out suppression is itself audit-visible** so compliance teams can prove which messages were withheld and why.
+
+### SMTP Credential Storage
+
+The SMTP password is **hard-required to live in Vault**. The `PUT /api/admin/notifications/smtp` endpoint refuses to save credentials when the configured Vault backend is sealed or running in stub mode — a half-configured install fails loudly instead of silently writing the password to `system_settings` in plaintext. The seal/unseal path uses the same `crate::services::vault::seal_setting` helper as `recordings_azure_access_key`, so the credential rests under the same Transit envelope as every other sealed setting (rotated by `vault operator rotate`, rewrappable via the established Transit rotate + rewrap path documented in [ADR-0006](adr/ADR-0006-vault-transit-envelope.md)).
+
+The plaintext SMTP username is stored in `system_settings.smtp_username` because most relays treat it as a non-secret routing identifier, but the design treats `(host, port, username, password)` as a single sensitive bundle when surfacing the configuration over the API: `GET /api/admin/notifications/smtp` returns `password_set: bool` instead of the password itself.
+
+### Dispatch Block on Misconfiguration
+
+If `smtp_from_address` is empty, the dispatcher refuses to send and emits a `notifications.misconfigured` audit event. This prevents:
+
+- An admin enabling the master switch before configuring `From:` and discovering after the fact that hundreds of deliveries hit the SMTP relay with an invalid envelope sender (which most relays reject as 5xx, marking otherwise-recoverable rows as permanently failed).
+- A stack restart silently re-enabling dispatch when settings have been partially cleared.
+
+The same audit event fires when `smtp_enabled` is false at dispatch time, so on-call engineers can correlate a missing notification with the precise reason it was withheld.
+
+### Per-User Opt-Out (Audit-Aware)
+
+`users.notifications_opt_out` is a single boolean column. When `true`, the dispatcher suppresses **all** transactional messages for that recipient and writes:
+
+1. An `email_deliveries` row with `status='suppressed'`, `attempts=0`, `last_error=NULL`.
+2. A `notifications.skipped_opt_out` entry to the append-only audit log, including the template key and the related entity ID (typically the checkout request UUID).
+
+The **self-approved audit notice** explicitly bypasses the flag (the dispatcher branches on `ignores_opt_out`). This is intentional: that template exists to give security teams a record of self-approvals, not to inform the requester. Allowing users to opt out of an audit event would defeat its purpose.
+
+### PII Boundary in `email_deliveries`
+
+The rendered email body is **not** stored in `email_deliveries`. The table retains only:
+
+- `template_key` (e.g. `checkout_pending`)
+- `recipient_user_id` (or `NULL` for external audit recipients)
+- `recipient_email`
+- `subject`
+- `related_entity_type` / `related_entity_id` (typically `checkout_request` / UUID)
+- `status`, `attempts`, `last_error`, `created_at`, `sent_at`
+
+Justification text — the most sensitive field in a checkout flow — therefore lives in exactly one place (`password_checkout_requests.justification`) and is reachable through one access path (the existing checkout-detail endpoint, which already enforces `can_manage_system` or approver-scope membership). An attacker who compromises the `email_deliveries` table cannot reconstruct the message content; they can only learn that someone received an email about a particular checkout.
+
+### Template Rendering Hardening
+
+- **Custom `xml_escape`.** All Tera context values are escaped through a hand-rolled 5-character helper (`& < > " '`). `ammonia::clean_text` was evaluated and rejected — it over-escapes (encodes spaces as `&#32;`), which breaks layout and bloats payload size. The custom helper is intentionally minimal and reviewed in-tree.
+- **Standalone templates.** mrml's XML parser does not tolerate Tera's `{% include %}` mechanism; whitespace from the include directive breaks parsing. Templates are self-contained, which also makes review easier (one file = one email).
+- **No `<script>` / `<style>` injection surface.** MJML is a structural DSL, not a templating language for arbitrary HTML. Tera substitutions land inside `<mj-text>` or `<mj-button>` content, which mrml renders as table-cell `<td>` text — there is no JavaScript surface to compromise even if an upstream value escapes `xml_escape`.
+
+### Retry Worker Safety
+
+The background retry worker (`services::email::worker`) operates under three safeguards:
+
+1. **Per-attempt timeout** of 120 seconds caps the blast radius of a single hung connection.
+2. **Permanent failures (5xx) are not retried** — the classifier in `SmtpTransport::send` distinguishes 4xx (transient) from 5xx (permanent) before incrementing `attempts`. A 5xx-rejected recipient cannot turn into thousands of redundant attempts.
+3. **Hard cap of 3 attempts** with exponential backoff. After the third failure the row transitions to a terminal state (audit event `notifications.abandoned`) and is not selected by the worker again.
+
+### Audit Events
+
+| Event | Trigger |
+|---|---|
+| `notifications.skipped_opt_out` | Recipient has `users.notifications_opt_out = true` and the template honours the flag |
+| `notifications.misconfigured` | Dispatcher refused to send because `smtp_from_address` is empty or `smtp_enabled = false` |
+| `notifications.abandoned` | Retry worker gave up on a delivery row after 3 failed attempts |
 
 ---
 

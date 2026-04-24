@@ -24,6 +24,20 @@ export interface GuacSession {
   isPoppedOut?: boolean;
   popOut?: () => void;
   popIn?: () => void;
+  /**
+   * Force a full re-composition of the Guacamole display element.
+   *
+   * Works around an RDP GFX / H.264 artifact where minimise/maximise
+   * animations occasionally leave stale pixels in the display canvas;
+   * the pixels are correct at the protocol level but the browser
+   * compositor has no reason to repaint because no CSS property has
+   * changed. Re-applying the current scale (with a tiny nudge) forces
+   * compositor invalidation and clears the ghost.
+   *
+   * Wired by `SessionClient.tsx`; undefined before the display effect
+   * has run or while the session is popped out / in multi-monitor mode.
+   */
+  refreshDisplay?: () => void;
   /** Whether multi-monitor mode is active */
   isMultiMonitor?: boolean;
   /** Whether drive/SFTP file transfer is enabled on the connection */

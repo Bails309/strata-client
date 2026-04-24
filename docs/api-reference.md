@@ -1159,6 +1159,117 @@ All errors follow this format:
 
 ---
 
+## Notification Endpoints (Admin)
+
+All four endpoints require `can_manage_system` and reject requests during the **Setup** boot phase.
+
+### `GET /api/admin/notifications/smtp`
+
+Return the current SMTP configuration. The password itself is **never** returned; the `password_set` boolean indicates whether a sealed value exists in Vault so the UI can render a `•••• (set)` placeholder.
+
+**Response** `200 OK`
+```json
+{
+  "enabled": true,
+  "host": "smtp.contoso.com",
+  "port": 587,
+  "username": "strata-mailer@contoso.com",
+  "tls_mode": "starttls",
+  "from_address": "strata-no-reply@contoso.com",
+  "from_name": "Strata Client",
+  "password_set": true,
+  "branding_accent_color": "#2563eb"
+}
+```
+
+### `PUT /api/admin/notifications/smtp`
+
+Upsert the SMTP configuration. The password is sealed via Vault Transit (`crate::services::vault::seal_setting`) before being written to `system_settings.smtp_encrypted_password`. The endpoint **rejects the request with `400 Bad Request`** when:
+
+- `password` is `Some(non-empty)` but Vault is sealed or running in stub mode (Vault is hard-required for SMTP password storage)
+- `tls_mode` is not one of `starttls`, `implicit`, `none`
+- `port` is `0`
+
+**Request Body**
+```json
+{
+  "enabled": true,
+  "host": "smtp.contoso.com",
+  "port": 587,
+  "username": "strata-mailer@contoso.com",
+  "password": "•••• new password ••••",
+  "tls_mode": "starttls",
+  "from_address": "strata-no-reply@contoso.com",
+  "from_name": "Strata Client",
+  "branding_accent_color": "#2563eb"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `enabled` | bool | Yes | Master switch; `false` causes the dispatcher to short-circuit |
+| `host` / `port` | string / u16 | Yes | SMTP relay endpoint |
+| `username` | string | No | Plaintext SMTP username (stored in `system_settings`) |
+| `password` | string | No | `null` = leave existing sealed value; `""` = clear; non-empty = seal as new value |
+| `tls_mode` | enum | Yes | `starttls` (port 587), `implicit` (port 465), `none` (internal-only relays) |
+| `from_address` | string | Yes | Empty value blocks dispatch entirely (audit `notifications.misconfigured`) |
+| `from_name` | string | No | Display name in the `From` header |
+| `branding_accent_color` | hex string | No | Used by future templates; currently surfaced in test-send body |
+
+**Response** `200 OK`
+```json
+{ "status": "saved" }
+```
+
+### `POST /api/admin/notifications/test-send`
+
+Render a small probe message and dispatch it through the live `SmtpTransport`. The actual SMTP response (or error) is surfaced verbatim so administrators can debug auth/TLS failures without grepping container logs.
+
+**Request Body**
+```json
+{ "recipient": "ops@contoso.com" }
+```
+
+**Response** `200 OK`
+```json
+{ "status": "sent", "message_id": "<uuid@strata-client>" }
+```
+
+**Errors**
+- `400` — recipient is empty or lacks `@`
+- `400` — SMTP settings invalid (returned as `Validation` error from `SmtpTransport::from_settings`)
+- `502` — SMTP relay rejected the message (the rejection text is included in the error body)
+
+### `GET /api/admin/notifications/deliveries`
+
+Return rows from `email_deliveries`, newest first. Use the `status` query parameter to filter to a single status; `limit` is clamped to `[1, 200]` (default 50).
+
+**Query parameters**
+- `status` — optional; one of `queued`, `sent`, `failed`, `bounced`, `suppressed`
+- `limit` — optional integer, default 50, max 200
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "5f5b1c0a-…",
+    "template_key": "checkout_pending",
+    "recipient_email": "approver@contoso.com",
+    "subject": "Strata Client — Checkout request awaiting your approval",
+    "status": "sent",
+    "attempts": 1,
+    "last_error": null,
+    "created_at": "2026-04-25T14:02:11Z",
+    "sent_at": "2026-04-25T14:02:12Z"
+  }
+]
+```
+
+> [!NOTE]
+> The rendered email **body** is deliberately not stored in `email_deliveries`. Only metadata (template key, recipient, subject, related entity) is retained, which keeps sensitive justification text confined to the source `password_checkout_requests` row and limits PII sprawl across the database.
+
+---
+
 ## Audit Event Types
 
 | Action Type | Trigger |
@@ -1178,6 +1289,9 @@ All errors follow this format:
 | `credential.updated` | User saves encrypted credential |
 | `tunnel.connected` | User opens a remote session |
 | `connection.shared` | User generates a connection share link (includes mode) |
+| `notifications.skipped_opt_out` | Recipient opted out via `users.notifications_opt_out`; suppression recorded in `email_deliveries` (`status='suppressed'`) |
+| `notifications.misconfigured` | Dispatcher refused to send (empty `smtp_from_address` or `smtp_enabled = false`) |
+| `notifications.abandoned` | Retry worker abandoned a delivery row after 3 failed attempts |
 | `connection.share_accessed` | External viewer opens a share link (includes client IP) |
 | `share.revoked` | User revokes a connection share link |
 | `ad_sync.config_created` | AD sync source config created |

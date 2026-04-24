@@ -26,6 +26,7 @@ import SessionsTab from "./admin/SessionsTab";
 import PasswordsTab from "./admin/PasswordsTab";
 import AdSyncTab from "./admin/AdSyncTab";
 import AccessTab from "./admin/AccessTab";
+import NotificationsTab from "./admin/NotificationsTab";
 
 type Tab =
   | "health"
@@ -39,6 +40,7 @@ type Tab =
   | "tags"
   | "ad-sync"
   | "passwords"
+  | "notifications"
   | "sessions"
   | "security";
 
@@ -109,6 +111,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
             "tags",
             "ad-sync",
             "passwords",
+            "notifications",
             "sessions",
             "security",
           ] as Tab[]
@@ -141,9 +144,11 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
                   ? "AD Sync"
                   : t === "passwords"
                     ? "Password Mgmt"
-                    : t === "sessions"
-                      ? "Sessions"
-                      : t.charAt(0).toUpperCase() + t.slice(1)}
+                    : t === "notifications"
+                      ? "Notifications"
+                      : t === "sessions"
+                        ? "Sessions"
+                        : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
       </div>
@@ -237,6 +242,11 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
 
       {/* ── Active Sessions (NVR) ── */}
       {tab === "sessions" && <SessionsTab />}
+
+      {/* ── Notifications (SMTP) ── */}
+      {tab === "notifications" && (
+        <NotificationsTab onSave={() => flash("Notification settings updated")} />
+      )}
 
       {/* ── Security ── */}
       {tab === "security" && (

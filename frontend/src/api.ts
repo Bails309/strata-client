@@ -1317,3 +1317,63 @@ export const listQuickShareFiles = (sessionId: string) =>
 
 export const deleteQuickShareFile = (token: string) =>
   request<void>(`/files/delete/${token}`, { method: "DELETE" });
+
+// ── Notifications / SMTP (v0.25.0+) ─────────────────────────────────
+
+export interface SmtpConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  tls_mode: string; // "starttls" | "implicit" | "none"
+  from_address: string;
+  from_name: string;
+  password_set: boolean;
+  branding_accent_color: string;
+}
+
+export interface SmtpConfigUpdate {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  /** `undefined` leaves the sealed password untouched; `""` clears it; any non-empty string replaces it. */
+  password?: string;
+  tls_mode: string;
+  from_address: string;
+  from_name: string;
+  branding_accent_color: string;
+}
+
+export interface EmailDelivery {
+  id: string;
+  template_key: string;
+  recipient_email: string;
+  subject: string;
+  status: string; // queued | sent | failed | bounced | suppressed
+  attempts: number;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export const getSmtpConfig = () => request<SmtpConfig>("/admin/notifications/smtp");
+
+export const updateSmtpConfig = (body: SmtpConfigUpdate) =>
+  request<{ status: string }>("/admin/notifications/smtp", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const testSmtpSend = (recipient: string) =>
+  request<{ status: string }>("/admin/notifications/test-send", {
+    method: "POST",
+    body: JSON.stringify({ recipient }),
+  });
+
+export const listEmailDeliveries = (status?: string, limit = 50) => {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  params.set("limit", String(limit));
+  return request<EmailDelivery[]>(`/admin/notifications/deliveries?${params.toString()}`);
+};

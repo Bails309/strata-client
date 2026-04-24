@@ -823,8 +823,12 @@ pub async fn connection_info(
     // Match the strict "only explicit true = enabled" semantics used by
     // `tunnel.rs::full_param_map` so the UI, backend, and guacd all agree.
     let extra_obj = extra.as_ref().and_then(|e| e.as_object());
-    let drive_setting = extra_obj.and_then(|o| o.get("enable-drive")).and_then(|v| v.as_str());
-    let sftp_setting = extra_obj.and_then(|o| o.get("enable-sftp")).and_then(|v| v.as_str());
+    let drive_setting = extra_obj
+        .and_then(|o| o.get("enable-drive"))
+        .and_then(|v| v.as_str());
+    let sftp_setting = extra_obj
+        .and_then(|o| o.get("enable-sftp"))
+        .and_then(|v| v.as_str());
     let file_transfer_enabled = drive_setting == Some("true") || sftp_setting == Some("true");
 
     let mut resp = json!({
@@ -1235,6 +1239,71 @@ pub async fn request_checkout(
     )
     .await?;
 
+    // ── Notification dispatch ───────────────────────────────────────
+    // Fire-and-forget; never blocks the HTTP response.  Branches on the
+    // initial_status so a self-approval (or emergency bypass) sends the
+    // audit-grade "self-approved" template, and a normal request fans
+    // out the "pending" template to all approvers.
+    {
+        let target_cn = dn
+            .splitn(2, ',')
+            .next()
+            .and_then(|s| s.strip_prefix("CN="))
+            .unwrap_or(dn)
+            .to_owned();
+        let requester_display = user
+            .full_name
+            .clone()
+            .unwrap_or_else(|| user.username.clone());
+        let vault_for_dispatch = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.clone())
+        };
+
+        if initial_status == "Approved" || initial_status == "Active" {
+            // Self-approved or emergency-bypass auto-approve: audit-grade
+            // notice to the requester.
+            let expires_at = chrono::Utc::now() + chrono::Duration::minutes(duration as i64);
+            crate::services::notifications::spawn_dispatch(
+                db.pool.clone(),
+                vault_for_dispatch,
+                crate::services::notifications::CheckoutEvent::SelfApproved {
+                    checkout_id: id,
+                    requester_id: user.id,
+                    requester_display_name: requester_display,
+                    target_account_dn: dn.to_owned(),
+                    target_account_cn: target_cn,
+                    expires_at,
+                },
+            );
+        } else if initial_status == "Pending" {
+            match crate::services::checkouts::approvers_for_account(&db.pool, dn).await {
+                Ok(approver_user_ids) => {
+                    crate::services::notifications::spawn_dispatch(
+                        db.pool.clone(),
+                        vault_for_dispatch,
+                        crate::services::notifications::CheckoutEvent::Pending {
+                            checkout_id: id,
+                            requester_id: user.id,
+                            requester_display_name: requester_display,
+                            requester_username: user.username.clone(),
+                            target_account_dn: dn.to_owned(),
+                            target_account_cn: target_cn,
+                            justification: body.justification_comment.clone().unwrap_or_default(),
+                            requested_ttl_minutes: duration as i32,
+                            approver_user_ids,
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("could not resolve approvers for {dn}: {e}");
+                }
+            }
+        }
+        // Scheduled ⇒ no immediate notification (worker will pick it up
+        // when the scheduled time arrives; that path is not yet wired).
+    }
+
     // Auto-activate if self-approved
     if initial_status == "Approved" {
         let vault_cfg = {
@@ -1343,6 +1412,40 @@ pub async fn decide_checkout(
         )
         .await?;
 
+        // Notification: tell the requester their request was approved.
+        {
+            let target_cn = checkout
+                .managed_ad_dn
+                .splitn(2, ',')
+                .next()
+                .and_then(|s| s.strip_prefix("CN="))
+                .unwrap_or(&checkout.managed_ad_dn)
+                .to_owned();
+            let approver_display = user
+                .full_name
+                .clone()
+                .unwrap_or_else(|| user.username.clone());
+            let expires_at = chrono::Utc::now()
+                + chrono::Duration::minutes(checkout.requested_duration_mins as i64);
+            let vault_for_dispatch = {
+                let s = state.read().await;
+                s.config.as_ref().and_then(|c| c.vault.clone())
+            };
+            crate::services::notifications::spawn_dispatch(
+                db.pool.clone(),
+                vault_for_dispatch,
+                crate::services::notifications::CheckoutEvent::Approved {
+                    checkout_id,
+                    requester_id: checkout.requester_user_id,
+                    requester_display_name: String::new(), // looked up server-side if needed
+                    approver_display_name: approver_display,
+                    target_account_dn: checkout.managed_ad_dn.clone(),
+                    target_account_cn: target_cn,
+                    expires_at,
+                },
+            );
+        }
+
         // Auto-activate
         let vault_cfg = {
             let s = state.read().await;
@@ -1374,6 +1477,37 @@ pub async fn decide_checkout(
             &json!({ "checkout_id": checkout_id }),
         )
         .await?;
+
+        // Notification: tell the requester their request was declined.
+        {
+            let target_cn = checkout
+                .managed_ad_dn
+                .splitn(2, ',')
+                .next()
+                .and_then(|s| s.strip_prefix("CN="))
+                .unwrap_or(&checkout.managed_ad_dn)
+                .to_owned();
+            let approver_display = user
+                .full_name
+                .clone()
+                .unwrap_or_else(|| user.username.clone());
+            let vault_for_dispatch = {
+                let s = state.read().await;
+                s.config.as_ref().and_then(|c| c.vault.clone())
+            };
+            crate::services::notifications::spawn_dispatch(
+                db.pool.clone(),
+                vault_for_dispatch,
+                crate::services::notifications::CheckoutEvent::Rejected {
+                    checkout_id,
+                    requester_id: checkout.requester_user_id,
+                    requester_display_name: String::new(),
+                    approver_display_name: approver_display,
+                    target_account_dn: checkout.managed_ad_dn.clone(),
+                    target_account_cn: target_cn,
+                },
+            );
+        }
 
         Ok(Json(json!({ "status": "Denied" })))
     }

@@ -110,7 +110,7 @@ The frontend nginx container serves as the primary gateway for all external traf
 Pages:
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes)
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends.
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, **Refresh display**, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, **display ghost-pixel mitigation** (`forceDisplayRepaint()` helper nudges the canvas scale by `1e-4` to force a compositor repaint after `display.onresize`, auto-scheduled at 50 / 200 / 500 ms and surfaced as a manual **Refresh display** button; v0.25.1+), and automatic redirect to the next active session when one ends.
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
@@ -191,6 +191,109 @@ Browser                    Backend                   guacd              Target
 6. Rust zeroizes DEK and password from memory
 ```
 
+### Transactional-Email Pipeline
+
+```
+                                                ┌──────────────────────────────┐
+checkout state-change                           │  email subsystem             │
+(routes/user.rs)                                │  services/email/             │
+       │                                        │                              │
+       │  notifications::spawn_dispatch(event)  │  ┌────────────────────────┐  │
+       ├───────────────────────────────────────►│  │ TemplateKey::from(evt) │  │
+       │                                        │  └─────────┬──────────────┘  │
+       ▼                                        │            │                 │
+┌────────────────┐                              │  ┌─────────▼──────────────┐  │
+│ recipients =   │                              │  │ Tera render (.mjml +   │  │
+│ approvers ∪    │                              │  │  .txt.tera) with       │  │
+│ requester ∪    │                              │  │  per-event context    │  │
+│ audit list     │                              │  └─────────┬──────────────┘  │
+└──────┬─────────┘                              │            │                 │
+       │                                        │  ┌─────────▼──────────────┐  │
+       │ filter users.notifications_opt_out     │  │ mrml MJML → HTML       │  │
+       │ (audit-event templates bypass)         │  └─────────┬──────────────┘  │
+       │                                        │            │                 │
+       │  audit: notifications.skipped_opt_out  │  ┌─────────▼──────────────┐  │
+       │                                        │  │ wrap_for_outlook_      │  │
+       ▼                                        │  │  dark_mode (VML)       │  │
+┌─────────────────────┐                         │  └─────────┬──────────────┘  │
+│ INSERT email_       │                         │            │                 │
+│  deliveries (queued)│                         │  ┌─────────▼──────────────┐  │
+│   per recipient     │                         │  │ EmailMessage::builder  │  │
+└──────────┬──────────┘                         │  │  + cid:strata-logo     │  │
+           │                                    │  │  inline attachment     │  │
+           ▼                                    │  └─────────┬──────────────┘  │
+   ┌───────────────┐                            │            │                 │
+   │ SmtpTransport │◄───────────────────────────┘            │                 │
+   │  (lettre 0.11)│                                         │                 │
+   └───────┬───────┘                                         │                 │
+           │ multipart/related (HTML + text + inline image)  │                 │
+           ▼                                                 │                 │
+      ┌─────────┐                                            │                 │
+      │  SMTP   │                                            │                 │
+      │  relay  │                                            │                 │
+      └────┬────┘                                            │                 │
+           │                                                 │                 │
+   ┌───────▼─────────────────┐                               │                 │
+   │ permanent failure (5xx) │ ─► UPDATE status='failed' (no retry)            │
+   │ transient failure       │ ─► UPDATE status='failed', attempts++           │
+   │ success                 │ ─► UPDATE status='sent', sent_at=now()          │
+   └─────────────────────────┘                                                  │
+                                                                                │
+   ┌────────────────────────────────────────────────────────────────────────┐  │
+   │ services/email/worker.rs (background, 30s tick, 60s warm-up)           │  │
+   │   SELECT * FROM email_deliveries                                       │  │
+   │     WHERE status='failed' AND attempts < 3 AND retry_after < now()     │  │
+   │   → re-render → resend → on 3rd failure mark abandoned                 │  │
+   └────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why MJML?** MJML compiles to table-based HTML that survives every major
+client (Gmail, Outlook desktop/web/mobile, Apple Mail, Thunderbird, K-9).
+Hand-rolling that markup is fragile; generating it from MJML lets the
+templates focus on layout intent rather than client quirks. The renderer
+runs server-side via the [`mrml`](https://github.com/jdrouet/mrml) Rust
+port — no Node.js round-trip is required at boot or at send time.
+
+**Outlook dark-mode wrapper.** `wrap_for_outlook_dark_mode` adds a VML
+namespace on `<html>`, a full-bleed `<v:background fill="t">` rectangle
+inside an `<!--[if gte mso 9]>` conditional, and an Outlook-only
+stylesheet. VML backgrounds are immune to Outlook desktop's dark-mode
+inversion engine, so the result is a clean dark-themed email even on
+Outlook for Windows in dark mode. Future templates inherit the fix
+automatically.
+
+**Standalone templates only.** mrml's XML parser does not tolerate
+Tera's `{% include %}` mechanism (whitespace from the include directive
+breaks parsing at the section/column boundary). Each of the four
+templates is therefore self-contained: no `_header.mjml` /
+`_footer.mjml` partials, no `<mj-attributes>` block, font-family set
+per-element. Context values are escaped through a custom `xml_escape`
+helper (only the five XML-significant characters: `& < > " '`) — using
+`ammonia::clean_text` over-escapes (it encodes spaces as `&#32;`) and
+breaks rendering.
+
+**Vault-sealed SMTP password.** The SMTP password is never stored in
+`system_settings`. It is sealed via the existing
+`crate::services::vault::seal_setting` helper and unsealed at send time.
+The `PUT /api/admin/notifications/smtp` endpoint refuses to save
+credentials when Vault is sealed or running in stub mode — a
+half-configured install should fail loudly rather than silently leak the
+password to disk in plaintext.
+
+**Dispatcher hooks.** Four call sites in `routes/user.rs` invoke
+`notifications::spawn_dispatch`:
+
+| Call site | Event |
+|---|---|
+| `request_checkout` (Pending branch) | `CheckoutEvent::Pending` → all approvers for the target account |
+| `request_checkout` (SelfApproved branch) | `CheckoutEvent::SelfApproved` → audit recipients (bypasses opt-out) |
+| `decide_checkout` (Approved branch) | `CheckoutEvent::Approved` → original requester |
+| `decide_checkout` (Rejected branch) | `CheckoutEvent::Rejected` → original requester |
+
+`spawn_dispatch` is fire-and-forget — it returns immediately so the
+user-facing checkout request is never blocked by mail delivery. All
+errors are logged via `tracing` and visible in `email_deliveries`.
+
 ## Database Schema
 
 ```
@@ -217,9 +320,11 @@ approval_role_assignments ── many-to-many user ↔ approval role
 approval_role_accounts ──── explicit scope: approval role ↔ managed AD account DN
 user_account_mappings ───── user ↔ managed AD account (with self-approve flag)
 password_checkout_requests ─ checkout lifecycle tracking (Pending/Approved/Active/Expired/Denied/CheckedIn, timestamps, Vault-sealed password)
+email_deliveries ──── transactional-email audit trail (template_key, recipient, subject, status, attempts, last_error, related_entity_type/id) — status ∈ {queued,sent,failed,bounced,suppressed}
+users.notifications_opt_out ─ boolean column; honoured by every transactional message except the self-approved audit notice
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `049_pm_search_bases.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `055_notifications.sql` for the full DDL.
 
 ## Directory Structure
 
@@ -263,6 +368,16 @@ strata-client/
 │           ├── user_cleanup.rs  Hard-delete soft-deleted users after configurable window (default 90 days)
 │           ├── file_store.rs  Session-scoped temporary file storage
 │           ├── vault.rs       Envelope encryption
+│           ├── notifications.rs  Dispatcher: maps CheckoutEvent → recipients → EmailMessage; honours opt-outs; writes email_deliveries rows
+│           ├── email/         Transactional email subsystem
+│           │   ├── mod.rs         Re-exports + EmailTransport trait
+│           │   ├── message.rs     EmailMessage + builder + InlineAttachment
+│           │   ├── transport.rs   EmailTransport trait + StubTransport (for tests)
+│           │   ├── smtp.rs        SmtpTransport (lettre 0.11, rustls, STARTTLS/implicit/none) + permanent vs transient classifier
+│           │   ├── outlook.rs     wrap_for_outlook_dark_mode (VML namespace + <v:background> + Outlook-only stylesheet)
+│           │   ├── templates.rs   Tera + mrml renderer; standalone MJML templates; custom xml_escape
+│           │   ├── templates/     4 MJML + 4 plaintext templates per checkout event
+│           │   └── worker.rs      Background retry worker (30s tick, exp backoff, 3 attempts max)
 │           └── vault_provisioning.rs  Bundled Vault lifecycle
 ├── frontend/              React SPA + nginx gateway
 │   ├── Dockerfile
@@ -305,6 +420,7 @@ numbered ADRs under [adr/](adr/):
 | [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) | JWT + refresh-token TTLs, single-use rotation, forced-logout lever |
 | [ADR-0006](adr/ADR-0006-vault-transit-envelope.md) | Vault Transit envelope (`vault:<base64>`), rotate + rewrap path |
 | [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts |
+| [ADR-0008](adr/ADR-0008-notification-pipeline.md) | Transactional-email subsystem: MJML/mrml renderer, Vault-sealed SMTP password, opt-out semantics, retry worker |
 
 ## Operational Runbooks
 
@@ -318,3 +434,4 @@ Step-by-step procedures for on-call engineers live under
 | [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA) |
 | [vault-operations.md](runbooks/vault-operations.md) | Vault unseal, Transit key rotate + rewrap, Shamir rekey |
 | [database-operations.md](runbooks/database-operations.md) | Replica promotion, migration rollback, panic-boot recovery |
+| [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config |

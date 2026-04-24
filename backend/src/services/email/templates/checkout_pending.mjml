@@ -1,0 +1,35 @@
+<mjml>
+  <mj-body background-color="#111827">
+    <mj-section background-color="{{ accent }}" padding="20px 24px">
+      <mj-column>
+        <mj-image src="cid:strata-logo" alt="Strata Client" width="120px" align="left" padding="0" />
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="24px 24px 8px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#f9fafb" font-size="20px" font-weight="600">Checkout request awaiting your approval</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#d1d5db" font-size="14px" line-height="1.6">{{ requester_display_name }} has requested temporary access to {{ target_account_cn }} for {{ requested_ttl_minutes }} minutes.</mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#1f2937" padding="20px 24px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px">Requester</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#e5e7eb" font-size="14px">{{ requester_display_name }} ({{ requester_username }})</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px" padding-top="12px">Target account</mj-text>
+        <mj-text font-family="Courier, monospace" color="#e5e7eb" font-size="13px">{{ target_account_cn }}</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px" padding-top="12px">Justification</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#e5e7eb" font-size="14px">{{ justification }}</mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="8px 24px 24px">
+      <mj-column>
+        <mj-button href="{{ approve_url }}" background-color="{{ accent }}" color="#ffffff" font-weight="600" border-radius="6px" inner-padding="12px 24px" font-family="Helvetica, Arial, sans-serif">Review request in Strata</mj-button>
+      </mj-column>
+    </mj-section>
+    <mj-section background-color="#111827" padding="16px 24px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="11px" align="center" line-height="1.6">Sent by Strata Client because of activity on a managed account you are associated with. You can opt out under Profile then Notifications; audit-trail messages will continue regardless.</mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

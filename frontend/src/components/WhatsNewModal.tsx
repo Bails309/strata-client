@@ -55,12 +55,12 @@ export const RELEASE_CARDS: ReleaseCard[] = [
     subtitle: "RDP display-refresh patch & zero-warning backend build",
     sections: [
       {
-        title: "RDP \"Screen Clipping\" Fix",
+        title: 'RDP "Screen Clipping" Fix',
         description:
-          'Some RDP users saw a stale rectangle of pixels remain visible after minimising and restoring the remote window, until they manually resized the browser. v0.25.1 introduces forceDisplayRepaint() — a sub-pixel scale nudge (baseScale + 1e-4) that the compositor treats as a transform change, invalidating every cached tile and forcing a full repaint of the guacamole-common-js display layers. Auto-scheduled at 50 / 200 / 500 ms after every display.onresize so the common minimise/restore/full-screen-toggle cases self-heal with no user action.',
+          "Some RDP users saw a stale rectangle of pixels remain visible after minimising and restoring the remote window, until they manually resized the browser. v0.25.1 introduces forceDisplayRepaint() — a sub-pixel scale nudge (baseScale + 1e-4) that the compositor treats as a transform change, invalidating every cached tile and forcing a full repaint of the guacamole-common-js display layers. Auto-scheduled at 50 / 200 / 500 ms after every display.onresize so the common minimise/restore/full-screen-toggle cases self-heal with no user action.",
       },
       {
-        title: "Manual \"Refresh Display\" Button",
+        title: 'Manual "Refresh Display" Button',
         description:
           "For rarer edge cases (GFX pipeline stalls, out-of-order H.264 frames on flaky networks), a Refresh display button on the Session Bar gives users a one-click recovery path. The control only appears for sessions that publish the refresh helper — historical recording playback is unaffected.",
       },
@@ -86,9 +86,9 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "Strata now sends polished MJML-authored HTML emails for the four key managed-account checkout events — pending approval, approved, rejected, and self-approved (audit notice). Every message ships as multipart/related with a plain-text alternative and the Strata logo inlined as cid:strata-logo, tested across Gmail, Outlook, and Apple Mail.",
       },
       {
-        title: "Outlook Dark-Mode \"Haze\" Fixed",
+        title: 'Outlook Dark-Mode "Haze" Fixed',
         description:
-          "Outlook desktop's dark-mode engine inverts bgcolor attributes, producing a visible lighter rectangle over HTML emails. v0.25.0 ships a reusable wrap_for_outlook_dark_mode helper that injects the VML namespace, a <v:background fill=\"t\"> conditional block, and an Outlook-only stylesheet. VML backgrounds are immune to the inversion engine, so the result is a clean dark-themed email even in Outlook desktop dark mode. Future templates inherit the fix automatically.",
+          'Outlook desktop\'s dark-mode engine inverts bgcolor attributes, producing a visible lighter rectangle over HTML emails. v0.25.0 ships a reusable wrap_for_outlook_dark_mode helper that injects the VML namespace, a <v:background fill="t"> conditional block, and an Outlook-only stylesheet. VML backgrounds are immune to the inversion engine, so the result is a clean dark-themed email even in Outlook desktop dark mode. Future templates inherit the fix automatically.',
       },
       {
         title: "SMTP Password Is Vault-Only",
@@ -117,7 +117,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "The in-session Quick Share feature (ephemeral file upload / share-link) is now gated by a dedicated permission. The Quick Share button on the Session Bar and the POST /api/files/upload endpoint both respect it. Administrators (can_manage_system) retain full access.",
       },
       {
-        title: "Unified \"Create Connections\" Permission",
+        title: 'Unified "Create Connections" Permission',
         description:
           "can_create_connections and can_create_connection_folders have been consolidated into a single can_create_connections flag. Users who can create connections can also organise them into folders — no more two checkboxes for the same mental model.",
       },

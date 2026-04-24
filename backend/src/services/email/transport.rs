@@ -56,9 +56,6 @@ pub type BoxedTransport = Arc<dyn EmailTransport>;
 /// Used by unit tests and by the `/api/admin/notifications/test-send`
 /// preview endpoint's dry-run mode.
 #[allow(dead_code)] // Reserved for the P8 test-send dry-run + integration tests.
-/// Used by unit tests and by the `/api/admin/notifications/test-send`
-/// preview endpoint's dry-run mode.
-#[allow(dead_code)] // Reserved for the P8 test-send dry-run + integration tests.
 #[derive(Default, Clone)]
 pub struct StubTransport {
     sent: Arc<Mutex<Vec<EmailMessage>>>,

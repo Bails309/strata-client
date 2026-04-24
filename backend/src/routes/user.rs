@@ -1246,7 +1246,7 @@ pub async fn request_checkout(
     // out the "pending" template to all approvers.
     {
         let target_cn = dn
-            .splitn(2, ',')
+            .split(',')
             .next()
             .and_then(|s| s.strip_prefix("CN="))
             .unwrap_or(dn)
@@ -1290,7 +1290,7 @@ pub async fn request_checkout(
                             target_account_dn: dn.to_owned(),
                             target_account_cn: target_cn,
                             justification: body.justification_comment.clone().unwrap_or_default(),
-                            requested_ttl_minutes: duration as i32,
+                            requested_ttl_minutes: duration,
                             approver_user_ids,
                         },
                     );
@@ -1416,7 +1416,7 @@ pub async fn decide_checkout(
         {
             let target_cn = checkout
                 .managed_ad_dn
-                .splitn(2, ',')
+                .split(',')
                 .next()
                 .and_then(|s| s.strip_prefix("CN="))
                 .unwrap_or(&checkout.managed_ad_dn)
@@ -1482,7 +1482,7 @@ pub async fn decide_checkout(
         {
             let target_cn = checkout
                 .managed_ad_dn
-                .splitn(2, ',')
+                .split(',')
                 .next()
                 .and_then(|s| s.strip_prefix("CN="))
                 .unwrap_or(&checkout.managed_ad_dn)

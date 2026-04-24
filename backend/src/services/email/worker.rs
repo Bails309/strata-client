@@ -155,7 +155,7 @@ async fn retry_one(
 
     let target_cn = checkout
         .managed_ad_dn
-        .splitn(2, ',')
+        .split(',')
         .next()
         .and_then(|s| s.strip_prefix("CN="))
         .unwrap_or(&checkout.managed_ad_dn)
@@ -251,6 +251,7 @@ mod tests {
     #[test]
     fn smoke() {
         // Compile-only assertion that the module wires together.
-        assert!(true);
+        // (No runtime state worth asserting on; the integration tests cover
+        // the actual retry path end-to-end.)
     }
 }

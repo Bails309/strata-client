@@ -24,6 +24,10 @@ use crate::services::email::outlook;
 /// Identifier for the four supported notification templates.  Maps to
 /// both the MJML template name and the plaintext companion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// All variants share the `Checkout` prefix because v0.25 only ships
+// checkout-flow templates; keeping the prefix keeps future non-checkout
+// additions (e.g. `PasswordRotated`) readable alongside them.
+#[allow(clippy::enum_variant_names)]
 pub enum TemplateKey {
     CheckoutPending,
     CheckoutApproved,
@@ -244,7 +248,6 @@ fn clean_value(v: &serde_json::Value) -> serde_json::Value {
 
 // Convenience: callers can build their context from a plain map without
 // defining a per-template struct.
-#[allow(dead_code)] // Used by the P8 admin UI test-send preview.
 #[allow(dead_code)] // Used by the P8 admin UI test-send preview.
 pub fn context_from_pairs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs

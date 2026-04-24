@@ -390,7 +390,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
             className="btn btn-primary whitespace-nowrap"
             onClick={handleTestSend}
             disabled={testing || !cfg.enabled}
-            title={cfg.enabled ? "Send a test email" : "Save the SMTP config with Enable ticked first"}
+            title={
+              cfg.enabled ? "Send a test email" : "Save the SMTP config with Enable ticked first"
+            }
           >
             {testing ? "Sending…" : "Send test"}
           </button>
@@ -435,7 +437,11 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               <option value="bounced">Bounced</option>
               <option value="suppressed">Suppressed</option>
             </select>
-            <button className="btn btn-secondary" onClick={reloadDeliveries} disabled={deliveriesLoading}>
+            <button
+              className="btn btn-secondary"
+              onClick={reloadDeliveries}
+              disabled={deliveriesLoading}
+            >
               {deliveriesLoading ? "Loading…" : "Refresh"}
             </button>
           </div>
@@ -461,7 +467,10 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               </thead>
               <tbody>
                 {deliveries.map((d) => (
-                  <tr key={d.id} className="border-b border-border/10 hover:bg-surface-secondary/20">
+                  <tr
+                    key={d.id}
+                    className="border-b border-border/10 hover:bg-surface-secondary/20"
+                  >
                     <td className="py-2 px-3 font-mono text-xs text-txt-secondary">
                       {new Date(d.created_at).toLocaleString()}
                     </td>

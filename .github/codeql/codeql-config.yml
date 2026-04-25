@@ -1,0 +1,11 @@
+name: "Strata CodeQL config"
+
+# Exclude vendored / generated artefacts from analysis. These files are not
+# authored by the Strata team and findings against them are noise.
+paths-ignore:
+  - frontend/src/lib/guacamole-vendor.js
+  - frontend/src/guacamole-common-js.d.ts
+  - frontend/dist/**
+  - frontend/coverage/**
+  - backend/target/**
+  - "**/node_modules/**"

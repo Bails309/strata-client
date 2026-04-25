@@ -613,4 +613,292 @@ describe("usePopOut", () => {
     expect(scaleFn).toHaveBeenCalled();
     expect(session.client.sendSize).toHaveBeenCalledWith(800, 600);
   });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Listener-capturing popup: drives handleResize / ResizeObserver / poll
+  // / pagehide / cleanup paths inside popOut() that the lightweight
+  // mockPopup above can't exercise.
+  // ──────────────────────────────────────────────────────────────────────
+
+  type Listener = (...args: any[]) => any;
+
+  function createCapturingPopup() {
+    const winListeners = new Map<string, Listener[]>();
+    const docListeners = new Map<string, Listener[]>();
+    const body = document.createElement("div");
+    let resizeObsCb: Listener | null = null;
+    const obsInstance = { observe: vi.fn(), disconnect: vi.fn() };
+
+    const popup: any = {
+      closed: false,
+      close: vi.fn(function (this: any) {
+        this.closed = true;
+      }),
+      innerWidth: 1280,
+      innerHeight: 720,
+      screenX: 0,
+      screenY: 0,
+      devicePixelRatio: 1,
+      navigator: { clipboard: { readText: vi.fn().mockResolvedValue("") } },
+      document: {
+        title: "",
+        body,
+        readyState: "complete",
+        addEventListener: vi.fn((evt: string, cb: Listener) => {
+          const arr = docListeners.get(evt) ?? [];
+          arr.push(cb);
+          docListeners.set(evt, arr);
+        }),
+        removeEventListener: vi.fn(),
+      },
+      addEventListener: vi.fn((evt: string, cb: Listener) => {
+        const arr = winListeners.get(evt) ?? [];
+        arr.push(cb);
+        winListeners.set(evt, arr);
+      }),
+      removeEventListener: vi.fn(),
+      requestAnimationFrame: (cb: Listener) => {
+        cb(0);
+        return 0;
+      },
+      setTimeout: (cb: Listener, ms: number) => globalThis.setTimeout(cb, ms),
+      clearTimeout: (id: number) => globalThis.clearTimeout(id),
+      ResizeObserver: vi.fn(function (this: any, cb: Listener) {
+        resizeObsCb = cb;
+        return obsInstance;
+      }),
+    };
+
+    return {
+      popup,
+      fireWin: (evt: string, ...args: any[]) =>
+        (winListeners.get(evt) ?? []).forEach((cb) => cb(...args)),
+      fireDoc: (evt: string, ...args: any[]) =>
+        (docListeners.get(evt) ?? []).forEach((cb) => cb(...args)),
+      fireResizeObs: () => resizeObsCb?.([]),
+      obsInstance,
+    };
+  }
+
+  function richSession() {
+    const scale = vi.fn();
+    return {
+      id: "sess-rich",
+      name: "Rich",
+      connectionId: "conn-rich",
+      displayEl: document.createElement("div"),
+      remoteClipboard: "",
+      client: {
+        getDisplay: vi.fn(() => ({
+          getElement: () => document.createElement("div"),
+          getWidth: () => 1920,
+          getHeight: () => 1080,
+          scale,
+          onresize: null,
+        })),
+        sendMouseState: vi.fn(),
+        sendKeyEvent: vi.fn(),
+        sendSize: vi.fn(),
+        createClipboardStream: vi.fn(() => ({ sendBlob: vi.fn(), sendEnd: vi.fn() })),
+      },
+      _scaleFn: scale,
+    };
+  }
+
+  it("initial resize (readyState=complete) drives display.scale and debounced sendSize", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = richSession();
+      const containerRef = { current: document.createElement("div") };
+      const { popup } = createCapturingPopup();
+      vi.spyOn(window, "open").mockReturnValue(popup as any);
+
+      const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+        wrapper: routerWrapper,
+      });
+
+      await act(async () => {
+        await result.current.popOut();
+      });
+
+      // Initial resize ran via popup.requestAnimationFrame chain
+      expect(session._scaleFn).toHaveBeenCalled();
+      expect(session.client.sendSize).not.toHaveBeenCalled();
+
+      // Advance the 150ms debounce
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      expect(session.client.sendSize).toHaveBeenCalledWith(1280, 720);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ResizeObserver callback re-runs handleResize and coalesces with debounce", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = richSession();
+      const containerRef = { current: document.createElement("div") };
+      const cap = createCapturingPopup();
+      vi.spyOn(window, "open").mockReturnValue(cap.popup as any);
+
+      const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+        wrapper: routerWrapper,
+      });
+      await act(async () => {
+        await result.current.popOut();
+      });
+
+      // Burn the initial-resize debounce
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      expect(session.client.sendSize).toHaveBeenCalledTimes(1);
+      expect(cap.obsInstance.observe).toHaveBeenCalled();
+
+      // Two rapid observer callbacks at a new size must coalesce to one sendSize
+      cap.popup.innerWidth = 1024;
+      cap.popup.innerHeight = 600;
+      cap.fireResizeObs();
+      cap.fireResizeObs();
+
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      expect(session.client.sendSize).toHaveBeenCalledTimes(2);
+      expect(session.client.sendSize).toHaveBeenLastCalledWith(1024, 600);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("window resize listener triggers handleResize; non-positive sizes are ignored", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = richSession();
+      const containerRef = { current: document.createElement("div") };
+      const cap = createCapturingPopup();
+      vi.spyOn(window, "open").mockReturnValue(cap.popup as any);
+
+      const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+        wrapper: routerWrapper,
+      });
+      await act(async () => {
+        await result.current.popOut();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      const baseline = (session.client.sendSize as any).mock.calls.length;
+
+      // Zero-size resize must be a no-op (early-return branch)
+      cap.popup.innerWidth = 0;
+      cap.popup.innerHeight = 0;
+      cap.fireWin("resize");
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      expect((session.client.sendSize as any).mock.calls.length).toBe(baseline);
+
+      // Real resize -> sendSize fires
+      cap.popup.innerWidth = 800;
+      cap.popup.innerHeight = 600;
+      cap.fireWin("resize");
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      expect(session.client.sendSize).toHaveBeenLastCalledWith(800, 600);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pagehide listener returns the display and clears popped-out state", async () => {
+    const session = richSession();
+    const container = document.createElement("div");
+    const containerRef = { current: container };
+    const cap = createCapturingPopup();
+    vi.spyOn(window, "open").mockReturnValue(cap.popup as any);
+
+    const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+      wrapper: routerWrapper,
+    });
+    await act(async () => {
+      await result.current.popOut();
+    });
+    expect(result.current.isPoppedOut).toBe(true);
+
+    act(() => {
+      cap.fireWin("pagehide");
+    });
+    expect(result.current.isPoppedOut).toBe(false);
+    expect(cap.obsInstance.disconnect).toHaveBeenCalled();
+  });
+
+  it("screen-position poll detects move and re-runs handleResize after settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = richSession();
+      const containerRef = { current: document.createElement("div") };
+      const cap = createCapturingPopup();
+      vi.spyOn(window, "open").mockReturnValue(cap.popup as any);
+
+      const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+        wrapper: routerWrapper,
+      });
+      await act(async () => {
+        await result.current.popOut();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(160);
+      });
+      const baseline = (session.client.sendSize as any).mock.calls.length;
+
+      // Simulate dragging to a different screen
+      cap.popup.screenX = 1920;
+      cap.popup.innerWidth = 2560;
+      cap.popup.innerHeight = 1440;
+
+      // 250ms screen poll fires, schedules a 300ms settle check, which then
+      // calls handleResize and finally the 150ms sendSize debounce.
+      await act(async () => {
+        vi.advanceTimersByTime(260);
+        vi.advanceTimersByTime(310);
+        vi.advanceTimersByTime(160);
+      });
+      expect((session.client.sendSize as any).mock.calls.length).toBeGreaterThan(baseline);
+      expect(session.client.sendSize).toHaveBeenLastCalledWith(2560, 1440);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("close-detection poll calls returnDisplay when popup window closes externally", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = richSession();
+      const containerRef = { current: document.createElement("div") };
+      const cap = createCapturingPopup();
+      vi.spyOn(window, "open").mockReturnValue(cap.popup as any);
+
+      const { result } = renderHook(() => usePopOut(session as any, containerRef as any), {
+        wrapper: routerWrapper,
+      });
+      await act(async () => {
+        await result.current.popOut();
+      });
+      expect(result.current.isPoppedOut).toBe(true);
+
+      // User closes the popup directly (not via returnDisplay)
+      cap.popup.closed = true;
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(result.current.isPoppedOut).toBe(false);
+      expect(cap.obsInstance.disconnect).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { useTheme } from "./ThemeProvider";
 import { MeResponse } from "../api";
@@ -156,7 +156,18 @@ export default function Layout({
 }) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
-  const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
+  // When inside a connected session (`/session/:id`), the sidebar is hidden
+  // entirely so the remote canvas gets the full viewport width. A floating
+  // chevron at the left edge lets the user pull it back in. The hidden state
+  // auto-resets when the user navigates away from a session route.
+  const inSession = location.pathname.startsWith("/session/");
+  const [sessionHidden, setSessionHidden] = useState(true);
+  useEffect(() => {
+    // Re-hide the sidebar each time the user enters a new session.
+    if (inSession) setSessionHidden(true);
+  }, [inSession, location.pathname]);
+  const hidden = inSession && sessionHidden;
+  const sidebarWidth = hidden ? 0 : collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
   const { theme, preference, cycle } = useTheme();
 
   const initial = (user?.full_name || user?.username || "S").charAt(0).toUpperCase();
@@ -164,14 +175,40 @@ export default function Layout({
   return (
     <SidebarContext.Provider value={sidebarWidth}>
       <div className="flex min-h-screen">
+        {/* ── Floating "show sidebar" chevron — only visible while in a
+             session AND the sidebar is hidden. Mirrors the right-side
+             SessionBar collapse handle. ── */}
+        {hidden && (
+          <button
+            onClick={() => setSessionHidden(false)}
+            title="Show menu"
+            aria-label="Show menu"
+            className="fixed top-1/2 left-0 z-[60] -translate-y-1/2 flex items-center justify-center w-6 h-16 rounded-r-md border border-l-0 border-white/10 bg-nav-bg text-txt-secondary hover:text-txt-primary hover:bg-white/5 shadow-lg transition-all duration-150"
+            style={{ background: "var(--color-nav-bg)" }}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        )}
+
         {/* ── Sidebar ── */}
         <aside
           className="fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-hidden transition-[width] duration-200 ease-out"
           style={{
             width: sidebarWidth,
-            padding: collapsed ? "1.25rem 0.5rem" : "1.25rem 0.75rem",
+            padding: hidden ? 0 : collapsed ? "1.25rem 0.5rem" : "1.25rem 0.75rem",
             background: "var(--color-nav-bg)",
-            borderRight: "1px solid var(--color-nav-border)",
+            borderRight: hidden ? "none" : "1px solid var(--color-nav-border)",
           }}
         >
           <div className="flex flex-col gap-6">
@@ -358,6 +395,31 @@ export default function Layout({
                 </svg>
                 {!collapsed && <span className="text-[0.75rem]">Collapse</span>}
               </button>
+
+              {/* Hide-completely toggle — only useful while in a session, so
+                   it is rendered conditionally to keep the menu uncluttered
+                   on regular pages. */}
+              {inSession && (
+                <button
+                  className={`flex items-center gap-2.5 text-txt-secondary hover:text-txt-primary rounded-sm cursor-pointer transition-all duration-150 p-2 hover:bg-nav-link-hover ${collapsed ? "justify-center" : ""}`}
+                  onClick={() => setSessionHidden(true)}
+                  title="Hide menu (session view)"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
+                  {!collapsed && <span className="text-[0.75rem]">Hide menu</span>}
+                </button>
+              )}
             </div>
           </div>
         </aside>

@@ -25,6 +25,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.27.0",
+    subtitle: "In-session recovery from H.264 rendering corruption",
+    sections: [
+      {
+        title: "Refresh Display now fixes the overlapping-window ghost",
+        description:
+          "v0.26.0 documented a class of rendering corruption where rapid window minimise/maximise cycles left multiple overlapping window states on the canvas, recoverable only by clicking Reconnect. v0.27.0 ships an in-session fix: our forked guacd now intercepts a no-op Guacamole size instruction (dimensions matching the current remote desktop) and sends an RDP Refresh Rect PDU to the RDP server, which on Windows servers triggers a fresh H.264 IDR keyframe and resets the decoder's reference chain. The Session Bar's Refresh Display button now drives this path — one click, no reconnect, no black-screen flash.",
+      },
+      {
+        title: "Server-dependent behaviour, safe fallbacks remain",
+        description:
+          "MS-RDPEGFX specifies Refresh Rect as valid in GFX mode but does not mandate that servers emit an IDR in response. On Windows 10/11 and Windows Server 2019/2022 the ghost clears within one frame; on non-Microsoft or legacy RDP targets the PDU may be a no-op. Reconnect (full session reset) and the per-connection Disable H.264 codec toggle (shipped in v0.26.0) remain available as fallbacks, and a 1-second per-session cooldown in the patch prevents any possibility of flood conditions.",
+      },
+      {
+        title: "Zero wire-protocol change, zero new opcodes",
+        description:
+          "The fix is implemented as a guacd patch (guacd/patches/004-refresh-on-noop-size.patch) plus a frontend wire-up — not a new Guacamole protocol opcode. That means stock guacamole-common-js keeps working unchanged and the frontend change is safe to run against an un-patched guacd (stock guacd silently ignores the no-op resize, the frontend's compositor nudge still fires). No migrations. No API-contract changes.",
+      },
+    ],
+  },
+  {
     version: "0.26.0",
     subtitle: "Security, audit & reliability hardening sweep",
     sections: [
@@ -32,6 +53,11 @@ export const RELEASE_CARDS: ReleaseCard[] = [
         title: "Input latency eliminated under bitmap bursts",
         description:
           "The single biggest user-facing fix in v0.26.0. The WebSocket tunnel used to call ws.send().await inline inside the guacd→browser select arm, so under a burst of draw instructions (e.g. Win+Arrow window snap) browser-side backpressure would block the arm and starve the ws.recv() input path — producing the classic rendering freeze, mouse-acceleration feel, and keyboard lag symptoms. The fix splits the WebSocket into sink + stream, moves the sink behind a bounded mpsc channel owned by a dedicated writer task, and coalesces display.onresize storms on the frontend so input latency is now independent of output-path backpressure.",
+      },
+      {
+        title: "Known issue: H.264 rendering corruption — new opt-out toggle",
+        description:
+          "Some RDP hosts can desynchronise FreeRDP 3's H.264 reference-frame chain during rapid window minimise/maximise cycles, leaving overlapping window states visible on the canvas. No client-side operation recovers this — the in-browser decoder state is corrupt. Workarounds: click Reconnect in the Session Bar to reset the codec state on both ends, or (for connections that hit this regularly) tick the new Disable H.264 codec checkbox under Admin → Connection → Display to fall back to the RemoteFX codec. A proper fix shipping in v0.27.0 will patch guacd to expose RDP's Refresh Rect PDU so an in-session keyframe refresh can clear the corruption without a full reconnect.",
       },
       {
         title: "Share tokens now respect connection soft-deletes",

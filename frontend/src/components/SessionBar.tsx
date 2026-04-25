@@ -397,31 +397,6 @@ export default function SessionBar() {
                   </button>
                 )}
 
-                {/* Refresh display — forces a compositor repaint to clear
-                    stale pixels left over by RDP GFX minimise animations. */}
-                {activeSession.refreshDisplay && (
-                  <button
-                    className="flex-1 h-9 flex items-center justify-center rounded-lg border border-white/10 bg-white/5 text-txt-secondary transition-all duration-200 hover:bg-white/10 hover:border-white/20"
-                    onClick={() => activeSession.refreshDisplay?.()}
-                    title="Refresh display (clear any ghost pixels)"
-                  >
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="23 4 23 10 17 10" />
-                      <polyline points="1 20 1 14 7 14" />
-                      <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-                    </svg>
-                  </button>
-                )}
-
                 {/* Fullscreen */}
                 <button
                   className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${isFullscreen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}

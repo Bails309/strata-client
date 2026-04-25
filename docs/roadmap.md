@@ -28,6 +28,51 @@ release that delivered them, then are removed. In practice:
 
 ---
 
+## Rendering & Session Quality
+
+### In-session IDR keyframe request (H.264 ghost recovery)
+**Status:** Shipped in v0.27.0
+**Area:** `guacd` · `SessionClient`
+
+Reports during v0.26.x testing surfaced a class of rendering corruption
+where rapid window minimise/maximise cycles cause H.264 GFX
+reference-frame desynchronisation between the server-side encoder and
+the in-browser decoder. The canvas ends up showing multiple overlapping
+window states at once and no client-side operation can recover the true
+frame — the decoder state itself is corrupt.
+
+Before v0.27.0 the only recovery was clicking **Reconnect** in the
+Session Bar, which tears down and re-establishes the tunnel — effective
+but visible (~1 s of black screen plus the cost of a fresh TLS/Guac
+handshake).
+
+**Shipped implementation:** rather than introduce a new Guacamole
+protocol opcode (which would require patching `guacamole-common-js`
+and version-handshake logic), v0.27.0 hijacks the existing `size`
+instruction. The forked guacd
+([`guacd/patches/004-refresh-on-noop-size.patch`](../guacd/patches/004-refresh-on-noop-size.patch))
+intercepts a `size W H` whose dimensions match the current remote
+desktop size and calls `context->update->RefreshRect()` with full-screen
+dimensions. Frontend wires `manualRefresh()` in `SessionClient.tsx` so
+the Session Bar's Refresh Display button now does compositor nudge +
+no-op `sendSize(cw, ch)`. A 1-second per-session cooldown in the patch
+prevents flood conditions. Approach is invisible at the wire-protocol
+layer: stock guacd silently ignores the no-op resize, so the frontend
+change runs safely against un-patched containers.
+
+Follow-up ideas (not yet planned):
+- **Auto-refresh on prolonged flush silence.** An earlier attempt at
+  auto-trigger on "no `onflush` for 1.5s" was reverted in v0.26.0 for
+  false-positive firing. A revisit once the v0.27.0 refresh path is
+  field-tested could re-introduce it with a longer threshold.
+- **Refresh Rect behaviour telemetry.** We currently have no
+  observability into whether a given server actually emits an IDR in
+  response. A per-connection counter (`refresh_rect_sent`,
+  `frame_received_after_refresh_delta_ms`) would quantify real-world
+  effectiveness across the Windows/Linux RDP target spread.
+
+---
+
 ## Recording Enhancements
 
 ### Historic Recording Screenshots

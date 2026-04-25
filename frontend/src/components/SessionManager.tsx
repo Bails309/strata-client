@@ -1,6 +1,5 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
-
 export interface GuacSession {
   id: string; // connection UUID
   connectionId: string;
@@ -111,7 +110,10 @@ export function SessionManagerProvider({
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [tiledSessionIds, setTiledSessionIds] = useState<string[]>([]);
   const [focusedSessionIds, setFocusedSessionIds] = useState<string[]>([]);
-  const [sessionBarCollapsed, setSessionBarCollapsed] = useState(false);
+  // Default to collapsed so users get the maximum visible session canvas on
+  // first load. The user can expand the bar by clicking the tab; the choice
+  // is intentionally not persisted (re-collapses on every page load).
+  const [sessionBarCollapsed, setSessionBarCollapsed] = useState(true);
   const sessionsRef = useRef<GuacSession[]>([]);
 
   const barWidth = 0; // Floating overlay doesn't reserve space
@@ -169,6 +171,24 @@ export function SessionManagerProvider({
     const display = client.getDisplay();
     const displayEl = display.getElement();
     displayEl.style.background = "#000";
+
+    // ── Remote cursor rendering (1.6.0 compatibility) ──
+    // guacamole-common-js 1.6.0 stopped setting CSS `cursor: url(...)` on the
+    // display element and instead renders the cursor as a software canvas
+    // layer that only becomes visible when the server pushes a "mouse"
+    // instruction. RDP doesn't push that for the local user, so the cursor
+    // would be invisible. Hook `oncursor` to convert the cursor canvas into a
+    // CSS data-URL cursor — restores 1.5.0 behaviour, lets the OS pointer
+    // render the remote cursor, and keeps the existing multi-monitor
+    // MutationObserver-based cursor mirroring working.
+    display.oncursor = (canvas: HTMLCanvasElement, hotspotX: number, hotspotY: number) => {
+      try {
+        const url = canvas.toDataURL("image/png");
+        displayEl.style.cursor = `url(${url}) ${hotspotX} ${hotspotY}, default`;
+      } catch {
+        /* canvas may be tainted in unusual cases — fall back silently */
+      }
+    };
 
     // Mouse
     const mouse = new Guacamole.Mouse(displayEl);

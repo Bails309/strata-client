@@ -230,19 +230,19 @@ export function RdpSections({
       <Section title="Display">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <label title="The color depth to request from the RDP server, in bits per pixel. If omitted, the color depth is automatically negotiated.">
+            <label title="The color depth to request from the RDP server, in bits per pixel. The default of 32-bit is REQUIRED for H.264 GFX negotiation; lower values silently disable AVC444 and force the RemoteFX codec.">
               Color Depth
             </label>
             <Select
               value={ex("color-depth")}
               onChange={(v) => setEx("color-depth", v)}
-              placeholder="Auto"
+              placeholder="Default (32-bit, required for H.264)"
               options={[
-                { value: "", label: "Auto" },
-                { value: "8", label: "8-bit (256 colors)" },
-                { value: "16", label: "16-bit (High color)" },
-                { value: "24", label: "24-bit (True color)" },
-                { value: "32", label: "32-bit" },
+                { value: "", label: "Default (32-bit, required for H.264)" },
+                { value: "8", label: "8-bit (256 colors) — disables H.264" },
+                { value: "16", label: "16-bit (High color) — disables H.264" },
+                { value: "24", label: "24-bit (True color) — disables H.264" },
+                { value: "32", label: "32-bit (True color + H.264)" },
               ]}
             />
           </div>
@@ -287,6 +287,21 @@ export function RdpSections({
                 className="checkbox"
               />
               Read-only (view only)
+            </label>
+          </div>
+          <div className="form-group !mb-0 col-span-2">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="H.264 GFX passthrough is enabled by default and dramatically reduces bandwidth on modern RDP hosts (frames are decoded by the browser's WebCodecs VideoDecoder rather than re-encoded server-side). If you see ghost pixels or overlapping window artefacts during rapid window minimise/maximise on this connection, disabling H.264 falls back to the legacy RemoteFX codec which has no cross-frame reference chain and cannot exhibit that class of rendering corruption — at the cost of 2–4× higher bandwidth. Requires AVC444 to be configured on the Windows host (see docs/Configure-RdpAvc444.ps1)."
+            >
+              <input
+                type="checkbox"
+                checked={ex("enable-h264") === "false"}
+                onChange={(e) => setEx("enable-h264", e.target.checked ? "false" : "")}
+                className="checkbox"
+              />
+              Disable H.264 codec (fixes rendering corruption on some hosts, uses more bandwidth)
             </label>
           </div>
         </FieldGrid>

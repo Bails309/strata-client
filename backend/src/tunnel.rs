@@ -131,10 +131,55 @@ impl HandshakeParams {
 
             // FreeRDP 3 GFX pipeline — enables H.264 hardware/software encoding
             // for significantly lower bandwidth usage on modern RDP hosts.
-            m.entry("enable-gfx".into())
+            // `enable-h264` is added by guacd patch 004-h264-display-worker, and
+            // activates raw H.264 NAL passthrough to the browser's WebCodecs
+            // VideoDecoder, eliminating server-side decode/re-encode (and the
+            // tile-cache ghosting that came with it).
+            //
+            // The full set below mirrors rustguac's RDP defaults verbatim
+            // (sol1/rustguac src/guacd.rs handshake builder). Those defaults
+            // are what actually get H.264 to flow on Windows hosts: in
+            // particular `color-depth=32` is mandatory for FreeRDP to enable
+            // AVC444 negotiation, and the `enable-*` toggles must be set
+            // explicitly (empty != "false" everywhere in guacd's settings.c).
+            m.entry("color-depth".into())
+                .or_insert_with(|| "32".into());
+            m.entry("disable-gfx".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-h264".into())
                 .or_insert_with(|| "true".into());
-            m.entry("enable-gfx-h264".into())
+            m.entry("force-lossless".into())
+                .or_insert_with(|| "false".into());
+            m.entry("cursor".into())
+                .or_insert_with(|| "local".into());
+            m.entry("enable-wallpaper".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-theming".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-font-smoothing".into())
                 .or_insert_with(|| "true".into());
+            m.entry("enable-full-window-drag".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-desktop-composition".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-menu-animations".into())
+                .or_insert_with(|| "false".into());
+            m.entry("disable-bitmap-caching".into())
+                .or_insert_with(|| "false".into());
+            m.entry("disable-offscreen-caching".into())
+                .or_insert_with(|| "false".into());
+            m.entry("disable-audio".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-audio-input".into())
+                .or_insert_with(|| "false".into());
+            m.entry("enable-printing".into())
+                .or_insert_with(|| "false".into());
+            m.entry("console".into())
+                .or_insert_with(|| "false".into());
+            m.entry("read-only".into())
+                .or_insert_with(|| "false".into());
+            m.entry("disable-auth".into())
+                .or_insert_with(|| "false".into());
 
             // Increase clipboard buffer size to 8 MiB (default is often 64KB - 256KB)
             m.entry("clipboard-buffer-size".into())
@@ -180,7 +225,7 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "enable-menu-animations"
             | "enable-printing"
             | "enable-gfx"
-            | "enable-gfx-h264"
+            | "enable-h264"
             | "clipboard-buffer-size"
             | "resize-method"
             | "server-layout"
@@ -372,10 +417,20 @@ async fn handle_guac_handshake(
     let w = handshake.width.to_string();
     let h = handshake.height.to_string();
     let d = handshake.dpi.to_string();
+    // Advertise H.264 video support for RDP so guacd's patch 004 H.264
+    // passthrough (AVC420/AVC444 → WebCodecs VideoDecoder) actually fires.
+    // Without this, guacd falls back to JPEG/WebP re-encoding, which produces
+    // tile-cache ghosting around windows that update via RDPGFX surface ops
+    // (Chrome being the most visible example). Other protocols don't use it.
+    let video_mimetypes: &[&str] = if handshake.protocol == "rdp" {
+        &["video/h264"]
+    } else {
+        &[]
+    };
     let client_handshake: Vec<Vec<u8>> = vec![
         guac_instruction("size", &[&w, &h, &d]),
         guac_instruction("audio", &["audio/L16", "audio/L8"]),
-        guac_instruction("video", &[]),
+        guac_instruction("video", video_mimetypes),
         guac_instruction("image", &["image/png", "image/jpeg", "image/webp"]),
         guac_instruction("timezone", &[&display_timezone]),
     ];
@@ -1000,8 +1055,9 @@ mod tests {
         assert!(!m.contains_key("enable-drive"));
         assert!(!m.contains_key("drive-path"));
         // Non-drive defaults still applied
-        assert_eq!(m["enable-gfx"], "true");
-        assert_eq!(m["enable-gfx-h264"], "true");
+        assert_eq!(m["disable-gfx"], "false");
+        assert_eq!(m["enable-h264"], "true");
+        assert_eq!(m["color-depth"], "32");
         // Clipboard
         assert_eq!(m["disable-copy"], "false");
         assert_eq!(m["disable-paste"], "false");
@@ -1057,7 +1113,8 @@ mod tests {
         assert!(!m.contains_key("enable-sftp"));
         // Should NOT have RDP-specific params
         assert!(!m.contains_key("enable-drive"));
-        assert!(!m.contains_key("enable-gfx"));
+        assert!(!m.contains_key("disable-gfx"));
+        assert!(!m.contains_key("enable-h264"));
     }
 
     #[test]
@@ -1315,7 +1372,8 @@ mod tests {
         let m = hp.full_param_map();
         // VNC should NOT have RDP-specific or SSH-specific params
         assert!(!m.contains_key("enable-drive"));
-        assert!(!m.contains_key("enable-gfx"));
+        assert!(!m.contains_key("disable-gfx"));
+        assert!(!m.contains_key("enable-h264"));
         assert!(!m.contains_key("enable-sftp"));
         // Should still have clipboard and resize-method
         assert_eq!(m["disable-copy"], "false");

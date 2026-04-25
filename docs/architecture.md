@@ -250,6 +250,55 @@ Additional tunnel details:
   are updated atomically on every read/write for the session-metrics
   endpoint.
 
+#### H.264 GFX reference-frame corruption (recovery path in v0.27.0)
+
+With `enable-gfx-h264=true` (the default for RDP connections), FreeRDP
+hands decoded H.264 NAL units to guacamole-common-js's `VideoPlayer`
+which renders them to the display canvas. H.264 is a delta-compressed
+codec: every P-frame references one or more prior frames. If the
+reference chain desynchronises between the server-side encoder and the
+in-browser decoder — for example, a packet reordering window during a
+rapid series of window minimise/maximise animations that briefly
+exceeds the GFX cache ceiling — the browser continues to decode
+subsequent deltas against a now-wrong reference. Visually, this appears
+as multiple overlapping window states composited on one canvas.
+
+v0.27.0 ships an in-session recovery path: the forked guacd
+([`guacd/patches/004-refresh-on-noop-size.patch`](../guacd/patches/004-refresh-on-noop-size.patch))
+intercepts a Guacamole `size W H` instruction whose dimensions match
+the current remote desktop size (a no-op resize) and sends an RDP
+`Refresh Rect` PDU to the RDP server via
+`context->update->RefreshRect()`. Refresh Rect asks the server to
+retransmit the specified region; on Windows servers this is expected
+to be emitted as an H.264 IDR keyframe that resets the decoder's
+reference-frame chain. A 1-second per-session cooldown guards against
+accidental flooding. The Refresh Display button in `SessionBar` wires
+a compositor nudge AND a no-op `client.sendSize(cw, ch)` through
+`manualRefresh()` in `SessionClient.tsx` to drive this path.
+
+Server-dependent behaviour: MS-RDPEGFX specifies Refresh Rect as valid
+in GFX mode but does not mandate that servers emit an IDR keyframe in
+response. On Windows 10/11 and Windows Server 2019/2022 the ghost is
+expected to clear within one frame; on non-Microsoft or legacy RDP
+targets this may be a no-op. Two fallback workarounds remain:
+
+- **User-driven**: the Reconnect button in `SessionBar` performs a full
+  `client.disconnect()` + re-establish, which cleanly re-initialises the
+  codec state on both ends.
+- **Operator-driven**: the Admin → Connection form's **Disable H.264
+  codec** toggle (which writes `enable-gfx-h264=false` into the extras
+  map) falls back to the RemoteFX codec, which has no cross-frame
+  reference chain and cannot exhibit this class of ghost at the cost of
+  2–4× higher bandwidth.
+
+Approach note: the no-op-size-hijack was chosen over defining a new
+Guacamole protocol opcode (e.g. a `refresh` instruction) so that stock
+`guacamole-common-js` — which Strata does not fork — continues to work
+unchanged. Stock guacd silently ignores a no-op resize, so the
+frontend change is also safe to run against an un-patched guacd (the
+compositor nudge still fires, the sendSize is a harmless no-op). The
+extension is invisible at the wire-protocol layer.
+
 ### Envelope Encryption (Credential Save)
 
 ```

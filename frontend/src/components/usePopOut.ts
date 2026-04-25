@@ -153,6 +153,13 @@ export function usePopOut(
     body.style.width = "100vw";
     body.style.height = "100vh";
     body.style.cursor = "none";
+    // Centre the displayEl inside body so any transient letterbox during
+    // the popup-settle phase is symmetric rather than a stripe of black
+    // pinned to the right/bottom edges. Once handleResize converges, the
+    // displayEl exactly fills body and the flex layout is a no-op.
+    body.style.display = "flex";
+    body.style.alignItems = "center";
+    body.style.justifyContent = "center";
 
     // ── Reparent the display element ──
     body.appendChild(sess.displayEl);
@@ -244,7 +251,46 @@ export function usePopOut(
     popup.document.addEventListener("paste", handlePastePopup);
 
     // ── Handle resize in the popup ──
+    //
+    // Two compounding issues used to leave a permanent black band on the
+    // right/bottom of the popup:
+    //
+    //   1. The opener's `requestAnimationFrame` fires BEFORE the popup
+    //      has fully laid out its document, so `popup.innerWidth/innerHeight`
+    //      are unreliable on the first read (Chrome lazily settles them).
+    //   2. Every `resize` event fired during the popup's settle phase
+    //      called `sendSize` immediately, putting the RDP server into a
+    //      resize storm where the final committed remote resolution did
+    //      not match the popup's eventual inner dimensions.
+    //
+    // Fixes here:
+    //   - Use the popup's OWN `requestAnimationFrame` for the initial
+    //     resize so we read dimensions after the popup has painted.
+    //   - Track size changes with a ResizeObserver on the popup body
+    //     (more reliable than the `resize` event in popups).
+    //   - Debounce `sendSize` with a 150 ms trailing edge so we only ever
+    //     ask the server to resize to the popup's FINAL size, not every
+    //     intermediate value during a drag or open.
+    //
     const display = sess.client.getDisplay();
+
+    let pendingSendSizeId: number | null = null;
+    function scheduleSendSize(cw: number, ch: number) {
+      if (!popup) return;
+      if (pendingSendSizeId !== null) {
+        popup.clearTimeout(pendingSendSizeId);
+      }
+      pendingSendSizeId = popup.setTimeout(() => {
+        pendingSendSizeId = null;
+        if (popup && !popup.closed) {
+          try {
+            sess.client.sendSize(cw, ch);
+          } catch (e) {
+            console.warn("popup sendSize failed", e);
+          }
+        }
+      }, 150);
+    }
 
     function handleResize() {
       if (!popup || popup.closed) return;
@@ -254,13 +300,16 @@ export function usePopOut(
       const dw = display.getWidth();
       const dh = display.getHeight();
       if (dw > 0 && dh > 0) {
+        // Letterbox-scale to preserve aspect ratio. With body using
+        // flexbox centring above, any transient letterbox during settle
+        // is symmetric.
         display.scale(Math.min(cw / dw, ch / dh));
       }
-      sess.client.sendSize(cw, ch);
+      scheduleSendSize(cw, ch);
     }
 
     // Rescale when the remote display resolution changes (e.g. maximising
-    // a window inside the remote desktop).
+    // a window inside the remote desktop, or our own sendSize landing).
     // Use setTimeout instead of requestAnimationFrame because rAF is
     // throttled/paused on the main window when the popup has focus.
     const prevOnResize = display.onresize;
@@ -268,8 +317,33 @@ export function usePopOut(
       setTimeout(() => handleResize(), 0);
     };
 
+    // Use a ResizeObserver on the popup body — more reliable than the
+    // `resize` event for popup windows, and fires for layout changes the
+    // window-resize event misses.
+    let resizeObs: ResizeObserver | null = null;
+    try {
+      resizeObs = new (popup as any).ResizeObserver(() => handleResize());
+      resizeObs?.observe(body);
+    } catch {
+      // ResizeObserver not available in this popup — fall back to event
+    }
     popup.addEventListener("resize", handleResize);
-    requestAnimationFrame(() => handleResize());
+
+    // Initial sizing: wait for the popup document to actually finish
+    // loading AND a popup-side animation frame to flush layout. Reading
+    // popup.innerWidth/innerHeight before this point can return stale or
+    // inflated opener-window values.
+    const runInitialResize = () => {
+      popup.requestAnimationFrame(() => {
+        // One more rAF to be sure layout has committed after readyState.
+        popup.requestAnimationFrame(() => handleResize());
+      });
+    };
+    if (popup.document.readyState === "complete") {
+      runInitialResize();
+    } else {
+      popup.addEventListener("load", runInitialResize, { once: true });
+    }
 
     // ── Detect when the popup is moved to a different screen ──
     // The browser doesn't fire 'resize' when a window is dragged to
@@ -318,6 +392,19 @@ export function usePopOut(
     const cleanup = () => {
       clearInterval(pollId);
       clearInterval(screenPollId);
+      if (pendingSendSizeId !== null) {
+        try {
+          popup.clearTimeout(pendingSendSizeId);
+        } catch {
+          /* popup may already be closed */
+        }
+        pendingSendSizeId = null;
+      }
+      try {
+        resizeObs?.disconnect();
+      } catch {
+        /* ignore */
+      }
       popup.removeEventListener("resize", handleResize);
       popup.removeEventListener("pagehide", onUnload);
       popup.removeEventListener("focus", pushClipboardPopup);

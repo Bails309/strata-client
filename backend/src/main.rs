@@ -117,20 +117,67 @@ async fn main() -> anyhow::Result<()> {
         .expect("JWT_SECRET already initialized");
 
     // ── Auto-unseal bundled Vault on startup ──
+    //
+    // After a host reboot, Vault's HTTP listener can take a few seconds to
+    // come up even after Docker reports the container as healthy (the
+    // healthcheck accepts sealed-but-responding as healthy by design). If
+    // we attempt to provision before the listener is fully ready, the call
+    // fails and previously the backend would just log "will retry on use"
+    // and never actually retry — leaving Vault sealed and every API call
+    // returning 502 ("Service dependency error") until the operator
+    // manually restarted the containers.
+    //
+    // We now loop with bounded backoff (max ~60 s total) so transient boot
+    // races self-heal without operator intervention. If Vault is genuinely
+    // unreachable after the budget, we still continue startup so the rest
+    // of the app (UI, health checks) remains available — but a clear error
+    // is logged.
     if let Some(ref v) = vault {
         if v.mode == VaultMode::Local {
             if let Some(ref unseal_key) = v.unseal_key {
                 tracing::info!("Bundled Vault detected — checking seal status …");
-                match services::vault_provisioning::provision(
-                    &v.address,
-                    &v.transit_key,
-                    Some(unseal_key),
-                    Some(&v.token),
-                )
-                .await
-                {
-                    Ok(_) => tracing::info!("Bundled Vault is ready"),
-                    Err(e) => tracing::warn!("Vault auto-unseal failed (will retry on use): {e}"),
+                const MAX_ATTEMPTS: u32 = 8;
+                let mut last_err: Option<String> = None;
+                for attempt in 1..=MAX_ATTEMPTS {
+                    match services::vault_provisioning::provision(
+                        &v.address,
+                        &v.transit_key,
+                        Some(unseal_key),
+                        Some(&v.token),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            tracing::info!("Bundled Vault is ready");
+                            last_err = None;
+                            break;
+                        }
+                        Err(e) => {
+                            last_err = Some(e.to_string());
+                            if attempt < MAX_ATTEMPTS {
+                                // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s
+                                let delay_secs = std::cmp::min(2u64.pow(attempt - 1), 30);
+                                tracing::warn!(
+                                    "Vault auto-unseal attempt {}/{} failed: {} — retrying in {}s",
+                                    attempt,
+                                    MAX_ATTEMPTS,
+                                    e,
+                                    delay_secs
+                                );
+                                tokio::time::sleep(std::time::Duration::from_secs(delay_secs))
+                                    .await;
+                            }
+                        }
+                    }
+                }
+                if let Some(e) = last_err {
+                    tracing::error!(
+                        "Vault auto-unseal failed after {} attempts: {} — \
+                         API calls requiring Vault will return 502 until \
+                         Vault is manually unsealed",
+                        MAX_ATTEMPTS,
+                        e
+                    );
                 }
             }
         }

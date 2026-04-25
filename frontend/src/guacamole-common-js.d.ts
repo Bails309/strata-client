@@ -96,11 +96,7 @@ declare module "guacamole-common-js" {
     }
 
     class StaticHTTPTunnel extends Tunnel {
-      constructor(
-        url: string,
-        crossDomain?: boolean,
-        extraTunnelHeaders?: Record<string, string>
-      );
+      constructor(url: string, crossDomain?: boolean, extraTunnelHeaders?: Record<string, string>);
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -136,7 +132,13 @@ declare module "guacamole-common-js" {
       onfilesystem: ((object: GuacObject, name: string) => void) | null;
       onpipe: ((stream: InputStream, mimetype: string, name: string) => void) | null;
       onaudio: ((stream: InputStream, mimetype: string) => AudioPlayer | null) | null;
-      onvideo: ((stream: InputStream, layer: Display.VisibleLayer, mimetype: string) => VideoPlayer | null) | null;
+      onvideo:
+        | ((
+            stream: InputStream,
+            layer: Display.VisibleLayer,
+            mimetype: string
+          ) => VideoPlayer | null)
+        | null;
       onargv: ((stream: InputStream, mimetype: string, name: string) => void) | null;
       onrequired: ((parameters: string[]) => void) | null;
       onname: ((name: string) => void) | null;
@@ -189,7 +191,13 @@ declare module "guacamole-common-js" {
       dispose(layer: Display.Layer): void;
       drawImage(layer: Display.Layer, x: number, y: number, image: CanvasImageSource): void;
       drawBlob(layer: Display.Layer, x: number, y: number, blob: Blob): void;
-      drawStream(layer: Display.Layer, x: number, y: number, stream: InputStream, mimetype: string): void;
+      drawStream(
+        layer: Display.Layer,
+        x: number,
+        y: number,
+        stream: InputStream,
+        mimetype: string
+      ): void;
       copy(
         srcLayer: Display.Layer,
         srcx: number,
@@ -223,19 +231,56 @@ declare module "guacamole-common-js" {
       ): void;
       rect(layer: Display.Layer, x: number, y: number, w: number, h: number): void;
       clip(layer: Display.Layer): void;
-      strokeColor(layer: Display.Layer, cap: string, join: string, thickness: number, r: number, g: number, b: number, a: number): void;
+      strokeColor(
+        layer: Display.Layer,
+        cap: string,
+        join: string,
+        thickness: number,
+        r: number,
+        g: number,
+        b: number,
+        a: number
+      ): void;
       fillColor(layer: Display.Layer, r: number, g: number, b: number, a: number): void;
-      strokeLayer(layer: Display.Layer, cap: string, join: string, thickness: number, srcLayer: Display.Layer): void;
+      strokeLayer(
+        layer: Display.Layer,
+        cap: string,
+        join: string,
+        thickness: number,
+        srcLayer: Display.Layer
+      ): void;
       fillLayer(layer: Display.Layer, srcLayer: Display.Layer): void;
       push(layer: Display.Layer): void;
       pop(layer: Display.Layer): void;
       reset(layer: Display.Layer): void;
-      transform(layer: Display.Layer, a: number, b: number, c: number, d: number, e: number, f: number): void;
-      setTransform(layer: Display.Layer, a: number, b: number, c: number, d: number, e: number, f: number): void;
+      transform(
+        layer: Display.Layer,
+        a: number,
+        b: number,
+        c: number,
+        d: number,
+        e: number,
+        f: number
+      ): void;
+      setTransform(
+        layer: Display.Layer,
+        a: number,
+        b: number,
+        c: number,
+        d: number,
+        e: number,
+        f: number
+      ): void;
       setChannelMask(layer: Display.Layer, mask: number): void;
       setMiterLimit(layer: Display.Layer, limit: number): void;
       resize(layer: Display.Layer, width: number, height: number): void;
-      move(layer: Display.VisibleLayer, parent: Display.VisibleLayer, x: number, y: number, z: number): void;
+      move(
+        layer: Display.VisibleLayer,
+        parent: Display.VisibleLayer,
+        x: number,
+        y: number,
+        z: number
+      ): void;
       shade(layer: Display.VisibleLayer, alpha: number): void;
       setSize(width: number, height: number): void;
 
@@ -545,7 +590,11 @@ declare module "guacamole-common-js" {
     }
 
     namespace VideoPlayer {
-      function getInstance(stream: InputStream, layer: Display.VisibleLayer, mimetype: string): VideoPlayer | null;
+      function getInstance(
+        stream: InputStream,
+        layer: Display.VisibleLayer,
+        mimetype: string
+      ): VideoPlayer | null;
       function isSupportedType(mimetype: string): boolean;
       function getSupportedTypes(): string[];
     }

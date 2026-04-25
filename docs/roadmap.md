@@ -73,6 +73,59 @@ Follow-up ideas (not yet planned):
 
 ---
 
+## Protocols & Session Types
+
+### Web Browser Sessions
+**Status:** Proposed  
+**Area:** Protocols · Sessions · guacd  
+**Roadmap ID:** `protocols-web-sessions`
+
+New `web` connection type that launches an ephemeral Chromium kiosk inside an
+Xvnc display and tunnels it through guacd as a standard VNC session. Brings
+parity with [rustguac](https://github.com/sol1/rustguac)'s web-session feature.
+
+Scope:
+
+- Backend service `web_session.rs` with display allocator (`:100`–`:199`) and
+  ephemeral profile dir under `/tmp/strata-chromium-{uuid}`.
+- Optional credential autofill via Chromium's encrypted Login Data SQLite
+  (PBKDF2 `peanuts`/`saltysalt`, AES-128-CBC, v10 prefix).
+- Allowed-domain enforcement via Chromium `--host-rules`; egress further bounded
+  by a `web_allowed_networks` CIDR list at the backend.
+- Login automation via Chrome DevTools Protocol on per-session ports
+  `9200`–`9299` with a 120 s timeout.
+- Frontend: new `WebSections.tsx` in the connection form (URL, allowed domains,
+  autofill builder, login-script picker). `AdSyncTab` guarded to
+  `rdp|ssh|vnc` only — `web` is interactive-create only.
+
+### VDI Desktop Containers
+**Status:** Proposed  
+**Area:** Protocols · Sessions · Infrastructure  
+**Roadmap ID:** `protocols-vdi-containers`
+
+New `vdi` connection type that provisions a Docker container running `xrdp` on
+demand and tunnels it through guacd as a standard RDP session. Brings parity
+with [rustguac](https://github.com/sol1/rustguac)'s VDI feature.
+
+Scope:
+
+- `VdiDriver` trait with a `DockerVdiDriver` (bollard) v1; future drivers
+  (Nomad, Proxmox) deferred.
+- Container reuse-by-name; persistent home via bind mount under a configurable
+  `home_base`.
+- Idle reaper extension to `session_cleanup.rs`; logout vs tab-close
+  differentiation from xrdp disconnect reason.
+- Image whitelist surfaced via `GET /api/admin/vdi/images`; sample image at
+  `contrib/vdi-sample/`.
+- Frontend: new `VdiSections.tsx` (image picker, CPU/memory/idle limits,
+  env-var editor, persistent-home toggle).
+- Security: `docker.sock` = host root — opt-in via `docker-compose.yml`.
+  Production guidance recommends a privileged sidecar exposing a narrow gRPC
+  API rather than mounting the socket directly.
+- **Out of scope v1:** shared driver state across multi-replica backends.
+
+---
+
 ## Recording Enhancements
 
 ### Historic Recording Screenshots

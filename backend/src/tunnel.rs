@@ -142,16 +142,14 @@ impl HandshakeParams {
             // particular `color-depth=32` is mandatory for FreeRDP to enable
             // AVC444 negotiation, and the `enable-*` toggles must be set
             // explicitly (empty != "false" everywhere in guacd's settings.c).
-            m.entry("color-depth".into())
-                .or_insert_with(|| "32".into());
+            m.entry("color-depth".into()).or_insert_with(|| "32".into());
             m.entry("disable-gfx".into())
                 .or_insert_with(|| "false".into());
             m.entry("enable-h264".into())
                 .or_insert_with(|| "true".into());
             m.entry("force-lossless".into())
                 .or_insert_with(|| "false".into());
-            m.entry("cursor".into())
-                .or_insert_with(|| "local".into());
+            m.entry("cursor".into()).or_insert_with(|| "local".into());
             m.entry("enable-wallpaper".into())
                 .or_insert_with(|| "false".into());
             m.entry("enable-theming".into())
@@ -174,8 +172,7 @@ impl HandshakeParams {
                 .or_insert_with(|| "false".into());
             m.entry("enable-printing".into())
                 .or_insert_with(|| "false".into());
-            m.entry("console".into())
-                .or_insert_with(|| "false".into());
+            m.entry("console".into()).or_insert_with(|| "false".into());
             m.entry("read-only".into())
                 .or_insert_with(|| "false".into());
             m.entry("disable-auth".into())

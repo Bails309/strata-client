@@ -264,6 +264,7 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 
 - **Display & performance**: color-depth, resize-method, force-lossless, cursor, read-only
 - **RDP performance flags**: enable-wallpaper, enable-theming, enable-font-smoothing, enable-full-window-drag, enable-desktop-composition, enable-menu-animations, disable-bitmap-caching, disable-offscreen-caching, disable-glyph-caching, disable-gfx
+- **H.264 GFX passthrough (v0.28.0+)**: `enable-h264`, `force-lossless`, plus the underlying `disable-gfx` / `disable-offscreen-caching` toggles. The H.264 stream is treated as **untrusted opaque data** by the backend — guacd forwards NAL units verbatim without parsing or re-encoding them. Decoding occurs entirely in the browser's WebCodecs `VideoDecoder`, which runs inside the same web origin sandbox as the rest of the page. No additional credentials, paths, or shell-executable parameters are exposed by these flags
 - **Session recording**: recording-path, recording-name, create-recording-path, recording-include-keys, recording-exclude-output, recording-exclude-mouse, recording-exclude-touch
 - **Authentication**: ignore-cert (certificate validation bypass only — no credential parameters)
 - **Clipboard, audio, printing, Wake-on-LAN**: various toggle and configuration parameters

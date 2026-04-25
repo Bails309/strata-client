@@ -1,3 +1,128 @@
+# What's New in v0.28.0
+
+> **Performance release.** v0.28.0 lands end-to-end H.264 GFX passthrough — RDP H.264 frames now travel from FreeRDP 3 all the way to the browser's WebCodecs `VideoDecoder` without a server-side transcode step. On Windows hosts with AVC444 properly configured, expect roughly an order-of-magnitude bandwidth reduction over the legacy bitmap path and meaningfully crisper text rendering during rapid window animations. No migrations, no API contract changes, drop-in upgrade.
+
+---
+
+## 🎥 H.264 GFX passthrough end-to-end (rustguac parity)
+
+For the first time, RDP H.264 frames travel **FreeRDP 3 → guacd → WebSocket → browser's WebCodecs `VideoDecoder`** with **no intermediate server-side decode/re-encode**. Previously every RDP frame was decoded inside guacd and re-encoded as PNG / JPEG / WebP tiles before being shipped to the browser — that round-trip was the root cause of the cross-frame ghost artefacts that v0.27.0's Refresh Rect mitigation targeted. With passthrough enabled, that whole class of artefact cannot occur because there is no transcode step to lose state across.
+
+The passthrough pipeline involves four cooperating components:
+
+1. **`guacd` patch (`guacd/patches/004-h264-display-worker.patch`)** — a byte-identical port of upstream `sol1/rustguac`'s H.264 display-worker patch (SHA `7a13504c2b051ec651d39e1068dc7174dc796f97`). The patch hooks FreeRDP's RDPGFX `SurfaceCommand` callback, queues AVC NAL units on each `guac_display_layer`, and emits them as a custom `4.h264` Guacamole instruction during the per-frame flush. The previous Refresh-Rect-on-no-op-size patch at the same path is **superseded** — the in-session ghost recovery from v0.27.0 is no longer needed because the underlying ghost class cannot occur with a passthrough decoder.
+
+2. **Vendored `guacamole-common-js` 1.6.0 (`frontend/src/lib/guacamole-vendor.js`)** — bundles a full `H264Decoder` (line ~13408) that lazily instantiates a `VideoDecoder` on the first `4.h264` opcode, plus a sync-point gate (`waitForPending`, line ~17085) that prevents the decoder being asked to flush before its pending-frame queue has drained. The `4.h264` opcode handler at line ~16755 routes inbound NAL units into the decoder. **Stock `guacamole-common-js` does not handle the `h264` opcode**, hence the vendored bundle. All `import Guacamole from "guacamole-common-js"` call sites continue to resolve through the existing Vite alias → `frontend/src/lib/guacamole-adapter.ts` → the vendored bundle, so no application code changed.
+
+3. **Backend RDP defaults (`backend/src/tunnel.rs`)** — `full_param_map()` now seeds the full RDP defaults block required for AVC444 negotiation: `color-depth=32`, `disable-gfx=false`, `enable-h264=true`, `force-lossless=false`, `cursor=local`, plus the explicit `enable-*` / `disable-*` toggles that FreeRDP's `settings.c` requires (empty ≠ `"false"` in many guacd code paths). Per-connection `extras` continue to override defaults via the existing allowlist — which now permits `disable-gfx`, `disable-offscreen-caching`, `disable-auth`, `enable-h264`, `force-lossless`, and the related GFX toggles so the admin UI can drive them per connection.
+
+4. **Windows host AVC444 configuration** — RDP hosts must have AVC444 enabled before any of the above starts paying off. v0.28.0 ships [`docs/Configure-RdpAvc444.ps1`](docs/Configure-RdpAvc444.ps1), a read-first PowerShell helper that audits the current registry state, detects whether the host has a usable hardware GPU, prints the diff, and prompts before applying changes. Idempotent and safe to re-run.
+
+### Why this is a big deal
+
+| Aspect | Bitmap path (pre-v0.28.0) | H.264 passthrough (v0.28.0+) |
+|---|---|---|
+| Server-side work per frame | RDP H.264 decode → re-encode to PNG/JPEG/WebP tiles | Forward NAL units verbatim |
+| Bandwidth (1080p typical desktop) | ~5–15 Mbps | ~0.5–2 Mbps |
+| Text rendering during animations | Cross-frame ghosting on rapid window cycles | Decoder reference chain stays intact |
+| Browser CPU | Image-tile blit (cheap, but constant) | Hardware video decode (cheaper, GPU-accelerated where available) |
+| Server CPU | Transcode pipeline runs every frame | guacd just shovels NAL units |
+
+---
+
+## 🛠️ Admin UX
+
+### "Disable H.264 codec" checkbox is no longer dead
+
+The toggle introduced in v0.26.0 was wired to `enable-gfx-h264` — a parameter name **guacd does not recognise** — so checking it had no effect. It is now bound to the correct `enable-h264` parameter and honoured by the backend allowlist. ([`frontend/src/pages/admin/connectionForm.tsx`](frontend/src/pages/admin/connectionForm.tsx))
+
+### Color Depth dropdown labels reflect H.264 reality
+
+The "Auto" placeholder was misleading because the backend forces `color-depth=32` whenever the field is empty (32-bit is **mandatory** for AVC444 negotiation). The select now reads "Default (32-bit, required for H.264)" and explicitly annotates the lower-bit options as **disabling H.264**, so admins are not surprised when a 16-bit choice silently degrades them to RemoteFX.
+
+---
+
+## 🧰 Operations
+
+### Windows host AVC444 configuration script
+
+[`docs/Configure-RdpAvc444.ps1`](docs/Configure-RdpAvc444.ps1) is a read-first PowerShell helper for Windows RDP hosts. It:
+
+- Inspects the current `HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services` and `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations` registry values.
+- Enumerates `Win32_VideoController` and detects whether the host has a usable hardware GPU (filtering out Microsoft Basic Display, Hyper-V synthetic, and RemoteFX adapters; requires >256 MB adapter RAM and a real vendor name).
+- On Server SKUs, prints the additional GPO requirement (`Use hardware graphics adapters for all Remote Desktop Services sessions`).
+- Reports the diff between current and recommended values as a table.
+- Prompts before applying any change, with an inline decision matrix for hosts **without** a hardware GPU (production multi-user → skip, production WAN with 1–2 users → proceed, verification → proceed).
+- Conditionally skips the GPU-only keys (`AVCHardwareEncodePreferred`, `bEnumerateHWBeforeSW`) on hosts without a real GPU.
+- Prints the post-reboot verification path: **Event Viewer → Applications and Services Logs → Microsoft → Windows → RemoteDesktopServices-RdpCoreTS → Operational**, watching for **Event ID 162** (AVC444 mode active) and **Event ID 170** (hardware encoding active).
+- Offers an opt-in reboot at the end.
+
+The desired-state map mirrors `sol1/rustguac`'s `contrib/setup-rdp-performance.ps1` and includes `MaxCompressionLevel=2`, `fEnableDesktopComposition=1`, `fEnableRemoteFXAdvancedRemoteApp=1`, `VisualExperiencePolicy=1`, `fClientDisableUDP=0`, and `SelectNetworkDetect=1` for full parity. The 60 FPS unlock (`DWMFRAMEINTERVAL=15`) is written to the **correct** `Terminal Server\WinStations` location, not the unrelated `\Windows\Dwm` key — an earlier draft of this script wrote it to the wrong location and so never actually unlocked 60 FPS.
+
+### New operator runbook: `docs/h264-passthrough.md`
+
+End-to-end documentation of the passthrough stack:
+
+- **Pipeline anatomy** — what runs where, and which file owns each step.
+- **Verification across four layers in priority order**:
+  1. **Windows Event Viewer** (authoritative — Event 162 = AVC444 active, Event 170 = HW encoding active)
+  2. **guacd logs** — "H.264 passthrough enabled for RDPGFX channel"
+  3. **WebSocket frame trace** — `4.h264,…` instructions visible in DevTools
+  4. **`client._h264Decoder.stats()`** — `framesDecoded > 0` confirms client-side decode
+- **Windows host prerequisites** — what the helper script automates and why each registry value matters.
+- **Decision matrix for hosts without a hardware GPU** — software AVC trade-offs (CPU cost ~1–2 cores per 1080p@30 session, bottlenecks at 2–4 concurrent sessions, lower quality at the same bitrate vs hardware AVC) and when the bitmap path is the better choice.
+
+---
+
+## ⚠️ Known limitations
+
+### Chrome DevTools-induced ghosting
+
+DevTools open in Chromium-based browsers can produce visible ghosting that **resembles** a codec problem but is not. Chrome throttles GPU-canvas compositing and `requestAnimationFrame` cadence on tabs whose DevTools panel is open; cached tile blits fall behind the live frame stream and the user perceives ghosting. Closing DevTools (or detaching it to a separate window) restores normal compositor behaviour. **This is a browser-side rendering artefact unrelated to H.264 and is not fixable in the Strata client.** If `client._h264Decoder?.stats()` shows `framesDecoded > 0` and the canvas still ghosts, DevTools is the most likely cause.
+
+### H.264 is opportunistic — depends on the host
+
+If AVC444 is not configured on the RDP host, `enable-h264=true` has no effect. guacd still loads the H.264 hook (you will see `H.264 passthrough enabled for RDPGFX channel` in the logs) but no AVC `SurfaceCommand` callbacks ever fire and the session falls back to the bitmap path silently. Run [`docs/Configure-RdpAvc444.ps1`](docs/Configure-RdpAvc444.ps1) on the host to enable it.
+
+---
+
+## 🔄 Upgrade notes
+
+- **No migrations.** No backend or frontend API-contract changes. The previously-shipped per-connection `extras` column accepts the corrected `enable-h264` key without any migration.
+- **guacd image rebuilds automatically** against the new patch (`004-h264-display-worker.patch`) on first deploy. The v0.27.0 `004-refresh-on-noop-size.patch` is **superseded**.
+- **Refresh Display button retired.** The Session Bar's Refresh Display button has been removed because the underlying ghost class cannot occur with a passthrough decoder. The `refreshDisplay?: () => void` field on the `GuacSession` interface remains as a no-op for backwards compatibility with any third-party integrations that may have referenced it.
+- **Breaking changes** — none.
+
+---
+
+# What's New in v0.27.0
+
+> **Reliability release.** v0.27.0 ships an in-session fix for the H.264 GFX rendering corruption documented in v0.26.0 — no more mandatory Reconnect to clear the overlapping-window ghost.
+
+---
+
+## 🖥️ Refresh Display now fixes the overlapping-window ghost
+
+v0.26.0 documented a class of rendering corruption where rapid window minimise/maximise cycles left multiple overlapping window states on the canvas, recoverable only by clicking **Reconnect**. v0.27.0 ships an in-session fix:
+
+1. **Forked guacd patch (`guacd/patches/004-refresh-on-noop-size.patch`)** intercepts a Guacamole `size W H` instruction whose dimensions match the current remote desktop size (a no-op resize) and sends an RDP **Refresh Rect** PDU to the RDP server for the full screen. Refresh Rect asks the server to retransmit a full frame, which under FreeRDP 3's H.264 GFX pipeline triggers an IDR keyframe and resets the decoder's reference-frame chain.
+2. **Frontend wire-up** — the Session Bar's **Refresh Display** button now drives this path via `client.sendSize(cw, ch)` with the current container dimensions. One click, no reconnect, no black-screen flash.
+
+A 1-second per-session cooldown (new `guac_rdp_client.last_refresh_rect_timestamp` field) prevents an over-eager client flooding the RDP server with full-frame retransmit requests.
+
+The hijack-the-`size`-instruction approach was deliberately chosen over a new Guacamole protocol opcode so that **stock `guacamole-common-js` (which Strata does not fork) continues to work unchanged**. The frontend change is also safe to run against an un-patched guacd — stock guacd silently ignores the no-op resize, the frontend's compositor nudge still fires, and the old behaviour is preserved.
+
+## ⚠️ Server-dependent behaviour, safe fallbacks remain
+
+MS-RDPEGFX specifies Refresh Rect as valid in GFX mode, but does **not** mandate that servers emit an IDR in response. On Windows 10/11 and Windows Server 2019/2022 the patch is expected to clear ghost frames within ~1 frame; on older or non-Microsoft RDP servers it may be a no-op and the **Reconnect** button remains the recovery path. Operators seeing persistent ghosts after Refresh Display should still fall back to Reconnect or to the per-connection **Disable H.264 codec** toggle.
+
+## 🔄 Upgrade notes
+
+- **No migrations.** No API-contract changes. No breaking changes to existing configs or persisted state.
+- The v0.26.0 **Known issues** entry for H.264 reference-frame corruption is **superseded** by this release; the workarounds listed there (Reconnect button + per-connection Disable H.264 toggle) remain available as fallbacks for the server-dependent behaviour noted above.
+
+---
+
 # What's New in v0.26.0
 
 > **Hardening release.** v0.26.0 is the result of an end-to-end code review across the backend and frontend, followed by a focused sweep of security, audit, and reliability fixes. No breaking API changes, one additive migration (056), drop-in upgrade.

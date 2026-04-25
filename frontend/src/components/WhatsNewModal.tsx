@@ -25,6 +25,52 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.28.0",
+    subtitle: "End-to-end H.264 GFX passthrough — no server-side transcode",
+    sections: [
+      {
+        title: "RDP H.264 frames now stream straight to the browser",
+        description:
+          "v0.28.0 ships full rustguac-parity H.264 passthrough. RDP H.264 GFX frames now travel FreeRDP 3 → guacd → WebSocket → the browser's WebCodecs VideoDecoder without any server-side decode/re-encode step. The legacy bitmap path (PNG/JPEG/WebP tile transcode) is bypassed entirely when the RDP host has AVC444 enabled. On Windows targets configured for AVC444 + hardware encoding, expect roughly an order-of-magnitude bandwidth reduction over the bitmap path and meaningfully crisper text rendering during rapid window animations. The cross-frame ghost class that the v0.27.0 Refresh Rect mitigation targeted simply cannot occur with a passthrough decoder, so the in-session ghost-recovery path has been retired.",
+      },
+      {
+        title: "New guacd patch + vendored 1.6.0 Guacamole client",
+        description:
+          "guacd/patches/004-h264-display-worker.patch is now a byte-identical port of upstream sol1/rustguac's H.264 display-worker patch (SHA 7a13504c…). It hooks FreeRDP's RDPGFX SurfaceCommand callback, queues AVC NAL units on each guac_display_layer, and emits them as a custom 4.h264 Guacamole instruction during the per-frame flush. The frontend bundles a vendored guacamole-common-js 1.6.0 (frontend/src/lib/guacamole-vendor.js) which is the first upstream version with H264Decoder, the 4.h264 opcode handler, and the waitForPending sync gate. Every existing import Guacamole from 'guacamole-common-js' resolves through the existing Vite alias, so no application code changed.",
+      },
+      {
+        title: "Backend RDP defaults match rustguac",
+        description:
+          "backend/src/tunnel.rs full_param_map() now seeds the full RDP defaults block required for AVC444 negotiation: color-depth=32, disable-gfx=false, enable-h264=true, force-lossless=false, cursor=local, plus the explicit enable-* / disable-* toggles FreeRDP's settings.c requires (empty ≠ 'false' in many guacd code paths). The per-connection extras allowlist was extended with disable-gfx, disable-offscreen-caching, disable-auth, enable-h264, force-lossless and the related GFX toggles so the admin UI can drive them per connection.",
+      },
+      {
+        title: "Disable H.264 codec checkbox is no longer dead",
+        description:
+          "The toggle introduced in v0.26.0 was wired to enable-gfx-h264 — a parameter name guacd does not recognise — so checking it had no effect. It is now bound to the correct enable-h264 parameter and honoured by the backend allowlist. The Color Depth dropdown's Auto option has also been relabelled to 'Default (32-bit, required for H.264)' and the lower-bit options now explicitly annotate that they disable H.264, so admins are not surprised when a 16-bit choice silently degrades them to RemoteFX.",
+      },
+      {
+        title: "Configure-RdpAvc444.ps1 — Windows host helper script",
+        description:
+          "docs/Configure-RdpAvc444.ps1 is a read-first PowerShell helper that inspects the current Terminal Services and Terminal Server\\WinStations registry values, detects whether the host has a usable hardware GPU (filtering out Microsoft Basic Display / Hyper-V synthetic / RemoteFX adapters), reports the diff between current and recommended settings, and prompts before applying any change. It conditionally skips the GPU-only keys on hosts without a real GPU, prints the Event Viewer path for post-reboot verification (Event ID 162 = AVC444 active, 170 = HW encoding active), and offers an opt-in reboot at the end. Idempotent — re-running on an already-correct host is a no-op.",
+      },
+      {
+        title: "New operator runbook: docs/h264-passthrough.md",
+        description:
+          "Covers the end-to-end pipeline (FreeRDP → guacd patch → WebCodecs), how to verify H.264 is actually flowing across four layers in priority order (Windows Event Viewer = authoritative, guacd logs, WebSocket trace, client._h264Decoder.stats()), the Windows host prerequisites the helper script automates, and a decision matrix for hosts without a hardware GPU (when software AVC is worth running vs when to keep the bitmap path).",
+      },
+      {
+        title: "Known limitation: Chrome DevTools-induced ghosting",
+        description:
+          "DevTools open in Chromium-based browsers can produce visible ghosting that resembles a codec problem but is not. Chrome throttles GPU-canvas compositing and requestAnimationFrame cadence on tabs whose DevTools panel is open; cached tile blits fall behind the live frame stream and the user perceives ghosting. Closing DevTools (or detaching it to a separate window) restores normal compositor behaviour. If client._h264Decoder?.stats() shows framesDecoded > 0 and the canvas still ghosts, DevTools is the most likely cause.",
+      },
+      {
+        title: "No migrations, no API contract changes",
+        description:
+          "Drop-in upgrade. The previously-shipped per-connection extras column accepts the corrected enable-h264 key without any migration. The v0.27.0 004-refresh-on-noop-size.patch is superseded by 004-h264-display-worker.patch; on first deploy the guacd image rebuilds against the new patch automatically.",
+      },
+    ],
+  },
+  {
     version: "0.27.0",
     subtitle: "In-session recovery from H.264 rendering corruption",
     sections: [

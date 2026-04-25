@@ -110,7 +110,7 @@ The frontend nginx container serves as the primary gateway for all external traf
 Pages:
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes)
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, **Refresh display**, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, **display ghost-pixel mitigation** (`forceDisplayRepaint()` helper nudges the canvas scale by `1e-4` to force a compositor repaint after `display.onresize`, auto-scheduled at 50 / 200 / 500 ms and surfaced as a manual **Refresh display** button; v0.25.1+), and automatic redirect to the next active session when one ends.
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy `forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
@@ -250,7 +250,99 @@ Additional tunnel details:
   are updated atomically on every read/write for the session-metrics
   endpoint.
 
+#### H.264 GFX passthrough (v0.28.0+)
+
+As of v0.28.0, RDP H.264 frames travel **end-to-end without a server-side
+transcode step**. The path is:
+
+```
+Windows RDP host (AVC444 enabled)
+    │  (RDPGFX H.264 stream)
+    ▼
+FreeRDP 3 inside guacd
+    │  SurfaceCommand callback (patched)
+    ▼
+guacd display worker
+    │  queues NAL units on guac_display_layer
+    │  emits "4.h264,…" Guacamole instruction on per-frame flush
+    ▼
+WebSocket tunnel (passthrough — backend never decodes)
+    ▼
+Vendored guacamole-common-js 1.6.0 in browser
+    │  4.h264 opcode handler routes NAL units to H264Decoder
+    ▼
+WebCodecs VideoDecoder (hardware-accelerated where available)
+    ▼
+Display canvas
+```
+
+The four cooperating components:
+
+1. **`guacd/patches/004-h264-display-worker.patch`** — a byte-identical
+   port of upstream `sol1/rustguac`'s H.264 display-worker patch
+   (SHA `7a13504c2b051ec651d39e1068dc7174dc796f97`). Hooks FreeRDP's
+   RDPGFX `SurfaceCommand` callback, queues AVC NAL units on each
+   `guac_display_layer`, and emits them as a custom `4.h264` Guacamole
+   instruction during the per-frame flush. **Supersedes** the v0.27.0
+   `004-refresh-on-noop-size.patch` at the same path.
+2. **Vendored `guacamole-common-js` 1.6.0**
+   ([`frontend/src/lib/guacamole-vendor.js`](../frontend/src/lib/guacamole-vendor.js)) —
+   bundles `H264Decoder` (line ~13408), the `4.h264` opcode handler
+   (line ~16755), and a sync-point gate `waitForPending` (line ~17085)
+   that prevents the decoder being asked to flush before its pending-
+   frame queue has drained. **Stock `guacamole-common-js` does not handle
+   the `h264` opcode**; the vendored bundle is required.
+3. **Backend RDP defaults** ([`backend/src/tunnel.rs`](../backend/src/tunnel.rs)) —
+   `full_param_map()` seeds `color-depth=32`, `disable-gfx=false`,
+   `enable-h264=true`, `force-lossless=false`, `cursor=local`, plus
+   the explicit `enable-*` / `disable-*` toggles that FreeRDP's
+   `settings.c` requires (empty ≠ `"false"` in many guacd code paths).
+   The per-connection `extras` allowlist permits `disable-gfx`,
+   `disable-offscreen-caching`, `disable-auth`, `enable-h264`,
+   `force-lossless`, and the related GFX toggles so the admin UI can
+   override defaults per connection.
+4. **Windows host AVC444 configuration** — the helper script
+   [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) audits
+   the host registry, detects whether a hardware GPU is usable, and
+   prompts before applying the recommended values. The full operator
+   runbook is [`docs/h264-passthrough.md`](h264-passthrough.md).
+
+The passthrough path **eliminates** the cross-frame ghost class that
+v0.27.0's Refresh Rect mitigation (below) targeted: there is no
+intermediate transcode step that can lose state across frames. The
+v0.27.0 Refresh Display button has been retired from the Session Bar.
+
+Verification flows in priority order:
+
+1. **Authoritative** — Windows Event Viewer →
+   `Applications and Services Logs > Microsoft > Windows >
+   RemoteDesktopServices-RdpCoreTS > Operational`:
+   - Event ID **162** = AVC444 mode active
+   - Event ID **170** = hardware encoding active
+2. guacd logs include `H.264 passthrough enabled for RDPGFX channel`
+3. WebSocket trace shows `4.h264,…` instructions in DevTools Network
+4. `client._h264Decoder?.stats()` shows `framesDecoded > 0`
+
+If the host is not configured for AVC444, `enable-h264=true` is a
+no-op: guacd loads the H.264 hook (visible in logs) but no
+`SurfaceCommand` callbacks fire and the session falls back silently to
+the bitmap path.
+
+**Known limitation — DevTools-induced ghosting**: Chromium-based
+browsers throttle GPU-canvas compositing and `requestAnimationFrame`
+cadence on tabs whose DevTools panel is open. Cached tile blits fall
+behind the live frame stream and the user perceives ghosting that
+resembles a codec problem but is not. Closing DevTools (or detaching
+to a separate window) restores normal compositor behaviour. This is
+not fixable in the Strata client.
+
 #### H.264 GFX reference-frame corruption (recovery path in v0.27.0)
+
+> **Status — superseded by v0.28.0.** Retained for historical context.
+> The cross-frame ghost class described below cannot occur with the
+> v0.28.0 passthrough decoder, because there is no intermediate
+> server-side transcode step to lose state across frames. The Refresh
+> Display button has been retired from the Session Bar.
 
 With `enable-gfx-h264=true` (the default for RDP connections), FreeRDP
 hands decoded H.264 NAL units to guacamole-common-js's `VideoPlayer`

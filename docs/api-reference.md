@@ -1435,6 +1435,9 @@ The `connection_defaults` field accepts a JSON object of Guacamole parameter key
 | `disable-glyph-caching` | Disable glyph (font symbol) cache |
 | `disable-offscreen-caching` | Disable off-screen region cache |
 | `disable-gfx` | Disable the Graphics Pipeline Extension (GFX) |
+| `enable-h264` | Enable H.264 GFX passthrough (v0.28.0+). Requires `disable-gfx=false`, `color-depth=32`, and AVC444 configured on the RDP host. When `false`, the session falls back to the bitmap path. The legacy parameter name `enable-gfx-h264` is **not** recognised by guacd and was a documented bug prior to v0.28.0 |
+| `force-lossless` | Force lossless encoding (disables H.264; falls back to RemoteFX). Use only for screens where colour fidelity is critical (e.g. medical imaging) |
+| `color-depth` | Colour depth in bits per pixel. **Must be `32` for H.264 GFX**; lower values silently disable H.264 and fall back to RemoteFX. The backend defaults this to `32` when empty (v0.28.0+) |
 | `recording-path` | Directory for screen recording files |
 | `recording-name` | Filename for recordings (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens) |
 | `create-recording-path` | Auto-create the recording directory |

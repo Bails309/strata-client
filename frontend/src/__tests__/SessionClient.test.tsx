@@ -17,6 +17,13 @@ vi.mock("../api", () => ({
   getConnections: vi.fn(),
   getCredentialProfiles: vi.fn(),
   getMe: vi.fn(),
+  getMyConnections: vi.fn().mockResolvedValue([]),
+  getTags: vi.fn().mockResolvedValue([]),
+  getConnectionTags: vi.fn().mockResolvedValue([]),
+  getConnectionFolders: vi.fn().mockResolvedValue([]),
+  postCommandAudit: vi.fn().mockResolvedValue(undefined),
+  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
+  MAX_OPEN_PATH_LEN: 1024,
 }));
 
 // Mock ResizeObserver

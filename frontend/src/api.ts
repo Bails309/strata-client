@@ -275,8 +275,18 @@ export const MAX_OPEN_PATH_LEN = 1024;
 /** A single user-defined command-palette mapping (`:trigger` → action). */
 export type CommandMapping = { trigger: string } & CommandMappingAction;
 
-/** Built-in command names. User triggers may not collide with these. */
-export const BUILTIN_COMMANDS = ["reload", "disconnect", "fullscreen", "commands"] as const;
+/** Built-in command names. User triggers may not collide with these.
+ *  Keep this list in sync with `BUILTIN_COMMANDS` in
+ *  `backend/src/services/user_preferences.rs` and `ALLOWED_AUDIT_ACTIONS`
+ *  in `backend/src/routes/user.rs`. */
+export const BUILTIN_COMMANDS = [
+  "reload",
+  "disconnect",
+  "fullscreen",
+  "commands",
+  "close",
+  "explorer",
+] as const;
 export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
 
 /** Maximum number of mappings per user — kept in sync with the backend. */

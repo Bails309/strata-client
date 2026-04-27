@@ -9,7 +9,7 @@ vi.mock("../api", () => ({
   getMyConnections: vi.fn().mockResolvedValue([]),
   getConnectionFolders: vi.fn().mockResolvedValue([]),
   getTags: vi.fn().mockResolvedValue([]),
-  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands"],
+  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
   COMMAND_MAPPING_PAGES: [
     "/dashboard",
     "/profile",

@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A feature release that turns the in-session Command Palette (default
 `Ctrl+K`) from a connection picker into a fully scriptable, user-extensible
 command surface. Operators can now type `:` to enter command mode, run
-**built-in commands** (`:reload`, `:disconnect`, `:fullscreen`, `:commands`)
+**built-in commands** (`:reload`, `:disconnect`, `:close`, `:fullscreen`,
+`:commands`, `:explorer <path-or-program>`)
 that target the active session, and define **personal `:command` mappings**
 that resolve to one of six typed actions: `open-connection`,
 `open-folder`, `open-tag`, `open-page`, `paste-text` (push text onto the
@@ -30,15 +31,17 @@ No `/api/*` breaking changes; one additive route
 
 ### Added
 
-- **Built-in commands.** Four commands ship by default and cannot be
+- **Built-in commands.** Six commands ship by default and cannot be
   overridden by user mappings:
 
-  | Command       | Action                                                                                                                                                            | Validity                                  |
-  | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-  | `:reload`     | Re-establish the active session (same flow as the SessionBar reconnect button — closes + recreates the tunnel so an IDR keyframe is forced and stale GFX clears) | Disabled when no active session            |
-  | `:disconnect` | Close the active session and return to the dashboard                                                                                                              | Disabled when no active session            |
-  | `:fullscreen` | Toggle browser fullscreen with Keyboard Lock (uses `requestFullscreenWithLock` / `exitFullscreenWithUnlock` from `utils/keyboardLock`)                              | Always available                           |
-  | `:commands`   | List every available command (built-ins + user mappings) inline in the palette body                                                                                | Always available                           |
+  | Command                | Action                                                                                                                                                            | Validity                                  |
+  | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+  | `:reload`              | Re-establish the active session (same flow as the SessionBar reconnect button — closes + recreates the tunnel so an IDR keyframe is forced and stale GFX clears) | Disabled when no active session            |
+  | `:disconnect`          | Close the active session and return to the dashboard                                                                                                              | Disabled when no active session            |
+  | `:close`               | Friendlier alias for `:disconnect` — closes the current server page (active session)                                                                              | Disabled when no active session            |
+  | `:fullscreen`          | Toggle browser fullscreen with Keyboard Lock (uses `requestFullscreenWithLock` / `exitFullscreenWithUnlock` from `utils/keyboardLock`)                              | Always available                           |
+  | `:commands`            | List every available command (built-ins + user mappings) inline in the palette body                                                                                | Always available                           |
+  | `:explorer <arg>`      | Drives the Windows Run dialog on the active session (Win+R → paste arg → Enter). Accepts anything `start` accepts: `cmd`, `powershell`, `notepad`, `\\server\share`, `C:\Users\Public`, `shell:startup`, `https://example.com`. Argument is validated like an `open-path` mapping: ≤ 1024 chars, no control characters. Audit log records only `{ arg_length: N }` — never the literal argument. | Disabled when no active session, no argument supplied, argument exceeds 1024 chars, or argument contains control characters |
 
   Built-in handlers live in [`frontend/src/components/CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx)
   and reuse the same primitives as the SessionBar buttons so behaviour
@@ -128,7 +131,7 @@ No `/api/*` breaking changes; one additive route
   Validation rejects: triggers outside `:?[a-z0-9_-]{1,64}` (longer than
   the 32-char mapping limit because audit accepts the leading colon),
   and actions outside
-  `reload | disconnect | fullscreen | commands | open-connection | open-folder | open-tag | open-page`.
+  `reload | disconnect | close | fullscreen | commands | explorer | open-connection | open-folder | open-tag | open-page | paste-text | open-path`.
   Every accepted call writes `action_type = "command.executed"` with
   `details = { trigger, action, args, target_id }`.
 
@@ -147,7 +150,7 @@ No `/api/*` breaking changes; one additive route
   - `commandMappings` is absent, `null`, or an array of objects.
   - Array length ≤ 50.
   - Each `trigger` matches `^[a-z0-9_-]{1,32}$`.
-  - No `trigger` collides with the four built-in command names.
+  - No `trigger` collides with the six built-in command names.
   - All `trigger` values within the array are unique (case-insensitive).
   - `action` is in the six-value allow-list.
   - `args` shape matches the action: UUID parseable for the three

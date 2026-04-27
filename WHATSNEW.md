@@ -7,19 +7,26 @@
 ## ⌨️ Type `:` to enter command mode
 
 Pressing `Ctrl+K` (or your customised binding from v0.30.1) and typing
-a colon now switches the palette into **command mode**. Four built-ins
+a colon now switches the palette into **command mode**. Six built-ins
 ship out of the box:
 
-| Command       | What it does                                                                                                                      |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `:reload`     | Reconnect the active session (forces an IDR keyframe — clears stale GFX without dropping the tunnel)                              |
-| `:disconnect` | Close the active session and return to the dashboard                                                                              |
-| `:fullscreen` | Toggle fullscreen with Keyboard Lock (the same chord the SessionBar uses, so OS shortcuts stay captured)                          |
-| `:commands`   | Inline list of every command available to you — built-ins plus your personal mappings, with a colour-coded pill for each kind     |
+| Command                | What it does                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `:reload`              | Reconnect the active session (forces an IDR keyframe — clears stale GFX without dropping the tunnel)                              |
+| `:disconnect`          | Close the active session and return to the dashboard                                                                              |
+| `:close`               | Friendlier alias for `:disconnect` — closes the current server page                                                               |
+| `:fullscreen`          | Toggle fullscreen with Keyboard Lock (the same chord the SessionBar uses, so OS shortcuts stay captured)                          |
+| `:commands`            | Inline list of every command available to you — built-ins plus your personal mappings, with a colour-coded pill for each kind     |
+| `:explorer <arg>`      | Drives the Run dialog on the active session — `:explorer cmd` opens a command prompt, `:explorer powershell` opens a PowerShell prompt, `:explorer \\server\share` opens a share, `:explorer notepad` launches Notepad. Anything `start` accepts works. |
 
-`:reload` and `:disconnect` are disabled (greyed) when there's no
-active session; the palette shows a clear reason rather than silently
-no-op'ing.
+Commands that need an active session (`:reload`, `:disconnect`,
+`:close`, `:explorer`) are disabled (greyed) when none is open; the
+palette shows a clear reason rather than silently no-op'ing.
+
+`:explorer` is the ad-hoc twin of the `open-path` mapping action: same
+Win+R → paste argument → Enter choreography, same ≤ 1024-char cap,
+same control-character rejection, and the audit log records only
+`{ arg_length: N }` — never the literal argument.
 
 ---
 

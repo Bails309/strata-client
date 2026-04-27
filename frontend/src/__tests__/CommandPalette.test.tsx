@@ -13,7 +13,8 @@ vi.mock("../api", () => ({
   getConnectionTags: vi.fn(),
   getConnectionFolders: vi.fn().mockResolvedValue([]),
   postCommandAudit: vi.fn().mockResolvedValue(undefined),
-  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands"],
+  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
+  MAX_OPEN_PATH_LEN: 1024,
 }));
 
 // Mock SessionManager

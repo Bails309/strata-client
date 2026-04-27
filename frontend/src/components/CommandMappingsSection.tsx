@@ -62,7 +62,11 @@ function StyledSelect<V extends string>({
   }, [open]);
 
   return (
-    <div ref={wrapRef} className={`relative ${className ?? ""}`} style={width ? { width } : undefined}>
+    <div
+      ref={wrapRef}
+      className={`relative ${className ?? ""}`}
+      style={width ? { width } : undefined}
+    >
       <button
         type="button"
         aria-label={ariaLabel}
@@ -392,7 +396,11 @@ function MappingRow({
           className="shrink-0"
           options={[
             { value: "open-connection", label: "Open connection" },
-            { value: "open-folder", label: "Open folder", description: "Filter dashboard by folder" },
+            {
+              value: "open-folder",
+              label: "Open folder",
+              description: "Filter dashboard by folder",
+            },
             { value: "open-tag", label: "Open tag", description: "Filter dashboard by tag" },
             { value: "open-page", label: "Open page" },
             {
@@ -507,9 +515,7 @@ function MappingRow({
 /** Profile section: manage user-defined `:command` mappings. */
 export default function CommandMappingsSection() {
   const { preferences, update, loading } = useUserPreferences();
-  const [draft, setDraft] = useState<CommandMapping[]>(
-    preferences.commandMappings ?? []
-  );
+  const [draft, setDraft] = useState<CommandMapping[]>(preferences.commandMappings ?? []);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [tags, setTags] = useState<UserTag[]>([]);
@@ -536,10 +542,7 @@ export default function CommandMappingsSection() {
   const triggers = useMemo(() => draft.map((m) => m.trigger.trim()), [draft]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(preferences.commandMappings ?? []);
   const validations = draft.map((m, i) =>
-    validateMapping(
-      m,
-      triggers.filter((_, j) => j !== i).filter(Boolean)
-    )
+    validateMapping(m, triggers.filter((_, j) => j !== i).filter(Boolean))
   );
   const hasErrors = validations.some((v) => v.triggerError || v.argError);
 
@@ -575,14 +578,12 @@ export default function CommandMappingsSection() {
     >
       <h2 className="text-lg font-semibold mb-1">Command Palette Mappings</h2>
       <p className="text-sm text-txt-tertiary mb-4">
-        Define your own <code>:commands</code>. Open the palette and type{" "}
-        <code>:</code> to use them. <strong>Open path on session</strong> drives
-        the Windows Run dialog (Win+R) on the active session to open a UNC
-        share, local folder, or <code>shell:</code> URI in Explorer.{" "}
-        <strong>Paste text</strong> sends free-form text into the active
-        session via clipboard + Ctrl+V (no Enter). Built-in commands (
-        <code>:reload</code>, <code>:disconnect</code>, <code>:fullscreen</code>,{" "}
-        <code>:commands</code>) cannot be overridden.
+        Define your own <code>:commands</code>. Open the palette and type <code>:</code> to use
+        them. <strong>Open path on session</strong> drives the Windows Run dialog (Win+R) on the
+        active session to open a UNC share, local folder, or <code>shell:</code> URI in Explorer.{" "}
+        <strong>Paste text</strong> sends free-form text into the active session via clipboard +
+        Ctrl+V (no Enter). Built-in commands (<code>:reload</code>, <code>:disconnect</code>,{" "}
+        <code>:fullscreen</code>, <code>:commands</code>) cannot be overridden.
       </p>
 
       {draft.length === 0 && (

@@ -830,7 +830,7 @@ operators cannot poison the audit-event taxonomy by passing a fake
 | Field       | Rule                                                                                                                                          |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `trigger`   | Matches `^:?[a-z0-9_-]{1,64}$` (the leading colon is accepted; the cap is 64 to leave headroom for future UI namespacing)                     |
-| `action`    | One of `reload \| disconnect \| fullscreen \| commands \| open-connection \| open-folder \| open-tag \| open-page \| paste-text \| open-path` |
+| `action`    | One of `reload \| disconnect \| close \| fullscreen \| commands \| explorer \| open-connection \| open-folder \| open-tag \| open-page \| paste-text \| open-path` |
 | `args`      | Opaque JSON value; persisted verbatim under `details.args`                                                                                   |
 | `target_id` | Optional UUID string; persisted verbatim under `details.target_id` for cross-reference with the resolved target                              |
 

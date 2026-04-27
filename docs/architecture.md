@@ -525,7 +525,8 @@ leading colon). The command surface is composed of two registries:
 
 1. **Built-in commands** — hard-coded in
    [`frontend/src/components/CommandPalette.tsx`](../frontend/src/components/CommandPalette.tsx).
-   Names: `reload`, `disconnect`, `fullscreen`, `commands`. Built-in
+   Names: `reload`, `disconnect`, `close`, `fullscreen`, `commands`,
+   `explorer`. Built-in
    handlers reuse the same primitives as the SessionBar (e.g.
    `requestFullscreenWithLock`) so behaviour is identical regardless of
    how the action is invoked. Built-in names are reserved — user

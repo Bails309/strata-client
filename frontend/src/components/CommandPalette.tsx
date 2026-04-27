@@ -12,6 +12,7 @@ import {
   UserTag,
   CommandMapping,
   BUILTIN_COMMANDS,
+  MAX_OPEN_PATH_LEN,
 } from "../api";
 import { useUserPreferences } from "./UserPreferencesProvider";
 import { useSessionManager } from "./SessionManager";
@@ -220,8 +221,50 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   );
 
   /** The current `:command` slug (lowercased, no leading colon). Empty when
-   *  the user has only typed `:`. */
+   *  the user has only typed `:`. For arg-bearing built-ins (`:explorer cmd`)
+   *  this still contains the entire post-colon string — use `commandHead`
+   *  for trigger matching and `commandArgRaw` for the original-case argument. */
   const commandSlug = isCommandMode ? query.slice(1).toLowerCase() : "";
+
+  /** Raw text after the leading `:` with case preserved. Needed because
+   *  arg-bearing built-ins (e.g. `:explorer C:\\Users`) must keep upper-case
+   *  characters in the argument we forward to the remote session. */
+  const commandRaw = isCommandMode ? query.slice(1) : "";
+
+  /** Index of the first space in `commandRaw`, or -1 when none. */
+  const commandSpaceIdx = commandRaw.indexOf(" ");
+
+  /** The `:command` head (lowercased, before the first space). Used for
+   *  trigger matching and ghost-text autocomplete. */
+  const commandHead = commandSpaceIdx === -1 ? commandSlug : commandSlug.slice(0, commandSpaceIdx);
+
+  /** The free-form argument typed after the trigger, with original case
+   *  preserved. Empty when the user hasn't typed a space yet. */
+  const commandArgRaw = commandSpaceIdx === -1 ? "" : commandRaw.slice(commandSpaceIdx + 1);
+
+  // ---------------------------------------------------------------
+  // `:explorer <arg>` validation. Mirrors the `open-path` mapping
+  // action so an operator can drive the remote Run dialog ad-hoc
+  // without first defining a mapping. Same ≤ 1024-char cap and same
+  // control-character rejection (newlines in the Run dialog could
+  // chain follow-up commands).
+  // ---------------------------------------------------------------
+  const explorerArgRaw = commandHead === "explorer" ? commandArgRaw : "";
+  const explorerArgTrimmed = explorerArgRaw.trim();
+  const EXPLORER_MAX_LEN = MAX_OPEN_PATH_LEN;
+  // eslint-disable-next-line no-control-regex
+  const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+  const explorerArgInvalidReason: string | undefined =
+    explorerArgTrimmed.length === 0
+      ? "Argument required"
+      : explorerArgTrimmed.length > EXPLORER_MAX_LEN
+        ? `Argument exceeds ${EXPLORER_MAX_LEN} chars`
+        : CONTROL_CHAR_RE.test(explorerArgTrimmed)
+          ? "Argument contains control characters"
+          : undefined;
+  const explorerArgValid = explorerArgInvalidReason === undefined;
+  const explorerArgPreview =
+    explorerArgTrimmed.length <= 40 ? explorerArgTrimmed : `${explorerArgTrimmed.slice(0, 37)}…`;
 
   /** Built-in commands matching the current prefix, plus their handlers. */
   type ExecutableCommand = {
@@ -232,6 +275,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     run: () => void | Promise<void>;
     /** For audit logging */
     audit: { action: string; args: unknown; targetId?: string | null };
+    /** When true, this command consumes free-form text after `:trigger ` —
+     *  e.g. `:explorer cmd`. Driven by `commandArgRaw` at execute-time. */
+    takesArgs?: boolean;
   };
 
   const hasActiveSession = activeSessionId !== null;
@@ -277,6 +323,25 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         },
       },
       {
+        // `:close` is a friendlier alias for `:disconnect` — operators
+        // think of session tabs as "server pages", so closing the
+        // current page mirrors the language they already use.
+        trigger: "close",
+        description: "Close the current server page",
+        valid: hasActiveSession,
+        invalidReason: hasActiveSession ? undefined : "No active session",
+        run: () => {
+          if (!activeSessionId) return;
+          closeSession(activeSessionId);
+          onClose();
+        },
+        audit: {
+          action: "close",
+          args: {},
+          targetId: activeSessionId,
+        },
+      },
+      {
         trigger: "fullscreen",
         description: "Toggle fullscreen",
         valid: true,
@@ -307,6 +372,72 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         },
         audit: { action: "commands", args: {} },
       },
+      {
+        // `:explorer <path-or-program>` drives the Windows Run dialog
+        // on the active remote session: Win+R → paste arg → Enter.
+        // Anything `start` accepts works — `cmd`, `notepad`,
+        // `\\server\share`, `C:\Users\Public`, `shell:startup`, even
+        // `https://example.com`. Argument validation matches the
+        // `open-path` mapping action: ≤ 1024 chars and no control
+        // characters (newline injection through Run could chain
+        // commands).
+        trigger: "explorer",
+        takesArgs: true,
+        description: explorerArgValid
+          ? `Run "${explorerArgPreview}" on the active session via the Run dialog`
+          : explorerArgRaw.length === 0
+            ? "Type a path or program after :explorer (e.g. :explorer cmd)"
+            : (explorerArgInvalidReason ?? "Invalid argument"),
+        valid: hasActiveSession && explorerArgValid,
+        invalidReason: !hasActiveSession
+          ? "No active session"
+          : explorerArgRaw.length === 0
+            ? "Argument required"
+            : explorerArgInvalidReason,
+        run: async () => {
+          if (!activeSessionId || !explorerArgValid) return;
+          const sess = sessions.find((s) => s.id === activeSessionId);
+          if (!sess) return;
+          onClose();
+          try {
+            // 1. Win+R — keysyms 0xffeb (Super_L) + 0x72 ("r").
+            sess.client.sendKeyEvent(1, 0xffeb);
+            sess.client.sendKeyEvent(1, 0x72);
+            sess.client.sendKeyEvent(0, 0x72);
+            sess.client.sendKeyEvent(0, 0xffeb);
+            await new Promise((r) => setTimeout(r, 250));
+
+            // 2. Push the argument onto the remote clipboard.
+            const stream = sess.client.createClipboardStream("text/plain");
+            const writer = new Guacamole.StringWriter(stream);
+            writer.sendText(explorerArgTrimmed);
+            writer.sendEnd();
+            sess.remoteClipboard = explorerArgTrimmed;
+            await new Promise((r) => setTimeout(r, 80));
+
+            // 3. Ctrl+V to paste.
+            sess.client.sendKeyEvent(1, 0xffe3);
+            sess.client.sendKeyEvent(1, 0x76);
+            sess.client.sendKeyEvent(0, 0x76);
+            sess.client.sendKeyEvent(0, 0xffe3);
+            await new Promise((r) => setTimeout(r, 80));
+
+            // 4. Enter to submit.
+            sess.client.sendKeyEvent(1, 0xff0d);
+            sess.client.sendKeyEvent(0, 0xff0d);
+          } catch {
+            /* swallow — non-Windows targets won't have Run */
+          }
+        },
+        audit: {
+          action: "explorer",
+          // Mirror `open-path`: never log the literal argument, only
+          // its length. A stored mapping cannot leak share names or
+          // internal hosts through the chained-hash audit log.
+          args: { arg_length: explorerArgTrimmed.length },
+          targetId: activeSessionId,
+        },
+      },
     ];
     return items;
   }, [
@@ -316,6 +447,11 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     navigate,
     onClose,
     sessions,
+    explorerArgRaw,
+    explorerArgTrimmed,
+    explorerArgValid,
+    explorerArgPreview,
+    explorerArgInvalidReason,
   ]);
 
   /** Resolve a user-defined mapping into something executable. Returns
@@ -386,8 +522,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           // mapping is valid as soon as a session opens after the
           // palette is created.
           const text = m.args.text;
-          const preview =
-            text.length <= 32 ? text : `${text.slice(0, 29)}…`;
+          const preview = text.length <= 32 ? text : `${text.slice(0, 29)}…`;
           return {
             trigger: m.trigger,
             description: `Paste "${preview}" into the active session`,
@@ -442,8 +577,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           // (`C:\Users\…`), `shell:` URIs (`shell:startup`), and
           // anything else `start` would accept on the remote box.
           const path = m.args.path;
-          const preview =
-            path.length <= 40 ? path : `${path.slice(0, 37)}…`;
+          const preview = path.length <= 40 ? path : `${path.slice(0, 37)}…`;
           return {
             trigger: m.trigger,
             description: `Open ${preview} on the active session`,
@@ -514,22 +648,31 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   /** Commands matching the current `:command` prefix (excludes mismatches). */
   const matchingCommands = useMemo(() => {
     if (!isCommandMode) return [] as ExecutableCommand[];
-    if (!commandSlug) return allCommands;
-    return allCommands.filter((c) => c.trigger.startsWith(commandSlug));
-  }, [isCommandMode, commandSlug, allCommands]);
+    if (!commandHead) return allCommands;
+    return allCommands.filter((c) => c.trigger.startsWith(commandHead));
+  }, [isCommandMode, commandHead, allCommands]);
 
-  /** Exact command match (or `null`). Drives validation + Enter behaviour. */
-  const exactCommand = useMemo(
-    () => allCommands.find((c) => c.trigger === commandSlug) ?? null,
-    [allCommands, commandSlug]
-  );
+  /** Exact command match (or `null`). Drives validation + Enter behaviour.
+   *  Commands that don't accept arguments are excluded once the user has
+   *  typed a space, so `:reload now` reports "Unknown command" instead of
+   *  silently triggering `:reload`. */
+  const exactCommand = useMemo(() => {
+    const match = allCommands.find((c) => c.trigger === commandHead) ?? null;
+    if (!match) return null;
+    if (commandSpaceIdx !== -1 && !match.takesArgs) return null;
+    return match;
+  }, [allCommands, commandHead, commandSpaceIdx]);
 
   /** Ghost-text suffix to render after the user's input. Empty string when
-   *  there is no unambiguous extension to suggest. */
+   *  there is no unambiguous extension to suggest, or when the user has
+   *  already typed past the trigger into argument territory. */
   const ghostSuffix = useMemo(() => {
-    if (!isCommandMode || !commandSlug) return "";
-    if (exactCommand) return "";
-    const candidates = matchingCommands.filter((c) => c.trigger !== commandSlug);
+    if (!isCommandMode || !commandHead) return "";
+    // Once the user types a space the trigger is locked in; ghost-text
+    // for arguments would just be misleading.
+    if (commandSpaceIdx !== -1) return "";
+    if (allCommands.some((c) => c.trigger === commandHead)) return "";
+    const candidates = matchingCommands.filter((c) => c.trigger !== commandHead);
     if (candidates.length === 0) return "";
     // Longest common prefix among candidates' triggers.
     const triggers = candidates.map((c) => c.trigger);
@@ -539,39 +682,35 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       while (i < lcp.length && i < t.length && lcp[i] === t[i]) i++;
       lcp = lcp.slice(0, i);
     }
-    if (lcp.length <= commandSlug.length) return "";
-    return lcp.slice(commandSlug.length);
-  }, [isCommandMode, commandSlug, matchingCommands, exactCommand]);
+    if (lcp.length <= commandHead.length) return "";
+    return lcp.slice(commandHead.length);
+  }, [isCommandMode, commandHead, commandSpaceIdx, matchingCommands, allCommands]);
 
   /** Whether the user typed a `:command` that doesn't resolve. Drives the
    *  red border + tooltip on the input. */
   const commandError = useMemo(() => {
     if (!isCommandMode) return null;
-    if (!commandSlug) return null; // just `:` — show the list, no error
-    if (matchingCommands.length === 0)
-      return `Unknown command: ':${commandSlug}'`;
+    if (!commandHead) return null; // just `:` — show the list, no error
+    if (matchingCommands.length === 0) return `Unknown command: ':${commandHead}'`;
     if (exactCommand && !exactCommand.valid)
       return exactCommand.invalidReason ?? "Command unavailable";
     return null;
-  }, [isCommandMode, commandSlug, matchingCommands, exactCommand]);
+  }, [isCommandMode, commandHead, matchingCommands, exactCommand]);
 
   /** Execute a command, fire-and-forget audit, then close. */
-  const executeCommand = useCallback(
-    (cmd: ExecutableCommand) => {
-      if (!cmd.valid) return;
-      // Audit first so the log captures intent even if the action throws.
-      void postCommandAudit({
-        trigger: `:${cmd.trigger}`,
-        action: cmd.audit.action,
-        args: cmd.audit.args,
-        target_id: cmd.audit.targetId ?? null,
-      }).catch(() => {
-        // Audit failures must never block the command itself.
-      });
-      void cmd.run();
-    },
-    []
-  );
+  const executeCommand = useCallback((cmd: ExecutableCommand) => {
+    if (!cmd.valid) return;
+    // Audit first so the log captures intent even if the action throws.
+    void postCommandAudit({
+      trigger: `:${cmd.trigger}`,
+      action: cmd.audit.action,
+      args: cmd.audit.args,
+      target_id: cmd.audit.targetId ?? null,
+    }).catch(() => {
+      // Audit failures must never block the command itself.
+    });
+    void cmd.run();
+  }, []);
 
   // Scroll selected item into view (works for both normal + command mode).
   useEffect(() => {
@@ -595,8 +734,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         isCommandMode &&
         ghostSuffix &&
         (e.key === "Tab" ||
-          (e.key === "ArrowRight" &&
-            inputRef.current?.selectionStart === query.length))
+          (e.key === "ArrowRight" && inputRef.current?.selectionStart === query.length))
       ) {
         e.preventDefault();
         setQuery(query + ghostSuffix);
@@ -704,9 +842,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               placeholder="Search connections, or type : for commands…"
               className="relative w-full bg-transparent text-sm outline-none placeholder:opacity-40"
               style={{
-                color: commandError
-                  ? "var(--color-danger, #ef4444)"
-                  : "var(--color-txt-primary)",
+                color: commandError ? "var(--color-danger, #ef4444)" : "var(--color-txt-primary)",
               }}
               autoComplete="off"
               spellCheck={false}
@@ -745,9 +881,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               )}
               {matchingCommands.map((cmd, i) => {
                 const isSelected = i === selectedIndex;
-                const isBuiltin = (BUILTIN_COMMANDS as readonly string[]).includes(
-                  cmd.trigger
-                );
+                const isBuiltin = (BUILTIN_COMMANDS as readonly string[]).includes(cmd.trigger);
                 return (
                   <div
                     key={cmd.trigger}
@@ -757,9 +891,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     className="flex items-center gap-3 px-4 py-2.5 mx-1 rounded-lg cursor-pointer transition-colors duration-100"
                     style={{
                       background: isSelected ? "var(--color-accent-dim)" : "transparent",
-                      color: cmd.valid
-                        ? "var(--color-txt-primary)"
-                        : "var(--color-txt-tertiary)",
+                      color: cmd.valid ? "var(--color-txt-primary)" : "var(--color-txt-tertiary)",
                       opacity: cmd.valid ? 1 : 0.6,
                     }}
                     onClick={() => executeCommand(cmd)}
@@ -780,9 +912,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium font-mono">
-                          :{cmd.trigger}
-                        </span>
+                        <span className="text-sm font-medium font-mono">:{cmd.trigger}</span>
                         <span
                           className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
                           style={{

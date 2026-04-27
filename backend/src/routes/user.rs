@@ -450,6 +450,8 @@ const ALLOWED_AUDIT_ACTIONS: &[&str] = &[
     "disconnect",
     "fullscreen",
     "commands",
+    "close",
+    "explorer",
     "open-connection",
     "open-folder",
     "open-tag",

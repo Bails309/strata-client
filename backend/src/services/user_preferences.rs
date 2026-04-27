@@ -14,7 +14,14 @@ use crate::error::AppError;
 
 /// Built-in command names — user-defined mapping triggers must not collide
 /// with these. Kept in sync with the frontend's built-in registry.
-const BUILTIN_COMMANDS: &[&str] = &["reload", "disconnect", "fullscreen", "commands"];
+const BUILTIN_COMMANDS: &[&str] = &[
+    "reload",
+    "disconnect",
+    "fullscreen",
+    "commands",
+    "close",
+    "explorer",
+];
 
 /// Allowed `action` values for a command mapping.
 const ALLOWED_ACTIONS: &[&str] = &[
@@ -62,9 +69,9 @@ fn validate_command_mappings(prefs: &Value) -> Result<(), AppError> {
     let Some(arr) = prefs.get("commandMappings") else {
         return Ok(());
     };
-    let arr = arr.as_array().ok_or_else(|| {
-        AppError::Validation("commandMappings must be an array".into())
-    })?;
+    let arr = arr
+        .as_array()
+        .ok_or_else(|| AppError::Validation("commandMappings must be an array".into()))?;
     if arr.len() > MAX_COMMAND_MAPPINGS {
         return Err(AppError::Validation(format!(
             "commandMappings: too many entries ({}, max {})",
@@ -81,10 +88,9 @@ fn validate_command_mappings(prefs: &Value) -> Result<(), AppError> {
         })?;
 
         // Trigger
-        let trigger = obj
-            .get("trigger")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::Validation(format!("commandMappings[{i}].trigger required")))?;
+        let trigger = obj.get("trigger").and_then(Value::as_str).ok_or_else(|| {
+            AppError::Validation(format!("commandMappings[{i}].trigger required"))
+        })?;
         if !is_valid_trigger(trigger) {
             return Err(AppError::Validation(format!(
                 "commandMappings[{i}].trigger must match [a-z0-9_-]{{1,32}}"
@@ -123,9 +129,7 @@ fn validate_command_mappings(prefs: &Value) -> Result<(), AppError> {
             "open-tag" => require_uuid(args, "tag_id", i)?,
             "open-page" => {
                 let path = args.get("path").and_then(Value::as_str).ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "commandMappings[{i}].args.path required"
-                    ))
+                    AppError::Validation(format!("commandMappings[{i}].args.path required"))
                 })?;
                 if !ALLOWED_PAGES.contains(&path) {
                     return Err(AppError::Validation(format!(
@@ -135,9 +139,7 @@ fn validate_command_mappings(prefs: &Value) -> Result<(), AppError> {
             }
             "paste-text" => {
                 let text = args.get("text").and_then(Value::as_str).ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "commandMappings[{i}].args.text required"
-                    ))
+                    AppError::Validation(format!("commandMappings[{i}].args.text required"))
                 })?;
                 if text.is_empty() {
                     return Err(AppError::Validation(format!(
@@ -152,9 +154,7 @@ fn validate_command_mappings(prefs: &Value) -> Result<(), AppError> {
             }
             "open-path" => {
                 let path = args.get("path").and_then(Value::as_str).ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "commandMappings[{i}].args.path required"
-                    ))
+                    AppError::Validation(format!("commandMappings[{i}].args.path required"))
                 })?;
                 if path.is_empty() {
                     return Err(AppError::Validation(format!(
@@ -195,9 +195,10 @@ fn require_uuid(
     key: &str,
     i: usize,
 ) -> Result<(), AppError> {
-    let s = args.get(key).and_then(Value::as_str).ok_or_else(|| {
-        AppError::Validation(format!("commandMappings[{i}].args.{key} required"))
-    })?;
+    let s = args
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Validation(format!("commandMappings[{i}].args.{key} required")))?;
     Uuid::parse_str(s)
         .map(|_| ())
         .map_err(|_| AppError::Validation(format!("commandMappings[{i}].args.{key} not a UUID")))

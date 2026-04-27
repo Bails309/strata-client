@@ -493,6 +493,24 @@ describe("Sessions", () => {
     expect(await screen.findByText("vnc")).toBeInTheDocument();
   });
 
+  it("shows web badge", async () => {
+    // rustguac parity Phase 2 — web kiosk sessions render a dedicated badge.
+    vi.mocked(getActiveSessions).mockResolvedValue([makeSession({ protocol: "web" })]);
+    await act(async () => {
+      renderSessions();
+    });
+    expect(await screen.findByText("web")).toBeInTheDocument();
+  });
+
+  it("shows vdi badge", async () => {
+    // rustguac parity Phase 3 — VDI containers render a dedicated badge.
+    vi.mocked(getActiveSessions).mockResolvedValue([makeSession({ protocol: "vdi" })]);
+    await act(async () => {
+      renderSessions();
+    });
+    expect(await screen.findByText("vdi")).toBeInTheDocument();
+  });
+
   it("shows unknown protocol badge", async () => {
     vi.mocked(getActiveSessions).mockResolvedValue([makeSession({ protocol: "telnet" })]);
     await act(async () => {

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Select from "../../components/Select";
 import { getTimezones } from "../../utils/time";
+import { getVdiImages } from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
 
 // ── Helper: Collapsible Section ─────────────────────────────────────
@@ -1532,3 +1533,311 @@ export function VncSections({
     </>
   );
 }
+
+// ── Web Browser Session Sections ────────────────────────────────────
+//
+// Phase 2 of rustguac parity (roadmap item `protocols-web-sessions`,
+// tracker docs/runbooks/rustguac-parity-tracker.md). A `web` connection
+// launches an ephemeral Chromium kiosk inside an Xvnc display and
+// tunnels it through guacd as a standard VNC session — the differences
+// from a normal VNC connection are entirely server-side, but admins
+// configure them through the fields below. All values land in
+// `connections.extra` JSONB alongside the regular protocol params.
+
+export function WebSections({
+  ex,
+  setEx,
+}: {
+  ex: (k: string) => string;
+  setEx: (k: string, v: string) => void;
+}) {
+  // `allowed_domains` is stored as a JSON-encoded string array inside
+  // `extra`. The chip editor below converts to/from a comma-separated
+  // textarea representation so admins can paste a list verbatim.
+  const allowedDomainsRaw = ex("allowed_domains");
+  let allowedDomains: string[] = [];
+  try {
+    const parsed = allowedDomainsRaw ? JSON.parse(allowedDomainsRaw) : [];
+    if (Array.isArray(parsed)) allowedDomains = parsed.filter((s) => typeof s === "string");
+  } catch {
+    /* tolerate legacy comma-separated values */
+    allowedDomains = allowedDomainsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  const setAllowedDomains = (next: string[]) => {
+    const cleaned = next.map((s) => s.trim()).filter(Boolean);
+    setEx("allowed_domains", cleaned.length ? JSON.stringify(cleaned) : "");
+  };
+
+  return (
+    <>
+      <Section title="Target URL" defaultOpen>
+        <FieldGrid>
+          <div className="form-group !mb-0 col-span-2">
+            <label title="The URL the kiosk Chromium instance navigates to when the session starts. Must include the scheme (https://...). Subject to the allowed-domains and server-side egress allow-list (system_settings.web_allowed_networks).">
+              Initial URL
+            </label>
+            <input
+              value={ex("url")}
+              onChange={(e) => setEx("url", e.target.value)}
+              placeholder="https://app.example.com/login"
+              type="url"
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Domain Allow-list">
+        <p className="text-xs opacity-60 mb-2">
+          Hostnames the kiosk Chromium is permitted to resolve. Leave empty to allow any host
+          that passes the server-side egress check. Wildcards like <code>*.example.com</code>
+          are honoured by Chromium's <code>--host-rules</code>.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0 col-span-2">
+            <label>Allowed Domains (one per line or comma-separated)</label>
+            <textarea
+              value={allowedDomains.join("\n")}
+              onChange={(e) =>
+                setAllowedDomains(e.target.value.split(/[\n,]/).map((s) => s.trim()))
+              }
+              rows={4}
+              placeholder={"example.com\n*.example.com\nauth.okta.com"}
+              className="font-mono text-sm"
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Login Automation">
+        <p className="text-xs opacity-60 mb-2">
+          Optionally run a registered server-side script over Chrome DevTools Protocol after the
+          page loads. Scripts are administered separately and reference by name to keep
+          connection rows compact and auditable.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="Identifier of a registered login script. Leave blank for no automation.">
+              Login Script
+            </label>
+            <input
+              value={ex("login_script")}
+              onChange={(e) => setEx("login_script", e.target.value)}
+              placeholder="okta-saml"
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Egress Allow-list (read-only)">
+        <p className="text-xs opacity-60">
+          Outbound network access is bounded server-side by the
+          <code className="mx-1">web_allowed_networks</code> system setting (CIDR list). Empty
+          allow-list denies all outbound traffic — operators must opt in to
+          <code className="mx-1">0.0.0.0/0</code> for public-internet access. Configure under
+          <strong className="mx-1">Admin → Network</strong>.
+        </p>
+      </Section>
+    </>
+  );
+}
+
+// ── VDI Desktop Container Sections ──────────────────────────────────
+//
+// Phase 3 of rustguac parity (roadmap item `protocols-vdi`, tracker
+// docs/runbooks/rustguac-parity-tracker.md). A `vdi` connection
+// launches a Strata-managed Docker container running xrdp on port 3389
+// and tunnels it through guacd as a standard RDP session. Operator
+// constraints (image whitelist, CPU/memory caps, idle timeout, env
+// injection, persistent home) all land in `connections.extra`.
+
+export function VdiSections({
+  ex,
+  setEx,
+}: {
+  ex: (k: string) => string;
+  setEx: (k: string, v: string) => void;
+}) {
+  const [images, setImages] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getVdiImages()
+      .then((res) => {
+        if (!cancelled) setImages(res.images);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err?.message ?? String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // env_vars are stored in `extra.env_vars` as a JSON-encoded
+  // {key:value} object. Reserved keys (VDI_USERNAME, VDI_PASSWORD) are
+  // stripped server-side regardless of what the admin enters here.
+  const envRaw = ex("env_vars");
+  let envEntries: Array<[string, string]> = [];
+  try {
+    const parsed = envRaw ? JSON.parse(envRaw) : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      envEntries = Object.entries(parsed).map(([k, v]) => [k, String(v ?? "")]);
+    }
+  } catch {
+    /* leave empty */
+  }
+  const setEnvEntries = (next: Array<[string, string]>) => {
+    const cleaned: Record<string, string> = {};
+    for (const [k, v] of next) {
+      const key = k.trim();
+      if (!key || key === "VDI_USERNAME" || key === "VDI_PASSWORD") continue;
+      cleaned[key] = v;
+    }
+    setEx("env_vars", Object.keys(cleaned).length ? JSON.stringify(cleaned) : "");
+  };
+
+  return (
+    <>
+      <Section title="Container Image" defaultOpen>
+        <FieldGrid>
+          <div className="form-group !mb-0 col-span-2">
+            <label title="The Docker image used to spawn the desktop container. The list is restricted to images whitelisted by the operator under Admin → System Settings.">
+              Image
+            </label>
+            <Select
+              value={ex("image")}
+              onChange={(v) => setEx("image", v)}
+              placeholder={
+                loadError
+                  ? `Failed to load images: ${loadError}`
+                  : images.length === 0
+                    ? "No images whitelisted — configure under Admin → System Settings"
+                    : "Select an image"
+              }
+              options={images.map((img) => ({ value: img, label: img }))}
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Resource Limits">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="Maximum CPU cores the container can use (Docker --cpus). Leave blank for unbounded.">
+              CPU Limit (cores)
+            </label>
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              value={ex("cpu_limit")}
+              onChange={(e) => setEx("cpu_limit", e.target.value)}
+              placeholder="2.0"
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="Maximum memory the container can use, in megabytes (Docker --memory). Leave blank for unbounded.">
+              Memory Limit (MB)
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={ex("memory_limit_mb")}
+              onChange={(e) => setEx("memory_limit_mb", e.target.value)}
+              placeholder="4096"
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Lifecycle">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="Minutes of inactivity after which the reaper destroys the container. Defaults to 30 when blank.">
+              Idle Timeout (minutes)
+            </label>
+            <input
+              type="number"
+              min="1"
+              value={ex("idle_timeout_mins")}
+              onChange={(e) => setEx("idle_timeout_mins", e.target.value)}
+              placeholder="30"
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2 mt-1"
+              title="Preserve the user's home directory between sessions on a bind mount. Disabled by default — every session starts from a fresh container."
+            >
+              <input
+                type="checkbox"
+                checked={ex("persistent_home") === "true"}
+                onChange={(e) => setEx("persistent_home", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Persistent home directory
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Environment Variables">
+        <p className="text-xs opacity-60 mb-2">
+          Injected into the container at start-up. <code>VDI_USERNAME</code> and{" "}
+          <code>VDI_PASSWORD</code> are reserved — Strata always supplies them at runtime and
+          will silently drop any matching entries here.
+        </p>
+        <div className="space-y-2">
+          {envEntries.map(([k, v], idx) => (
+            <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-start">
+              <input
+                value={k}
+                placeholder="KEY"
+                onChange={(e) => {
+                  const next = [...envEntries];
+                  next[idx] = [e.target.value, v];
+                  setEnvEntries(next);
+                }}
+                className="font-mono text-sm"
+              />
+              <input
+                value={v}
+                placeholder="value"
+                onChange={(e) => {
+                  const next = [...envEntries];
+                  next[idx] = [k, e.target.value];
+                  setEnvEntries(next);
+                }}
+                className="font-mono text-sm"
+              />
+              <button
+                type="button"
+                className="btn-sm"
+                onClick={() => {
+                  const next = envEntries.filter((_, i) => i !== idx);
+                  setEnvEntries(next);
+                }}
+                title="Remove this variable"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn-sm"
+            onClick={() => setEnvEntries([...envEntries, ["", ""]])}
+          >
+            + Add Variable
+          </button>
+        </div>
+      </Section>
+    </>
+  );
+}
+

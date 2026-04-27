@@ -209,6 +209,100 @@ Key performance settings in `common.fragment`:
 - `proxy_buffering off` — streams tunnel frames immediately with zero buffering
 - `gzip on` — compresses static assets and API responses
 
+### Web sessions and VDI desktops
+
+Strata Client ships two protocol drivers that run on the backend host
+rather than against an external server: `web` (kiosk Chromium inside
+`Xvnc`, tunnelled as VNC) and `vdi` (Strata-managed Docker container
+running `xrdp`, tunnelled as RDP). Both share the same backend image
+— there is **one** Docker image and **one** binary, with runtime
+feature flags controlling which protocols are active. See
+[`web-sessions.md`](web-sessions.md) and [`vdi.md`](vdi.md) for the
+protocol-specific operator guides.
+
+**Web sessions are part of the default deployment.** The unified
+backend image (Debian trixie-slim) ships `Xvnc` and `chromium` baked
+in, and `STRATA_WEB_ENABLED=true` is the default. No overlay or
+profile is required:
+
+```bash
+docker compose up -d --build
+```
+
+**VDI is gated behind an explicit overlay.** Mounting
+`/var/run/docker.sock` into the backend container effectively grants
+the backend host-root on the Docker daemon, so it is **not** in the
+default compose graph. Operators who want VDI must consciously layer
+[`docker-compose.vdi.yml`](../docker-compose.vdi.yml):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d --build
+```
+
+To make this the default for every `docker compose ...` invocation,
+set `COMPOSE_FILE` in `.env`:
+
+```env
+# Linux / macOS — colon separator
+COMPOSE_FILE=docker-compose.yml:docker-compose.vdi.yml
+# Windows — semicolon separator
+COMPOSE_FILE=docker-compose.yml;docker-compose.vdi.yml
+```
+
+> **Why stickiness matters.** Without `COMPOSE_FILE`, every operator
+> command must spell out both `-f` flags. A single
+> `docker compose up -d backend` (no overlay) silently drops the
+> docker.sock mount and the `STRATA_VDI_ENABLED` flag, and the next
+> VDI tunnel attempt returns a 503 "vdi driver unavailable".
+
+#### VDI runtime requirements (v0.30.0)
+
+Three operational details became apparent during the v0.30.0
+runtime delivery and are documented here for production deployments:
+
+1. **`docker.sock` permission.** The backend image runs as the
+   unprivileged `strata` user via `gosu strata strata-backend`. The
+   entrypoint script ([`backend/entrypoint.sh`](../backend/entrypoint.sh))
+   distinguishes Linux distros (where the socket is owned by a
+   non-zero `docker` group GID) from Docker Desktop on Windows / macOS
+   (where the socket is owned by `root:root` GID 0). On Linux it
+   creates a `docker-host` group at the socket's GID and adds
+   `strata` to it; on Docker Desktop it `chgrp strata` +
+   `chmod g+rw` the bind-mount in place. Both branches log the chosen
+   path so operators can audit it. **No operator action required**;
+   the entrypoint runs automatically on every container start.
+2. **Docker network resolution.** Docker Compose prefixes network
+   names with the project name, so the network the rest of the stack
+   joins is `<project>_guac-internal`, not `guac-internal`. The
+   overlay sets `STRATA_VDI_NETWORK` to
+   `${COMPOSE_PROJECT_NAME:-strata-client}_guac-internal` so the
+   default Compose project name "just works". Operators who set a
+   custom `COMPOSE_PROJECT_NAME` get the right resolution
+   automatically; operators who deploy outside Compose (Kubernetes,
+   direct `docker run`) must override `STRATA_VDI_NETWORK` to a
+   network that exists.
+3. **Host resource budget.** Each VDI container is a full Linux
+   desktop. Set `system_settings.max_vdi_containers` (Admin →
+   Settings → VDI) to bound concurrency on a single backend replica;
+   pair this with operator-supplied `cpu_limit` and `memory_limit_mb`
+   on the connection row to cap per-container resource usage.
+
+**Decision matrix:**
+
+| Goal | Command |
+|---|---|
+| RDP / SSH / VNC + web (default) | `docker compose up -d --build` |
+| Add bundled PostgreSQL | `docker compose --profile local-db up -d --build` |
+| Add VDI | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d --build` |
+| Everything | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml --profile local-db up -d --build` |
+
+`-f` flags select which compose files to merge (structural — for
+VDI's host-root mount). `--profile` flags select which optional
+services to start (local postgres, extra guacd). The two are
+independent. TLS is terminated by the frontend nginx gateway using
+the certificates mounted from `./certs/` — there is no separate
+reverse-proxy service.
+
 #### Using an External Reverse Proxy Instead
 
 If you must use a different reverse proxy (e.g., Traefik, HAProxy, Caddy, or a cloud load balancer), you can modify `docker-compose.yml` to expose the backend and frontend ports directly. Key requirements for your proxy:

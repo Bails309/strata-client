@@ -71,6 +71,7 @@ vi.mock("../api", () => ({
   getUnmappedAccounts: vi.fn().mockResolvedValue([]),
   testRotation: vi.fn(),
   getCheckoutRequests: vi.fn().mockResolvedValue([]),
+  getVdiImages: vi.fn().mockResolvedValue({ images: [] }),
 }));
 
 vi.mock("../contexts/SettingsContext", () => ({
@@ -249,6 +250,7 @@ describe("AdminSettings", () => {
       "Access",
       "AD Sync",
       "Sessions",
+      "VDI",
       "Security",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
@@ -2376,6 +2378,45 @@ describe("ConnectionForm protocol sections", () => {
     await user.click(screen.getByText("VNC"));
     // VNC Authentication section is defaultOpen, so Password should be visible
     expect(screen.getByText("Password")).toBeInTheDocument();
+  });
+
+  it("hides Hostname/Port/Domain fields when protocol is Web Browser", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    // RDP is the default — confirm the network fields are visible first.
+    expect(screen.getByPlaceholderText("10.0.0.10")).toBeInTheDocument();
+    // Switch to Web Browser.
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText("Web Browser"));
+    // Hostname/Port/Domain row should disappear because the backend
+    // allocates a localhost VNC display for `web` connections.
+    expect(screen.queryByPlaceholderText("10.0.0.10")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("EXAMPLE.COM")).not.toBeInTheDocument();
+    // Web-specific protocol parameter section should appear.
+    expect(screen.getByText(/Target URL/)).toBeInTheDocument();
+  });
+
+  it("hides Hostname/Port/Domain fields when protocol is VDI Desktop", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText("VDI Desktop"));
+    // The backend tunnels guacd to a managed container's published
+    // port — the operator never sets a hostname/port for a VDI conn.
+    expect(screen.queryByPlaceholderText("10.0.0.10")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("EXAMPLE.COM")).not.toBeInTheDocument();
   });
 
   it("calls createConnection on form submit", async () => {

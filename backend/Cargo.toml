@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "0.28.0"
+version = "0.30.0"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"
@@ -40,6 +40,14 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], defau
 
 # Cryptography (envelope encryption)
 aes-gcm = "0.10"
+# Chromium Login Data password store (rustguac parity, web sessions): the
+# Linux `--password-store=basic` profile uses AES-128-CBC with a key derived
+# via PBKDF2-HMAC-SHA1 from the literal "peanuts" passphrase + "saltysalt"
+# salt. RustCrypto split-crate ecosystem; small self-contained deps.
+aes = "0.8"
+cbc = { version = "0.1", features = ["std"] }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
 rand = "0.10"
 base64 = "0.22"
 sha2 = "0.11"
@@ -93,6 +101,48 @@ lettre = { version = "0.11", default-features = false, features = [
 mrml = { version = "5", default-features = false, features = ["parse", "render"] }
 tera = { version = "1", default-features = false }
 async-trait = "0.1"
+
+# Web Browser Sessions (rustguac parity, Phase 2 — see
+# docs/runbooks/rustguac-parity-tracker.md)
+# `ipnet`  — CIDR parsing for the `web_allowed_networks` egress allow-list.
+# `url`    — host extraction from connection URLs before the CIDR check.
+ipnet = "2"
+url = "2"
+
+# VDI Desktop Containers (rustguac parity, Phase 3 — see
+# docs/runbooks/rustguac-parity-tracker.md). `bollard` talks to the
+# Docker Engine API over /var/run/docker.sock. The dependency is
+# pulled in unconditionally because the trait surface is shared, but
+# `DockerVdiDriver` is only constructed when the operator opts in via
+# the `docker-compose.vdi.yml` overlay (which mounts docker.sock into
+# the backend — see the ⚠️ HOST-ROOT MOUNT warning at the top of
+# that file).
+#
+# Default features are kept on — the unix-socket transport is gated
+# behind the default `ssl` feature in bollard 0.18 (it brings in the
+# hyper-unix-connector). Stripping defaults makes bollard reject the
+# `unix:///var/run/docker.sock` URI at runtime with "URI scheme is
+# not supported". Debian trixie-slim already ships libssl3 for
+# chromium so the OpenSSL transitive dep costs us nothing.
+bollard = "0.18"
+
+# rusqlite — Chromium `Login Data` SQLite writer for the web-session
+# autofill path (rustguac parity C4). `bundled` ships libsqlite3
+# statically so the file format is locked to a known SQLite version
+# and operators don't need a system libsqlite3 in the runtime image.
+# The file we write is per-session ephemeral, no migrations, no async
+# — sqlx is the wrong tool here.
+#
+# Pinned to 0.33 (not rustguac's 0.39) because both crates declare
+# `links = "sqlite3"` and Cargo allows only one version of
+# libsqlite3-sys per build graph. sqlx 0.8.x pins libsqlite3-sys
+# ^0.30.1; rusqlite 0.33 is the version that also uses
+# libsqlite3-sys ^0.30 (0.34 jumps to 0.32, 0.39 to 0.37). The API
+# surface we touch (Connection::open, execute_batch, prepare,
+# params!, query_row) is unchanged across these releases, so this is
+# a transparent downgrade. Bump alongside sqlx when sqlx adopts a
+# newer libsqlite3-sys.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 lto = true

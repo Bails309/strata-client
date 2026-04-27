@@ -254,6 +254,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/checkout-requests",
             get(admin::list_checkout_requests),
         )
+        .route("/api/admin/vdi/images", get(admin::list_vdi_images))
+        .route("/api/admin/vdi/containers", get(admin::list_vdi_containers))
+        .route("/api/admin/vdi/health", get(admin::vdi_health))
+        .route("/api/admin/web-sessions/stats", get(admin::web_sessions_stats))
         .route("/api/recordings/{filename}", get(user::get_recording))
         .route("/api/admin/roadmap/{item_id}", put(roadmap::set_status))
         .layer(middleware::from_fn(require_admin))
@@ -530,6 +534,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         std::env::remove_var("STRATA_ALLOWED_ORIGINS");

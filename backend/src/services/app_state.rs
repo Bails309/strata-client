@@ -7,6 +7,9 @@ use crate::db::Database;
 use crate::services::file_store::FileStore;
 use crate::services::guacd_pool::GuacdPool;
 use crate::services::session_registry::SessionRegistry;
+use crate::services::vdi::VdiDriver;
+use crate::services::web_runtime::WebRuntimeRegistry;
+use crate::services::web_session::WebDisplayAllocator;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootPhase {
@@ -21,6 +24,21 @@ pub struct AppState {
     pub session_registry: SessionRegistry,
     pub guacd_pool: Option<GuacdPool>,
     pub file_store: FileStore,
+    /// Allocator for X-display numbers used by `web` connections (Phase
+    /// 2 of rustguac parity, see `services/web_session.rs`).
+    pub web_displays: Arc<WebDisplayAllocator>,
+    /// End-to-end web session spawn registry (Xvnc + Chromium kiosk
+    /// orchestrator, rustguac parity Phase 2 spawn runtime). Shares
+    /// the [`WebDisplayAllocator`] above so the admin stats endpoint
+    /// can report a single in-use count.
+    pub web_runtime: Arc<WebRuntimeRegistry>,
+    /// Driver used to spawn / reap `vdi` connection containers (Phase 3
+    /// of rustguac parity, see `services/vdi.rs`). Defaults to
+    /// [`NoopVdiDriver`] which fails fast with `DriverUnavailable`.
+    /// Replaced with [`crate::services::vdi_docker::DockerVdiDriver`] at
+    /// boot when `STRATA_VDI_ENABLED=true` and `/var/run/docker.sock`
+    /// is mounted (the `vdi` compose profile).
+    pub vdi_driver: Arc<dyn VdiDriver>,
     pub started_at: Instant,
 }
 
@@ -70,6 +88,9 @@ mod tests {
             session_registry: SessionRegistry::new(),
             guacd_pool: None,
             file_store: FileStore::new(std::path::PathBuf::from("/tmp/strata-files")).await,
+            web_displays: Arc::new(WebDisplayAllocator::new()),
+            web_runtime: Arc::new(WebRuntimeRegistry::new(Arc::new(WebDisplayAllocator::new()))),
+            vdi_driver: Arc::new(NoopVdiDriver::default()),
             started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);

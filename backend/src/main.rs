@@ -219,6 +219,50 @@ async fn main() -> anyhow::Result<()> {
     // Clone the pool before `db` is moved into state (needed by background tasks)
     let db_pool = db.pool.clone();
 
+    // ── VDI driver selection ────────────────────────────────────────
+    //
+    // The live `DockerVdiDriver` is only constructed when the operator
+    // has explicitly opted in to mounting `/var/run/docker.sock` into
+    // the backend (see the `vdi` profile in docker-compose.yml — that
+    // mount = HOST ROOT, hence the opt-in). On any other deployment
+    // we fall back to the no-op driver, which fails fast on
+    // ensure_container with a clear `DriverUnavailable` message so a
+    // misconfigured `vdi` connection never silently hangs.
+    let vdi_driver: std::sync::Arc<dyn services::vdi::VdiDriver> =
+        if std::env::var("STRATA_VDI_ENABLED").as_deref() == Ok("true") {
+            // Allow operators to override the docker network spawned VDI
+            // containers join. Required when the compose project name
+            // prefixes the network (e.g. `strata-client_guac-internal`).
+            let network = std::env::var("STRATA_VDI_NETWORK")
+                .unwrap_or_else(|_| services::vdi_docker::DEFAULT_VDI_NETWORK.to_string());
+            match services::vdi_docker::DockerVdiDriver::connect(&network) {
+                Ok(driver) => {
+                    tracing::warn!(
+                        network = %network,
+                        "VDI driver: connected to docker daemon via /var/run/docker.sock. \
+                         Backend has HOST-ROOT capability via the docker socket — treat as a \
+                         privileged service."
+                    );
+                    std::sync::Arc::new(driver)
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "STRATA_VDI_ENABLED=true but DockerVdiDriver init failed: {e}. \
+                         Falling back to NoopVdiDriver (vdi connections will return 503)."
+                    );
+                    std::sync::Arc::new(services::vdi::NoopVdiDriver::default())
+                }
+            }
+        } else {
+            std::sync::Arc::new(services::vdi::NoopVdiDriver::default())
+        };
+
+    // Shared web display allocator. Both `AppState.web_displays`
+    // (admin stats endpoint) and the spawn registry reference the
+    // same instance so in-use counts stay consistent.
+    let web_displays =
+        std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new());
+
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
         phase: BootPhase::Running,
@@ -230,6 +274,11 @@ async fn main() -> anyhow::Result<()> {
             "/tmp/strata-files",
         ))
         .await,
+        web_displays: web_displays.clone(),
+        web_runtime: std::sync::Arc::new(
+            crate::services::web_runtime::WebRuntimeRegistry::new(web_displays),
+        ),
+        vdi_driver,
         started_at: std::time::Instant::now(),
     }));
 
@@ -259,6 +308,9 @@ async fn main() -> anyhow::Result<()> {
         // (W2-5 / W2-8) moved into a dedicated service so the error path is
         // explicit rather than `let _ = sqlx::query(...)`.
         services::session_cleanup::spawn_session_cleanup_task(db_pool.clone(), shutdown.clone()),
+        // ── Spawn VDI container reaper (rustguac parity, Phase 3) ──
+        // No-op when STRATA_VDI_ENABLED is unset (NoopVdiDriver).
+        services::session_cleanup::spawn_vdi_reaper(state.clone(), shutdown.clone()),
     ];
 
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;

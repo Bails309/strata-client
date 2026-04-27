@@ -679,7 +679,7 @@ All services in the Docker Compose stack apply security constraints:
 |---|---|
 | `security_opt: no-new-privileges:true` | All services |
 | `cap_drop: ALL` | All services |
-| `cap_add` (minimal) | `frontend` / `caddy` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
+| `cap_add` (minimal) | `frontend` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
 | `read_only: true` + `tmpfs` | `frontend` |
 | Resource limits (`cpus`, `memory`) | `guacd`, `backend`, `postgres-local` |
 
@@ -744,16 +744,31 @@ Quick Share provides session-scoped temporary file hosting so users can transfer
 
 ---
 
-## TLS & Reverse Proxy (Caddy)
+## TLS & Reverse Proxy
 
-The optional Caddy reverse proxy (`--profile https`) provides:
+TLS is terminated by the frontend **nginx** container, which also
+acts as the gateway for `/api/*` (proxied to the backend) and the
+guacamole tunnel WebSocket. The split config files
+(`common.fragment`, `http_only.conf`, `https_enabled.conf`) are
+selected at startup by `ssl-init.sh` based on whether PEM material
+is present in `/etc/nginx/ssl`.
 
-- **Automatic HTTPS** — Let's Encrypt certificates obtained and renewed automatically when `STRATA_DOMAIN` is set
-- **HTTP/3 (QUIC)** — UDP port 443 for modern browsers
-- **Security headers** — `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Server` header stripped
-- **Compression** — gzip and zstd
+When TLS is enabled the gateway provides:
 
-Caddy runs on the internal Docker network and proxies to the backend and frontend containers. Certificate private keys are stored in the `caddy-data` Docker volume.
+- **HTTPS** — operator-supplied certificates mounted read-only from
+  `./certs/` into `/etc/nginx/ssl`. Bring your own Let's Encrypt /
+  ACME client, or terminate TLS at an upstream load balancer and
+  point the backend at HTTP only.
+- **Automatic HTTP-to-HTTPS redirect** — enabled when certs are
+  present.
+- **Security headers** — `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and the
+  `Server` header stripped.
+- **Compression** — gzip on static assets and API responses.
+
+The nginx container runs unprivileged with `cap_drop: ALL` and
+adds back only `NET_BIND_SERVICE` so it can bind to ports 80/443.
 
 ---
 
@@ -805,7 +820,7 @@ The proxy operates entirely in the browser (client-side JavaScript). No keysym r
 
 ## Recommendations for Production
 
-1. **TLS everywhere** — use the built-in Caddy profile (`--profile https`) or terminate TLS at an external reverse proxy
+1. **TLS everywhere** — supply certificates to the frontend nginx gateway via `./certs/`, or terminate TLS at an external reverse proxy / load balancer
 2. **External Vault** — for production, use an external Vault cluster with Shamir's Secret Sharing (multiple key shares) and AppRole authentication instead of a single unseal key and root token
 3. **Vault AppRole** — use AppRole authentication instead of static tokens; rotate credentials regularly
 4. **Restrict CORS** — set `STRATA_ALLOWED_ORIGINS` to your specific frontend domain (e.g., `https://strata.example.com`).
@@ -815,3 +830,94 @@ The proxy operates entirely in the browser (client-side JavaScript). No keysym r
 8. **Log forwarding** — forward the backend's structured JSON logs to a SIEM or log aggregation service
 9. **Container scanning** — scan the custom guacd and backend images for vulnerabilities in CI
 10. **Backup unseal key** — if using the bundled Vault, back up the `backend-config` volume containing the unseal key and root token
+
+---
+
+## Web Sessions and VDI: extended threat model
+
+Strata's `web` and `vdi` connection types extend the attack surface
+because the backend takes on the role of a workload supervisor — see
+[`web-sessions.md`](web-sessions.md) and [`vdi.md`](vdi.md) for the
+operator-facing documentation.
+
+### Web Sessions (`web` protocol)
+
+- **SSRF.** A `web` connection asks the backend to dial an arbitrary
+  URL. The backend resolves the host and refuses unless **every**
+  resolved IP falls inside the operator's CIDR allow-list
+  (`system_settings.web_allowed_networks`). The allow-list is
+  fail-closed: an empty list denies all outbound traffic. This
+  defeats DNS rebinding via mixed A records.
+- **Profile reuse.** Each Chromium kiosk launches with a fresh
+  `--user-data-dir=/tmp/strata-chromium-{uuid}`. The directory is
+  destroyed at session end. Bookmarks, cookies, and history do not
+  survive the tab close.
+- **Autofill secrecy.** Where the optional Login Data SQLite writer
+  is used, the AES-128-CBC encryption key is derived per-session via
+  PBKDF2-SHA1 and the SQLite file lives only in the ephemeral profile
+  directory. The DB is destroyed with the profile.
+- **CDP exposure.** The Chrome DevTools Protocol port binds to
+  `127.0.0.1` only — never the Docker bridge. Login automation runs
+  inside the backend's network namespace.
+- **Domain restriction.** Chromium's `--host-rules` rewrites every
+  non-allowed host to `~NOTFOUND`. This is in addition to the egress
+  CIDR allow-list, not a replacement for it.
+
+### VDI Desktop Containers (`vdi` protocol)
+
+- **`docker.sock` is host root.** Mounting `/var/run/docker.sock` into
+  the backend container is effectively granting the backend the
+  ability to spawn containers — including privileged ones — on the
+  host. Operators must opt in explicitly via the
+  [`docker-compose.vdi.yml`](../docker-compose.vdi.yml) overlay file
+  (the default compose graph deliberately omits the mount). A
+  sidecar driver running in a separate, more locked-down namespace
+  is recommended for production deployments.
+- **Image whitelist.** Only operator-approved images may be
+  referenced as the `image` field of a `vdi` connection. Matching is
+  strict equality — there is no glob, tag, or digest substitution
+  because that would let a connection silently pin to a different
+  artifact than the operator approved. Whitelist failures emit a
+  `vdi.image.rejected` audit event.
+- **Reserved env keys.** `VDI_USERNAME` and `VDI_PASSWORD` are
+  always supplied at runtime by the backend. Even if these keys are
+  smuggled into the connection's `env_vars`, they are stripped at
+  parse time and overwritten at injection time.
+- **Ephemeral credentials (v0.30.0).** Operators do not have to
+  populate `username`/`password` on a VDI connection row. When the
+  credential cascade resolves to no password, the runtime auto-
+  provisions a sanitised POSIX username (deterministic per Strata
+  user) and a fresh 24-character alphanumeric password per spawn.
+  The password is never written to disk on the backend; it lives in
+  the spawned container's environment block and is invalidated when
+  the container is destroyed.
+- **Persistent home isolation.** Persistent homes are bind-mounted
+  per `(connection_id, user_id)` pair, never shared. A user with
+  access to two VDI connections gets two homes; sharing one
+  connection across users does not share the home.
+- **TLS overrides are scoped (v0.30.0).** `ignore-cert=true` and
+  `security=any` are forced for `vdi` connections only — RDP
+  connections to operator-managed Windows hosts continue to honour
+  per-connection TLS settings. The forced overrides are safe for VDI
+  because both ends of the RDP hop are Strata-controlled and the
+  traffic stays on the internal `guac-internal` Compose bridge.
+- **Reaper semantics.** The xrdp WTSChannel disconnect frame
+  classifies tab-close vs logout vs idle-timeout. Logouts and
+  idle-timeouts destroy the container immediately; tab-closes retain
+  for reuse within the idle window. Each destroy emits a
+  `vdi.container.destroy` audit event with the classified reason.
+- **Concurrency.** `system_settings.max_vdi_containers` bounds the
+  number of simultaneous containers per backend replica (admin UI:
+  Admin → Settings → VDI). Operators should set this to match the
+  host's CPU / RAM budget; the default is unbounded.
+- **Network resolution (v0.30.0).** The `STRATA_VDI_NETWORK` env var
+  selects which Docker network the spawned containers join. Default
+  in the overlay is the Compose-prefixed `guac-internal`. Operators
+  who deploy outside Compose must override this to a network that
+  exists on their Docker daemon.
+- **Socket permission handling (v0.30.0).** The backend runs as the
+  unprivileged `strata` user. `entrypoint.sh` either creates a
+  `docker-host` group at the socket's GID (Linux distros) or
+  `chgrp` + `chmod g+rw` the bind-mount in place (Docker Desktop GID
+  0). The socket access decision is logged at startup so operators
+  can audit which path the entrypoint took.

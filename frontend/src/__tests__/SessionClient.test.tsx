@@ -448,4 +448,27 @@ describe("SessionClient", () => {
     });
     expect(root.getByText("Saved Credential Profile")).toBeInTheDocument();
   });
+
+  it("does not prompt for credentials on a VDI connection", async () => {
+    // VDI tunnels as RDP at the wire level but Strata auto-provisions
+    // ephemeral credentials on the backend (the entrypoint creates
+    // the local Linux account from VDI_USERNAME/VDI_PASSWORD), so the
+    // operator should never see a credentials dialog.
+    vi.mocked(api.getConnectionInfo).mockResolvedValue({
+      protocol: "vdi",
+      has_credentials: false,
+    } as any);
+    vi.mocked(api.getCredentialProfiles).mockResolvedValue([]);
+
+    await renderSessionClient();
+
+    // We should land in the "connected" phase, which means a session
+    // was created without ever showing the credentials prompt.
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalled();
+    });
+    const root = within(document.getElementById("root")!);
+    expect(root.queryByText(/Connect to (RDP|VDI)/i)).not.toBeInTheDocument();
+    expect(root.queryByText("Saved Credential Profile")).not.toBeInTheDocument();
+  });
 });

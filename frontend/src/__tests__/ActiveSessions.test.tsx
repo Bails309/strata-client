@@ -173,6 +173,28 @@ describe("ActiveSessions", () => {
     expect(screen.getByText("telnet")).toBeInTheDocument();
   });
 
+  it("renders web protocol badge", async () => {
+    // Web Browser sessions (rustguac parity Phase 2) get their own success-styled badge.
+    vi.mocked(getActiveSessions).mockResolvedValue([
+      makeSession({ session_id: "sw", protocol: "web", connection_name: "Okta Login" }),
+    ]);
+    await act(async () => {
+      render(<ActiveSessions />);
+    });
+    expect(await screen.findByText("web")).toBeInTheDocument();
+  });
+
+  it("renders vdi protocol badge", async () => {
+    // VDI desktop containers (rustguac parity Phase 3) get their own accent-styled badge.
+    vi.mocked(getActiveSessions).mockResolvedValue([
+      makeSession({ session_id: "sd", protocol: "vdi", connection_name: "Ubuntu Desktop" }),
+    ]);
+    await act(async () => {
+      render(<ActiveSessions />);
+    });
+    expect(await screen.findByText("vdi")).toBeInTheDocument();
+  });
+
   it("toggles all sessions with select-all checkbox", async () => {
     vi.mocked(getActiveSessions).mockResolvedValue([
       makeSession({ session_id: "s1" }),

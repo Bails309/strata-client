@@ -1,0 +1,54 @@
+# Strata — VDI overlay
+#
+# Apply this overlay to the default compose file to enable the `vdi`
+# connection protocol. It mounts /var/run/docker.sock into the backend
+# (which Bollard talks to in order to spawn / reap desktop containers)
+# and flips STRATA_VDI_ENABLED=true.
+#
+# ⚠️  SECURITY WARNING — MOUNTING /var/run/docker.sock GIVES THE
+# BACKEND ROOT ON THE HOST. Anyone with control of the backend
+# process (RCE, container escape, supply-chain compromise) can:
+#   - Start any image with `--privileged --pid=host --net=host`
+#   - Mount `/` from the host as a writable volume
+#   - Run as uid 0 outside the container
+#
+# Only apply this overlay if:
+#   1. You have a hard requirement for the `vdi` connection protocol.
+#   2. You understand that Strata is now a privileged service in your
+#      network policy (firewall, network segmentation, audit log
+#      retention, vulnerability-management cadence).
+#   3. You have whitelisted only the exact image tags you've reviewed
+#      in `vdi_image_whitelist` (Admin → Settings → VDI). The whitelist
+#      is strict-equality — `:latest` is never implicitly trusted.
+#   4. You have set `max_vdi_containers` to a sensible per-replica
+#      cap (Admin → Settings → VDI).
+#
+# The production-recommended alternative is a privileged sidecar
+# exposing a narrow gRPC API to the backend (no docker.sock in the
+# backend itself). This is the v1 simple path; track the sidecar work
+# as a follow-up before exposing VDI to untrusted users.
+#
+# ─ Usage ─
+#   docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d
+#
+# Or set COMPOSE_FILE in your .env so every compose command picks both up:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.vdi.yml
+
+services:
+  backend:
+    volumes:
+      # ⚠️  HOST-ROOT MOUNT — see security warning above.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent-home base for VDI containers (per-(connection,user)
+      # subdirectories under here are bind-mounted into containers
+      # whose connection has `persistent_home=true`). Must exist on
+      # the host with mode 0700 owned by the docker daemon's GID.
+      - ${VDI_HOME_BASE:-./vdi-homes}:/var/lib/strata/vdi-homes
+    environment:
+      - STRATA_VDI_ENABLED=true
+      - STRATA_VDI_HOME_BASE=/var/lib/strata/vdi-homes
+      # Docker network spawned VDI containers join. Compose prefixes
+      # network names with the project name, so the actual network is
+      # `<project>_guac-internal`. Override here if you've set
+      # `COMPOSE_PROJECT_NAME` to anything other than the default.
+      - STRATA_VDI_NETWORK=${COMPOSE_PROJECT_NAME:-strata-client}_guac-internal

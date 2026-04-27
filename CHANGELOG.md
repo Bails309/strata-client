@@ -5,6 +5,393 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] — 2026-04-27
+
+### Runtime delivery: Web Browser Sessions and VDI Desktop Containers
+
+This release **ships the live runtime spawn** for the two new
+connection protocols whose pure-logic foundation landed in v0.29.0.
+Both protocols are now end-to-end functional in the default compose
+graph (web) and via the documented overlay (VDI). Connecting to a
+`web` or `vdi` connection from the browser now actually launches the
+backing kiosk / container, tunnels it through guacd, and delivers
+pixels to the operator's tab. The roadmap items
+`protocols-web-sessions` and `protocols-vdi` move from **In Progress**
+to **Shipped** in the admin UI.
+
+### Web Browser Sessions — runtime delivery
+
+- **End-to-end spawn pipeline.** New
+  [`backend/src/services/web_runtime.rs`](backend/src/services/web_runtime.rs)
+  ties the v0.29.0 foundation modules together into a single
+  `WebRuntimeRegistry::ensure(connection_id, user_id, session_id, spec)`
+  call site invoked from the tunnel handler:
+  1. Allocate an X-display (`:100`–`:199`) via `WebDisplayAllocator`.
+  2. Allocate a CDP debug port (`9222`–`9421`) via `CdpPortAllocator`.
+  3. Create a per-session ephemeral profile dir
+     (`/tmp/strata-chromium-{uuid}`).
+  4. Write the operator-supplied `Login Data` autofill row when the
+     connection is configured with credentials, encrypted with
+     Chromium's per-profile AES-128-CBC key
+     ([`backend/src/services/web_autofill.rs`](backend/src/services/web_autofill.rs)).
+  5. Spawn `Xvnc :{display} -SecurityTypes None -localhost yes
+     -geometry {width}x{height}` and wait for it to bind on the
+     allocated VNC port.
+  6. Spawn `chromium --kiosk --user-data-dir={profile}
+     --remote-debugging-address=127.0.0.1
+     --remote-debugging-port={cdp}
+     --host-rules="MAP * ~NOTFOUND, MAP {allowed} {allowed}"
+     --start-maximized {url}` under `DISPLAY=:{display}`.
+  7. Detect immediate-exit crashes (Chromium dies within 500 ms of
+     spawn) and surface them as `WE::ChromiumImmediateExit`.
+  8. Run the configured login script via the CDP transport
+     ([`backend/src/services/web_cdp.rs`](backend/src/services/web_cdp.rs),
+     [`backend/src/services/web_login_script.rs`](backend/src/services/web_login_script.rs))
+     to handle the SSO redirect chain before guacd attaches.
+  9. Register the handle so subsequent reconnects against the same
+     `(connection_id, user_id)` reuse the live process pair without
+     re-spawning.
+- **Tunnel integration.** When a tunnel opens against a `web`
+  connection, the route in
+  [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)
+  rewrites `wire_protocol = "vnc"` and substitutes the operator-typed
+  hostname/port with `127.0.0.1:{5900+display}` returned by the
+  runtime. The original `web` label is preserved on `nvr_protocol` so
+  recordings keep the operator-facing name.
+- **Viewport-matched framebuffer.** The kiosk's Xvnc geometry is now
+  threaded from the operator's actual browser window dimensions,
+  matching the v0.29.0 RDP behaviour for `width`/`height`/`dpi`. New
+  fields `window_width` / `window_height` on
+  [`ChromiumLaunchSpec`](backend/src/services/web_session.rs) and
+  [`WebSpawnSpec`](backend/src/services/web_runtime.rs); existing
+  fixture tests updated to populate them.
+
+### VDI Desktop Containers — runtime delivery
+
+- **Live `DockerVdiDriver`.** New
+  [`backend/src/services/vdi_docker.rs`](backend/src/services/vdi_docker.rs)
+  implements `VdiDriver` against the `bollard` 0.18 Docker client,
+  with default features so the `unix-socket` transport is available
+  on Linux backends. `ensure_container` is idempotent: the
+  deterministic name `strata-vdi-{conn[..12]}-{user[..12]}` lets a
+  re-open of the same `(connection, user)` pair land on the same
+  running container, preserving the persistent home and
+  ephemeral-but-sticky session state. `connect(network)` accepts an
+  override so the driver attaches new containers to whichever network
+  Compose actually created (see "Network resolution" below).
+- **Ephemeral RDP credentials (auto-provisioning).** Operators no
+  longer have to populate `username`/`password` on a VDI connection
+  row — the tunnel route in
+  [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs) now
+  calls
+  [`crate::services::vdi::ephemeral_credentials(&user.username)`](backend/src/services/vdi.rs)
+  when the credential cascade resolves to no password. The function
+  returns a sanitised POSIX username (deterministic per Strata user)
+  and a fresh 24-character alphanumeric password, both of which are
+  injected into the spawned container as `VDI_USERNAME` /
+  `VDI_PASSWORD`. Because xrdp inside the container authenticates
+  against the same env-var pair, every VDI session gets a fresh
+  password without operator interaction. The frontend
+  [`SessionClient.tsx`](frontend/src/pages/SessionClient.tsx) RDP
+  prompt branch is updated to skip the credential dialog for `vdi`,
+  so users never see "enter your credentials" for an internally
+  managed account.
+- **VDI admin tab.** New
+  [`frontend/src/pages/admin/VdiTab.tsx`](frontend/src/pages/admin/VdiTab.tsx)
+  exposes the `vdi_image_whitelist` (newline- or comma-separated
+  list, lines starting with `#` are comments) and `max_vdi_containers`
+  (per-replica concurrency cap) settings via the generic
+  `PUT /api/admin/settings` endpoint. Registered alongside the other
+  admin tabs in
+  [`AdminSettings.tsx`](frontend/src/pages/AdminSettings.tsx) with a
+  threat-model reminder linking to `docs/vdi.md`.
+- **Connection form refactor.** New
+  [`frontend/src/pages/admin/protocolFields.ts`](frontend/src/pages/admin/protocolFields.ts)
+  registry centralises which `extra` fields each protocol supports;
+  [`AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx) renders
+  fields off this registry instead of a hard-coded switch, making it
+  trivial to extend per-protocol options going forward.
+
+### VDI runtime hot-fixes (this release)
+
+Three issues surfaced during the live integration; all are fixed in
+v0.30.0 and documented here for operators upgrading from the v0.29.0
+foundation:
+
+1. **`docker.sock` permission.** The backend runs as the unprivileged
+   `strata` user via `gosu strata strata-backend`, but Docker Desktop
+   on Windows mounts `/var/run/docker.sock` inside containers as
+   `srw-rw---- root:root`. `bollard::Docker::connect_with_defaults()`
+   is lazy: the connection check at startup succeeds even when the
+   socket is unreadable, only the first real HTTP request fails with
+   `Error in the hyper legacy client: client error (Connect)`.
+   [`backend/entrypoint.sh`](backend/entrypoint.sh) now stats the
+   socket at runtime: when the GID is non-zero (typical Linux: 998 /
+   999) it creates a `docker-host` group with that GID and adds the
+   `strata` user; when the GID is zero (Docker Desktop) it
+   `chgrp strata` + `chmod g+rw` the bind-mount. Both paths emit a
+   `[entrypoint] …` log line so operators can see which branch
+   executed.
+2. **Compose-prefixed network resolution.** Docker Compose prefixes
+   network names with the project name, so the network the rest of
+   the stack joins is actually `strata-client_guac-internal`, not
+   `guac-internal`. The driver previously hard-coded the unprefixed
+   name and every `ensure_container` failed with `404 network
+   guac-internal not found`. New `STRATA_VDI_NETWORK` env var on
+   the backend, defaulted in
+   [`docker-compose.vdi.yml`](docker-compose.vdi.yml) to
+   `${COMPOSE_PROJECT_NAME:-strata-client}_guac-internal`, threaded
+   through to `DockerVdiDriver::connect(&network)` in
+   [`backend/src/main.rs`](backend/src/main.rs).
+3. **xrdp TLS / dynamic-resize quirks.** The sample VDI image's xrdp
+   uses a per-container self-signed certificate that Strata never
+   trusts, and its display-update virtual channel drops the RDP
+   session on resize storms (sidebar toggle, browser window resize).
+   The tunnel handler now forces three overrides for `vdi`
+   connections:
+   - `ignore-cert=true` (both ends are Strata-controlled and traffic
+     stays on the internal `guac-internal` bridge).
+   - `security=any` (xrdp negotiates whatever it can, since the cert
+     is not trustworthy regardless).
+   - `resize-method=""` (no display-update messages — the frontend's
+     guacamole-common-js display layer continues to scale the fixed
+     framebuffer to fit the viewport client-side, so the user sees a
+     letterbox / scale rather than a disconnect).
+- **`COMPOSE_FILE` sticky overlay.** The `.env` and `.env.example`
+  files now document and ship a `COMPOSE_FILE` shortcut so plain
+  `docker compose ...` commands automatically apply
+  `docker-compose.vdi.yml`. Without this shortcut, every operator
+  command had to spell out both `-f` flags or risk silently dropping
+  the overlay (and with it, `STRATA_VDI_ENABLED`, the docker.sock
+  mount, and the persistent-home bind mount).
+
+### Audit and recording
+
+- **Audit events wired live.** The action-type strings declared as
+  fixed contracts in v0.29.0 are now actually emitted by the
+  runtime: `web.session.start`, `web.session.end`,
+  `web.autofill.write`, `vdi.container.ensure`,
+  `vdi.container.destroy`, `vdi.image.rejected`. See
+  [`docs/api-reference.md`](docs/api-reference.md) §
+  *Audit events* for the per-event `details` schema.
+- **Recording semantics carry over unchanged.** `nvr_protocol`
+  preserves the operator-facing `web` / `vdi` label even though the
+  wire protocol is `vnc` / `rdp`, so recording playback shows the
+  correct icon in the session list.
+
+### Documentation
+
+- **Web Sessions and VDI added to in-app docs.** The
+  [`/docs`](frontend/src/pages/Documentation.tsx) page in the admin
+  UI now ships two dedicated left-rail entries — *Web Sessions* and
+  *VDI Desktop* — wired to
+  [`docs/web-sessions.md`](docs/web-sessions.md) and
+  [`docs/vdi.md`](docs/vdi.md). Both files are rewritten for the
+  shipping runtime: when-to-use, architecture diagrams, full
+  `connections.extra` schema tables, the egress allow-list semantics,
+  the image whitelist semantics, the ephemeral-credentials flow, the
+  reaper disconnect classification, the `STRATA_VDI_NETWORK`
+  override, the `docker.sock` permission handling in
+  `entrypoint.sh`, and the operator-facing audit-event contract.
+- **`docs/architecture.md`**: new *Extended protocols* section
+  diagramming the spawn pipeline for `web` and `vdi`, including the
+  display / port allocator state machines, the deterministic
+  container-naming scheme, and the wire-protocol translation
+  (`web→vnc`, `vdi→rdp`).
+- **`docs/security.md`**: new *Web Sessions and VDI extended threat
+  model* covering SSRF defence (DNS-rebinding, fail-closed CIDR
+  list), profile reuse and ephemeral profile lifetime, autofill
+  secrecy at rest, CDP localhost-only binding, the docker.sock
+  host-root warning, image-whitelist strictness (no glob/digest
+  substitution), the reserved env-key rule for VDI
+  (`VDI_USERNAME` / `VDI_PASSWORD`), the reaper semantics, and the
+  per-replica concurrency caps.
+- **`docs/api-reference.md`**: documents the read-only
+  `GET /api/admin/vdi/images` endpoint introduced in v0.29.0 plus
+  the new audit action types now wired into `audit_logs`.
+- **`docs/deployment.md`**: deployment notes for VDI overlay,
+  `COMPOSE_FILE` sticky form, and the chromium / Xvnc package
+  requirements (already in the default backend image since v0.29.0).
+- **`README.md`**: feature list updated with web and VDI as
+  shipping protocols; deployment quickstart adds the VDI overlay
+  one-liner.
+- **`WHATSNEW.md`** rewritten for the v0.30.0 runtime delivery.
+- **In-app *What's New* card** added to
+  [`WhatsNewModal.tsx`](frontend/src/components/WhatsNewModal.tsx)
+  for v0.30.0.
+
+### Meta
+
+- **Version bump (minor)**: `VERSION`,
+  [`backend/Cargo.toml`](backend/Cargo.toml),
+  [`backend/Cargo.lock`](backend/Cargo.lock),
+  [`frontend/package.json`](frontend/package.json),
+  [`frontend/package-lock.json`](frontend/package-lock.json), and the
+  README badge are all bumped to `0.30.0`.
+- **No new database migrations.** The v0.29.0 migration
+  `057_session_types_web_vdi.sql` already created `vdi_containers`
+  and the per-protocol settings rows; v0.30.0 only writes to those
+  tables.
+- **No API-contract changes for existing protocols.** RDP, VNC, SSH,
+  Kubernetes, and Telnet behave identically. The new VDI-specific
+  forced parameters (`ignore-cert`, `security`, `resize-method`)
+  apply only when `protocol == "vdi"`.
+- **Drop-in upgrade from v0.29.0.** Operators who do not enable VDI
+  (i.e. do not apply `docker-compose.vdi.yml`) see no behaviour change
+  beyond the new in-app docs entries and the live web-session runtime.
+
+## [0.29.0] — 2026-04-25
+
+### Foundation: Web Browser Sessions and VDI Desktop Containers (rustguac parity)
+
+This release lands the **pure-logic foundation** for two new connection
+protocols. The runtime spawn integration is deferred to a follow-up
+release; see *Deferred deliverables* at the bottom of this entry.
+
+- **`web` protocol — typed config, allocator, egress guard, Chromium argv builder.**
+  New module [`backend/src/services/web_session.rs`](backend/src/services/web_session.rs)
+  ships:
+  - `WebDisplayAllocator` — thread-safe X-display allocator over `:100`–`:199`
+    (cap 100 simultaneous sessions per backend replica).
+  - `WebSessionConfig::from_extra` — typed projection over the JSONB
+    `connections.extra` column (`url`, `allowed_domains`, `login_script`)
+    with lenient parsing and blank-string-collapses-to-`None` semantics.
+  - CIDR egress allow-list helpers (`parse_allowed_networks`,
+    `is_ip_allowed_by_cidr`, `host_lookup_passes`, `extract_host`)
+    with **fail-closed semantics for an empty allow-list** and
+    **all-resolved-IPs-must-pass for DNS hosts** (defence against DNS
+    rebinding via mixed A records).
+  - `chromium_command_args` — kiosk argv builder mirroring rustguac:
+    `--kiosk`, ephemeral `--user-data-dir=/tmp/strata-chromium-{uuid}`,
+    `--host-rules` for domain restriction, and **localhost-only**
+    `--remote-debugging-address=127.0.0.1` so the CDP socket can never
+    be reached from the network.
+  - `Arc<WebDisplayAllocator>` plumbed through `AppState` (all 11
+    constructors).
+  - 20 new unit tests covering allocator
+    increment/reuse/exhaustion/release-unknown/capacity, config
+    full/minimal/missing-url/blank-url/blank-login-script, CIDR
+    parse/match/empty-deny/v4+v6/host-lookup-literal/host-lookup-DNS-rebinding,
+    and Chromium kiosk argv emission.
+  - Two new dependencies: `ipnet = "2"` (CIDR parsing) and `url = "2"`
+    (host extraction).
+
+- **`vdi` protocol — driver trait, image whitelist, deterministic naming, env injection, disconnect classifier.**
+  New module [`backend/src/services/vdi.rs`](backend/src/services/vdi.rs)
+  ships:
+  - `VdiDriver` async trait + `NoopVdiDriver` stub returning
+    `DriverUnavailable` until the operator opts in to mounting
+    `/var/run/docker.sock`.
+  - `VdiConfig::from_extra` typed view (`image`, `cpu_limit`,
+    `memory_limit_mb`, `idle_timeout_mins`, `env_vars`,
+    `persistent_home`) with **reserved-key stripping** —
+    `VDI_USERNAME` / `VDI_PASSWORD` are silently dropped from `env_vars`
+    so the admin form cannot leak or override the runtime credentials.
+  - `ImageWhitelist::parse` — newline- or comma-separated, supports `#`
+    comments, **strict equality matching only** (no glob/tag/digest
+    substitution; pinning is a security feature).
+  - `container_name_for(connection_id, user_id)` — deterministic, ≤63
+    chars, basis for persistent-home reuse.
+  - `vdi_env_vars` — operator env layered with reserved-key overrides
+    so the runtime always wins.
+  - `DisconnectReason::from_xrdp_code` — maps the xrdp WTSChannel
+    disconnect frame to logout / tab-close / idle-timeout / other,
+    plus `should_destroy_immediately()` driving the reaper decision
+    (logout + idle-timeout destroy; tab-close retains for reuse).
+  - 16 new unit tests covering all of the above.
+  - New endpoint `GET /api/admin/vdi/images` returning the operator
+    whitelist (route in [`backend/src/routes/admin.rs`](backend/src/routes/admin.rs),
+    wired in [`backend/src/routes/mod.rs`](backend/src/routes/mod.rs);
+    documented under [`docs/api-reference.md`](docs/api-reference.md)).
+
+- **Admin UI for both protocols.** New `WebSections` and `VdiSections`
+  components in [`frontend/src/pages/admin/connectionForm.tsx`](frontend/src/pages/admin/connectionForm.tsx)
+  cover URL / allowed-domains / login-script for `web` and
+  image / CPU / memory / idle-timeout / env-vars / persistent-home for
+  `vdi`. The image dropdown is populated from `GET /api/admin/vdi/images`
+  via the new [`getVdiImages`](frontend/src/api.ts) helper. Reserved
+  env keys are stripped client-side too as defence-in-depth.
+  [`AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx) gains the
+  `web` and `vdi` protocol options with appropriate port defaults
+  (5900 / 3389) and conditional sub-section rendering.
+
+- **Icons and badges.** Globe SVG for `web`, stacked-container SVG
+  for `vdi`, in both
+  [`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx)
+  and [`frontend/src/components/CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx).
+  New protocol badges in
+  [`frontend/src/pages/ActiveSessions.tsx`](frontend/src/pages/ActiveSessions.tsx)
+  and [`frontend/src/pages/Sessions.tsx`](frontend/src/pages/Sessions.tsx)
+  with matching test coverage in
+  [`ActiveSessions.test.tsx`](frontend/src/__tests__/ActiveSessions.test.tsx)
+  and [`Sessions.test.tsx`](frontend/src/__tests__/Sessions.test.tsx).
+
+### Documentation
+
+- [`docs/web-sessions.md`](docs/web-sessions.md) — operator-facing
+  documentation for the `web` protocol: when to use, architecture
+  diagram, `connections.extra` schema, egress allow-list semantics,
+  planned audit events, and operator pitfalls.
+- [`docs/vdi.md`](docs/vdi.md) — operator-facing documentation for the
+  `vdi` protocol: when to use, architecture diagram, image whitelist
+  semantics, env-var reserved-key rules, reaper disconnect
+  classification, planned audit events.
+- [`docs/architecture.md`](docs/architecture.md) — added an "Extended
+  protocols" section linking to both new docs.
+- [`docs/security.md`](docs/security.md) — added "Web Sessions and VDI:
+  extended threat model" covering SSRF defence via
+  `web_allowed_networks`, profile reuse, autofill secrecy, CDP
+  localhost-only binding, **`docker.sock` host-root warning**, image
+  whitelist strictness, reserved env keys, reaper semantics, and
+  concurrency cap.
+- [`docs/api-reference.md`](docs/api-reference.md) — documented
+  `GET /api/admin/vdi/images`.
+
+### Deferred deliverables
+
+The following remain on the rustguac-parity tracker for a follow-up
+release. Each is tagged in the tracker with its rationale:
+
+- **`web` protocol**: actual `Xvnc` + Chromium kiosk spawn (requires
+  Dockerfile package additions and a sandboxing review); Chromium
+  Login Data SQLite autofill writer (PBKDF2-SHA1 / AES-128-CBC with
+  v10 prefix); Chrome DevTools Protocol login-script runner; tunnel
+  handshake `web → vnc` selector translation;
+  `max_web_sessions` concurrency cap.
+- **`vdi` protocol**: `DockerVdiDriver` implementation via `bollard`;
+  live `ensure_container` reuse-by-name pattern; persistent-home bind
+  mount under `home_base`; idle reaper extension to
+  `services/session_cleanup.rs`; `contrib/vdi-sample/Dockerfile`;
+  opt-in `/var/run/docker.sock` mount in `docker-compose.yml` with an
+  explicit comment warning that it grants host root;
+  `max_vdi_containers` concurrency cap.
+- **Audit events**: `web.session.start` / `web.session.end`,
+  `web.autofill.write`, `vdi.container.ensure` /
+  `vdi.container.destroy`, `vdi.image.rejected` — wired alongside the
+  live spawn integration. The action-type strings and `details`
+  schemas are fixed in [`docs/web-sessions.md`](docs/web-sessions.md)
+  and [`docs/vdi.md`](docs/vdi.md) so the operator-facing contract is
+  stable now.
+- **`SessionClient.tsx` audit** to treat `vdi` as `rdp` for clipboard
+  and recording branching — deferred with the live driver because it
+  cannot be exercised end-to-end until containers can actually be
+  spawned.
+
+### Meta
+
+- Version bump (minor): `VERSION`,
+  [`backend/Cargo.toml`](backend/Cargo.toml),
+  [`backend/Cargo.lock`](backend/Cargo.lock),
+  [`frontend/package.json`](frontend/package.json),
+  [`frontend/package-lock.json`](frontend/package-lock.json), and the
+  README badge are bumped to `0.29.0`. **No database migrations.** No
+  API-contract changes for existing protocols. The two new connection
+  types reuse the existing `connections.extra` JSONB column and the
+  existing audit / recording / credential-mapping pipelines.
+- Roadmap items `protocols-web-sessions` and `protocols-vdi` remain
+  marked **In Progress** in the admin UI — this release is the
+  foundation, not the runtime delivery.
+
 ## [0.28.0] — 2026-04-25
 
 ### Performance / rendering

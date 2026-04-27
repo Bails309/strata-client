@@ -393,6 +393,13 @@ async fn handle_guac_handshake(
     let (mut tcp_read, mut tcp_write) = tokio::io::split(stream);
 
     // Step 1: Send "select" instruction
+    //
+    // NOTE (rustguac parity, Phase 2/3): the `web` and `vdi` protocols
+    // expose themselves to guacd as `vnc` and `rdp` respectively. The
+    // translation will happen in the route handler that builds
+    // `HandshakeParams` (see services/web_session.rs and services/vdi.rs).
+    // By the time we reach this point, `handshake.protocol` is already the
+    // wire-level protocol and is forwarded verbatim.
     let select = guac_instruction("select", &[&handshake.protocol]);
     tcp_write
         .write_all(&select)

@@ -1322,6 +1322,12 @@ Return rows from `email_deliveries`, newest first. Use the `status` query parame
 | `checkout.scheduled` | User created a password checkout with a future `scheduled_start_at`; no credential material exists yet |
 | `checkout.emergency_bypass` | User invoked break-glass approval bypass; checkout activated immediately without approver review (requires `pm_allow_emergency_bypass`) |
 | `rotation.completed` | Automatic service account password rotation completed |
+| `web.session.start` | Chromium kiosk has been spawned, Xvnc is reachable, and guacd is about to attach. `details`: `{ connection_id, display, cdp_port }`. Added in v0.30.0 |
+| `web.session.end` | Web Session closed for any reason. `details`: `{ connection_id, display, reason }`. Added in v0.30.0 |
+| `web.autofill.write` | Login Data SQLite was provisioned for the session. `details`: `{ connection_id, credential_id }`. Added in v0.30.0 |
+| `vdi.container.ensure` | `DockerVdiDriver::ensure_container()` succeeded (spawn or reuse). `details`: `{ connection_id, container_name, image }`. Added in v0.30.0 |
+| `vdi.container.destroy` | Reaper destroyed a VDI container. `details`: `{ connection_id, container_name, reason }` where `reason` is one of `Logout`, `IdleTimeout`, or `Other`. Added in v0.30.0 |
+| `vdi.image.rejected` | A VDI tunnel attempt referenced an image not present in the operator whitelist. `details`: `{ connection_id, image }`. Added in v0.30.0 |
 
 ---
 
@@ -1730,6 +1736,21 @@ Test service account password rotation for a config. Body: `{ "config_id": "uuid
 #### `GET /api/admin/checkout-requests`
 
 List all checkout requests (up to 200, most recent first).
+
+#### `GET /api/admin/vdi/images`
+
+Return the operator-managed VDI image whitelist (rustguac parity
+Phase 3). Backed by the `vdi_image_whitelist` row in
+`system_settings`. Newline- or comma-separated; lines starting with
+`#` are treated as comments.
+
+**Response** `200 OK`
+```json
+{
+  "images": ["strata/vdi-ubuntu:24.04-2026.04.01", "strata/vdi-rocky:9-2026.04.01"],
+  "count": 2
+}
+```
 
 #### `PUT /api/admin/roadmap/:item_id`
 

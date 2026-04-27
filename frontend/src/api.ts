@@ -768,6 +768,15 @@ export interface RoleMappings {
 export const getRoleMappings = (roleId: string) =>
   request<RoleMappings>(`/admin/roles/${roleId}/mappings`);
 
+// ── VDI image whitelist (rustguac parity Phase 3) ───────────────────
+
+export interface VdiImageList {
+  images: string[];
+  count: number;
+}
+
+export const getVdiImages = () => request<VdiImageList>("/admin/vdi/images");
+
 export const updateRoleMappings = (
   roleId: string,
   connection_ids: string[],

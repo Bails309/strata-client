@@ -6,6 +6,8 @@ import userEvent from "@testing-library/user-event";
 vi.mock("@docs/architecture.md?raw", () => ({ default: "# Architecture\nArch content here" }));
 vi.mock("@docs/security.md?raw", () => ({ default: "# Security\nSecurity content here" }));
 vi.mock("@docs/api-reference.md?raw", () => ({ default: "# API Reference\nAPI content here" }));
+vi.mock("@docs/web-sessions.md?raw", () => ({ default: "# Web Sessions\nWeb content here" }));
+vi.mock("@docs/vdi.md?raw", () => ({ default: "# VDI\nVDI content here" }));
 
 // Mock the roadmap API calls used by the Roadmap tab.
 const getRoadmapStatusesMock = vi.fn();

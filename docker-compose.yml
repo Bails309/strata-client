@@ -67,6 +67,17 @@ services:
       retries: 3
 
   # ── 2. Rust Backend (Proxy / API) ───────────────────────────────────
+  #
+  # Built from backend/Dockerfile — the unified image that
+  # ships with Xvnc + Chromium baked in. The Web Browser Session
+  # protocol works out of the box; RDP/SSH/VNC always work; the
+  # VDI protocol is OFF by default and opted into via the overlay
+  # docker-compose.vdi.yml (which adds the /var/run/docker.sock
+  # mount — see the security warning in that file).
+  #
+  # Run:
+  #   docker compose up -d                                                 # web + RDP + SSH + VNC
+  #   docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d # +VDI
   backend:
     build:
       context: .
@@ -90,6 +101,12 @@ services:
       - guac-recordings:/var/lib/guacamole/recordings:ro
       - guac-drive:/var/lib/guacamole/drive
       - krb5-config:/etc/krb5
+      # Operator-supplied Playwright/Puppeteer login scripts for the
+      # `web` protocol. Mount read-only so a compromised backend can't
+      # tamper with the kiosk-login automation source. Empty/absent
+      # directory is harmless if no `web` connection references a
+      # login_script.
+      - ${WEB_LOGIN_SCRIPTS_DIR:-./web-login-scripts}:/var/lib/strata/web-login-scripts:ro
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}}
@@ -99,6 +116,20 @@ services:
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
       - STRATA_ALLOWED_ORIGINS=${STRATA_ALLOWED_ORIGINS:-}
+      # Web (Chromium kiosk) — always available because the binaries
+      # are baked into the image. Operators who don't define `web`
+      # connections simply never trigger a spawn.
+      - STRATA_WEB_ENABLED=${STRATA_WEB_ENABLED:-true}
+      - STRATA_WEB_XVNC_PATH=/usr/bin/Xvnc
+      - STRATA_WEB_CHROMIUM_PATH=/usr/bin/chromium
+      - STRATA_WEB_LOGIN_SCRIPTS_DIR=/var/lib/strata/web-login-scripts
+      # Hostname guacd uses to reach the spawned Xvnc listener. Must
+      # be the backend's service name on the docker network — guacd
+      # is a sibling container, so 127.0.0.1 won't work.
+      - STRATA_WEB_VNC_HOST=${STRATA_WEB_VNC_HOST:-backend}
+      # VDI (docker-spawned desktops) — DISABLED at this layer; flip
+      # to true via docker-compose.vdi.yml which also mounts docker.sock.
+      - STRATA_VDI_ENABLED=${STRATA_VDI_ENABLED:-false}
     deploy:
       resources:
         limits:

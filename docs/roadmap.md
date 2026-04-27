@@ -76,7 +76,7 @@ Follow-up ideas (not yet planned):
 ## Protocols & Session Types
 
 ### Web Browser Sessions
-**Status:** Proposed  
+**Status:** Shipped (v0.30.0)  
 **Area:** Protocols · Sessions · guacd  
 **Roadmap ID:** `protocols-web-sessions`
 
@@ -99,7 +99,7 @@ Scope:
   `rdp|ssh|vnc` only — `web` is interactive-create only.
 
 ### VDI Desktop Containers
-**Status:** Proposed  
+**Status:** Shipped (v0.30.0)  
 **Area:** Protocols · Sessions · Infrastructure  
 **Roadmap ID:** `protocols-vdi-containers`
 

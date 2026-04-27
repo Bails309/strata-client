@@ -407,6 +407,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         let result = status(axum::extract::State(state)).await;
@@ -429,6 +432,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -469,6 +475,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -511,6 +520,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;

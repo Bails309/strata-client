@@ -1213,6 +1213,7 @@ pub async fn create_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
+    validate_vdi_image(&db.pool, user.id, &body, None).await?;
     let name = body.name.clone();
     let row = connections::create(&db.pool, &body).await?;
     audit::log(
@@ -1233,6 +1234,7 @@ pub async fn update_connection(
 ) -> Result<Json<ConnectionRow>, AppError> {
     crate::services::middleware::check_connection_management_permission(&user)?;
     let db = require_running(&state).await?;
+    validate_vdi_image(&db.pool, user.id, &body, Some(id)).await?;
     let name = body.name.clone();
     let row = connections::update(&db.pool, id, &body)
         .await?
@@ -1245,6 +1247,46 @@ pub async fn update_connection(
     )
     .await?;
     Ok(Json(row))
+}
+
+/// When the request targets the `vdi` protocol, parse the image-whitelist
+/// from `system_settings` and reject any image that is not exactly listed.
+/// Emits an `AUDIT_VDI_IMAGE_REJECTED` audit event on rejection so an
+/// operator can spot a misconfigured (or malicious) editor session.
+async fn validate_vdi_image(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    user_id: Uuid,
+    body: &CreateConnectionRequest,
+    connection_id: Option<Uuid>,
+) -> Result<(), AppError> {
+    if body.protocol != "vdi" {
+        return Ok(());
+    }
+    let cfg = crate::services::vdi::VdiConfig::from_extra(&body.extra);
+    let image = cfg.image.unwrap_or_default();
+    let raw = settings::get(pool, crate::services::vdi::SETTING_VDI_IMAGE_WHITELIST)
+        .await?
+        .unwrap_or_default();
+    let wl = crate::services::vdi::ImageWhitelist::parse(&raw);
+    if wl.is_allowed(&image) {
+        return Ok(());
+    }
+    let details = json!({
+        "connection_id": connection_id.map(|i| i.to_string()),
+        "connection_name": body.name,
+        "requested_image": image,
+        "whitelist_size": wl.len(),
+    });
+    let _ = audit::log(
+        pool,
+        Some(user_id),
+        crate::services::vdi::AUDIT_VDI_IMAGE_REJECTED,
+        &details,
+    )
+    .await;
+    Err(AppError::Validation(format!(
+        "VDI image '{image}' is not in the operator whitelist"
+    )))
 }
 
 pub async fn delete_connection(
@@ -3405,6 +3447,127 @@ pub async fn list_checkout_requests(
     Ok(Json(rows))
 }
 
+// ── Admin: VDI image whitelist (rustguac parity Phase 3) ──────────────
+
+/// `GET /api/admin/vdi/images` — returns the operator-managed list of
+/// container images permitted as the `image` field of a `vdi`
+/// connection. Backed by the `vdi_image_whitelist` row in
+/// `system_settings` (newline- or comma-separated).
+pub async fn list_vdi_images(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let raw = settings::get(&db.pool, "vdi_image_whitelist")
+        .await?
+        .unwrap_or_default();
+    let wl = crate::services::vdi::ImageWhitelist::parse(&raw);
+    Ok(Json(json!({
+        "images": wl.images(),
+        "count": wl.len(),
+    })))
+}
+
+// ── Admin: VDI runtime visibility (rustguac parity A11/A12) ───────────
+
+/// `GET /api/admin/vdi/containers` — returns the live list of
+/// Strata-managed VDI containers from the driver. Surface for the
+/// admin "Active Sessions" view to show containers with their image,
+/// running state, and the (connection_id, user_id) labels (parity
+/// item A11).
+///
+/// Returns an empty list when the driver is the `NoopVdiDriver` (the
+/// default in non-VDI deployments). Never errors — the driver's
+/// default impl returns `Ok(vec![])` when listing isn't supported.
+pub async fn list_vdi_containers(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let _ = require_running(&state).await?;
+    let driver = {
+        let s = state.read().await;
+        s.vdi_driver.clone()
+    };
+    let containers = driver
+        .list_managed_containers_detail()
+        .await
+        .map_err(|e| AppError::Internal(format!("vdi list failed: {e}")))?;
+    let payload: Vec<serde_json::Value> = containers
+        .into_iter()
+        .map(|c| {
+            json!({
+                "container_id": c.container_id,
+                "container_name": c.container_name,
+                "connection_id": c.connection_id,
+                "user_id": c.user_id,
+                "image": c.image,
+                "running": c.running,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "count": payload.len(),
+        "containers": payload,
+    })))
+}
+
+/// `GET /api/admin/vdi/health` — runs the driver's health probe
+/// (`docker.ping()` for the Docker driver) and returns its status.
+/// Surface for ops dashboards / readiness checks (parity item A12).
+///
+/// Returns `{"status": "ok"}` on success or `{"status": "down",
+/// "error": "..."}` on failure with HTTP 200 either way — operators
+/// monitor by reading the body, not by relying on the status code.
+pub async fn vdi_health(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let _ = require_running(&state).await?;
+    let driver = {
+        let s = state.read().await;
+        s.vdi_driver.clone()
+    };
+    match driver.health_check().await {
+        Ok(()) => Ok(Json(json!({"status": "ok"}))),
+        Err(e) => Ok(Json(json!({
+            "status": "down",
+            "error": e.to_string(),
+        }))),
+    }
+}
+
+// ── Admin: web session stats (rustguac parity Phase 2) ────────────────
+
+/// `GET /api/admin/web-sessions/stats` — current allocator usage and
+/// live spawn-registry size for `web` connections. The two numbers
+/// should always match in steady state because the registry holds
+/// the display reservation for the lifetime of the kiosk; a drift
+/// would indicate a leaked reservation (release without registry
+/// eviction or vice versa).
+pub async fn web_sessions_stats(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let _ = require_running(&state).await?;
+    let (displays_in_use, displays_capacity, runtime_len) = {
+        let s = state.read().await;
+        (
+            s.web_displays.in_use_count(),
+            crate::services::web_session::WebDisplayAllocator::capacity() as usize,
+            s.web_runtime.len().await,
+        )
+    };
+    Ok(Json(json!({
+        "displays_in_use": displays_in_use,
+        "displays_capacity": displays_capacity,
+        "registry_len": runtime_len,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3828,6 +3991,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -3848,6 +4014,9 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
+            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
+            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

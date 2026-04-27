@@ -25,7 +25,8 @@ import {
   updateRoleMappings,
   updateUser,
 } from "../../api";
-import { RdpSections, SshSections, VncSections } from "./connectionForm";
+import { RdpSections, SshSections, VncSections, VdiSections, WebSections } from "./connectionForm";
+import { PROTOCOLS, protocolDescriptor } from "./protocolFields";
 
 export default function AccessTab({
   user,
@@ -895,7 +896,17 @@ export default function AccessTab({
             className="mb-4"
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 100px 1fr 80px 1fr",
+              gridTemplateColumns: (() => {
+                const proto = protocolDescriptor(formCore.protocol);
+                const cols = [
+                  "1fr",   // Name
+                  "100px", // Protocol
+                  proto.showHostname && "1fr",
+                  proto.showPort && "80px",
+                  proto.showDomain && "1fr",
+                ].filter(Boolean) as string[];
+                return cols.join(" ");
+              })(),
               gap: "0.5rem",
             }}
           >
@@ -912,40 +923,45 @@ export default function AccessTab({
               <Select
                 value={formCore.protocol}
                 onChange={(v) => {
-                  const ports: Record<string, number> = { rdp: 3389, ssh: 22, vnc: 5900 };
-                  setFormCore({ ...formCore, protocol: v, port: ports[v] ?? formCore.port });
+                  // Default port comes from the protocol registry. For
+                  // `web`/`vdi` the port is harmless — those protocols
+                  // hide the field entirely (see protocolFields.ts).
+                  const next = protocolDescriptor(v);
+                  setFormCore({ ...formCore, protocol: v, port: next.defaultPort });
                 }}
-                options={[
-                  { value: "rdp", label: "RDP" },
-                  { value: "ssh", label: "SSH" },
-                  { value: "vnc", label: "VNC" },
-                ]}
+                options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label }))}
               />
             </div>
-            <div className="form-group !mb-0">
-              <label>Hostname</label>
-              <input
-                value={formCore.hostname}
-                onChange={(e) => setFormCore({ ...formCore, hostname: e.target.value })}
-                placeholder="10.0.0.10"
-              />
-            </div>
-            <div className="form-group !mb-0">
-              <label>Port</label>
-              <input
-                type="number"
-                value={formCore.port}
-                onChange={(e) => setFormCore({ ...formCore, port: parseInt(e.target.value) || 0 })}
-              />
-            </div>
-            <div className="form-group !mb-0">
-              <label>Domain</label>
-              <input
-                value={formCore.domain}
-                onChange={(e) => setFormCore({ ...formCore, domain: e.target.value })}
-                placeholder="EXAMPLE.COM"
-              />
-            </div>
+            {protocolDescriptor(formCore.protocol).showHostname && (
+              <div className="form-group !mb-0">
+                <label>Hostname</label>
+                <input
+                  value={formCore.hostname}
+                  onChange={(e) => setFormCore({ ...formCore, hostname: e.target.value })}
+                  placeholder="10.0.0.10"
+                />
+              </div>
+            )}
+            {protocolDescriptor(formCore.protocol).showPort && (
+              <div className="form-group !mb-0">
+                <label>Port</label>
+                <input
+                  type="number"
+                  value={formCore.port}
+                  onChange={(e) => setFormCore({ ...formCore, port: parseInt(e.target.value) || 0 })}
+                />
+              </div>
+            )}
+            {protocolDescriptor(formCore.protocol).showDomain && (
+              <div className="form-group !mb-0">
+                <label>Domain</label>
+                <input
+                  value={formCore.domain}
+                  onChange={(e) => setFormCore({ ...formCore, domain: e.target.value })}
+                  placeholder="EXAMPLE.COM"
+                />
+              </div>
+            )}
           </div>
           <div
             className="mb-4"
@@ -997,6 +1013,8 @@ export default function AccessTab({
             )}
             {formCore.protocol === "ssh" && <SshSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "vnc" && <VncSections ex={ex} setEx={setEx} />}
+            {formCore.protocol === "web" && <WebSections ex={ex} setEx={setEx} />}
+            {formCore.protocol === "vdi" && <VdiSections ex={ex} setEx={setEx} />}
           </div>
           <div className="flex gap-2 mt-4">
             <button className="btn-primary" onClick={handleSave}>

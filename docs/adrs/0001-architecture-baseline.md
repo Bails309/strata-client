@@ -35,7 +35,7 @@ Deployed via `docker-compose` as four long-running services:
 
 | Service | Image / source | Role |
 |---------|----------------|------|
-| `backend` | `backend/Dockerfile` (Rust 1.94, Alpine musl) | Axum HTTP API on port 8080 |
+| `backend` | `backend/Dockerfile` (Rust 1.95, Debian trixie-slim) | Axum HTTP API on port 8080; ships with Xvnc + Chromium for `web` connections |
 | `frontend` | `frontend/Dockerfile` (nginx:alpine, read-only FS) | Static SPA + TLS termination |
 | `guacd` | `guacd/Dockerfile` (custom patch of Apache Guacamole `guacd`) | Protocol proxy for RDP/SSH/VNC |
 | `postgres` | `postgres:17-alpine` | Primary data store |

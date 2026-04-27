@@ -13,6 +13,8 @@ import {
 import architectureMd from "@docs/architecture.md?raw";
 import securityMd from "@docs/security.md?raw";
 import apiReferenceMd from "@docs/api-reference.md?raw";
+import webSessionsMd from "@docs/web-sessions.md?raw";
+import vdiMd from "@docs/vdi.md?raw";
 
 /* ── Sidebar sections ──────────────────────────────────────────────── */
 
@@ -104,6 +106,47 @@ const SECTIONS: DocSection[] = [
       </svg>
     ),
     content: apiReferenceMd,
+  },
+  {
+    id: "web-sessions",
+    label: "Web Sessions",
+    icon: (
+      <svg
+        width={ICON_SIZE}
+        height={ICON_SIZE}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20" />
+      </svg>
+    ),
+    content: webSessionsMd,
+  },
+  {
+    id: "vdi",
+    label: "VDI Desktop",
+    icon: (
+      <svg
+        width={ICON_SIZE}
+        height={ICON_SIZE}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="2" y="4" width="20" height="12" rx="2" />
+        <path d="M8 20h8M12 16v4" />
+        <path d="M6 8h4M6 11h2" />
+      </svg>
+    ),
+    content: vdiMd,
   },
   {
     id: "roadmap",
@@ -437,7 +480,7 @@ const ROADMAP: RoadmapTheme[] = [
       {
         id: "protocols-web-sessions",
         title: "Web Browser Sessions",
-        status: "Proposed",
+        status: "Shipped",
         areas: ["Protocols", "Sessions", "guacd"],
         description:
           "New `web` connection type that launches an ephemeral Chromium kiosk inside an Xvnc display and tunnels it through guacd as a standard VNC session. Brings parity with rustguac's web-session feature: per-session display allocation, optional credential autofill via Chromium's encrypted Login Data store, allow-listed domains, scripted login automation, and CIDR-bounded egress.",
@@ -453,7 +496,7 @@ const ROADMAP: RoadmapTheme[] = [
       {
         id: "protocols-vdi-containers",
         title: "VDI Desktop Containers",
-        status: "Proposed",
+        status: "Shipped",
         areas: ["Protocols", "Sessions", "Infrastructure"],
         description:
           "New `vdi` connection type that provisions a Docker container running xrdp on demand and tunnels it through guacd as a standard RDP session. Brings parity with rustguac's VDI feature: image whitelist, per-user persistent home, CPU/memory limits, idle reaper, and logout-vs-tab-close differentiation.",

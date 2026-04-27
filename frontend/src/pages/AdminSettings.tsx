@@ -27,6 +27,7 @@ import PasswordsTab from "./admin/PasswordsTab";
 import AdSyncTab from "./admin/AdSyncTab";
 import AccessTab from "./admin/AccessTab";
 import NotificationsTab from "./admin/NotificationsTab";
+import VdiTab from "./admin/VdiTab";
 
 type Tab =
   | "health"
@@ -42,6 +43,7 @@ type Tab =
   | "passwords"
   | "notifications"
   | "sessions"
+  | "vdi"
   | "security";
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
@@ -113,6 +115,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
             "passwords",
             "notifications",
             "sessions",
+            "vdi",
             "security",
           ] as Tab[]
         )
@@ -148,7 +151,9 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
                       ? "Notifications"
                       : t === "sessions"
                         ? "Sessions"
-                        : t.charAt(0).toUpperCase() + t.slice(1)}
+                        : t === "vdi"
+                          ? "VDI"
+                          : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
       </div>
@@ -246,6 +251,19 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       {/* ── Notifications (SMTP) ── */}
       {tab === "notifications" && (
         <NotificationsTab onSave={() => flash("Notification settings updated")} />
+      )}
+
+      {/* ── VDI ── */}
+      {tab === "vdi" && (
+        <VdiTab
+          settings={settings}
+          onSave={() => {
+            flash("VDI settings updated");
+            getSettings()
+              .then(setSettings)
+              .catch(() => {});
+          }}
+        />
       )}
 
       {/* ── Security ── */}

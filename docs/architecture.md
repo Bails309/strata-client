@@ -2,7 +2,7 @@
 
 ## Overview
 
-Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs four containers (frontend/nginx, backend, guacd, Vault); optional profiles add a bundled PostgreSQL instance and additional guacd sidecar instances for horizontal scaling.
+Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs four containers (frontend/nginx, backend, guacd, Vault); optional profiles add a bundled PostgreSQL instance and additional guacd sidecar instances for horizontal scaling. The backend image (Debian trixie-slim) additionally ships `Xvnc` and `chromium` baked in to support the `web` protocol out of the box; the `vdi` protocol is gated behind the [`docker-compose.vdi.yml`](../docker-compose.vdi.yml) overlay because it requires mounting `/var/run/docker.sock` (= host root).
 
 ```
                           ┌─────────────────────────────────────────────┐
@@ -657,3 +657,154 @@ Step-by-step procedures for on-call engineers live under
 | [vault-operations.md](runbooks/vault-operations.md) | Vault unseal, Transit key rotate + rewrap, Shamir rekey |
 | [database-operations.md](runbooks/database-operations.md) | Replica promotion, migration rollback, panic-boot recovery |
 | [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config |
+
+## Extended protocols
+
+In addition to the classic RDP / SSH / VNC connections, Strata
+supports two driver-backed connection types where the backend
+supervises a workload on the user's behalf:
+
+- **Web Sessions** (`web` protocol) — ephemeral kiosk Chromium inside
+  Xvnc, tunnelled as VNC. See [`web-sessions.md`](web-sessions.md).
+- **VDI Desktop Containers** (`vdi` protocol) — Strata-managed
+  Docker container running xrdp, tunnelled as RDP. See
+  [`vdi.md`](vdi.md).
+
+Both extensions land their per-connection configuration in
+`connections.extra` (JSONB) and inherit the existing recording, audit,
+and credential-mapping pipelines unchanged.
+
+### Web Sessions runtime (shipped v0.30.0)
+
+```
+   ┌────────────────────┐  tunnel.rs    ┌────────────────────────────┐
+   │ Tunnel (web)       │──────────────▶│ WebRuntimeRegistry::ensure │
+   └────────────────────┘               └─────────────┬──────────────┘
+                                                      │
+        ┌─────────────────────────────────────────────┴───────────┐
+        │                                                          │
+        ▼                                                          ▼
+ ┌─────────────────┐  alloc :100..:199  ┌────────────┐    write   ┌──────────────┐
+ │ WebDisplay      │───────────────────▶│ /tmp/      │───────────▶│ Login Data   │
+ │ Allocator       │                    │ strata-    │  autofill  │ (AES-128-CBC)│
+ └─────────────────┘                    │ chromium-… │            └──────────────┘
+                                        │ (profile)  │
+                                        └────────────┘
+        │                                       │
+        ▼                                       ▼
+ ┌──────────────────┐                 ┌────────────────────────┐
+ │ Xvnc :{display}  │◀── DISPLAY ─────│ chromium --kiosk       │
+ │ -SecurityTypes   │                 │   --user-data-dir=…    │
+ │  None            │                 │   --remote-debugging-  │
+ │ -localhost yes   │                 │     address=127.0.0.1  │
+ │ -geometry WxH    │                 │   --remote-debugging-  │
+ └────────┬─────────┘                 │     port={cdp}         │
+          │                           │   --host-rules="…"     │
+          │                           │   {url}                │
+          ▼                           └──────────┬─────────────┘
+   guacd attaches                               │
+   to vnc://127.0.0.1:                          ▼
+   {5900+display}                  ┌──────────────────────────┐
+                                   │ Login script runner      │
+                                   │ over CDP (localhost-only)│
+                                   └──────────────────────────┘
+```
+
+Allocator state machine: `WebDisplayAllocator` keeps a `BTreeSet<u8>`
+of free displays; `acquire()` removes the first; `release(display)`
+re-inserts. The cap of 100 simultaneous sessions is the size of the
+range `:100..:199`. `CdpPortAllocator` mirrors the structure for
+`9222..9421`. Both are `Arc<…>` so the runtime can share them across
+spawn workers.
+
+Reuse semantics: `WebRuntimeRegistry::ensure(connection_id, user_id,
+session_id, spec)` returns the existing handle for a `(connection_id,
+user_id)` pair if one is registered and still alive, so a tab refresh
+doesn't pay the spawn cost twice. When the tunnel closes the registry
+keeps the handle for a short grace window; an idle reaper destroys it
+afterwards.
+
+### VDI runtime (shipped v0.30.0)
+
+```
+   ┌────────────────────┐  tunnel.rs       ┌────────────────────────┐
+   │ Tunnel (vdi)       │─────────────────▶│ VdiDriver::            │
+   │  → wire = "rdp"    │                  │   ensure_container     │
+   │  → host = name     │                  │ (DockerVdiDriver)      │
+   │  → port = 3389     │                  └────────────┬───────────┘
+   └────────────────────┘                               │
+                                                        │ bollard 0.18
+                                  ┌─────────────────────┘
+                                  │
+                                  ▼
+                        ┌───────────────────────┐
+                        │ /var/run/docker.sock  │ (overlay-only)
+                        └───────────┬───────────┘
+                                    │
+                  ┌─────────────────┴────────────────┐
+                  │ create + start + attach network  │
+                  ▼                                  ▼
+        ┌──────────────────────┐         ┌──────────────────────┐
+        │ image whitelisted?   │   no    │ vdi.image.rejected   │
+        │  (strict equality)   │────────▶│  audit event + 503   │
+        └──────────┬───────────┘         └──────────────────────┘
+                   │ yes
+                   ▼
+        ┌──────────────────────────────────────────────┐
+        │ Container: strata-vdi-{conn[..12]}-          │
+        │             {user[..12]}                     │
+        │   • labels: strata.managed=true,             │
+        │             strata.connection_id=…,          │
+        │             strata.user_id=…,                │
+        │             strata.image=…                   │
+        │   • env: VDI_USERNAME, VDI_PASSWORD          │
+        │   • host config: --cpus, --memory            │
+        │   • restart policy: no                       │
+        │   • network: STRATA_VDI_NETWORK              │
+        │   • bind: HOME (when persistent_home=true)   │
+        └────────────────┬─────────────────────────────┘
+                         │
+                         ▼
+                  vdi_containers row upsert
+                  (connection_id, user_id, container_name,
+                   image, state='running', last_seen_at)
+```
+
+Deterministic naming: `container_name_for(connection_id, user_id)`
+takes the first 12 hex chars of each UUID, separated by `-`, with the
+prefix `strata-vdi-`. The same `(connection, user)` pair always
+resolves to the same name, so `ensure_container` short-circuits to a
+reuse path when the container already exists.
+
+Ephemeral credentials: when the credential cascade resolves to no
+password, `ephemeral_credentials(strata_username)` returns a
+`(sanitised_posix_username, fresh_24char_password)` pair. The
+sanitised username is a pure function of the Strata username so the
+bind-mounted `$HOME` is consistent across reconnects; the password is
+fresh per call so the live xrdp instance always sees a new value.
+
+Wire-protocol translation: `tunnel.rs` rewrites
+`wire_protocol = "rdp"` and replaces hostname/port with the
+network-attached endpoint. The original `vdi` label is preserved on
+`nvr_protocol` so recordings keep the operator-facing icon.
+
+Network resolution: `STRATA_VDI_NETWORK` (env var, threaded through
+`main.rs`) defaults to
+`${COMPOSE_PROJECT_NAME:-strata-client}_guac-internal` in the overlay
+file so containers join the same Compose-prefixed network as the rest
+of the stack.
+
+Socket permission handling: `entrypoint.sh` either creates a
+`docker-host` group at the socket's GID (Linux distros) or `chgrp` +
+`chmod g+rw` the bind-mount in place (Docker Desktop GID 0). See
+[`vdi.md`](vdi.md) § *Docker socket permissions* for the exact
+script.
+
+VDI-specific tunnel parameter overrides:
+
+| Param           | Forced for VDI   | Reason                                                |
+| --------------- | ---------------- | ----------------------------------------------------- |
+| `ignore-cert`   | `true`           | Per-container self-signed cert; both ends Strata-controlled. |
+| `security`      | `any`            | xrdp negotiates whatever it can.                     |
+| `resize-method` | `""`             | xrdp's display-update channel drops on resize storms. |
+

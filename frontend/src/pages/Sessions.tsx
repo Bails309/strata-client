@@ -136,6 +136,10 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
         return <span className="badge badge-secondary uppercase">ssh</span>;
       case "vnc":
         return <span className="badge badge-warning uppercase">vnc</span>;
+      case "web":
+        return <span className="badge badge-success uppercase">web</span>;
+      case "vdi":
+        return <span className="badge badge-accent uppercase">vdi</span>;
       default:
         return <span className="badge uppercase">{proto}</span>;
     }

@@ -190,6 +190,11 @@ export default function SessionClient() {
         } else if (info.has_credentials) {
           setPhase("connected");
         } else if (info.protocol === "rdp") {
+          // RDP needs Strata-stored credentials (or the prompt) —
+          // there's no host-side mechanism to provision them. VDI
+          // bypasses this branch even though it tunnels as RDP:
+          // Strata controls both ends of the auth and auto-generates
+          // ephemeral creds on the WS handshake.
           setPhase("prompt");
         } else {
           setPhase("connected");
@@ -1190,7 +1195,7 @@ export default function SessionClient() {
     domain: "Domain",
   };
   const preConnectFields =
-    protocol === "rdp"
+    protocol === "rdp" || protocol === "vdi"
       ? hasDomain
         ? ["username", "password"]
         : ["username", "password", "domain"]

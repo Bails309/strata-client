@@ -231,7 +231,7 @@ pub async fn ws_tunnel(
             .ok_or_else(|| AppError::NotFound("Connection not found".into()))?;
 
     // Parse extra JSONB into a HashMap for guacd params
-    let extra = crate::tunnel::json_to_string_map(&extra_json);
+    let mut extra = crate::tunnel::json_to_string_map(&extra_json);
 
     // Attempt to load and decrypt user credentials from credential profiles.
     // If the profile is linked to an active checkout, the managed credential's
@@ -476,6 +476,26 @@ pub async fn ws_tunnel(
     );
     tracing::debug!(msg = debug_msg);
 
+    // ── VDI: auto-provision ephemeral credentials ──
+    // VDI containers are Strata-controlled on both sides of the auth
+    // chain (the entrypoint materialises the local Linux account from
+    // `VDI_USERNAME`/`VDI_PASSWORD`, guacd authenticates against xrdp
+    // with the same pair). There's nothing for the operator to "log
+    // in to", so prompting them for credentials is meaningless UX —
+    // generate a fresh per-session pair instead. The username is
+    // derived from the Strata user's name so `whoami` inside the
+    // desktop matches the operator they already authenticated as.
+    let (final_username, final_password) = if protocol == "vdi" && final_password.is_none() {
+        let (u, p) = crate::services::vdi::ephemeral_credentials(&user.username);
+        tracing::debug!(
+            msg = "Auto-provisioned ephemeral VDI credentials",
+            vdi_username = %u,
+        );
+        (Some(u), Some(p))
+    } else {
+        (final_username, final_password)
+    };
+
     // Use per-connection security/ignore-cert from extra, with fallback defaults.
     // The one-time ticket can override the 'ignore-cert' database setting.
     let security = extra.get("security").cloned().or(Some("any".into()));
@@ -489,9 +509,254 @@ pub async fn ws_tunnel(
                 .unwrap_or(false)
         });
 
+    // VDI: xrdp inside the spawned container uses a per-container
+    // self-signed certificate that Strata never trusts. Because both
+    // ends of the RDP hop are Strata-controlled and the traffic stays
+    // on the internal `guac-internal` bridge, force `ignore-cert=true`
+    // and let xrdp negotiate `security=any` regardless of what the
+    // connection row says.
+    let (security, ignore_cert) = if protocol == "vdi" {
+        (Some("any".into()), true)
+    } else {
+        (security, ignore_cert)
+    };
+
+    // VDI: xrdp's display-update virtual channel is unreliable in the
+    // sample image — a sidebar toggle or window resize on the
+    // operator's browser routinely drops the RDP session. Until we
+    // ship an xrdp build with a stable display-update implementation,
+    // pin VDI to a fixed framebuffer (the frontend display layer
+    // continues to scale to fit the viewport client-side, so the
+    // experience is "letterbox/scale" rather than "disconnect").
+    if protocol == "vdi" {
+        extra.insert("resize-method".into(), String::new());
+    }
+
     let safe_port: u16 = port
         .try_into()
         .map_err(|_| AppError::Validation("Invalid port number".into()))?;
+
+    // ── rustguac parity Phase 2/3: protocol translation ──
+    // `web`  → `vnc` (Xvnc + Chromium kiosk on the spawned web display)
+    // `vdi`  → `rdp` (xrdp inside the spawned container)
+    // The original (`web`/`vdi`) is preserved on `nvr_protocol` below so
+    // recordings keep the operator-facing label. The wire-level protocol
+    // is what guacd negotiates against.
+    let wire_protocol = match protocol.as_str() {
+        "web" => "vnc".to_string(),
+        "vdi" => "rdp".to_string(),
+        _ => protocol.clone(),
+    };
+
+    // ── rustguac parity Phase 3: ensure VDI container is running ──
+    // For `vdi` connections, ask the driver to spawn (or reuse) the
+    // per-(connection,user) container. We override hostname/port with
+    // the driver-returned endpoint so guacd connects to the spawned
+    // container instead of the operator-typed hostname (which on the
+    // `vdi` profile is intentionally a no-op placeholder).
+    //
+    // When the driver is the `NoopVdiDriver` (i.e. `STRATA_VDI_ENABLED`
+    // is unset), `ensure_container` returns `DriverUnavailable` and we
+    // surface it as a 503 — the connection editor was able to save the
+    // row but this replica isn't configured to spawn it.
+    let (final_hostname, final_safe_port) = if protocol == "vdi" {
+        let cfg = crate::services::vdi::VdiConfig::from_extra(&extra_json);
+        let image = cfg.image.clone().unwrap_or_default();
+        if image.is_empty() {
+            return Err(AppError::Validation(
+                "VDI connection is missing the 'image' extra field".into(),
+            ));
+        }
+        let home_base_raw = crate::services::settings::get(
+            &db.pool,
+            crate::services::vdi::SETTING_VDI_HOME_BASE,
+        )
+        .await?
+        .unwrap_or_else(|| "/var/lib/strata/vdi-home".to_owned());
+        let spec = crate::services::vdi::VdiSpawnSpec {
+            image: image.clone(),
+            username: final_username.clone().unwrap_or_default(),
+            password: final_password.clone().unwrap_or_default(),
+            env: cfg.env_vars.clone(),
+            cpu_limit: cfg.cpu_limit,
+            memory_limit_mb: cfg.memory_limit_mb,
+            persistent_home: cfg.persistent_home,
+            home_base: std::path::PathBuf::from(home_base_raw),
+        };
+        let driver = {
+            let s = state.read().await;
+            s.vdi_driver.clone()
+        };
+        let endpoint = driver
+            .ensure_container(connection_id, user.id, &spec)
+            .await
+            .map_err(|e| match e {
+                crate::services::vdi::VdiError::DriverUnavailable(m) => {
+                    AppError::Internal(format!("vdi driver unavailable: {m}"))
+                }
+                crate::services::vdi::VdiError::ImageNotAllowed(img) => {
+                    AppError::Validation(format!("vdi image not allowed: {img}"))
+                }
+                other => AppError::Internal(format!("vdi ensure_container failed: {other}")),
+            })?;
+        // Upsert the bookkeeping row so the reaper can see it.
+        let _ = sqlx::query(
+            r#"
+            INSERT INTO vdi_containers
+                (connection_id, user_id, container_name, image, state, last_seen_at)
+            VALUES ($1, $2, $3, $4, 'running', now())
+            ON CONFLICT (connection_id, user_id) DO UPDATE
+                SET container_name = EXCLUDED.container_name,
+                    image          = EXCLUDED.image,
+                    state          = 'running',
+                    last_seen_at   = now()
+            "#,
+        )
+        .bind(connection_id)
+        .bind(user.id)
+        .bind(&endpoint.container_name)
+        .bind(&image)
+        .execute(&db.pool)
+        .await;
+        let _ = crate::services::audit::log(
+            &db.pool,
+            Some(user.id),
+            crate::services::vdi::AUDIT_VDI_CONTAINER_ENSURE,
+            &serde_json::json!({
+                "connection_id": connection_id.to_string(),
+                "container_name": endpoint.container_name,
+                "image": image,
+            }),
+        )
+        .await;
+        (endpoint.host, endpoint.port)
+    } else if protocol == "web" {
+        // ── rustguac parity Phase 2: ensure web kiosk is running ──
+        // Spawn pipeline (or reuse existing): allocates display + CDP
+        // port, writes Login Data autofill (C3 + C4), spawns Xvnc
+        // (B9), waits for the listener (B10), spawns Chromium (B2–B6),
+        // detects immediate crashes (B11), runs the configured login
+        // script if any (D1–D4), registers the handle. The returned
+        // endpoint is `127.0.0.1:{5900+display}`, which we hand to
+        // guacd in place of the operator-typed hostname/port (which
+        // for `web` is a no-op placeholder, same as for `vdi`).
+        let cfg = match crate::services::web_session::WebSessionConfig::from_extra(&extra_json)
+        {
+            Some(c) => c,
+            None => {
+                return Err(AppError::Validation(
+                    "Web connection is missing or has empty 'url' extra field".into(),
+                ));
+            }
+        };
+
+        // Resolve operator-overridable settings with sensible defaults.
+        // The defaults match Debian's package layout (`Xvnc` and
+        // `chromium` on $PATH); operators on the Alpine image, NixOS,
+        // or a custom path override via system_settings.
+        let xvnc_path_str = crate::services::settings::get(
+            &db.pool,
+            crate::services::web_session::SETTING_WEB_XVNC_PATH,
+        )
+        .await?
+        .unwrap_or_else(|| "Xvnc".to_owned());
+        let chromium_path_str = crate::services::settings::get(
+            &db.pool,
+            crate::services::web_session::SETTING_WEB_CHROMIUM_PATH,
+        )
+        .await?
+        .unwrap_or_else(|| "chromium".to_owned());
+        let scripts_dir_str = crate::services::settings::get(
+            &db.pool,
+            crate::services::web_runtime::SETTING_WEB_LOGIN_SCRIPTS_DIR,
+        )
+        .await?
+        .unwrap_or_else(|| "/var/lib/strata/web-login-scripts".to_owned());
+
+        // Optional credentials: only feed them to autofill if the
+        // operator chose username/password auth. Empty username is
+        // treated as "no autofill" so passwordless connections don't
+        // write a meaningless Login Data row.
+        let credentials = match (&final_username, &final_password) {
+            (Some(u), Some(p)) if !u.is_empty() => {
+                Some(crate::services::web_runtime::WebCredentials {
+                    username: u.clone(),
+                    password: p.clone(),
+                })
+            }
+            _ => None,
+        };
+
+        let spec = crate::services::web_runtime::WebSpawnSpec {
+            config: cfg,
+            credentials,
+            xvnc_binary: std::path::PathBuf::from(xvnc_path_str),
+            chromium_binary: std::path::PathBuf::from(chromium_path_str),
+            login_scripts_dir: std::path::PathBuf::from(scripts_dir_str),
+            // Match the framebuffer to the operator's actual browser
+            // tab so the kiosk fills it edge-to-edge with no black
+            // bars. Saturating cast: u32 → u16 is safe because the
+            // tunnel route already clamped these to MAX_WIDTH/HEIGHT
+            // (8K), and once Xvnc is running we never resize it.
+            width: u16::try_from(effective_width).unwrap_or(u16::MAX),
+            height: u16::try_from(effective_height).unwrap_or(u16::MAX),
+            // Default Strata compose stack runs the backend as root
+            // (uid 0), matching rustguac's reference deployment. When
+            // operators harden by running unprivileged, they MUST
+            // expose chromium-sandbox SUID-root in the image; once
+            // that's in place this can be flipped to `false`.
+            running_as_root: true,
+        };
+
+        let runtime = {
+            let s = state.read().await;
+            s.web_runtime.clone()
+        };
+
+        // The session_id we hand to the login-script runner is the
+        // connection_id stringified — login scripts log against this
+        // and ops correlates it to the audit `web.session.start`
+        // event below.
+        let session_id = connection_id.to_string();
+
+        let handle = runtime
+            .ensure(connection_id, user.id, &session_id, spec)
+            .await
+            .map_err(|e| {
+                use crate::services::web_runtime::WebRuntimeError as WE;
+                match e {
+                    WE::DisplayExhausted | WE::CdpPortExhausted => AppError::Internal(format!(
+                        "web session capacity exhausted: {e}"
+                    )),
+                    WE::XvncNotReady(_) | WE::XvncSpawn(_) => {
+                        AppError::Internal(format!("xvnc spawn failed: {e}"))
+                    }
+                    WE::ChromiumSpawn(_) | WE::ChromiumImmediateExit(_) => {
+                        AppError::Internal(format!("chromium spawn failed: {e}"))
+                    }
+                    WE::LoginScript(_) => AppError::Internal(format!("login script failed: {e}")),
+                    WE::Profile(_) | WE::Autofill(_) => {
+                        AppError::Internal(format!("web profile prep failed: {e}"))
+                    }
+                }
+            })?;
+
+        let _ = crate::services::audit::log(
+            &db.pool,
+            Some(user.id),
+            crate::services::web_session::AUDIT_WEB_SESSION_START,
+            &serde_json::json!({
+                "connection_id": connection_id.to_string(),
+                "display": handle.display,
+                "cdp_port": handle.cdp_port,
+            }),
+        )
+        .await;
+
+        (handle.endpoint.host.to_string(), handle.endpoint.port)
+    } else {
+        (hostname, safe_port)
+    };
 
     let recording_name = recording_path.as_ref().map(|_| {
         format!(
@@ -502,9 +767,9 @@ pub async fn ws_tunnel(
     });
 
     let handshake = HandshakeParams {
-        protocol,
-        hostname,
-        port: safe_port,
+        protocol: wire_protocol,
+        hostname: final_hostname,
+        port: final_safe_port,
         username: final_username,
         password: final_password,
         domain,
@@ -547,7 +812,10 @@ pub async fn ws_tunnel(
         chrono::Utc::now().timestamp_millis()
     );
     let nvr_connection_name = connection_name.clone();
-    let nvr_protocol = handshake.protocol.clone();
+    // Preserve the operator-facing label (`web` / `vdi`) on recording
+    // metadata even though the wire protocol on `handshake.protocol` is
+    // already translated to `vnc` / `rdp`.
+    let nvr_protocol = protocol.clone();
     let nvr_user_id = user_id;
     let nvr_username = user.username.clone();
     let started_at = chrono::Utc::now();

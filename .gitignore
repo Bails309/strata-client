@@ -1,5 +1,6 @@
 # Build artifacts
 target/
+target-*/
 node_modules/
 dist/
 **/node_modules/
@@ -7,6 +8,7 @@ dist/
 **/test-results/
 **/blob-report/
 **/coverage/
+**/coverage_output.txt
 
 # Temp debug/test output files
 *.log

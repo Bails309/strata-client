@@ -272,7 +272,7 @@ rejected files are purged. Every request + decision is logged.
 ## Notifications & Email
 
 ### Modern Managed-Account Notification Emails
-**Status:** Proposed  
+**Status:** Shipped (v0.25.0)  
 **Area:** Notifications · Email · Managed Accounts
 
 Redesigned transactional emails covering the full managed-account checkout

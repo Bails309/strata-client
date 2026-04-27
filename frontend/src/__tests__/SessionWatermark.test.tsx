@@ -160,9 +160,11 @@ describe("SessionWatermark", () => {
     });
 
     // Should have N/A in the text since client_ip is empty string (falsy)
-    const callArgs = fillTextSpy.mock.calls;
-    const hasNA = callArgs.some((args: any) => args[0].includes("N/A"));
-    expect(hasNA).toBe(true);
+    await waitFor(() => {
+      const callArgs = fillTextSpy.mock.calls;
+      const hasNA = callArgs.some((args: any) => args[0].includes("N/A"));
+      expect(hasNA).toBe(true);
+    });
 
     HTMLCanvasElement.prototype.getContext = origGetContext;
     delete (HTMLCanvasElement.prototype as any).clientWidth;

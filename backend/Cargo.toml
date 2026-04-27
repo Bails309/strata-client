@@ -84,7 +84,7 @@ sysinfo = "0.38"
 # Magic-number / MIME detection for uploads (W3-6)
 infer = { version = "0.19", default-features = false }
 # Prometheus /metrics endpoint (W3-12)
-axum-prometheus = "0.7"
+axum-prometheus = "0.10"
 
 # Email notifications (v0.25.0)
 # lettre  — async SMTP transport over rustls (no OpenSSL dep on alpine).
@@ -98,7 +98,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "hostname",
     "pool",
 ] }
-mrml = { version = "5", default-features = false, features = ["parse", "render"] }
+mrml = { version = "6", default-features = false, features = ["parse", "render"] }
 tera = { version = "1", default-features = false }
 async-trait = "0.1"
 

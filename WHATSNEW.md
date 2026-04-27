@@ -1,3 +1,93 @@
+# What's New in v0.30.2
+
+> **Maintenance & supply-chain hygiene release.** v0.30.2 lands the open Dependabot queue locally so dependency bumps don't accumulate against future feature work, clears a **CodeQL `rust/hardcoded-credentials` Critical finding** in a backend unit test, refreshes pinned-by-SHA GitHub Actions, and stabilises three CI-only test issues. **Drop-in upgrade from v0.30.1.** No database migrations, no API contract changes, no UI changes — operators on v0.30.1 can `docker compose pull && up` without further action.
+
+---
+
+## 🛡️ CodeQL #83 — `rust/hardcoded-credentials` (Critical) cleared
+
+A CodeQL Critical alert flagged the `vdi_env_vars_overrides_reserved_keys_with_runtime_values` test in `backend/src/services/vdi.rs` because it passed string literals (`"alice"`, `"s3cret"`, `"attacker"`, `"leaked"`) into a function whose parameter name is `password`. The literal values were never reachable outside the `#[cfg(test)]` module — there is no production code path that consumes them — but the static-analysis signal is real noise on the security dashboard.
+
+The test now constructs all four values at runtime via `format!("user-{}", Uuid::new_v4())` / `format!("pw-{}", …)` so no literal flows into a credential parameter. The override semantic that the test exercises (a connection's `extra` env-var blob smuggling `VDI_USERNAME` or `VDI_PASSWORD` keys must not leak past the runtime, which always wins) is unchanged.
+
+---
+
+## 📦 Dependency bumps
+
+### Backend
+
+- **`rustls` 0.23.38 → 0.23.39** (patch). Cargo.lock-only — the declared `"0.23"` requirement in `backend/Cargo.toml` already subsumes the patch.
+- **`axum-prometheus` 0.7 → 0.10** (major). Strata's only call site is `PrometheusMetricLayer::pair()` in `backend/src/routes/mod.rs`. None of the breaking-surface APIs (`MakeDefaultHandle::make_default_handle(self)` in 0.7, `with_group_patterns_as` matchit-pattern syntax in 0.8, or the `metrics-exporter-prometheus` 0.18 upgrade in 0.10) are reached. Pulls in transitive bumps to `metrics` 0.23 → 0.24, `metrics-exporter-prometheus` 0.15 → 0.18, `metrics-util` 0.17 → 0.20.
+- **`mrml` 5 → 6** (major). Strata's only call sites are `mrml::parse(&str)` and `mrml::prelude::render::RenderOptions::default()` in `backend/src/services/email/templates.rs`. Both are stable across the 5→6 boundary, which contains bug-fixes-and-deps-bump only (font-family quoted-name parse, `mj-include` inside `mjml`, container-width propagation, VML namespace preservation).
+
+### Frontend
+
+- **`jsdom` 29.0.2 → 29.1.0** (minor) and **`vite` 8.0.9 → 8.0.10** (patch). Both `devDependencies` (test runner / build tool) — no runtime bundle change.
+- **`npm audit` → 0 vulnerabilities.**
+
+---
+
+## 🔐 GitHub Actions SHA pinning refreshed
+
+Pinned-by-SHA-with-tag-comment workflow actions are bumped to their newest tagged commits to pick up upstream security fixes. The existing `# vN.N.N` trailing-comment convention is preserved so Dependabot keeps tracking them.
+
+**`.github/workflows/ci.yml`:**
+
+| Action                         | From | To     | Commit                                     |
+| ------------------------------ | ---- | ------ | ------------------------------------------ |
+| `actions/setup-node` (×3)      | v4   | v6.4.0 | `48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e` |
+| `actions/upload-artifact` (×3) | v4   | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
+
+**`.github/workflows/release.yml`:**
+
+| Action                        | From | To     | Commit                                     |
+| ----------------------------- | ---- | ------ | ------------------------------------------ |
+| `docker/metadata-action`      | v5   | v6.0.0 | `030e881283bb7a6894de51c315a6bfe6a94e05cf` |
+| `actions/upload-artifact`     | v4   | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
+| `sigstore/cosign-installer`   | v3   | v4.1.1 | `cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003` |
+| `softprops/action-gh-release` | v2   | v3.0.0 | `b4309332981a82ec1c5618f44dd2e27cc8bfbfda` |
+
+---
+
+## 🧪 CI stability fixes
+
+### `web_login_script` Linux ETXTBSY
+
+Three tests in `backend/src/services/web_login_script.rs` (`spawn_succeeds_with_zero_exit`, `spawn_surfaces_non_zero_exit`, `spawn_kills_on_timeout`) intermittently failed on Linux CI runners with _"Text file busy"_ because the temp script file was still being held by an `fs::File` write handle when the test attempted `set_permissions()` followed immediately by `spawn()`. Linux refuses to `execve(2)` a file that has an open writer.
+
+**Fix:** explicit `f.sync_all().unwrap(); drop(f);` _before_ `set_permissions()`, so the kernel flushes the inode and releases the write lock prior to exec. No production change — the production caller already drops its handle before chmod.
+
+### Flaky `SessionWatermark` paint assertion
+
+The `uses N/A for missing client_ip` case in `frontend/src/__tests__/SessionWatermark.test.tsx` asserted `fillTextSpy.mock.calls.some(args => args[0].includes("N/A"))` synchronously after `render()` resolved the canvas mount. The watermark paint actually runs in a `useEffect` triggered by the user-state commit, **one tick after** the canvas appears.
+
+**Fix:** wrap the assertion in `await waitFor(...)` so the matcher polls until the paint completes. This matches the same fix already applied to the sibling case earlier in the v0.30.1 cycle.
+
+### Trivy SARIF upload no-op when scanner failed
+
+In `.github/workflows/trivy.yml` the `github/codeql-action/upload-sarif` step previously failed with _"Path does not exist: trivy-frontend.sarif"_ whenever the prior Trivy scan step itself errored out (because the matrix step uses `continue-on-error: true`).
+
+**Fix:** added `if: always() && hashFiles(format('trivy-{0}.sarif', matrix.service)) != ''` so the upload skips cleanly when no SARIF file was produced, rather than masking the real Trivy failure with a misleading upload-not-found error.
+
+---
+
+## ✅ Validation
+
+- **Frontend:** `npx vitest run` → 47 files / **1232 tests, all green.**
+- **Frontend:** `npm audit` → **0 vulnerabilities.**
+- **Backend:** `cargo update -p axum-prometheus -p mrml` resolved cleanly to `axum-prometheus 0.10.0` + `mrml 6.0.1`. The downstream `cargo check` is authoritative on CI (the local Windows workstation hits an unrelated Defender block on build-script execution under the cargo target dir, which does not affect Linux CI).
+
+---
+
+## 🚀 Upgrade notes
+
+- **No database migrations.** The migration runner has no work to do for this release.
+- **No API contract changes.** All `/api/*` routes, request/response shapes, and audit-event names are byte-identical to v0.30.1.
+- **No UI changes.** Operators won't see anything different in the running app.
+- **Operators on custom forks of `axum-prometheus` or `mrml`** should re-run their own integration suite — the major-version bumps exercise a large transitive-dependency delta even though Strata's call sites are unchanged.
+
+---
+
 # What's New in v0.30.1
 
 > **Per-user preferences release.** v0.30.1 introduces a per-user preferences subsystem stored server-side, and the first preference it powers: a fully customisable keybinding for the in-session **Command Palette** (default `Ctrl+K`). Operators whose host applications collide with `Ctrl+K` — Visual Studio, JetBrains IDEs, Slack, Obsidian — can now rebind the palette to any combination they prefer, or disable it entirely. The setting follows the operator across browsers and devices because it lives in PostgreSQL, not localStorage. **Drop-in upgrade from v0.30.0.** A single additive migration (`058_user_preferences.sql`) creates the new table — no existing rows are mutated, and users who never open the Profile page get exactly the same `Ctrl+K` behaviour as before.
@@ -18,7 +108,7 @@ When a Strata tab has focus the in-page handler swallows `Ctrl+K` so it can pop 
 ### How it works
 
 1. Click the **user avatar** at the bottom of the sidebar — that block is now a link to a new `/profile` page (was a static label).
-2. Under **Keyboard Shortcuts**, click the **Command Palette** button. It enters recording mode (the button highlights and the helper text reads *"Press a shortcut… (Esc to cancel)"*).
+2. Under **Keyboard Shortcuts**, click the **Command Palette** button. It enters recording mode (the button highlights and the helper text reads _"Press a shortcut… (Esc to cancel)"_).
 3. Press the new combination. Modifier-only presses (just `Shift`, just `Ctrl`, etc.) are ignored — the recorder waits for an actual key. Press `Esc` to cancel without committing.
 4. The button reverts to the recorded value (e.g. `Ctrl+Shift+P`, `Alt+Space`, `Ctrl+Backquote`). Click **Save** to persist.
 5. **Reset to Ctrl+K** restores the default. **Disable** stores the empty string, turning the palette off entirely (the operator can still close it via the in-palette UI when something else opens it, e.g. a session reconnect modal that programmatically opens it).
@@ -160,7 +250,7 @@ The sample VDI image's xrdp uses a per-container self-signed certificate that St
 
 ## 📝 Audit and recording
 
-The action-type strings declared as fixed contracts in v0.29.0 are now actually emitted by the runtime: `web.session.start`, `web.session.end`, `web.autofill.write`, `vdi.container.ensure`, `vdi.container.destroy`, `vdi.image.rejected`. See [`docs/api-reference.md`](docs/api-reference.md) § *Audit Event Types* for the per-event `details` schema.
+The action-type strings declared as fixed contracts in v0.29.0 are now actually emitted by the runtime: `web.session.start`, `web.session.end`, `web.autofill.write`, `vdi.container.ensure`, `vdi.container.destroy`, `vdi.image.rejected`. See [`docs/api-reference.md`](docs/api-reference.md) § _Audit Event Types_ for the per-event `details` schema.
 
 `nvr_protocol` preserves the operator-facing `web` / `vdi` label even though the wire protocol is `vnc` / `rdp`, so recording playback shows the correct icon in the session list.
 
@@ -168,11 +258,11 @@ The action-type strings declared as fixed contracts in v0.29.0 are now actually 
 
 ## 📚 Documentation
 
-- **Web Sessions and VDI added to in-app docs.** The `/docs` page in the admin UI now ships two dedicated left-rail entries — *Web Sessions* and *VDI Desktop* — wired to `docs/web-sessions.md` and `docs/vdi.md`.
+- **Web Sessions and VDI added to in-app docs.** The `/docs` page in the admin UI now ships two dedicated left-rail entries — _Web Sessions_ and _VDI Desktop_ — wired to `docs/web-sessions.md` and `docs/vdi.md`.
 - **`docs/vdi.md`** rewritten for the shipping runtime: when-to-use, architecture diagrams, the full `connections.extra` schema, ephemeral-credentials flow, image whitelist semantics, network resolution (`STRATA_VDI_NETWORK`), the `entrypoint.sh` socket-permission handling, the security overrides for VDI, audit-event contract, reaper disconnect classification, custom-image build requirements, and a troubleshooting matrix.
 - **`docs/web-sessions.md`** updated with viewport-matched framebuffer details, the runtime registry reuse semantics, the login-script runner section, and a troubleshooting matrix mapping each `WebRuntimeError` variant to its operator-facing remediation.
-- **`docs/architecture.md`** gains an *Extended protocols* deep-dive with ASCII diagrams of both spawn pipelines, the display / port allocator state machines, the deterministic container-naming scheme, and the wire-protocol translation (`web→vnc`, `vdi→rdp`).
-- **`docs/security.md`** *Web Sessions and VDI extended threat model* augmented with the v0.30.0 ephemeral-credentials flow, the scope of TLS overrides for VDI (vdi-only, RDP unaffected), the `STRATA_VDI_NETWORK` selection rule, and the entrypoint socket-permission handling.
+- **`docs/architecture.md`** gains an _Extended protocols_ deep-dive with ASCII diagrams of both spawn pipelines, the display / port allocator state machines, the deterministic container-naming scheme, and the wire-protocol translation (`web→vnc`, `vdi→rdp`).
+- **`docs/security.md`** _Web Sessions and VDI extended threat model_ augmented with the v0.30.0 ephemeral-credentials flow, the scope of TLS overrides for VDI (vdi-only, RDP unaffected), the `STRATA_VDI_NETWORK` selection rule, and the entrypoint socket-permission handling.
 - **`docs/api-reference.md`** documents the live audit events with their `details` schemas.
 - **`docs/deployment.md`** documents the Windows-vs-Linux `COMPOSE_FILE` separator, the runtime requirements section, and the host resource budgeting guidance for VDI.
 - **`README.md`** feature list updated with web and VDI as shipping protocols.
@@ -185,6 +275,7 @@ The action-type strings declared as fixed contracts in v0.29.0 are now actually 
 - **No new database migrations.** The v0.29.0 migration `057_session_types_web_vdi.sql` already created `vdi_containers` and the per-protocol settings rows; v0.30.0 only writes to those tables.
 - **No API-contract changes for existing protocols.** RDP, VNC, SSH, Kubernetes, and Telnet behave identically. The new VDI-specific forced parameters (`ignore-cert`, `security`, `resize-method`) apply only when `protocol == "vdi"`.
 - **Drop-in upgrade from v0.29.0.** Operators who do not enable VDI (i.e. do not apply `docker-compose.vdi.yml`) see no behaviour change beyond the new in-app docs entries and the live web-session runtime.
+
 # What's New in v0.29.0
 
 > **Foundation release.** v0.29.0 lands the typed config, allocator, egress guard, image whitelist, container-naming, and admin UI for two new connection protocols — `web` (kiosk Chromium inside Xvnc, tunnelled as VNC) and `vdi` (Strata-managed Docker desktop containers tunnelled as RDP) — along with 36 new backend unit tests, full operator docs, and a new admin endpoint for the VDI image whitelist. The **live runtime spawn** (`Xvnc` + Chromium for `web`, the `bollard`-backed `DockerVdiDriver` for `vdi`) is intentionally deferred to a follow-up release; both roadmap items remain marked **In Progress** in the admin UI. No migrations, no API-contract changes for existing protocols.
@@ -280,13 +371,13 @@ The passthrough pipeline involves four cooperating components:
 
 ### Why this is a big deal
 
-| Aspect | Bitmap path (pre-v0.28.0) | H.264 passthrough (v0.28.0+) |
-|---|---|---|
-| Server-side work per frame | RDP H.264 decode → re-encode to PNG/JPEG/WebP tiles | Forward NAL units verbatim |
-| Bandwidth (1080p typical desktop) | ~5–15 Mbps | ~0.5–2 Mbps |
-| Text rendering during animations | Cross-frame ghosting on rapid window cycles | Decoder reference chain stays intact |
-| Browser CPU | Image-tile blit (cheap, but constant) | Hardware video decode (cheaper, GPU-accelerated where available) |
-| Server CPU | Transcode pipeline runs every frame | guacd just shovels NAL units |
+| Aspect                            | Bitmap path (pre-v0.28.0)                           | H.264 passthrough (v0.28.0+)                                     |
+| --------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------- |
+| Server-side work per frame        | RDP H.264 decode → re-encode to PNG/JPEG/WebP tiles | Forward NAL units verbatim                                       |
+| Bandwidth (1080p typical desktop) | ~5–15 Mbps                                          | ~0.5–2 Mbps                                                      |
+| Text rendering during animations  | Cross-frame ghosting on rapid window cycles         | Decoder reference chain stays intact                             |
+| Browser CPU                       | Image-tile blit (cheap, but constant)               | Hardware video decode (cheaper, GPU-accelerated where available) |
+| Server CPU                        | Transcode pipeline runs every frame                 | guacd just shovels NAL units                                     |
 
 ---
 
@@ -412,13 +503,13 @@ Both carry a SHA-256-prefix fingerprint of the token (8 hex chars, the raw token
 
 Several self-service mutations were previously silent. They now emit audit events:
 
-| Handler | Event |
-|---|---|
-| `POST /api/user/accept-terms` | `user.terms_accepted` |
-| `PUT /api/user/credential-mappings` | `user.credential_mapping_set` |
+| Handler                                               | Event                             |
+| ----------------------------------------------------- | --------------------------------- |
+| `POST /api/user/accept-terms`                         | `user.terms_accepted`             |
+| `PUT /api/user/credential-mappings`                   | `user.credential_mapping_set`     |
 | `DELETE /api/user/credential-mappings/:connection_id` | `user.credential_mapping_removed` |
-| `POST /api/user/checkouts/:id/retry` | `checkout.retry_activation` |
-| `POST /api/user/checkouts/:id/checkin` | `checkout.checkin` |
+| `POST /api/user/checkouts/:id/retry`                  | `checkout.retry_activation`       |
+| `POST /api/user/checkouts/:id/checkin`                | `checkout.checkin`                |
 
 ### Vault error paths sanitized
 
@@ -479,7 +570,7 @@ The SMTP test-send panel gained a dropdown next to the recipient input letting a
 
 ### Port & TLS dropdowns are now bidirectionally symmetric
 
-Picking a canonical port (25 / 465 / 587) now also snaps the TLS mode to the conventional pairing (so port 465 → Implicit TLS, 587 → STARTTLS), mirroring the pre-existing "TLS mode snaps port" behaviour. The two dropdowns can no longer drift into nonsensical combinations like *port 465 + STARTTLS*.
+Picking a canonical port (25 / 465 / 587) now also snaps the TLS mode to the conventional pairing (so port 465 → Implicit TLS, 587 → STARTTLS), mirroring the pre-existing "TLS mode snaps port" behaviour. The two dropdowns can no longer drift into nonsensical combinations like _port 465 + STARTTLS_.
 
 ### Password field: discriminated union
 
@@ -519,7 +610,7 @@ A new top-level tab appears on the Admin Settings page (visible to users with `c
 
 ### 1. SMTP relay configuration
 
-Standard form fields for **host**, **port**, **TLS mode** (STARTTLS / Implicit TLS / None), **username**, **From address**, **From name**, and **brand accent colour** (used as the button colour in the HTML templates). The **Enable notification emails** master switch at the top is honoured by the dispatcher — off means *no outbound mail*, no TCP connection to the relay, no `email_deliveries` row churn.
+Standard form fields for **host**, **port**, **TLS mode** (STARTTLS / Implicit TLS / None), **username**, **From address**, **From name**, and **brand accent colour** (used as the button colour in the HTML templates). The **Enable notification emails** master switch at the top is honoured by the dispatcher — off means _no outbound mail_, no TCP connection to the relay, no `email_deliveries` row churn.
 
 ### 🔐 The password field is Vault-aware
 
@@ -572,7 +663,7 @@ Full TypeScript types (`SmtpConfig`, `SmtpConfigUpdate`, `EmailDelivery`) are ex
 
 ## 🙏 Credits
 
-Thanks to the admin who noticed the discrepancy between the release notes and the actual UI. The v0.25.0 changelog entry has been annotated in v0.25.2's *Fixed* section as a documentation-honesty correction.
+Thanks to the admin who noticed the discrepancy between the release notes and the actual UI. The v0.25.0 changelog entry has been annotated in v0.25.2's _Fixed_ section as a documentation-honesty correction.
 
 ---
 
@@ -632,12 +723,12 @@ Thanks to the user who reported the RDP minimise/restore clipping; the repro ste
 
 Strata now sends mobile-friendly HTML emails for every key managed-account checkout event:
 
-| Event | Recipients | Opt-out? |
-|---|---|---|
-| **Checkout pending approval** | All assigned approvers for the target account | ✅ Yes |
-| **Checkout approved** | The original requester | ✅ Yes |
-| **Checkout rejected** | The original requester | ✅ Yes |
-| **Self-approved checkout (audit notice)** | Configured audit recipients | ❌ No (audit visibility) |
+| Event                                     | Recipients                                    | Opt-out?                 |
+| ----------------------------------------- | --------------------------------------------- | ------------------------ |
+| **Checkout pending approval**             | All assigned approvers for the target account | ✅ Yes                   |
+| **Checkout approved**                     | The original requester                        | ✅ Yes                   |
+| **Checkout rejected**                     | The original requester                        | ✅ Yes                   |
+| **Self-approved checkout (audit notice)** | Configured audit recipients                   | ❌ No (audit visibility) |
 
 Each email is rendered from an [MJML](https://mjml.io) template (mobile-responsive, tested across Gmail / Outlook / Apple Mail), dispatched as `multipart/related` with the Strata logo inlined as `cid:strata-logo`, and accompanied by a plain-text alternative for accessibility and minimal-client compatibility.
 
@@ -694,7 +785,7 @@ Transient SMTP failures (network blips, 4xx responses, transient connection erro
 - **Backoff**: exponential
 - **Max attempts**: 3 — after which the row is marked `abandoned` and a `notifications.abandoned` audit event is emitted
 
-**Permanent failures (5xx)** are *not* retried — they go straight to `failed` so admins can see the underlying SMTP rejection in the deliveries view.
+**Permanent failures (5xx)** are _not_ retried — they go straight to `failed` so admins can see the underlying SMTP rejection in the deliveries view.
 
 ---
 
@@ -714,7 +805,7 @@ The SMTP password is **not** stored in `system_settings`. It lives sealed under 
 
 ## 📈 Approver fan-out improvement
 
-Previously, only the first matching approver received the *pending* notification. v0.25.0's `services::checkouts::approvers_for_account` now joins `approval_role_accounts` with `approval_role_assignments` to fan out to **every assigned approver** for the target account. No configuration change required.
+Previously, only the first matching approver received the _pending_ notification. v0.25.0's `services::checkouts::approvers_for_account` now joins `approval_role_accounts` with `approval_role_assignments` to fan out to **every assigned approver** for the target account. No configuration change required.
 
 ---
 
@@ -731,7 +822,7 @@ Previously, only the first matching approver received the *pending* notification
 
 - **Migration**: [`backend/migrations/055_notifications.sql`](backend/migrations/055_notifications.sql) — adds `email_deliveries`, the `users.notifications_opt_out` column, and 8 SMTP/branding rows in `system_settings`.
 - **Module layout**: `backend/src/services/email/` houses the trait (`transport.rs`), production transport (`smtp.rs`), MJML renderer (`templates.rs` + `templates/`), Outlook VML wrapper (`outlook.rs`), and retry worker (`worker.rs`). Dispatcher lives in `backend/src/services/notifications.rs`.
-- **New crates**: `lettre 0.11` (rustls + tokio1), `mrml 5`, `tera 1`, `async-trait 0.1`. `ammonia` was *removed* in favour of a custom 5-character `xml_escape` helper.
+- **New crates**: `lettre 0.11` (rustls + tokio1), `mrml 5`, `tera 1`, `async-trait 0.1`. `ammonia` was _removed_ in favour of a custom 5-character `xml_escape` helper.
 - **ADR**: [ADR-0008 — Notification pipeline](docs/adr/ADR-0008-notification-pipeline.md) records the design rationale (MJML + mrml, Vault-sealed password, opt-out semantics, retry strategy, alternatives considered).
 - **Runbook**: [docs/runbooks/smtp-troubleshooting.md](docs/runbooks/smtp-troubleshooting.md) covers symptom triage, log inspection, common transient/permanent errors, and rollback.
 - **Version bump**: `VERSION`, `frontend/package.json`, and `backend/Cargo.toml` all now read **0.25.0**.
@@ -749,11 +840,11 @@ Previously, only the first matching approver received the *pending* notification
 
 Quick Share — the ephemeral file CDN exposed on the Session Bar for handing files into a remote desktop — previously relied on implicit "if the button is visible, the user can use it" gating with no backend enforcement. In v0.24.0 it is a first-class role permission:
 
-| Surface | Behaviour before v0.24.0 | Behaviour in v0.24.0 |
-|---|---|---|
-| **Session Bar button** | Always visible while a session was active | Visible only when the user's role grants `can_use_quick_share` (or `can_manage_system`) |
-| **`POST /api/files/upload`** | Any authenticated user | Requires `can_use_quick_share`; returns `403 Forbidden` otherwise |
-| **Admin role editor** | No checkbox | New **Use Quick Share** checkbox under **Admin → Access → Roles** |
+| Surface                      | Behaviour before v0.24.0                  | Behaviour in v0.24.0                                                                    |
+| ---------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| **Session Bar button**       | Always visible while a session was active | Visible only when the user's role grants `can_use_quick_share` (or `can_manage_system`) |
+| **`POST /api/files/upload`** | Any authenticated user                    | Requires `can_use_quick_share`; returns `403 Forbidden` otherwise                       |
+| **Admin role editor**        | No checkbox                               | New **Use Quick Share** checkbox under **Admin → Access → Roles**                       |
 
 > [!NOTE]
 > **Upgrade behaviour is non-breaking.** Migration 054 sets `can_use_quick_share = true` on every existing role on first boot. Administrators who want to restrict Quick Share should untick the new checkbox on the relevant roles after the upgrade.
@@ -777,7 +868,7 @@ In every review those two checkboxes ended up ticked together; the separation pr
 
 - The `can_create_connection_folders` column is dropped from the `roles` table.
 - Before dropping, migration 054 OR's its value **into** `can_create_connections`, so any role that had folders-only keeps connection-creation rights.
-- The role-editor checkbox for "Create connection folders" is removed. Users with **Create new connections** can now create and organise both connections *and* their folder hierarchy.
+- The role-editor checkbox for "Create connection folders" is removed. Users with **Create new connections** can now create and organise both connections _and_ their folder hierarchy.
 
 > [!TIP]
 > **No one loses a capability.** Roles that previously had only the folders flag are silently upgraded to full connection creation — consistent with the practical reality that folders are meaningless without connections to put in them.
@@ -816,11 +907,11 @@ External API consumers should update their field mappings. The JSON field **coun
 
 The Admin Settings page used to live in a single **8,402-line** React file. That file has been broken up into one module per tab under `frontend/src/pages/admin/`:
 
-| Tab | Module |
-|---|---|
+| Tab                                                                                                                              | Module                                          |
+| -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | Health · Display · Network · SSO · Kerberos · Recordings · Vault · Access · Tags · AD Sync · Password Mgmt · Sessions · Security | one file each under `frontend/src/pages/admin/` |
-| Connection-form helpers (`Section`, `FieldGrid`, `RdpSections`, `SshSections`, `VncSections`) | `admin/connectionForm.tsx` |
-| Shared RDP keyboard layouts | `admin/rdpKeyboardLayouts.ts` |
+| Connection-form helpers (`Section`, `FieldGrid`, `RdpSections`, `SshSections`, `VncSections`)                                    | `admin/connectionForm.tsx`                      |
+| Shared RDP keyboard layouts                                                                                                      | `admin/rdpKeyboardLayouts.ts`                   |
 
 `AdminSettings.tsx` itself is now a **258-line** dispatcher that loads settings once and renders the currently-selected tab. Net reduction across the admin surface: **−8,144 lines**. No behavioural changes; **1,162 / 1,162 frontend tests pass** and the backend suite is green.
 
@@ -852,8 +943,6 @@ Live references to the tracker (PR template, runbook index, ADR-0001) have been 
 - Rust 1.95 / React 19 / TypeScript 6 toolchain from 0.23.0 is unchanged.
 
 ---
-
-
 
 > **Compliance & operations release.** No feature-facing changes for end users — v0.22.0 closes out the data-retention and operational-documentation items from the compliance tracker so administrators and on-call engineers have runtime-configurable retention windows, concrete runbooks, and a documented design record.
 
@@ -888,12 +977,12 @@ As of v0.22.0 the window defaults to **90 days** and is editable by an administr
 
 Five new ADRs capture decisions that were previously only in operator heads:
 
-| ADR | Topic |
-|---|---|
+| ADR          | Topic                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------- |
 | **ADR-0003** | Feature flags — why we kept boolean settings and when we'd promote to a real flag table |
-| **ADR-0004** | guacd connection model, protocol-parameter allow-list, and trust boundaries |
-| **ADR-0005** | JWT + refresh-token TTLs, single-use refresh rotation, global-logout lever |
-| **ADR-0006** | Vault Transit envelope format (`vault:<base64>`), rotate + rewrap path |
+| **ADR-0004** | guacd connection model, protocol-parameter allow-list, and trust boundaries             |
+| **ADR-0005** | JWT + refresh-token TTLs, single-use refresh rotation, global-logout lever              |
+| **ADR-0006** | Vault Transit envelope format (`vault:<base64>`), rotate + rewrap path                  |
 | **ADR-0007** | Emergency approval bypass & scheduled-start checkouts — data model and audit invariants |
 
 All live under `docs/adr/`.
@@ -958,7 +1047,7 @@ You can now request a password checkout that releases at a future moment instead
 
 ## ⚡ Emergency Approval Bypass (Break-Glass)
 
-When a production incident needs a privileged credential *right now* and the approver chain is unavailable, admins can let users self-release with a mandatory written justification.
+When a production incident needs a privileged credential _right now_ and the approver chain is unavailable, admins can let users self-release with a mandatory written justification.
 
 ### How it works
 
@@ -979,4 +1068,5 @@ When a production incident needs a privileged credential *right now* and the app
 - **Single Expiration Worker**: The existing 60-second checkout worker now also activates due scheduled checkouts — no extra background processes.
 
 ---
-*For a full technical list of changes, please refer to the [CHANGELOG.md](file:///c:/GitRepos/strata-client/CHANGELOG.md).*
+
+_For a full technical list of changes, please refer to the [CHANGELOG.md](file:///c:/GitRepos/strata-client/CHANGELOG.md)._

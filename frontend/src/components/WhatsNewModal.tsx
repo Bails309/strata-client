@@ -25,6 +25,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.30.2",
+    subtitle:
+      "Maintenance & supply-chain hygiene — dependency bumps, action SHA pinning refresh, and a CodeQL credential finding cleared",
+    sections: [
+      {
+        title: "CodeQL #83 — hardcoded credential finding cleared",
+        description:
+          "A CodeQL Critical alert (rust/hardcoded-credentials) flagged literal username/password values flowing through the vdi_env_vars test in backend/src/services/vdi.rs. The literals were never reachable outside the #[cfg(test)] module — there is no production code path that consumes them — but the static-analysis signal added noise to the security dashboard. The test now constructs all four values at runtime via Uuid::new_v4(), so no string literal flows into a credential parameter, and the override semantic (smuggled VDI_USERNAME / VDI_PASSWORD in extra get replaced by the runtime args) is unchanged.",
+      },
+      {
+        title: "Dependency bumps — backend (rustls, axum-prometheus, mrml)",
+        description:
+          "rustls 0.23.38 → 0.23.39 (patch, Cargo.lock-only). axum-prometheus 0.7 → 0.10 (major) — Strata's only call site is PrometheusMetricLayer::pair() in backend/src/routes/mod.rs; none of the breaking-surface APIs (MakeDefaultHandle::make_default_handle(self) in 0.7, with_group_patterns_as matchit-pattern syntax in 0.8, or the metrics-exporter-prometheus 0.18 upgrade in 0.10) are reached. mrml 5 → 6 (major) — Strata's only call sites are mrml::parse(&str) and RenderOptions::default() in backend/src/services/email/templates.rs, both stable across the boundary; the 5→6 changelog is bug-fixes-and-deps-bump only.",
+      },
+      {
+        title: "Dependency bumps — frontend (jsdom, vite)",
+        description:
+          "jsdom 29.0.2 → 29.1.0 (minor) and vite 8.0.9 → 8.0.10 (patch), both devDependencies (test runner / build tool). No runtime bundle change. npm audit reports 0 vulnerabilities.",
+      },
+      {
+        title: "GitHub Actions SHA pinning refreshed (5 actions, 9 occurrences)",
+        description:
+          "Pinned-by-SHA-with-tag-comment workflow actions are bumped to their newest tagged commits. .github/workflows/ci.yml: actions/setup-node v4 → v6.4.0 (×3), actions/upload-artifact v4 → v7.0.1 (×3). .github/workflows/release.yml: docker/metadata-action v5 → v6.0.0, actions/upload-artifact v4 → v7.0.1, sigstore/cosign-installer v3 → v4.1.1, softprops/action-gh-release v2 → v3.0.0. Existing # vN.N.N trailing-comment convention preserved so Dependabot keeps tracking them.",
+      },
+      {
+        title: "CI stability fixes",
+        description:
+          "(1) backend/src/services/web_login_script.rs — three tests (spawn_succeeds_with_zero_exit, spawn_surfaces_non_zero_exit, spawn_kills_on_timeout) intermittently failed on Linux CI with 'Text file busy' (ETXTBSY) because the temp script file was still being held by an fs::File handle when chmod+spawn ran. Now explicitly sync_all().unwrap() and drop(f) before set_permissions(). (2) frontend SessionWatermark 'uses N/A for missing client_ip' test asserted fillTextSpy synchronously after render() — the watermark paint actually runs in a useEffect a tick later, so the assertion is now wrapped in await waitFor(...). (3) .github/workflows/trivy.yml SARIF upload step now skips cleanly via if: always() && hashFiles(...) != '' when the prior Trivy scan errored out, instead of masking the real failure with a misleading upload-not-found error.",
+      },
+      {
+        title: "Drop-in upgrade — no DB migrations, no API changes, no UI changes",
+        description:
+          "This is a pure maintenance release. Operators on v0.30.1 can docker compose pull && up without further action. No new database migrations. No /api/* contract changes. No frontend UI changes. Frontend test suite is green at 1232/1232 across 47 files.",
+      },
+    ],
+  },
+  {
     version: "0.30.1",
     subtitle: "Per-user preferences and a customisable Command Palette shortcut (default Ctrl+K)",
     sections: [

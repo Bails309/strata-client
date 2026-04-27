@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.30.1-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.30.2-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.95-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -145,30 +145,31 @@ docker compose up -d --build
 
 Browsers cannot capture the physical Windows key — the OS intercepts it before it reaches the page. Strata remaps **Right Ctrl** as a Windows key proxy (the same convention used by VMware Workstation and VirtualBox):
 
-| Action | What the remote session receives |
-|---|---|
-| **Hold Right Ctrl + E** | Win+E (open Explorer) |
-| **Hold Right Ctrl + R** | Win+R (Run dialog) |
-| **Hold Right Ctrl + Shift + S** | Win+Shift+S (screenshot) |
-| **Tap Right Ctrl alone** | Win tap (Start menu) |
+| Action                          | What the remote session receives |
+| ------------------------------- | -------------------------------- |
+| **Hold Right Ctrl + E**         | Win+E (open Explorer)            |
+| **Hold Right Ctrl + R**         | Win+R (Run dialog)               |
+| **Hold Right Ctrl + Shift + S** | Win+Shift+S (screenshot)         |
+| **Tap Right Ctrl alone**        | Win tap (Start menu)             |
 
 This works in all session modes — single session, tiled view, pop-out windows, and shared viewer (control mode). The proxy is active for **RDP and VNC** connections; SSH sessions are unaffected.
 
 > [!NOTE]
 > If you are using an **external database**, ensure `DATABASE_URL` is set in your `.env` file first. If you want to use the **bundled local database**, use the `local-db` profile:
+>
 > ```bash
 > docker compose --profile local-db up -d
 > ```
 
 This starts all services with Nginx as the main gateway:
 
-| Service | Port | Purpose |
-|---|---|---|
-| `frontend` | `80`, `443` | React SPA + SSL Gateway + API Proxy |
-| `backend` | — (internal) | Rust API / WebSocket proxy |
-| `guacd` | — (internal) | Guacamole protocol daemon (FreeRDP 3 + H.264) |
-| `postgres-local` | — (internal) | Bundled PostgreSQL 16 |
-| `vault` | — (internal) | Bundled HashiCorp Vault 1.19 |
+| Service          | Port         | Purpose                                       |
+| ---------------- | ------------ | --------------------------------------------- |
+| `frontend`       | `80`, `443`  | React SPA + SSL Gateway + API Proxy           |
+| `backend`        | — (internal) | Rust API / WebSocket proxy                    |
+| `guacd`          | — (internal) | Guacamole protocol daemon (FreeRDP 3 + H.264) |
+| `postgres-local` | — (internal) | Bundled PostgreSQL 16                         |
+| `vault`          | — (internal) | Bundled HashiCorp Vault 1.19                  |
 
 ### 2.1 SSL / HTTPS Setup
 
@@ -234,15 +235,15 @@ See [docs/deployment.md](docs/deployment.md) for production deployment and upgra
 
 ## 📚 Documentation
 
-| Document | Description |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | System design, container layout, data flow |
-| [docs/api-reference.md](docs/api-reference.md) | REST & WebSocket API endpoints |
-| [docs/deployment.md](docs/deployment.md) | Production deployment, upgrades, HA |
-| [docs/security.md](docs/security.md) | Threat model, encryption, auth details |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
-| [NOTICE](NOTICE) | Third-party software notices |
+| Document                                       | Description                                |
+| ---------------------------------------------- | ------------------------------------------ |
+| [docs/architecture.md](docs/architecture.md)   | System design, container layout, data flow |
+| [docs/api-reference.md](docs/api-reference.md) | REST & WebSocket API endpoints             |
+| [docs/deployment.md](docs/deployment.md)       | Production deployment, upgrades, HA        |
+| [docs/security.md](docs/security.md)           | Threat model, encryption, auth details     |
+| [CHANGELOG.md](CHANGELOG.md)                   | Version history                            |
+| [CONTRIBUTING.md](CONTRIBUTING.md)             | Contribution guidelines                    |
+| [NOTICE](NOTICE)                               | Third-party software notices               |
 
 ## 📄 License
 

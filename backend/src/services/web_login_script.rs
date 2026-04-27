@@ -315,6 +315,8 @@ mod tests {
         // Read stdin to /dev/null so the pipe doesn't EPIPE-trip the
         // parent-side write.
         writeln!(f, "#!/bin/sh\ncat >/dev/null\nexit 0").unwrap();
+        f.sync_all().unwrap();
+        drop(f); // Close the writer or Linux returns ETXTBSY on exec.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let creds = Credentials {
             username: "u".into(),
@@ -337,6 +339,8 @@ mod tests {
         let path = dir.path().join("fail.sh");
         let mut f = std::fs::File::create(&path).expect("create");
         writeln!(f, "#!/bin/sh\ncat >/dev/null\nexit 7").unwrap();
+        f.sync_all().unwrap();
+        drop(f); // Close the writer or Linux returns ETXTBSY on exec.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let creds = Credentials {
             username: "u".into(),
@@ -363,6 +367,8 @@ mod tests {
         let path = dir.path().join("slow.sh");
         let mut f = std::fs::File::create(&path).expect("create");
         writeln!(f, "#!/bin/sh\nsleep 30\nexit 0").unwrap();
+        f.sync_all().unwrap();
+        drop(f); // Close the writer or Linux returns ETXTBSY on exec.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let creds = Credentials {
             username: "u".into(),

@@ -131,7 +131,7 @@ export default function Profile() {
         </p>
 
         <div className="flex items-center gap-3 mb-2">
-          <label className="text-sm font-medium w-48">Command Palette</label>
+          <span className="text-sm font-medium w-48">Command Palette</span>
           <button
             ref={recorderRef}
             type="button"

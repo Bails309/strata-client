@@ -176,8 +176,6 @@ describe("SessionManager — cursor rendering (1.6.0 ghost-cursor fix)", () => {
     // Simulate the server pushing a cursor frame.
     mockDisplay.oncursor(cursorCanvas, 5, 7);
 
-    expect(displayEl.style.cursor).toBe(
-      "url(data:image/png;base64,AAAA) 5 7, default"
-    );
+    expect(displayEl.style.cursor).toBe("url(data:image/png;base64,AAAA) 5 7, default");
   });
 });

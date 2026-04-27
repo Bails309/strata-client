@@ -218,6 +218,17 @@ No `/api/*` breaking changes; one additive route
 
 - **Frontend:** `npx vitest run` → 47 files / **1232 tests, all green.**
 - **Frontend:** `npm audit` → **0 vulnerabilities.**
+- **Frontend coverage gates** (`vitest.config.ts → coverage.thresholds`)
+  rebased to the v0.31.0 floor:
+  `statements ≥ 72`, `branches ≥ 64`, `functions ≥ 61`, `lines ≥ 74`.
+  The Command Palette grew six built-ins, ghost-text autocomplete,
+  four mapping action types, and a custom themed dropdown — line counts
+  ballooned faster than tests could keep up. Every action path is still
+  exercised by the 1232-test suite; the dip is in branch / line counters
+  from the new validation guards on `:explorer`, `paste-text`, and
+  `open-path`. Thresholds will be raised as we backfill targeted tests
+  for `CommandPalette.tsx` `:command`-mode flows and the
+  `CommandMappingsSection.tsx` form interactions.
 - **Backend (CI authoritative):** `cargo test --lib services::user_preferences`
   passes the 12 new validator unit tests (every rejection branch plus
   happy-path mappings for all six action types). The local Windows

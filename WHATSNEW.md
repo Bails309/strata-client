@@ -1,3 +1,88 @@
+# What's New in v0.30.1
+
+> **Per-user preferences release.** v0.30.1 introduces a per-user preferences subsystem stored server-side, and the first preference it powers: a fully customisable keybinding for the in-session **Command Palette** (default `Ctrl+K`). Operators whose host applications collide with `Ctrl+K` — Visual Studio, JetBrains IDEs, Slack, Obsidian — can now rebind the palette to any combination they prefer, or disable it entirely. The setting follows the operator across browsers and devices because it lives in PostgreSQL, not localStorage. **Drop-in upgrade from v0.30.0.** A single additive migration (`058_user_preferences.sql`) creates the new table — no existing rows are mutated, and users who never open the Profile page get exactly the same `Ctrl+K` behaviour as before.
+
+---
+
+## ⌨️ Customisable Command Palette shortcut
+
+Strata's in-session **Command Palette** is the operator's escape hatch from a captured Guacamole session — it pops over the remote-display canvas, intercepts keystrokes before the remote OS sees them, and lets the user disconnect, switch sessions, copy/paste, share, etc. It is bound to `Ctrl+K` by default. That keystroke unfortunately collides with several common host-side shortcuts:
+
+- **Visual Studio** — `Ctrl+K, …` is the chord prefix for Peek, Comment selection, and the entire **Edit ▸ Advanced** menu.
+- **JetBrains IDEs (IntelliJ, Rider, PyCharm, …)** — `Ctrl+K` is **Commit changes**.
+- **Slack / Microsoft Teams** — `Ctrl+K` is the conversation quick-switcher.
+- **Obsidian / Notion** — `Ctrl+K` is the link-insert / quick-find prompt.
+
+When a Strata tab has focus the in-page handler swallows `Ctrl+K` so it can pop the palette — which means the operator's host app never sees the chord. v0.30.1 lets each user customise the binding away from the default.
+
+### How it works
+
+1. Click the **user avatar** at the bottom of the sidebar — that block is now a link to a new `/profile` page (was a static label).
+2. Under **Keyboard Shortcuts**, click the **Command Palette** button. It enters recording mode (the button highlights and the helper text reads *"Press a shortcut… (Esc to cancel)"*).
+3. Press the new combination. Modifier-only presses (just `Shift`, just `Ctrl`, etc.) are ignored — the recorder waits for an actual key. Press `Esc` to cancel without committing.
+4. The button reverts to the recorded value (e.g. `Ctrl+Shift+P`, `Alt+Space`, `Ctrl+Backquote`). Click **Save** to persist.
+5. **Reset to Ctrl+K** restores the default. **Disable** stores the empty string, turning the palette off entirely (the operator can still close it via the in-palette UI when something else opens it, e.g. a session reconnect modal that programmatically opens it).
+
+### Cross-platform binding semantics
+
+The matcher deliberately treats `Ctrl` in a stored binding as "**Ctrl OR ⌘**" so the same preference works on every operator's OS without per-device tweaking. A binding of `Ctrl+K` matches:
+
+- `Ctrl+K` on Windows / Linux
+- `⌘+K` on macOS
+
+(If a future preference needs to distinguish Ctrl from ⌘, that's a separate knob — out of scope for v0.30.1.)
+
+The matcher is also **case-insensitive** on the event side (so `K` and `k` both match a stored `Ctrl+K`), and **modifier-order insensitive** in the stored string (`Shift+Ctrl+P` and `Ctrl+Shift+P` parse identically). `Cmd`, `Meta`, `Win`, and `Super` are aliases for the same modifier.
+
+### Where the binding takes effect
+
+Two production keystroke traps respect the new preference, both via a `useRef` so the keydown listener doesn't have to be rebound when the user changes the value mid-session:
+
+- The **main session window** trap in `frontend/src/pages/SessionClient.tsx` (capture-phase, runs **before** Guacamole's keyboard handler so the chord can't leak through to the remote OS).
+- The **popout / multi-monitor child window** trap in `frontend/src/components/usePopOut.ts`. The popout doesn't open the palette directly — it relays a `strata:open-command-palette` postMessage back to the main window, which then opens it. Both windows now use the same matcher.
+
+The postMessage listener itself in `SessionClient.tsx` was untouched — it dispatches on message type, not on key.
+
+---
+
+## 🗄️ Per-user preferences subsystem
+
+The Command Palette binding is stored in a brand-new `user_preferences` table, designed up-front to be the foundation for additional preferences without further migrations. Schema:
+
+```sql
+CREATE TABLE user_preferences (
+    user_id     UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+The blob is intentionally schema-less at the database layer — the **frontend owns the shape**. The backend enforces exactly one invariant: the top-level value MUST be a JSON object. Anything else (array, string, number, null) returns `400 Bad Request`. Future preferences (e.g. RDP keyboard-layout overrides, dashboard tile order, default-recording behaviour) just add new keys to the same blob.
+
+### Backend surface
+
+- New service module `backend/src/services/user_preferences.rs` with `get(pool, user_id) -> Value` and `set(pool, user_id, prefs)`. The setter is an idempotent UPSERT (`ON CONFLICT (user_id) DO UPDATE`).
+- Two new endpoints, both on the standard `Extension<AuthUser>` middleware path:
+  - `GET /api/user/preferences` → `200 { ... }` (or `200 {}` if no row exists yet).
+  - `PUT /api/user/preferences` → accepts and returns the same JSON object; `400` for non-object bodies.
+
+### Frontend surface
+
+- React context provider `frontend/src/components/UserPreferencesProvider.tsx`, mounted in `App.tsx` between `SettingsProvider` and `SessionManagerProvider`. Exposes `useUserPreferences()` with `{ preferences, loading, error, update, reload }`. Performs optimistic updates with rollback on failure. Falls back to safe defaults when used outside the provider, so the login screen and unit-test harnesses keep working.
+- Profile page `frontend/src/pages/Profile.tsx` at `/profile`. Two sections today: **Account** (read-only summary from `/api/user/me`) and **Keyboard Shortcuts** (the recorder UI described above). Designed so additional preference sections drop in as new `<section>` blocks.
+- Keybinding utility `frontend/src/utils/keybindings.ts` — `parseBinding`, `matchesBinding`, `bindingFromEvent`, `DEFAULT_COMMAND_PALETTE_BINDING`. Covered by 16 vitest cases.
+- API client additions in `frontend/src/api.ts`: `getUserPreferences()`, `updateUserPreferences(prefs)`, `UserPreferences` interface.
+
+---
+
+## ✅ Migration / upgrade notes
+
+- **Drop-in upgrade from v0.30.0.** The migration runner picks up `058_user_preferences.sql` automatically on backend start. The table is `IF NOT EXISTS` and has no constraints that touch existing data, so the migration is reversible by hand if needed.
+- **Defaults preserved.** Until a user explicitly visits `/profile` and saves something, the preferences row does not exist. The frontend transparently substitutes `commandPaletteBinding = "Ctrl+K"` so the experience is byte-identical to v0.30.0.
+- **No backend dependency changes.** No new crates; the existing `serde_json` / `sqlx` stack is enough.
+
+---
+
 # What's New in v0.30.0
 
 > **Runtime delivery release.** v0.30.0 ships the live runtime spawn for the two new connection protocols whose pure-logic foundation landed in v0.29.0. Connecting to a `web` connection now actually launches Xvnc + Chromium and tunnels them through guacd; connecting to a `vdi` connection now actually launches the Strata-managed Docker desktop container, attaches it to the Compose-prefixed `guac-internal` network, and tunnels its xrdp through guacd. The roadmap items `protocols-web-sessions` and `protocols-vdi` move from **In Progress** to **Shipped**. **No new database migrations** — the v0.29.0 migration `057_session_types_web_vdi.sql` already created the runtime tables. **Drop-in upgrade from v0.29.0.**

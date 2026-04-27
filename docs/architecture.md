@@ -544,9 +544,10 @@ user_account_mappings ───── user ↔ managed AD account (with self-app
 password_checkout_requests ─ checkout lifecycle tracking (Pending/Approved/Active/Expired/Denied/CheckedIn, timestamps, Vault-sealed password)
 email_deliveries ──── transactional-email audit trail (template_key, recipient, subject, status, attempts, last_error, related_entity_type/id) — status ∈ {queued,sent,failed,bounced,suppressed}
 users.notifications_opt_out ─ boolean column; honoured by every transactional message except the self-approved audit notice
+user_preferences ──── per-user UI preferences blob (JSONB, schema owned by the frontend); first key shipped is `commandPaletteBinding` (default `"Ctrl+K"`, added v0.30.1)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `055_notifications.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `058_user_preferences.sql` for the full DDL.
 
 ## Directory Structure
 

@@ -271,6 +271,8 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/password", put(auth::change_password))
         .route("/api/user/me", get(user::me))
         .route("/api/user/accept-terms", post(user::accept_terms))
+        .route("/api/user/preferences", get(user::get_preferences))
+        .route("/api/user/preferences", put(user::update_preferences))
         .route("/api/roadmap", get(roadmap::get_statuses))
         .route("/api/user/connections", get(user::my_connections))
         .route("/api/user/credentials", put(user::update_credential))
@@ -545,7 +547,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         std::env::remove_var("STRATA_ALLOWED_ORIGINS");

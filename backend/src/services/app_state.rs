@@ -58,6 +58,7 @@ pub type SharedState = Arc<RwLock<AppState>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::vdi::NoopVdiDriver;
 
     #[test]
     fn boot_phase_default_is_setup() {
@@ -92,7 +93,7 @@ mod tests {
             web_runtime: Arc::new(WebRuntimeRegistry::new(
                 Arc::new(WebDisplayAllocator::new()),
             )),
-            vdi_driver: Arc::new(NoopVdiDriver::default()),
+            vdi_driver: Arc::new(NoopVdiDriver),
             started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);

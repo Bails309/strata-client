@@ -190,6 +190,23 @@ export function SessionManagerProvider({
       }
     };
 
+    // Suppress 1.6.0's software-rendered cursor canvas layer. It gets
+    // appended to the display element on every server-side `mouse`
+    // instruction (see vendor.js handleMouse → display.showCursor(true)),
+    // which stacks on top of our CSS data-URL cursor and produces ghost
+    // cursors. Force-detach the cursor element and no-op `showCursor`
+    // so the only visible pointer is the OS/CSS one.
+    try {
+      const cursorLayer = display.getCursorLayer?.();
+      const cursorEl = cursorLayer?.getElement?.();
+      cursorEl?.parentNode?.removeChild(cursorEl);
+    } catch {
+      /* defensive — older builds may not expose getCursorLayer */
+    }
+    display.showCursor = () => {
+      /* no-op: rendered via CSS in oncursor above */
+    };
+
     // Mouse
     const mouse = new Guacamole.Mouse(displayEl);
     mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {

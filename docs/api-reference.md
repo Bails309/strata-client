@@ -730,6 +730,52 @@ Accept the recording disclaimer / terms of service. Sets `terms_accepted_at` to 
 { "ok": true }
 ```
 
+### `GET /api/user/preferences`
+
+Return the current authenticated user's UI preferences blob. The shape is
+intentionally schema-less at the database layer — the frontend owns the
+schema. Returns `{}` when no row has been written yet (i.e. the user has
+never visited the Profile page).
+
+Known keys today (added in v0.30.1):
+
+| Key                       | Type     | Default   | Description                                                                                                                  |
+| ------------------------- | -------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `commandPaletteBinding`   | `string` | `"Ctrl+K"` | Keybinding for the in-session Command Palette. Empty string disables the shortcut. Format: `"Ctrl+Shift+P"`, `"Alt+Space"`. |
+
+`Ctrl` in a binding matches either `event.ctrlKey` or `event.metaKey` so
+the same stored value works on Windows/Linux and macOS without per-OS
+configuration. Modifier-order is insensitive. `Cmd`, `Meta`, `Win`, and
+`Super` are accepted aliases for the same modifier.
+
+**Response** `200 OK`
+```json
+{
+  "commandPaletteBinding": "Ctrl+K"
+}
+```
+
+### `PUT /api/user/preferences`
+
+Replace the current authenticated user's UI preferences blob wholesale
+(idempotent UPSERT). Accepts and returns the same JSON shape. The body
+**MUST** be a JSON object — arrays, strings, numbers, and `null` are
+rejected with `400 Bad Request: validation error: preferences must be a
+JSON object`.
+
+Operators normally call this through the in-app Profile page; the
+endpoint is documented for completeness and for downstream automation
+that may want to provision a default keybinding for managed accounts.
+
+**Request**
+```json
+{
+  "commandPaletteBinding": "Ctrl+Shift+P"
+}
+```
+
+**Response** `200 OK` — echoes the stored object.
+
 ### `GET /api/roadmap`
 
 Return all admin-set roadmap item status overrides. Available to any

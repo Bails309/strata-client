@@ -394,6 +394,29 @@ pub async fn list_admin_connection_tags(
     Ok(Json(json!(map)))
 }
 
+// ── User preferences ──────────────────────────────────────────────────
+
+/// Return the current user's UI preferences object (or `{}` if unset).
+pub async fn get_preferences(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let prefs = crate::services::user_preferences::get(&db.pool, user.id).await?;
+    Ok(Json(prefs))
+}
+
+/// Replace the current user's UI preferences object.
+pub async fn update_preferences(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    crate::services::user_preferences::set(&db.pool, user.id, &body).await?;
+    Ok(Json(body))
+}
+
 // ── Update user credential (envelope encryption) ──────────────────────
 
 #[derive(Deserialize)]
@@ -2022,7 +2045,7 @@ mod tests {
                         crate::services::web_session::WebDisplayAllocator::new(),
                     )),
                 ),
-                vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+                vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
                 started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;
@@ -2052,7 +2075,7 @@ mod tests {
                         crate::services::web_session::WebDisplayAllocator::new(),
                     )),
                 ),
-                vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+                vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
                 started_at: std::time::Instant::now(),
             }));
         let result = require_running(&state).await;

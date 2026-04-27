@@ -33,6 +33,7 @@ pub mod token_revocation;
 pub mod tunnel_tickets;
 pub mod user_cleanup;
 pub mod user_credentials;
+pub mod user_preferences;
 pub mod user_tags;
 pub mod users;
 pub mod vault;

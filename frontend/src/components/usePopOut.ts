@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import { GuacSession } from "./SessionManager";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
+import { useUserPreferences } from "./UserPreferencesProvider";
+import {
+  parseBinding,
+  matchesBinding,
+  DEFAULT_COMMAND_PALETTE_BINDING,
+} from "../utils/keybindings";
 
 /**
  * Hook that manages popping a Guacamole session out into a separate browser window.
@@ -19,6 +25,19 @@ export function usePopOut(
   containerRef: React.RefObject<HTMLDivElement | null>
 ) {
   const navigate = useNavigate();
+
+  // Live ref to the user's command-palette binding so the popout's key
+  // trap (installed once when the popup opens) sees subsequent updates
+  // without needing to be re-bound.
+  const { preferences: userPrefs } = useUserPreferences();
+  const commandPaletteBindingRef = useRef(
+    parseBinding(userPrefs.commandPaletteBinding ?? DEFAULT_COMMAND_PALETTE_BINDING)
+  );
+  useEffect(() => {
+    commandPaletteBindingRef.current = parseBinding(
+      userPrefs.commandPaletteBinding ?? DEFAULT_COMMAND_PALETTE_BINDING
+    );
+  }, [userPrefs.commandPaletteBinding]);
 
   // Derive initial state from the session — if it already has a popup open
   // (e.g. we navigated away and came back), reflect that immediately.
@@ -189,8 +208,8 @@ export function usePopOut(
     const trapKeyDown = (e: KeyboardEvent) => {
       if (e.key === "F12") return;
       if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
-      // Ctrl+K → relay to main window to open command palette
-      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      // User-configurable command-palette shortcut → relay to main window.
+      if (matchesBinding(e, commandPaletteBindingRef.current)) {
         e.preventDefault();
         e.stopImmediatePropagation();
         kb.reset();

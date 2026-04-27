@@ -25,6 +25,37 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.30.1",
+    subtitle: "Per-user preferences and a customisable Command Palette shortcut (default Ctrl+K)",
+    sections: [
+      {
+        title: "Rebind Ctrl+K from your Profile page",
+        description:
+          "Strata's in-session Command Palette is bound to Ctrl+K by default — which collides with Visual Studio's Peek/Comment chord, JetBrains' commit-changes, Slack's quick-switcher, Obsidian's link-insert, and several other common host-side shortcuts. v0.30.1 lets every user remap that binding (or disable it entirely) from a brand-new Profile page, accessible by clicking the user avatar in the sidebar. The recorder accepts any Ctrl/Alt/Shift/Meta combination plus a printable or named key (Enter, Space, F1, etc.); modifier-only presses are ignored, and Esc cancels without committing.",
+      },
+      {
+        title: "Stored server-side per user — follows you across devices",
+        description:
+          "The preference is persisted in a new user_preferences PostgreSQL table (migration 058_user_preferences.sql) keyed by user_id with a JSONB blob, exposed through GET / PUT /api/user/preferences. That means the binding survives browser-cache clears and follows the operator across browsers and devices. The blob is intentionally schema-less at the database layer so additional preferences can be added in future releases without further migrations — the frontend owns the shape.",
+      },
+      {
+        title: "Cross-platform: Ctrl matches both Ctrl and ⌘",
+        description:
+          "The matcher treats Ctrl in a stored binding as 'Ctrl OR ⌘' so the same value works on every operator's OS without per-device configuration. A stored Ctrl+K matches Ctrl+K on Windows/Linux and ⌘+K on macOS. The matcher is also case-insensitive on the event side and modifier-order insensitive in the stored string. Cmd, Meta, Win, and Super are recognised aliases for the same modifier.",
+      },
+      {
+        title: "Both keystroke traps now respect the preference",
+        description:
+          "The capture-phase trap in SessionClient.tsx (which fires before Guacamole's keyboard handler so the chord can't leak through to the remote OS) and the popout/multi-monitor trap in usePopOut.ts both read the user-configured binding through a useRef. The ref is updated whenever the preference changes so the keydown listener never has to be rebound mid-session. The cross-window postMessage relay is unchanged — it dispatches on message type, not on key.",
+      },
+      {
+        title: "Drop-in upgrade — defaults preserved",
+        description:
+          "Until a user explicitly visits /profile and saves something, no preferences row exists for them. The frontend transparently substitutes commandPaletteBinding = 'Ctrl+K' in that case, so the experience is byte-identical to v0.30.0. The single new migration is additive (CREATE TABLE IF NOT EXISTS); no existing rows are mutated. 16 new vitest cases cover the parser/matcher/recorder edge cases.",
+      },
+    ],
+  },
+  {
     version: "0.30.0",
     subtitle:
       "Web Browser Sessions and VDI Desktop Containers — runtime delivery (rustguac parity, Shipped)",

@@ -3999,7 +3999,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -4028,7 +4028,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

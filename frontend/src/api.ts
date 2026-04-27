@@ -228,6 +228,26 @@ export const acceptTerms = (version: number) =>
     body: JSON.stringify({ version }),
   });
 
+// ── User preferences (per-user UI settings) ─────────────────────────
+
+/**
+ * Free-form JSON object stored per-user. Frontend owns the schema; the
+ * backend stores opaque JSON. Known keys today:
+ *   - `commandPaletteBinding`: keybinding string, e.g. "Ctrl+K", "" to disable.
+ */
+export interface UserPreferences {
+  commandPaletteBinding?: string;
+  [key: string]: unknown;
+}
+
+export const getUserPreferences = () => request<UserPreferences>("/user/preferences");
+
+export const updateUserPreferences = (prefs: UserPreferences) =>
+  request<UserPreferences>("/user/preferences", {
+    method: "PUT",
+    body: JSON.stringify(prefs),
+  });
+
 // ── Roadmap status overrides ────────────────────────────────────────
 
 export type RoadmapStatus = "Proposed" | "Researching" | "In Progress" | "Shipped";

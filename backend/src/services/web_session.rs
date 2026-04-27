@@ -153,12 +153,7 @@ impl CdpPortAllocator {
             .in_use
             .lock()
             .expect("CDP port allocator mutex poisoned");
-        for n in WEB_CDP_PORT_MIN..=WEB_CDP_PORT_MAX {
-            if in_use.insert(n) {
-                return Some(n);
-            }
-        }
-        None
+        (WEB_CDP_PORT_MIN..=WEB_CDP_PORT_MAX).find(|&n| in_use.insert(n))
     }
 
     /// Release a previously allocated port. No-op if the port was never
@@ -205,12 +200,7 @@ impl WebDisplayAllocator {
             .in_use
             .lock()
             .expect("display allocator mutex poisoned");
-        for n in WEB_DISPLAY_MIN..=WEB_DISPLAY_MAX {
-            if in_use.insert(n) {
-                return Some(n);
-            }
-        }
-        None
+        (WEB_DISPLAY_MIN..=WEB_DISPLAY_MAX).find(|&n| in_use.insert(n))
     }
 
     /// Release a previously allocated display number. No-op if the

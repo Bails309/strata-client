@@ -415,7 +415,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         let result = status(axum::extract::State(state)).await;
@@ -446,7 +446,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -495,7 +495,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -546,7 +546,7 @@ mod tests {
                     crate::services::web_session::WebDisplayAllocator::new(),
                 )),
             ),
-            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
+            vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;

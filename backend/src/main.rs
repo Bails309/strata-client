@@ -250,11 +250,11 @@ async fn main() -> anyhow::Result<()> {
                         "STRATA_VDI_ENABLED=true but DockerVdiDriver init failed: {e}. \
                          Falling back to NoopVdiDriver (vdi connections will return 503)."
                     );
-                    std::sync::Arc::new(services::vdi::NoopVdiDriver::default())
+                    std::sync::Arc::new(services::vdi::NoopVdiDriver)
                 }
             }
         } else {
-            std::sync::Arc::new(services::vdi::NoopVdiDriver::default())
+            std::sync::Arc::new(services::vdi::NoopVdiDriver)
         };
 
     // Shared web display allocator. Both `AppState.web_displays`

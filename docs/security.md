@@ -611,6 +611,7 @@ The bundled Vault container runs on the internal Docker bridge network and is **
 - **Path traversal:** Recording file downloads reject filenames containing `..`, `/`, or `\`
 - **JSON parsing:** All request bodies are deserialized with `serde` into strongly-typed structs
 - **CORS:** Configured via `tower-http`. Controlled by the `STRATA_ALLOWED_ORIGINS` environment variable in production.
+- **Per-user preferences blob (`/api/user/preferences`):** the database column is a free-form `JSONB`, but the route handler enforces that the top-level value MUST be a JSON object. Arrays, scalars, and `null` are rejected with `400`. The blob is **never executed** server-side — it is opaque to the backend; only the frontend interprets known keys. Keys the frontend doesn't recognise are preserved on round-trip but otherwise inert. This means a compromised end-user account cannot escalate by writing arbitrary code into the blob; the worst case is denial-of-service against that user's own UI by storing nonsense values for known keys, which the user can self-recover from by hitting **Reset to default** in the Profile page.
 
 ---
 

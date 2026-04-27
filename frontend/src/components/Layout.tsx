@@ -288,8 +288,14 @@ export default function Layout({
             className="flex flex-col gap-3 pt-4"
             style={{ borderTop: "1px solid var(--color-border)" }}
           >
-            {/* User Profile */}
-            <div className={`flex items-center gap-2.5 ${collapsed ? "justify-center" : "px-2.5"}`}>
+            {/* User Profile — click to open the profile/settings page */}
+            <Link
+              to="/profile"
+              className={`flex items-center gap-2.5 rounded-lg transition-colors hover:bg-white/5 ${
+                collapsed ? "justify-center py-1" : "px-2.5 py-1"
+              }`}
+              title="Profile & settings"
+            >
               <div className="user-avatar-premium mesh-gradient w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0">
                 {initial}
                 <div className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-success border border-nav-bg" />
@@ -304,7 +310,7 @@ export default function Layout({
                   </span>
                 </div>
               )}
-            </div>
+            </Link>
 
             {!collapsed && (
               <div className="flex flex-col gap-2 px-2.5">

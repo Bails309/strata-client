@@ -5,6 +5,126 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.1] — 2026-04-27
+
+### Per-user preferences and customisable Command Palette shortcut
+
+This release introduces a **per-user preferences subsystem** along with the
+first preference it enables: a fully customisable keybinding for the
+in-session **Command Palette** (default `Ctrl+K`). The Ctrl+K combination
+collides with several common host-side shortcuts (Visual Studio's
+**Peek**/**Comment selection** sub-menu, JetBrains' delete-line, Slack's
+quick switcher, etc.); operators who use those tools alongside Strata
+sessions can now rebind the palette to any combination they prefer, or
+disable it entirely. The preference is **stored server-side per user**, so
+it follows the operator across browsers and devices.
+
+### Added
+
+- **Database — `user_preferences` table.** New migration
+  [`058_user_preferences.sql`](backend/migrations/058_user_preferences.sql)
+  introduces a thin per-user JSONB store:
+  ```sql
+  CREATE TABLE user_preferences (
+      user_id     UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  ```
+  The blob is intentionally schema-less at the database layer — the
+  frontend owns the shape of the object so future preferences can be
+  added without further migrations. The backend enforces exactly one
+  invariant: the top-level value MUST be a JSON object (anything else
+  returns `400 Bad Request`).
+- **Backend — preferences service and routes.** New
+  [`backend/src/services/user_preferences.rs`](backend/src/services/user_preferences.rs)
+  exposes `get(pool, user_id) -> Value` and `set(pool, user_id, prefs)`
+  (idempotent UPSERT with `ON CONFLICT (user_id) DO UPDATE`). Two new
+  endpoints in [`backend/src/routes/user.rs`](backend/src/routes/user.rs)
+  are registered in [`backend/src/routes/mod.rs`](backend/src/routes/mod.rs):
+  - `GET /api/user/preferences` — returns the current user's preferences
+    object, or `{}` if no row has been written yet.
+  - `PUT /api/user/preferences` — replaces the preferences object
+    wholesale. Accepts and returns the same JSON shape; rejects
+    non-object bodies with `400`.
+- **Frontend — keybinding utility.** New
+  [`frontend/src/utils/keybindings.ts`](frontend/src/utils/keybindings.ts)
+  centralises shortcut parsing and matching:
+  - `parseBinding("Ctrl+Shift+K")` → `{ ctrl, alt, shift, meta, key }`
+    or `null` for the empty / disabled state.
+  - `matchesBinding(event, parsed)` — case-insensitive, modifier-order
+    insensitive, and **`Ctrl` matches either `event.ctrlKey` or
+    `event.metaKey`** so the same binding works on Windows/Linux and
+    macOS without per-OS configuration.
+  - `bindingFromEvent(event)` — used by the Profile-page key recorder
+    to translate a live keypress into the canonical storage form.
+  - `DEFAULT_COMMAND_PALETTE_BINDING = "Ctrl+K"`.
+- **Frontend — context provider and hook.** New
+  [`frontend/src/components/UserPreferencesProvider.tsx`](frontend/src/components/UserPreferencesProvider.tsx)
+  loads the preferences object on mount, exposes `useUserPreferences()`
+  with `{ preferences, loading, error, update, reload }`, performs
+  optimistic updates with rollback on failure, and falls back to safe
+  defaults when used outside the provider (so the login screen and
+  unit-test harnesses keep working). Mounted in
+  [`frontend/src/App.tsx`](frontend/src/App.tsx) between
+  `SettingsProvider` and `SessionManagerProvider`.
+- **Frontend — Profile page.** New
+  [`frontend/src/pages/Profile.tsx`](frontend/src/pages/Profile.tsx)
+  registered at `/profile` exposes a read-only account summary plus a
+  **Keyboard Shortcuts** section. The Command Palette binding row uses
+  a live key-recorder button (Esc cancels), an explicit **Save**
+  (preferences persist only when the user opts in, not on every
+  keystroke), a **Reset to Ctrl+K** button, and a **Disable** button
+  that stores the empty string. Validation rejects unparseable
+  combinations and surfaces a status line.
+- **Frontend — sidebar profile entry-point.** The user-profile block in
+  [`frontend/src/components/Layout.tsx`](frontend/src/components/Layout.tsx)
+  is now a clickable `<Link to="/profile">` (was a static `<div>`),
+  with hover styling on both the collapsed and expanded sidebar
+  layouts.
+- **API client.** New `getUserPreferences()` and
+  `updateUserPreferences(prefs)` helpers plus the `UserPreferences`
+  TypeScript interface in
+  [`frontend/src/api.ts`](frontend/src/api.ts).
+- **Tests.** New
+  [`frontend/src/__tests__/keybindings.test.ts`](frontend/src/__tests__/keybindings.test.ts)
+  — 16 vitest cases covering parser edge-cases (empty/whitespace,
+  modifier-order independence, `Cmd`/`Meta`/`Win` aliasing, modifier-only
+  rejection), matcher rules (Ctrl ↔ Meta cross-platform mapping,
+  case-insensitivity, extra-modifier rejection, disabled-binding
+  null-safety), and the recorder's `bindingFromEvent` (modifier-only
+  presses ignored, single letters upper-cased, named keys preserved).
+  All 16 pass.
+
+### Changed
+
+- **Hard-coded `Ctrl+K` matchers replaced.** Two production sites that
+  previously hard-coded `(e.ctrlKey || e.metaKey) && e.key === "k"` now
+  read the user-configured binding through a `useRef` (so the keydown
+  trap doesn't need to be rebound when the preference changes):
+  - [`frontend/src/pages/SessionClient.tsx`](frontend/src/pages/SessionClient.tsx)
+    — main-window capture-phase trap that opens the in-session
+    Command Palette before Guacamole's keyboard handler sees the event.
+  - [`frontend/src/components/usePopOut.ts`](frontend/src/components/usePopOut.ts)
+    — popout / multi-monitor child window trap that relays a
+    `strata:open-command-palette` postMessage back to the main window.
+  The `postMessage` listener itself in `SessionClient.tsx` is unchanged
+  — it dispatches purely on the message `type` field and does not
+  inspect the original keystroke.
+
+### Notes
+
+- **Drop-in upgrade from v0.30.0.** The single new migration is
+  additive (`CREATE TABLE IF NOT EXISTS`); no existing rows are
+  mutated. Users who never visit `/profile` continue to get `Ctrl+K`
+  exactly as before — the default binding is applied client-side
+  whenever the preference is unset.
+- **`Ctrl` on macOS.** The matcher deliberately treats `Ctrl` in a
+  binding as "Ctrl OR ⌘" so the same stored value works on every
+  operator's OS. If a user wants to bind specifically to `⌘+P`
+  without also matching `Ctrl+P`, that requires a future preference
+  knob — out of scope for v0.30.1.
+
 ## [0.30.0] — 2026-04-27
 
 ### Runtime delivery: Web Browser Sessions and VDI Desktop Containers

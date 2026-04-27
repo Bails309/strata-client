@@ -112,6 +112,7 @@ impl DockerVdiDriver {
     /// Wrap an already-built `bollard::Docker`. Used by tests with a
     /// faked transport.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn from_docker(docker: Docker, network: impl Into<String>) -> Self {
         Self {
             docker: Arc::new(docker),

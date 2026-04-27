@@ -48,6 +48,20 @@ export default function SharedViewer() {
       }
     };
 
+    // Suppress the 1.6.0 software cursor canvas layer (it stacks on top
+    // of the CSS cursor and produces ghost cursors). See SessionManager
+    // for the full explanation.
+    try {
+      const cursorLayer = display.getCursorLayer?.();
+      const cursorEl = cursorLayer?.getElement?.();
+      cursorEl?.parentNode?.removeChild(cursorEl);
+    } catch {
+      /* defensive */
+    }
+    display.showCursor = () => {
+      /* no-op */
+    };
+
     // Mouse (view-only still lets the viewer see cursor position)
     const mouse = new Guacamole.Mouse(displayEl);
     mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {

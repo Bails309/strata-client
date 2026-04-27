@@ -23,6 +23,12 @@ import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
 import CommandPalette from "../components/CommandPalette";
+import { useUserPreferences } from "../components/UserPreferencesProvider";
+import {
+  parseBinding,
+  matchesBinding,
+  DEFAULT_COMMAND_PALETTE_BINDING,
+} from "../utils/keybindings";
 
 /*
  * Phases:
@@ -90,6 +96,21 @@ export default function SessionClient() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const commandPaletteOpenRef = useRef(false);
   const containerFocusedRef = useRef(false);
+
+  // Live ref to the user-configured command-palette binding. Stored as a
+  // pre-parsed object so the hot keydown trap doesn't re-parse on every
+  // press. Updated whenever the user changes the preference, without
+  // needing to re-bind the keydown listener.
+  const { preferences: userPrefs } = useUserPreferences();
+  const commandPaletteBindingRef = useRef(
+    parseBinding(userPrefs.commandPaletteBinding ?? DEFAULT_COMMAND_PALETTE_BINDING)
+  );
+  useEffect(() => {
+    commandPaletteBindingRef.current = parseBinding(
+      userPrefs.commandPaletteBinding ?? DEFAULT_COMMAND_PALETTE_BINDING
+    );
+  }, [userPrefs.commandPaletteBinding]);
+
   const [reconnecting, setReconnecting] = useState<ReconnectState | null>(null);
   const [reconnectLoading, setReconnectLoading] = useState(false);
   const userDisconnectRef = useRef(false);
@@ -1012,8 +1033,8 @@ export default function SessionClient() {
       // Allow browser dev-tools shortcuts through
       if (e.key === "F12") return;
       if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
-      // Ctrl+K → open command palette (intercept before Guacamole)
-      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+      // User-configurable command-palette shortcut (default Ctrl+K).
+      if (matchesBinding(e, commandPaletteBindingRef.current)) {
         e.preventDefault();
         e.stopImmediatePropagation();
         // Flush any keys currently held down (typically Ctrl/Meta) to the

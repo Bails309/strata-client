@@ -197,7 +197,7 @@ impl ImageWhitelist {
     /// can keep documented allow-lists.
     pub fn parse(raw: &str) -> Self {
         let images = raw
-            .split(|c: char| c == '\n' || c == ',')
+            .split(['\n', ','])
             .map(str::trim)
             .filter(|s| !s.is_empty() && !s.starts_with('#'))
             .map(str::to_owned)

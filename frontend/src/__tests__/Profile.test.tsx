@@ -9,10 +9,7 @@ vi.mock("../api", () => ({
 }));
 
 import Profile from "../pages/Profile";
-import {
-  UserPreferencesProvider,
-  useUserPreferences,
-} from "../components/UserPreferencesProvider";
+import { UserPreferencesProvider, useUserPreferences } from "../components/UserPreferencesProvider";
 import { getMe, getUserPreferences, updateUserPreferences } from "../api";
 
 function renderWithProvider() {
@@ -101,9 +98,7 @@ describe("Profile page", () => {
     act(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
-    await waitFor(() =>
-      expect(screen.getByText("Recording cancelled.")).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByText("Recording cancelled.")).toBeInTheDocument());
     expect(recorder).toHaveTextContent("Ctrl+K");
   });
 

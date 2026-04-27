@@ -905,6 +905,26 @@ function SessionThumbnail({
     return () => document.removeEventListener("mousedown", handler);
   }, [tagPickerOpen]);
 
+  // Close tag picker on Esc
+  useEffect(() => {
+    if (!tagPickerOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTagPickerOpen(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [tagPickerOpen]);
+
+  // Reset filter when picker closes
+  const [tagFilter, setTagFilter] = useState("");
+  useEffect(() => {
+    if (!tagPickerOpen) setTagFilter("");
+  }, [tagPickerOpen]);
+
+  const filteredTags = tagFilter.trim()
+    ? userTags.filter((t) => t.name.toLowerCase().includes(tagFilter.trim().toLowerCase()))
+    : userTags;
+
   return (
     <div
       className={`session-thumb ${isActive ? "session-thumb-active" : ""} ${session.error ? "session-thumb-error" : ""}`}
@@ -950,68 +970,169 @@ function SessionThumbnail({
             </svg>
           </button>
 
-          {/* Tag Picker Dropdown */}
+          {/* Tag Picker Modal Overlay */}
           {tagPickerOpen && (
             <div
-              ref={tagPickerRef}
-              className="absolute top-7 left-1 z-30 w-40 max-h-48 overflow-y-auto rounded-lg border border-white/10 bg-surface shadow-xl animate-in fade-in slide-in-from-top-1 duration-150"
-              onClick={(e) => e.stopPropagation()}
+              className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+              onClick={(e) => {
+                e.stopPropagation();
+                setTagPickerOpen(false);
+              }}
             >
-              <div className="p-1.5">
-                <div className="text-[0.55rem] font-bold text-txt-tertiary uppercase tracking-widest px-2 py-1">
-                  Display Tag
-                </div>
-                {/* None option */}
-                <button
-                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[0.65rem] transition-colors ${!displayTag ? "bg-white/10 text-txt-primary" : "text-txt-secondary hover:bg-white/5"}`}
-                  onClick={() => {
-                    onRemoveDisplayTag(session.connectionId);
-                    setTagPickerOpen(false);
-                  }}
-                >
-                  <span className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0" />
-                  <span>None</span>
-                </button>
-                {userTags.map((tag) => (
+              <div
+                ref={tagPickerRef}
+                className="card w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col"
+                style={{ maxHeight: "min(70vh, 600px)" }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="min-w-0">
+                    <div className="text-[0.7rem] font-bold text-txt-tertiary uppercase tracking-widest">
+                      Display Tag
+                    </div>
+                    <div
+                      className="text-sm font-semibold text-txt-primary truncate mt-0.5"
+                      title={session.name}
+                    >
+                      {session.name}
+                    </div>
+                  </div>
                   <button
-                    key={tag.id}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-[0.65rem] transition-colors ${displayTag?.id === tag.id ? "bg-white/10 text-txt-primary" : "text-txt-secondary hover:bg-white/5"}`}
+                    type="button"
+                    className="shrink-0 w-7 h-7 flex items-center justify-center rounded text-txt-secondary hover:bg-white/10 hover:text-txt-primary transition-colors"
+                    onClick={() => setTagPickerOpen(false)}
+                    title="Close (Esc)"
+                    aria-label="Close"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 12 12" fill="none">
+                      <path
+                        d="M2 2L10 10M10 2L2 10"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                {/* Search filter (only when there are enough tags to need it) */}
+                {userTags.length > 6 && (
+                  <input
+                    type="text"
+                    autoFocus
+                    value={tagFilter}
+                    onChange={(e) => setTagFilter(e.target.value)}
+                    placeholder="Filter tags…"
+                    className="w-full px-3 py-2 mb-2 rounded-lg bg-bg-secondary border border-white/10 text-sm text-txt-primary placeholder:text-txt-tertiary focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/30"
+                  />
+                )}
+
+                {/* Tag list */}
+                <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-1">
+                  {/* None option */}
+                  <button
+                    type="button"
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors ${
+                      !displayTag
+                        ? "bg-white/10 text-txt-primary"
+                        : "text-txt-secondary hover:bg-white/5"
+                    }`}
                     onClick={() => {
-                      onSetDisplayTag(session.connectionId, tag.id);
+                      onRemoveDisplayTag(session.connectionId);
                       setTagPickerOpen(false);
                     }}
                   >
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ background: tag.color }}
-                    />
-                    <span className="truncate">{tag.name}</span>
+                    <span className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0" />
+                    <span className="flex-1">None</span>
+                    {!displayTag && (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        className="text-accent shrink-0"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
                   </button>
-                ))}
-                {userTags.length === 0 && (
-                  <div className="px-2 py-2 text-[0.55rem] text-txt-tertiary">
-                    No tags created yet
-                  </div>
-                )}
+
+                  {filteredTags.map((tag) => {
+                    const selected = displayTag?.id === tag.id;
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors ${
+                          selected
+                            ? "bg-white/10 text-txt-primary"
+                            : "text-txt-secondary hover:bg-white/5"
+                        }`}
+                        onClick={() => {
+                          onSetDisplayTag(session.connectionId, tag.id);
+                          setTagPickerOpen(false);
+                        }}
+                      >
+                        <span
+                          className="w-3.5 h-3.5 rounded-full shrink-0 border border-white/10"
+                          style={{ background: tag.color }}
+                        />
+                        <span className="flex-1 truncate">{tag.name}</span>
+                        {selected && (
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            className="text-accent shrink-0"
+                          >
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  {userTags.length === 0 && (
+                    <div className="px-3 py-6 text-center text-sm text-txt-tertiary">
+                      No tags created yet. Create tags from your Profile or Tags page first.
+                    </div>
+                  )}
+                  {userTags.length > 0 && filteredTags.length === 0 && (
+                    <div className="px-3 py-6 text-center text-sm text-txt-tertiary">
+                      No tags match "{tagFilter}".
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
           {/* Label Overlay */}
-          <div className="absolute bottom-0 left-0 right-0 p-2 pt-6 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none flex items-center gap-2 min-w-0 z-10">
-            <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent/30 text-accent-light shrink-0 border border-white/10 backdrop-blur-sm">
-              {session.protocol.toUpperCase()}
-            </span>
-            {displayTag && (
-              <span
-                className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded shrink-0 border border-white/10 backdrop-blur-sm truncate max-w-[60px]"
-                style={{ background: `${displayTag.color}40`, color: displayTag.color }}
-                title={displayTag.name}
-              >
-                {displayTag.name}
+          <div className="absolute bottom-0 left-0 right-0 p-2 pt-6 bg-gradient-to-t from-black/90 via-black/40 to-transparent pointer-events-none flex flex-col gap-1 min-w-0 z-10">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded bg-accent/30 text-accent-light shrink-0 border border-white/10 backdrop-blur-sm">
+                {session.protocol.toUpperCase()}
               </span>
-            )}
-            <span className="text-[0.75rem] font-bold text-white whitespace-nowrap overflow-hidden text-ellipsis min-w-0 drop-shadow-md">
+              {displayTag && (
+                <span
+                  className="text-[0.55rem] font-bold tracking-wide px-1.5 py-0.5 rounded border border-white/10 backdrop-blur-sm truncate min-w-0"
+                  style={{ background: `${displayTag.color}40`, color: displayTag.color }}
+                  title={displayTag.name}
+                >
+                  {displayTag.name}
+                </span>
+              )}
+            </div>
+            <span
+              className="text-[0.75rem] font-bold text-white whitespace-nowrap overflow-hidden text-ellipsis min-w-0 drop-shadow-md"
+              title={session.name}
+            >
               {session.name}
             </span>
           </div>

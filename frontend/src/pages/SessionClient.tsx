@@ -1011,7 +1011,12 @@ export default function SessionClient() {
     kb.onkeydown = (keysym: number) => {
       if (!containerFocusedRef.current || commandPaletteOpenRef.current) {
         winProxy.reset();
-        return false;
+        // Returning `true` (or any truthy / undefined) tells
+        // Guacamole.Keyboard "let the browser handle this key" — without
+        // it, returning `false` causes Guacamole to call preventDefault()
+        // and the keystroke never reaches the focused command-palette
+        // input (or any other in-page input outside the canvas).
+        return true;
       }
       return winProxy.onkeydown(keysym);
     };

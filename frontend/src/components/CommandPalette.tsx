@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getMyConnections, Connection } from "../api";
+import { getMyConnections, getTags, getConnectionTags, Connection, UserTag } from "../api";
 import { useSessionManager } from "./SessionManager";
 
 /* ── Protocol icon (inline SVG, matching Dashboard) ──────────────── */
@@ -123,20 +123,31 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const { sessions } = useSessionManager();
   const [query, setQuery] = useState("");
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [tags, setTags] = useState<UserTag[]>([]);
+  const [connectionTags, setConnectionTags] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Fetch connections when opened
+  // Fetch connections + tags + per-connection tag map when opened.
+  // Tags and the assignment map are best-effort: if they fail we still show
+  // connections, just without tag pills / tag-based filtering.
   useEffect(() => {
     if (!open) return;
     setQuery("");
     setSelectedIndex(0);
     setLoading(true);
-    getMyConnections()
-      .then(setConnections)
-      .catch(() => {})
+    Promise.all([
+      getMyConnections().catch(() => [] as Connection[]),
+      getTags().catch(() => [] as UserTag[]),
+      getConnectionTags().catch(() => ({}) as Record<string, string[]>),
+    ])
+      .then(([conns, allTags, ctags]) => {
+        setConnections(conns);
+        setTags(allTags);
+        setConnectionTags(ctags);
+      })
       .finally(() => setLoading(false));
   }, [open]);
 
@@ -149,18 +160,30 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     }
   }, [open]);
 
-  // Filter connections
+  // Filter connections.
+  // Query matches against name / protocol / hostname / description / folder /
+  // any tag name assigned to the connection. Pure-tag-name queries find
+  // every connection wearing that tag, so users can type "prod" to see all
+  // tagged connections regardless of their actual hostname.
   const lowerQuery = query.toLowerCase();
   const activeConnectionIds = new Set(sessions.map((s) => s.connectionId));
 
+  // Pre-resolve tag id → tag for O(1) lookup during the per-row render.
+  const tagById = new Map(tags.map((t) => [t.id, t]));
+
   const filtered = connections.filter((c) => {
     if (!query) return true;
+    const tagIds = connectionTags[c.id] || [];
+    const tagNamesMatch = tagIds.some((id) =>
+      tagById.get(id)?.name.toLowerCase().includes(lowerQuery)
+    );
     return (
       c.name.toLowerCase().includes(lowerQuery) ||
       c.protocol.toLowerCase().includes(lowerQuery) ||
       (c.hostname || "").toLowerCase().includes(lowerQuery) ||
       (c.description || "").toLowerCase().includes(lowerQuery) ||
-      (c.folder_name || "").toLowerCase().includes(lowerQuery)
+      (c.folder_name || "").toLowerCase().includes(lowerQuery) ||
+      tagNamesMatch
     );
   });
 
@@ -292,6 +315,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             filtered.map((conn, i) => {
               const isActive = activeConnectionIds.has(conn.id);
               const isSelected = i === selectedIndex;
+              const rowTags = (connectionTags[conn.id] || [])
+                .map((id) => tagById.get(id))
+                .filter((t): t is UserTag => Boolean(t));
               return (
                 <div
                   key={conn.id}
@@ -319,7 +345,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     <ProtocolIcon protocol={conn.protocol} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium truncate">{conn.name}</span>
                       {isActive && (
                         <span
@@ -329,6 +355,20 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                           Active
                         </span>
                       )}
+                      {rowTags.map((tag) => (
+                        <span
+                          key={tag.id}
+                          className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 border"
+                          style={{
+                            background: `${tag.color}26`,
+                            color: tag.color,
+                            borderColor: `${tag.color}40`,
+                          }}
+                          title={`Tag: ${tag.name}`}
+                        >
+                          {tag.name}
+                        </span>
+                      ))}
                     </div>
                     <div className="text-xs truncate opacity-40">
                       {conn.protocol.toUpperCase()}

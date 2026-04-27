@@ -745,7 +745,7 @@ describe("SessionBar", () => {
     renderSessionBar("/", false, sessions);
 
     await userEvent.click(screen.getByTitle("Set display tag"));
-    expect(screen.getByText("No tags created yet")).toBeInTheDocument();
+    expect(screen.getByText(/No tags created yet/)).toBeInTheDocument();
   });
 
   it("closes tag picker when clicking outside", async () => {

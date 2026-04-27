@@ -9,6 +9,8 @@ Element.prototype.scrollIntoView = vi.fn();
 // Mock the API
 vi.mock("../api", () => ({
   getMyConnections: vi.fn(),
+  getTags: vi.fn(),
+  getConnectionTags: vi.fn(),
 }));
 
 // Mock SessionManager
@@ -16,7 +18,7 @@ vi.mock("../components/SessionManager", () => ({
   useSessionManager: vi.fn(),
 }));
 
-import { getMyConnections } from "../api";
+import { getMyConnections, getTags, getConnectionTags } from "../api";
 import { useSessionManager } from "../components/SessionManager";
 import CommandPalette from "../components/CommandPalette";
 
@@ -49,6 +51,8 @@ const mockConnections = [
 function setup(open = true) {
   const onClose = vi.fn();
   (getMyConnections as ReturnType<typeof vi.fn>).mockResolvedValue(mockConnections);
+  (getTags as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (getConnectionTags as ReturnType<typeof vi.fn>).mockResolvedValue({});
   (useSessionManager as ReturnType<typeof vi.fn>).mockReturnValue({
     sessions: [{ connectionId: "c1" }], // Dev Server is "active"
   });
@@ -65,6 +69,10 @@ describe("CommandPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockNavigate.mockReset();
+    // Sensible defaults so tests that don't call setup() and don't override
+    // these explicitly still get a resolved Promise.all in the open effect.
+    (getTags as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getConnectionTags as ReturnType<typeof vi.fn>).mockResolvedValue({});
   });
 
   it("renders nothing when closed", () => {

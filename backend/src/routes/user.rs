@@ -417,6 +417,92 @@ pub async fn update_preferences(
     Ok(Json(body))
 }
 
+// ── Command palette execution audit ───────────────────────────────────
+
+/// Body for `POST /api/user/command-audit` — records an executed Ctrl+K
+/// command for the current user. The frontend posts this fire-and-forget
+/// after the command runs; the backend is the source of truth for actor
+/// identity and timestamp.
+#[derive(Deserialize)]
+pub struct CommandAuditRequest {
+    /// e.g. `":reload"` or `":jump"`. Must be 1–64 chars after trimming
+    /// the leading colon, and match the same trigger character class as
+    /// stored mappings.
+    pub trigger: String,
+    /// The action that ran. For built-ins this is the built-in command
+    /// name (`"reload"`, `"disconnect"`, `"fullscreen"`, `"commands"`);
+    /// for user-defined mappings it's one of the action enum values
+    /// (`"open-connection"`, `"open-folder"`, `"open-tag"`, `"open-page"`,
+    /// `"paste-text"`).
+    pub action: String,
+    /// Action-specific arguments, opaque to this endpoint.
+    #[serde(default)]
+    pub args: serde_json::Value,
+    /// Optional resolved target id — connection / folder / tag / session
+    /// id where applicable. Stored for cross-referencing in the audit
+    /// view; not validated server-side beyond UUID parseability.
+    #[serde(default)]
+    pub target_id: Option<Uuid>,
+}
+
+const ALLOWED_AUDIT_ACTIONS: &[&str] = &[
+    "reload",
+    "disconnect",
+    "fullscreen",
+    "commands",
+    "open-connection",
+    "open-folder",
+    "open-tag",
+    "open-page",
+    "paste-text",
+    "open-path",
+];
+
+fn is_valid_audit_trigger(s: &str) -> bool {
+    let core = s.strip_prefix(':').unwrap_or(s);
+    if core.is_empty() || core.len() > 64 {
+        return false;
+    }
+    core.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+/// `POST /api/user/command-audit` — record one executed command.
+pub async fn post_command_audit(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<CommandAuditRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+
+    // Light validation — keep noise out of the audit chain. Anything
+    // coming from a tampered client will be rejected at the door rather
+    // than recorded with junk fields.
+    if !is_valid_audit_trigger(&body.trigger) {
+        return Err(AppError::Validation(
+            "trigger must match :?[a-z0-9_-]{1,64}".into(),
+        ));
+    }
+    if !ALLOWED_AUDIT_ACTIONS.contains(&body.action.as_str()) {
+        return Err(AppError::Validation(format!(
+            "action '{}' not in allow-list",
+            body.action
+        )));
+    }
+
+    let details = json!({
+        "trigger": body.trigger,
+        "action": body.action,
+        "args": body.args,
+        "target_id": body.target_id,
+    });
+    crate::services::audit::log(&db.pool, Some(user.id), "command.executed", &details)
+        .await
+        .map_err(|e| AppError::Internal(format!("command audit: {e}")))?;
+
+    Ok(Json(json!({ "ok": true })))
+}
+
 // ── Update user credential (envelope encryption) ──────────────────────
 
 #[derive(Deserialize)]

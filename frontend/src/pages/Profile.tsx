@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useUserPreferences } from "../components/UserPreferencesProvider";
+import CommandMappingsSection from "../components/CommandMappingsSection";
 import { getMe, MeResponse } from "../api";
 import {
   bindingFromEvent,
@@ -179,6 +180,8 @@ export default function Profile() {
           {status && <span className="text-xs text-txt-tertiary">{status}</span>}
         </div>
       </section>
+
+      <CommandMappingsSection />
     </div>
   );
 }

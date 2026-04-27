@@ -1035,8 +1035,13 @@ export default function SessionClient() {
     // has already processed certain default actions.
     const trapKeyDown = (e: KeyboardEvent) => {
       if (!containerFocusedRef.current) return;
-      // Allow browser dev-tools shortcuts through
-      if (e.key === "F12") return;
+      // Allow browser dev-tools shortcuts through. F12 is intentionally NOT
+      // in this list — it's heavily used in Visual Studio (Go to Definition),
+      // SSMS, and many other host apps that operators run inside RDP. Letting
+      // F12 fall through to the browser also caused it to fire twice (once
+      // opening DevTools locally, once forwarded to the remote via the
+      // Guacamole.Keyboard bubble-phase handler). Ctrl+Shift+I / Ctrl+Shift+J
+      // remain available for operators who genuinely need DevTools.
       if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
       // User-configurable command-palette shortcut (default Ctrl+K).
       if (matchesBinding(e, commandPaletteBindingRef.current)) {

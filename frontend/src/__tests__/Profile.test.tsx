@@ -6,6 +6,23 @@ vi.mock("../api", () => ({
   getMe: vi.fn(),
   getUserPreferences: vi.fn(),
   updateUserPreferences: vi.fn(),
+  getMyConnections: vi.fn().mockResolvedValue([]),
+  getConnectionFolders: vi.fn().mockResolvedValue([]),
+  getTags: vi.fn().mockResolvedValue([]),
+  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands"],
+  COMMAND_MAPPING_PAGES: [
+    "/dashboard",
+    "/profile",
+    "/credentials",
+    "/settings",
+    "/admin",
+    "/audit",
+    "/recordings",
+  ],
+  COMMAND_TRIGGER_RE: /^[a-z0-9_-]{1,32}$/,
+  MAX_COMMAND_MAPPINGS: 50,
+  MAX_PASTE_TEXT_LEN: 4096,
+  MAX_OPEN_PATH_LEN: 1024,
 }));
 
 import Profile from "../pages/Profile";

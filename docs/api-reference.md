@@ -737,11 +737,12 @@ intentionally schema-less at the database layer — the frontend owns the
 schema. Returns `{}` when no row has been written yet (i.e. the user has
 never visited the Profile page).
 
-Known keys today (added in v0.30.1):
+Known keys today:
 
-| Key                       | Type     | Default   | Description                                                                                                                  |
-| ------------------------- | -------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `commandPaletteBinding`   | `string` | `"Ctrl+K"` | Keybinding for the in-session Command Palette. Empty string disables the shortcut. Format: `"Ctrl+Shift+P"`, `"Alt+Space"`. |
+| Key                       | Type     | Default   | Description                                                                                                                                                                  |
+| ------------------------- | -------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `commandPaletteBinding`   | `string` | `"Ctrl+K"` | (v0.30.1) Keybinding for the in-session Command Palette. Empty string disables the shortcut. Format: `"Ctrl+Shift+P"`, `"Alt+Space"`.                                       |
+| `commandMappings`         | `array`  | `[]`       | (v0.31.0) User-defined `:command` palette mappings. See **`commandMappings` shape** below. Validated server-side; max 50 entries; triggers cannot collide with built-ins.   |
 
 `Ctrl` in a binding matches either `event.ctrlKey` or `event.metaKey` so
 the same stored value works on Windows/Linux and macOS without per-OS
@@ -775,6 +776,75 @@ that may want to provision a default keybinding for managed accounts.
 ```
 
 **Response** `200 OK` — echoes the stored object.
+
+#### `commandMappings` shape (v0.31.0)
+
+Each element is a discriminated union with three required fields:
+
+```jsonc
+{
+  "trigger": "prod",                          // ^[a-z0-9_-]{1,32}$, no built-in collision, unique within the array
+  "action":  "open-connection",               // enum: open-connection | open-folder | open-tag | open-page
+  "args":    { "connection_id": "<uuid>" }    // shape determined by `action`
+}
+```
+
+| `action`           | `args` shape                                                                                                                                | Resolves to                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `open-connection`  | `{ "connection_id": "<uuid>" }`                                                                                                              | `/session/<id>`                                                                          |
+| `open-folder`      | `{ "folder_id": "<uuid>" }`                                                                                                                  | `/dashboard?folder=<id>`                                                                  |
+| `open-tag`         | `{ "tag_id": "<uuid>" }`                                                                                                                     | `/dashboard?tag=<id>`                                                                     |
+| `open-page`        | `{ "path": "/dashboard" \| "/profile" \| "/credentials" \| "/settings" \| "/admin" \| "/audit" \| "/recordings" }`                            | `<path>`                                                                                 |
+| `paste-text`       | `{ "text": "<freeform string, 1..4096 chars>" }`                                                                                              | Pushes `text` onto the active session's remote clipboard, then sends Ctrl+V keystrokes  |
+| `open-path`        | `{ "path": "<freeform string, 1..1024 chars, no control chars>" }`                                                                            | Drives the Windows Run dialog: Win+R → paste path via clipboard → Enter. Useful for UNC shares (`\\server\share`), local folders (`C:\Users\…`), and `shell:` URIs (`shell:startup`). |
+
+The four reserved built-in command names (`reload`, `disconnect`,
+`fullscreen`, `commands`) cannot be used as a trigger. Validation is
+enforced inside `services::user_preferences::set()`; a malformed
+`commandMappings` entry causes the entire `PUT` to be rejected with
+`400 Validation`.
+
+### `POST /api/user/command-audit`
+
+(v0.31.0) Record a `command.executed` audit row when the in-session
+Command Palette executes a command. Called fire-and-forget by the
+frontend before the action runs so the audit row captures intent even
+if the action throws.
+
+The handler hard-codes `action_type = "command.executed"` server-side —
+operators cannot poison the audit-event taxonomy by passing a fake
+`action_type` through the request body.
+
+**Request**
+```json
+{
+  "trigger":   ":reload",
+  "action":    "reload",
+  "args":      {},
+  "target_id": null
+}
+```
+
+**Validation**
+
+| Field       | Rule                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trigger`   | Matches `^:?[a-z0-9_-]{1,64}$` (the leading colon is accepted; the cap is 64 to leave headroom for future UI namespacing)                     |
+| `action`    | One of `reload \| disconnect \| fullscreen \| commands \| open-connection \| open-folder \| open-tag \| open-page \| paste-text \| open-path` |
+| `args`      | Opaque JSON value; persisted verbatim under `details.args`                                                                                   |
+| `target_id` | Optional UUID string; persisted verbatim under `details.target_id` for cross-reference with the resolved target                              |
+
+**Response** `200 OK`
+```json
+{ "ok": true }
+```
+
+The resulting `audit_logs` row uses
+`details = { trigger, action, args, target_id }`. Chain-hash integrity
+is enforced by the existing advisory-locked
+`services::audit::log()` pipeline — see
+[security.md → Audit Trail](security.md#audit-trail) for the chain
+guarantees.
 
 ### `GET /api/roadmap`
 

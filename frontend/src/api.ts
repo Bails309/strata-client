@@ -237,8 +237,53 @@ export const acceptTerms = (version: number) =>
  */
 export interface UserPreferences {
   commandPaletteBinding?: string;
+  commandMappings?: CommandMapping[];
   [key: string]: unknown;
 }
+
+// ── Command palette mappings ────────────────────────────────────────
+
+/** Allowed `path` values for a `open-page` command mapping. Mirror of the
+ *  backend allow-list in `services/user_preferences.rs`. */
+export const COMMAND_MAPPING_PAGES = [
+  "/dashboard",
+  "/profile",
+  "/credentials",
+  "/settings",
+  "/admin",
+  "/audit",
+  "/recordings",
+] as const;
+export type CommandMappingPage = (typeof COMMAND_MAPPING_PAGES)[number];
+
+export type CommandMappingAction =
+  | { action: "open-connection"; args: { connection_id: string } }
+  | { action: "open-folder"; args: { folder_id: string } }
+  | { action: "open-tag"; args: { tag_id: string } }
+  | { action: "open-page"; args: { path: CommandMappingPage } }
+  | { action: "paste-text"; args: { text: string } }
+  | { action: "open-path"; args: { path: string } };
+
+/** Maximum number of characters in a `paste-text` mapping. Mirror of the
+ *  backend `MAX_PASTE_TEXT_LEN` constant. */
+export const MAX_PASTE_TEXT_LEN = 4096;
+
+/** Maximum number of characters in an `open-path` mapping. Mirror of the
+ *  backend `MAX_OPEN_PATH_LEN` constant. */
+export const MAX_OPEN_PATH_LEN = 1024;
+
+/** A single user-defined command-palette mapping (`:trigger` → action). */
+export type CommandMapping = { trigger: string } & CommandMappingAction;
+
+/** Built-in command names. User triggers may not collide with these. */
+export const BUILTIN_COMMANDS = ["reload", "disconnect", "fullscreen", "commands"] as const;
+export type BuiltinCommand = (typeof BUILTIN_COMMANDS)[number];
+
+/** Maximum number of mappings per user — kept in sync with the backend. */
+export const MAX_COMMAND_MAPPINGS = 50;
+
+/** Trigger validation regex shared by Profile UI and palette. */
+export const COMMAND_TRIGGER_RE = /^[a-z0-9_-]{1,32}$/;
 
 export const getUserPreferences = () => request<UserPreferences>("/user/preferences");
 
@@ -246,6 +291,21 @@ export const updateUserPreferences = (prefs: UserPreferences) =>
   request<UserPreferences>("/user/preferences", {
     method: "PUT",
     body: JSON.stringify(prefs),
+  });
+
+export interface CommandAuditPayload {
+  trigger: string;
+  action: string;
+  args?: unknown;
+  target_id?: string | null;
+}
+
+/** Fire-and-forget audit log of an executed `:command`. Errors are
+ *  swallowed by the caller — auditing must never block the action. */
+export const postCommandAudit = (payload: CommandAuditPayload) =>
+  request<{ ok: boolean }>("/user/command-audit", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 
 // ── Roadmap status overrides ────────────────────────────────────────

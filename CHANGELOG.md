@@ -5,6 +5,239 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] — 2026-04-27
+
+### User-defined `:command` palette mappings, built-in commands, ghost-text autocomplete, and a new `command.executed` audit stream
+
+A feature release that turns the in-session Command Palette (default
+`Ctrl+K`) from a connection picker into a fully scriptable, user-extensible
+command surface. Operators can now type `:` to enter command mode, run
+**built-in commands** (`:reload`, `:disconnect`, `:fullscreen`, `:commands`)
+that target the active session, and define **personal `:command` mappings**
+that resolve to one of six typed actions: `open-connection`,
+`open-folder`, `open-tag`, `open-page`, `paste-text` (push text onto the
+remote clipboard + Ctrl+V), and `open-path` (drive the Windows Run dialog
+to open UNC shares, local folders, or `shell:` URIs in Explorer on the
+remote target — the headline `:comp1` → `\\computer456\share` use case).
+Ghost-text autocomplete suggests the longest unambiguous extension;
+Tab or Right Arrow accepts. Every executed command writes one immutable,
+hash-chained `command.executed` row to the audit log so security teams
+can review what operators ran and against which target.
+**Drop-in upgrade from v0.30.2.** No new database migrations — mappings
+are stored in the existing `user_preferences` JSONB blob added in v0.30.1.
+No `/api/*` breaking changes; one additive route
+(`POST /api/user/command-audit`).
+
+### Added
+
+- **Built-in commands.** Four commands ship by default and cannot be
+  overridden by user mappings:
+
+  | Command       | Action                                                                                                                                                            | Validity                                  |
+  | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+  | `:reload`     | Re-establish the active session (same flow as the SessionBar reconnect button — closes + recreates the tunnel so an IDR keyframe is forced and stale GFX clears) | Disabled when no active session            |
+  | `:disconnect` | Close the active session and return to the dashboard                                                                                                              | Disabled when no active session            |
+  | `:fullscreen` | Toggle browser fullscreen with Keyboard Lock (uses `requestFullscreenWithLock` / `exitFullscreenWithUnlock` from `utils/keyboardLock`)                              | Always available                           |
+  | `:commands`   | List every available command (built-ins + user mappings) inline in the palette body                                                                                | Always available                           |
+
+  Built-in handlers live in [`frontend/src/components/CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx)
+  and reuse the same primitives as the SessionBar buttons so behaviour
+  is identical regardless of how the action is invoked.
+
+- **User-defined `:command` mappings (`commandMappings` preference key).**
+  Up to **50 mappings per user** are stored as a JSONB array in the
+  existing `user_preferences.preferences` blob. Each mapping is a
+  discriminated union with three required fields:
+
+  ```jsonc
+  {
+    "trigger": "prod",                             // [a-z0-9_-]{1,32}, no built-in collision
+    "action":  "open-connection",                  // enum (see below)
+    "args":    { "connection_id": "<uuid>" }      // shape determined by `action`
+  }
+  ```
+
+  The six allowed actions and their `args` schemas:
+
+  | `action`           | `args` shape                                  | Resolves to                                                                              |
+  | ------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+  | `open-connection`  | `{ "connection_id": "<uuid>" }`               | `navigate(`/session/${id}`)`                                                              |
+  | `open-folder`      | `{ "folder_id": "<uuid>" }`                   | `navigate(`/dashboard?folder=${id}`)`                                                     |
+  | `open-tag`         | `{ "tag_id": "<uuid>" }`                      | `navigate(`/dashboard?tag=${id}`)`                                                        |
+  | `open-page`        | `{ "path": "/dashboard" \| "/profile" \| ... }` | `navigate(path)` — path must be in the server allow-list                                 |
+  | `paste-text`       | `{ "text": "<1..4096 chars>" }`                | Pushes `text` onto the active session's remote clipboard via `Guacamole.Client.createClipboardStream`, then fires a Ctrl+V keystroke so the focused remote application receives the paste |
+  | `open-path`        | `{ "path": "<1..1024 chars, no ctrl chars>" }`  | Drives the Windows Run dialog on the active session: Win+R (keysyms `0xffeb`+`0x72`) → paste path via clipboard → Enter (`0xff0d`). Resolves UNC shares, local folders, and `shell:` URIs in Explorer on the remote target. The flagship example: `:comp1` → `\\computer456\share`. |
+
+  The `open-page` path enum is locked server-side to
+  `/dashboard | /profile | /credentials | /settings | /admin | /audit | /recordings`
+  so a tampered client cannot smuggle arbitrary in-app routes through
+  the preferences blob. The `paste-text` `args.text` is capped at
+  4096 characters server-side; the `open-path` `args.path` is capped
+  at 1024 characters and rejected if it contains any control character
+  (newline injection would let a stored mapping execute follow-up
+  commands through the Run dialog). The audit stream logs only
+  `{ text_length: N }` / `{ path_length: N }` for these two actions so
+  potentially sensitive payloads (UNC paths, internal command
+  snippets, ad-hoc credentials) never leave the originating user's
+  preferences blob.
+
+- **Profile UI — Command Palette Mappings section.** New
+  [`frontend/src/components/CommandMappingsSection.tsx`](frontend/src/components/CommandMappingsSection.tsx)
+  appears below the existing Keyboard Shortcuts section on `/profile`.
+  Per-row controls: `:trigger` text input (lowercased on type, monospaced,
+  prefixed with a styled `:` chip), action `<select>`, action-specific
+  arg picker (searchable typeahead for connection/folder/tag, native
+  `<select>` for page), Delete button (`btn-danger-outline`). Inline
+  validation surfaces trigger and arg errors independently with red
+  borders and a `role="alert"` message line. Save is disabled while any
+  row has errors. Counter shows `n / 50`.
+
+- **Ghost-text autocomplete in the palette.** When in command mode, a
+  zero-opacity overlay renders the longest common prefix shared by all
+  candidate commands matching the user's input. Tab or Right Arrow (only
+  when the caret is at end-of-input) accepts. The longest-common-prefix
+  computation runs over the merged built-in + user-mapping list, so
+  typing `:re` after defining a `:reset` mapping correctly suggests the
+  full disambiguation rather than autocompleting to `:reload`.
+
+- **Red-border + tooltip + `aria-invalid` on invalid commands.** When
+  the typed slug doesn't resolve (`Unknown command`) or resolves to a
+  built-in that isn't currently usable (e.g. `:reload` with no active
+  session), the input border switches to `var(--color-danger)`, a
+  `role="alert"` span renders the failure reason on wide viewports, and
+  the host `<div>` carries the message in a `title` attribute for
+  pointer hover / screen readers. Pressing Enter while invalid is a
+  no-op — no audit event, no navigation.
+
+- **Audit endpoint — `POST /api/user/command-audit`.** New route in
+  [`backend/src/routes/user.rs`](backend/src/routes/user.rs) registered
+  in [`backend/src/routes/mod.rs`](backend/src/routes/mod.rs). Records
+  one `audit_logs` row per executed command via the existing
+  `services::audit::log()` advisory-locked, SHA-256-chained pipeline.
+  Body schema:
+
+  ```jsonc
+  {
+    "trigger":   ":reload",                       // :?[a-z0-9_-]{1,64}
+    "action":    "reload",                        // server allow-list
+    "args":      { /* opaque, action-specific */ },
+    "target_id": "<uuid> | null"                  // resolved target where applicable
+  }
+  ```
+
+  Validation rejects: triggers outside `:?[a-z0-9_-]{1,64}` (longer than
+  the 32-char mapping limit because audit accepts the leading colon),
+  and actions outside
+  `reload | disconnect | fullscreen | commands | open-connection | open-folder | open-tag | open-page`.
+  Every accepted call writes `action_type = "command.executed"` with
+  `details = { trigger, action, args, target_id }`.
+
+- **Frontend audit POST — fire-and-forget.** `postCommandAudit()` in
+  [`frontend/src/api.ts`](frontend/src/api.ts) is invoked from
+  `executeCommand()` _before_ the navigation/disconnect/reload runs so
+  the audit row captures intent even if the action throws. The promise
+  is `.catch(() => {})`-swallowed at the call site — audit failures
+  must never block the action itself.
+
+- **Backend `commandMappings` validation in `services::user_preferences::set()`.**
+  New `validate_command_mappings()` helper in
+  [`backend/src/services/user_preferences.rs`](backend/src/services/user_preferences.rs)
+  enforces, before the UPSERT lands:
+
+  - `commandMappings` is absent, `null`, or an array of objects.
+  - Array length ≤ 50.
+  - Each `trigger` matches `^[a-z0-9_-]{1,32}$`.
+  - No `trigger` collides with the four built-in command names.
+  - All `trigger` values within the array are unique (case-insensitive).
+  - `action` is in the six-value allow-list.
+  - `args` shape matches the action: UUID parseable for the three
+    target-id actions, path in the server enum for `open-page`.
+
+  12 unit tests in the same file exercise every rejection branch plus
+  the happy paths.
+
+### Changed
+
+- **Profile page layout.** [`frontend/src/pages/Profile.tsx`](frontend/src/pages/Profile.tsx)
+  now renders the new Command Mappings section beneath the existing
+  Account and Keyboard Shortcuts sections, using the same
+  `var(--color-surface)` card styling. Section ordering mirrors the
+  cognitive flow: "who am I" → "how do I open the palette" → "what does
+  the palette do for me".
+
+- **CommandPalette input contract.** The placeholder text now reads
+  "Search connections, or type : for commands…" and the input width is
+  shared with a positioned ghost-text overlay (`pointer-events-none`,
+  `whitespace-pre`, `opacity: 0.35`). Existing connection-search
+  behaviour is unchanged when `query` does not start with `:`; the new
+  command-mode branches activate only on the `:` prefix.
+
+- **`UserPreferences` TypeScript type.** [`frontend/src/api.ts`](frontend/src/api.ts)
+  gains the strongly-typed `CommandMapping` discriminated union plus
+  `BUILTIN_COMMANDS`, `MAX_COMMAND_MAPPINGS`, `COMMAND_TRIGGER_RE`, and
+  `COMMAND_MAPPING_PAGES` exports — kept in sync with the Rust
+  allow-lists. The existing `commandPaletteBinding` key is unchanged.
+
+### Security
+
+- **Audit-chain integrity.** Every `:command` execution flows through
+  the existing PostgreSQL advisory-locked
+  (`pg_advisory_xact_lock(0x5354_4155_4449_5400)`) chain-hash code path
+  in [`backend/src/services/audit.rs`](backend/src/services/audit.rs).
+  Concurrent executions cannot race the chain hash because the lock is
+  held for the duration of the INSERT transaction. Replaying or
+  tampering with a `command.executed` row breaks the SHA-256 chain on
+  the next entry.
+
+- **Server-side enum enforcement on `open-page`.** The page allow-list
+  is defined in Rust (`ALLOWED_PAGES` in `user_preferences.rs`) and
+  validated in `services::user_preferences::set()` _before_ the JSONB
+  blob is persisted. A modified frontend cannot inject
+  `{ "action": "open-page", "args": { "path": "/etc/passwd" } }`
+  through the preferences endpoint — the PUT will be rejected with a
+  `400 Validation` and the row never lands. The frontend's enum is a
+  cosmetic mirror; the server is the source of truth.
+
+- **No user-controlled audit metadata.** The `action_type`
+  (`command.executed`) is hard-coded in the route handler. Operators
+  cannot poison the audit-event taxonomy through this endpoint, e.g. by
+  passing `action_type = "tunnel.connected"` to mask a real connection
+  inside command-execution noise.
+
+- **Audit-trigger length cap.** The audit endpoint accepts triggers up
+  to 64 chars (vs. the 32-char mapping cap) to leave headroom for the
+  leading colon plus future UI namespacing. `details.trigger` is stored
+  verbatim; we explicitly do not log raw user-typed input that didn't
+  resolve to a real command, so unknown-command red-border events do
+  not bloat the audit log.
+
+### Validation
+
+- **Frontend:** `npx vitest run` → 47 files / **1232 tests, all green.**
+- **Frontend:** `npm audit` → **0 vulnerabilities.**
+- **Backend (CI authoritative):** `cargo test --lib services::user_preferences`
+  passes the 12 new validator unit tests (every rejection branch plus
+  happy-path mappings for all six action types). The local Windows
+  workstation hits an unrelated Defender ASR block on Cargo build-script
+  execution, which does not affect Linux CI.
+
+### Upgrade notes
+
+- **No database migrations.** The migration runner has no work to do —
+  mappings live in the existing `user_preferences.preferences` JSONB
+  column from v0.30.1.
+- **Operators on v0.30.2 can `docker compose pull && up`** without
+  further action.
+- **Existing users with no `commandMappings` key** see exactly the same
+  palette experience as v0.30.2 until they explicitly add a mapping
+  through `/profile`. Built-in commands (`:reload`, `:disconnect`,
+  `:fullscreen`, `:commands`) become available to everyone immediately
+  after upgrade — there is no per-user opt-in.
+- **External automation that PUTs `/api/user/preferences`** must now
+  submit a valid `commandMappings` array (or omit the key entirely);
+  malformed entries that previously round-tripped through the schema-less
+  blob will now be rejected with a `400 Validation`.
+
 ## [0.30.2] — 2026-04-27
 
 ### Dependency hygiene, supply-chain pinning, and a CodeQL credential finding

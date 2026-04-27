@@ -25,6 +25,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "0.31.0",
+    subtitle:
+      "Built-in commands, personal `:command` mappings, ghost-text autocomplete, and a new `command.executed` audit stream",
+    sections: [
+      {
+        title: "Type `:` to enter command mode — four built-ins out of the box",
+        description:
+          "Pressing your Command Palette binding (default Ctrl+K) and typing a colon switches the palette into command mode. Four built-in commands ship by default: :reload reconnects the active session and forces an IDR keyframe (same flow as the SessionBar reconnect button), :disconnect closes the active session and returns to the dashboard, :fullscreen toggles browser fullscreen with Keyboard Lock so OS shortcuts stay captured, and :commands renders an inline list of every command available to you with a colour-coded pill for each kind. Built-ins that aren't currently usable (e.g. :reload with no active session) are greyed and surface a clear reason instead of silently no-op'ing.",
+      },
+      {
+        title: "Personal `:command` mappings — up to 50 per user, six action types",
+        description:
+          "Visit Profile → Command Palette Mappings to define up to 50 of your own :command triggers. Six action types are supported: open-connection (jump to a saved connection by UUID), open-folder (dashboard pre-filtered to a folder), open-tag (dashboard pre-filtered to a tag), open-page (in-app route from the seven-value allow-list), paste-text (sends free-form text into the active session via clipboard + Ctrl+V, up to 4096 chars), and the headline addition open-path — which drives the Windows Run dialog on the active remote session (Win+R → paste path → Enter) so a UNC share like \\\\computer456\\share, a local folder like C:\\Users\\Public, or a shell: URI like shell:startup opens directly in Explorer on the remote target. Triggers are validated against ^[a-z0-9_-]{1,32}$, must not collide with the four built-in command names, and must be unique within your own list. Mappings persist in the same user_preferences JSONB blob added in v0.30.1, so they follow you across browsers and devices with no new database migration.",
+      },
+      {
+        title: "Ghost-text autocomplete and a friendly invalid state",
+        description:
+          "While typing in command mode the palette renders a low-opacity ghost-text overlay showing the longest unambiguous extension of your current input across every command available to you (built-ins plus your mappings). Press Tab or Right Arrow (when the caret is at end-of-input) to accept. Type something that doesn't resolve and the input border switches to var(--color-danger), a role=\"alert\" reason line renders below, aria-invalid is set, and Enter becomes a hard no-op — no audit row, no navigation. The longest-common-prefix algorithm correctly disambiguates a user-defined :reset against the built-in :reload, so adding mappings never traps you in the wrong autocomplete.",
+      },
+      {
+        title: "Every executed command writes one tamper-evident audit row",
+        description:
+          "Every successful command execution writes one command.executed entry to the existing append-only, SHA-256-chain-hashed audit_logs table via a new fire-and-forget POST /api/user/command-audit endpoint. The handler hard-codes action_type server-side so a malicious client cannot poison the audit-event taxonomy by passing a fake type through the request body, and uses the same advisory-locked chain-hash code path as every other Strata audit event. Security teams can review what operators ran, against which target, and when — with the same tamper-evidence guarantees as tunnel.connected, checkout.activated, and the rest of the existing audit stream.",
+      },
+      {
+        title: "Defence-in-depth validation — server is the source of truth",
+        description:
+          "A new validate_command_mappings() helper in backend/src/services/user_preferences.rs enforces the mappings shape before the JSONB blob ever lands in PostgreSQL: array length ≤ 50, trigger regex ^[a-z0-9_-]{1,32}$, no built-in collision, unique-within-list triggers, action in the six-value allow-list, open-page path in the seven-value enum, paste-text ≤ 4096 chars, open-path ≤ 1024 chars and free of control characters (newline injection through the Run dialog would let a stored mapping execute follow-up commands), and UUID-parseable target IDs for the three target-id actions. 12 unit tests cover every rejection branch plus the happy paths for all action types. A frontend bypassing client-side validation still cannot poison the database — all server-side enums are authoritative and the frontend's mirrors are cosmetic.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, defaults preserved",
+        description:
+          "No database migrations land in v0.31.0; mappings reuse the existing user_preferences.preferences JSONB column from v0.30.1. Operators on v0.30.2 can docker compose pull && up without further action. Existing users see exactly the same palette experience as v0.30.2 until they explicitly add a mapping; built-in commands become available to everyone immediately after upgrade with no per-user opt-in. Frontend test suite is green at 1232/1232 across 47 files; npm audit reports 0 vulnerabilities.",
+      },
+    ],
+  },
+  {
     version: "0.30.2",
     subtitle:
       "Maintenance & supply-chain hygiene — dependency bumps, action SHA pinning refresh, and a CodeQL credential finding cleared",

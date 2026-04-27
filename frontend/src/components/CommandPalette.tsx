@@ -1,7 +1,21 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { getMyConnections, getTags, getConnectionTags, Connection, UserTag } from "../api";
+import Guacamole from "guacamole-common-js";
+import {
+  getMyConnections,
+  getTags,
+  getConnectionTags,
+  getConnectionFolders,
+  postCommandAudit,
+  Connection,
+  ConnectionFolder,
+  UserTag,
+  CommandMapping,
+  BUILTIN_COMMANDS,
+} from "../api";
+import { useUserPreferences } from "./UserPreferencesProvider";
 import { useSessionManager } from "./SessionManager";
+import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
 
 /* ── Protocol icon (inline SVG, matching Dashboard) ──────────────── */
 function ProtocolIcon({ protocol }: { protocol: string }) {
@@ -120,13 +134,17 @@ interface CommandPaletteProps {
 
 export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const navigate = useNavigate();
-  const { sessions } = useSessionManager();
+  const { sessions, activeSessionId, closeSession } = useSessionManager();
+  const { preferences } = useUserPreferences();
   const [query, setQuery] = useState("");
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [tags, setTags] = useState<UserTag[]>([]);
   const [connectionTags, setConnectionTags] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  /** True while user has typed `:` to enter command mode. */
+  const isCommandMode = query.startsWith(":");
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -142,11 +160,13 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       getMyConnections().catch(() => [] as Connection[]),
       getTags().catch(() => [] as UserTag[]),
       getConnectionTags().catch(() => ({}) as Record<string, string[]>),
+      getConnectionFolders().catch(() => [] as ConnectionFolder[]),
     ])
-      .then(([conns, allTags, ctags]) => {
+      .then(([conns, allTags, ctags, fs]) => {
         setConnections(conns);
         setTags(allTags);
         setConnectionTags(ctags);
+        setFolders(fs);
       })
       .finally(() => setLoading(false));
   }, [open]);
@@ -192,7 +212,368 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     setSelectedIndex((prev) => Math.min(prev, Math.max(0, filtered.length - 1)));
   }, [filtered.length]);
 
-  // Scroll selected item into view
+  // ── Command mode: built-in registry, mappings, validation ───────
+
+  const userMappings: CommandMapping[] = useMemo(
+    () => preferences.commandMappings ?? [],
+    [preferences.commandMappings]
+  );
+
+  /** The current `:command` slug (lowercased, no leading colon). Empty when
+   *  the user has only typed `:`. */
+  const commandSlug = isCommandMode ? query.slice(1).toLowerCase() : "";
+
+  /** Built-in commands matching the current prefix, plus their handlers. */
+  type ExecutableCommand = {
+    trigger: string;
+    description: string;
+    valid: boolean;
+    invalidReason?: string;
+    run: () => void | Promise<void>;
+    /** For audit logging */
+    audit: { action: string; args: unknown; targetId?: string | null };
+  };
+
+  const hasActiveSession = activeSessionId !== null;
+
+  const builtinCommands: ExecutableCommand[] = useMemo(() => {
+    const items: ExecutableCommand[] = [
+      {
+        trigger: "reload",
+        description: "Reload the current session",
+        valid: hasActiveSession,
+        invalidReason: hasActiveSession ? undefined : "No active session",
+        run: () => {
+          if (!activeSessionId) return;
+          const sess = sessions.find((s) => s.id === activeSessionId);
+          if (!sess) return;
+          onClose();
+          // Same flow as the SessionBar reconnect button — navigate with a
+          // `reconnect` state stamp so SessionClient tears down + recreates.
+          navigate(`/session/${sess.connectionId}`, {
+            state: { reconnect: Date.now() },
+          });
+        },
+        audit: {
+          action: "reload",
+          args: {},
+          targetId: activeSessionId,
+        },
+      },
+      {
+        trigger: "disconnect",
+        description: "Close the current session",
+        valid: hasActiveSession,
+        invalidReason: hasActiveSession ? undefined : "No active session",
+        run: () => {
+          if (!activeSessionId) return;
+          closeSession(activeSessionId);
+          onClose();
+        },
+        audit: {
+          action: "disconnect",
+          args: {},
+          targetId: activeSessionId,
+        },
+      },
+      {
+        trigger: "fullscreen",
+        description: "Toggle fullscreen",
+        valid: true,
+        run: () => {
+          onClose();
+          // Defer one frame so the palette unmounts before the
+          // fullscreen request — Chrome requires user-gesture context
+          // and the click already qualifies, but tearing down a modal
+          // mid-request occasionally swallows it.
+          requestAnimationFrame(() => {
+            if (document.fullscreenElement) {
+              exitFullscreenWithUnlock(document).catch(() => {});
+            } else {
+              requestFullscreenWithLock(document.documentElement).catch(() => {});
+            }
+          });
+        },
+        audit: { action: "fullscreen", args: {} },
+      },
+      {
+        trigger: "commands",
+        description: "List all available commands",
+        valid: true,
+        run: () => {
+          // Handled inline — typing `:commands` shows the list in the
+          // results pane, so executing it is a no-op (just close).
+          onClose();
+        },
+        audit: { action: "commands", args: {} },
+      },
+    ];
+    return items;
+  }, [
+    activeSessionId,
+    closeSession,
+    hasActiveSession,
+    navigate,
+    onClose,
+    sessions,
+  ]);
+
+  /** Resolve a user-defined mapping into something executable. Returns
+   *  `null` if its target no longer exists (e.g. the connection was
+   *  deleted) — the caller renders an error state. */
+  const resolveMapping = useCallback(
+    (m: CommandMapping): ExecutableCommand => {
+      const baseAudit = { action: m.action, args: m.args };
+      switch (m.action) {
+        case "open-connection": {
+          const conn = connections.find((c) => c.id === m.args.connection_id);
+          return {
+            trigger: m.trigger,
+            description: conn ? `Open ${conn.name}` : "Open connection (not found)",
+            valid: !!conn,
+            invalidReason: conn ? undefined : "Connection no longer exists",
+            run: () => {
+              if (!conn) return;
+              onClose();
+              navigate(`/session/${conn.id}`);
+            },
+            audit: { ...baseAudit, targetId: m.args.connection_id },
+          };
+        }
+        case "open-folder": {
+          const folder = folders.find((f) => f.id === m.args.folder_id);
+          return {
+            trigger: m.trigger,
+            description: folder ? `Open folder ${folder.name}` : "Open folder (not found)",
+            valid: !!folder,
+            invalidReason: folder ? undefined : "Folder no longer exists",
+            run: () => {
+              if (!folder) return;
+              onClose();
+              navigate(`/dashboard?folder=${folder.id}`);
+            },
+            audit: { ...baseAudit, targetId: m.args.folder_id },
+          };
+        }
+        case "open-tag": {
+          const tag = tags.find((t) => t.id === m.args.tag_id);
+          return {
+            trigger: m.trigger,
+            description: tag ? `Filter by tag ${tag.name}` : "Open tag (not found)",
+            valid: !!tag,
+            invalidReason: tag ? undefined : "Tag no longer exists",
+            run: () => {
+              if (!tag) return;
+              onClose();
+              navigate(`/dashboard?tag=${tag.id}`);
+            },
+            audit: { ...baseAudit, targetId: m.args.tag_id },
+          };
+        }
+        case "open-page":
+          return {
+            trigger: m.trigger,
+            description: `Go to ${m.args.path}`,
+            valid: true,
+            run: () => {
+              onClose();
+              navigate(m.args.path);
+            },
+            audit: baseAudit,
+          };
+        case "paste-text": {
+          // Resolve the active session (if any) at execute-time so the
+          // mapping is valid as soon as a session opens after the
+          // palette is created.
+          const text = m.args.text;
+          const preview =
+            text.length <= 32 ? text : `${text.slice(0, 29)}…`;
+          return {
+            trigger: m.trigger,
+            description: `Paste "${preview}" into the active session`,
+            valid: hasActiveSession && text.length > 0,
+            invalidReason: !hasActiveSession
+              ? "No active session"
+              : text.length === 0
+                ? "Mapping has no text"
+                : undefined,
+            run: async () => {
+              if (!activeSessionId) return;
+              const sess = sessions.find((s) => s.id === activeSessionId);
+              if (!sess) return;
+              onClose();
+              // Push the text into the remote clipboard, then fire a
+              // Ctrl+V keystroke so the focused remote application
+              // actually receives it. We deliberately do NOT log the
+              // text in the audit details — only the trigger + length.
+              try {
+                const stream = sess.client.createClipboardStream("text/plain");
+                const writer = new Guacamole.StringWriter(stream);
+                const CHUNK = 4096;
+                for (let i = 0; i < text.length; i += CHUNK) {
+                  writer.sendText(text.substring(i, i + CHUNK));
+                }
+                writer.sendEnd();
+                sess.remoteClipboard = text;
+                // Give the clipboard transfer a moment to land before
+                // the paste keystroke. 80 ms matches the empirical
+                // delay used by SessionBar's Paste button.
+                await new Promise((r) => setTimeout(r, 80));
+                // Ctrl+V — keysyms 0xffe3 (Left Ctrl) and 0x76 ("v").
+                sess.client.sendKeyEvent(1, 0xffe3);
+                sess.client.sendKeyEvent(1, 0x76);
+                sess.client.sendKeyEvent(0, 0x76);
+                sess.client.sendKeyEvent(0, 0xffe3);
+              } catch {
+                /* swallow — clipboard may be denied on this protocol */
+              }
+            },
+            audit: {
+              action: "paste-text",
+              args: { text_length: text.length },
+              targetId: activeSessionId,
+            },
+          };
+        }
+        case "open-path": {
+          // Open a path on the remote target by driving the Windows
+          // Run dialog: Win+R → paste path via clipboard → Enter.
+          // Works for UNC shares (`\\server\share`), local folders
+          // (`C:\Users\…`), `shell:` URIs (`shell:startup`), and
+          // anything else `start` would accept on the remote box.
+          const path = m.args.path;
+          const preview =
+            path.length <= 40 ? path : `${path.slice(0, 37)}…`;
+          return {
+            trigger: m.trigger,
+            description: `Open ${preview} on the active session`,
+            valid: hasActiveSession && path.length > 0,
+            invalidReason: !hasActiveSession
+              ? "No active session"
+              : path.length === 0
+                ? "Mapping has no path"
+                : undefined,
+            run: async () => {
+              if (!activeSessionId) return;
+              const sess = sessions.find((s) => s.id === activeSessionId);
+              if (!sess) return;
+              onClose();
+              try {
+                // 1. Win+R to open the Run dialog.
+                //    Keysym 0xffeb = Super_L (left Windows key);
+                //    keysym 0x72  = "r".
+                sess.client.sendKeyEvent(1, 0xffeb);
+                sess.client.sendKeyEvent(1, 0x72);
+                sess.client.sendKeyEvent(0, 0x72);
+                sess.client.sendKeyEvent(0, 0xffeb);
+                // Give the Run dialog a moment to focus and clear any
+                // stale text. The dialog auto-selects existing content
+                // so a subsequent paste replaces rather than appends.
+                await new Promise((r) => setTimeout(r, 250));
+
+                // 2. Push the path into the remote clipboard.
+                const stream = sess.client.createClipboardStream("text/plain");
+                const writer = new Guacamole.StringWriter(stream);
+                writer.sendText(path);
+                writer.sendEnd();
+                sess.remoteClipboard = path;
+                await new Promise((r) => setTimeout(r, 80));
+
+                // 3. Ctrl+V to paste.
+                sess.client.sendKeyEvent(1, 0xffe3);
+                sess.client.sendKeyEvent(1, 0x76);
+                sess.client.sendKeyEvent(0, 0x76);
+                sess.client.sendKeyEvent(0, 0xffe3);
+                await new Promise((r) => setTimeout(r, 80));
+
+                // 4. Enter (keysym 0xff0d) to submit the dialog.
+                sess.client.sendKeyEvent(1, 0xff0d);
+                sess.client.sendKeyEvent(0, 0xff0d);
+              } catch {
+                /* swallow — non-Windows targets won't have Run */
+              }
+            },
+            audit: {
+              action: "open-path",
+              args: { path_length: path.length },
+              targetId: activeSessionId,
+            },
+          };
+        }
+      }
+    },
+    [connections, folders, tags, navigate, onClose, hasActiveSession, activeSessionId, sessions]
+  );
+
+  /** All executable commands, merged + sorted by trigger. */
+  const allCommands: ExecutableCommand[] = useMemo(
+    () => [...builtinCommands, ...userMappings.map(resolveMapping)],
+    [builtinCommands, userMappings, resolveMapping]
+  );
+
+  /** Commands matching the current `:command` prefix (excludes mismatches). */
+  const matchingCommands = useMemo(() => {
+    if (!isCommandMode) return [] as ExecutableCommand[];
+    if (!commandSlug) return allCommands;
+    return allCommands.filter((c) => c.trigger.startsWith(commandSlug));
+  }, [isCommandMode, commandSlug, allCommands]);
+
+  /** Exact command match (or `null`). Drives validation + Enter behaviour. */
+  const exactCommand = useMemo(
+    () => allCommands.find((c) => c.trigger === commandSlug) ?? null,
+    [allCommands, commandSlug]
+  );
+
+  /** Ghost-text suffix to render after the user's input. Empty string when
+   *  there is no unambiguous extension to suggest. */
+  const ghostSuffix = useMemo(() => {
+    if (!isCommandMode || !commandSlug) return "";
+    if (exactCommand) return "";
+    const candidates = matchingCommands.filter((c) => c.trigger !== commandSlug);
+    if (candidates.length === 0) return "";
+    // Longest common prefix among candidates' triggers.
+    const triggers = candidates.map((c) => c.trigger);
+    let lcp = triggers[0];
+    for (const t of triggers.slice(1)) {
+      let i = 0;
+      while (i < lcp.length && i < t.length && lcp[i] === t[i]) i++;
+      lcp = lcp.slice(0, i);
+    }
+    if (lcp.length <= commandSlug.length) return "";
+    return lcp.slice(commandSlug.length);
+  }, [isCommandMode, commandSlug, matchingCommands, exactCommand]);
+
+  /** Whether the user typed a `:command` that doesn't resolve. Drives the
+   *  red border + tooltip on the input. */
+  const commandError = useMemo(() => {
+    if (!isCommandMode) return null;
+    if (!commandSlug) return null; // just `:` — show the list, no error
+    if (matchingCommands.length === 0)
+      return `Unknown command: ':${commandSlug}'`;
+    if (exactCommand && !exactCommand.valid)
+      return exactCommand.invalidReason ?? "Command unavailable";
+    return null;
+  }, [isCommandMode, commandSlug, matchingCommands, exactCommand]);
+
+  /** Execute a command, fire-and-forget audit, then close. */
+  const executeCommand = useCallback(
+    (cmd: ExecutableCommand) => {
+      if (!cmd.valid) return;
+      // Audit first so the log captures intent even if the action throws.
+      void postCommandAudit({
+        trigger: `:${cmd.trigger}`,
+        action: cmd.audit.action,
+        args: cmd.audit.args,
+        target_id: cmd.audit.targetId ?? null,
+      }).catch(() => {
+        // Audit failures must never block the command itself.
+      });
+      void cmd.run();
+    },
+    []
+  );
+
+  // Scroll selected item into view (works for both normal + command mode).
   useEffect(() => {
     if (!listRef.current) return;
     const item = listRef.current.children[selectedIndex] as HTMLElement | undefined;
@@ -209,21 +590,52 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Tab / Right Arrow accept ghost-text autocomplete (command mode only).
+      if (
+        isCommandMode &&
+        ghostSuffix &&
+        (e.key === "Tab" ||
+          (e.key === "ArrowRight" &&
+            inputRef.current?.selectionStart === query.length))
+      ) {
+        e.preventDefault();
+        setQuery(query + ghostSuffix);
+        return;
+      }
+
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
+        const max = isCommandMode ? matchingCommands.length : filtered.length;
+        setSelectedIndex((i) => Math.min(i + 1, Math.max(0, max - 1)));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (filtered[selectedIndex]) launch(filtered[selectedIndex]);
+        if (isCommandMode) {
+          // Prefer the highlighted suggestion if any; fall back to exact match.
+          const cmd = matchingCommands[selectedIndex] ?? exactCommand;
+          if (cmd) executeCommand(cmd);
+        } else if (filtered[selectedIndex]) {
+          launch(filtered[selectedIndex]);
+        }
       } else if (e.key === "Escape") {
         e.preventDefault();
         onClose();
       }
     },
-    [filtered, selectedIndex, launch, onClose]
+    [
+      isCommandMode,
+      ghostSuffix,
+      query,
+      filtered,
+      matchingCommands,
+      exactCommand,
+      selectedIndex,
+      executeCommand,
+      launch,
+      onClose,
+    ]
   );
 
   if (!open) return null;
@@ -246,8 +658,11 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       >
         {/* Search input */}
         <div
-          className="flex items-center gap-3 px-4 py-3 border-b"
-          style={{ borderColor: "var(--color-border)" }}
+          className="flex items-center gap-3 px-4 py-3 border-b relative"
+          style={{
+            borderColor: commandError ? "var(--color-danger, #ef4444)" : "var(--color-border)",
+          }}
+          title={commandError ?? ""}
         >
           <svg
             width="18"
@@ -263,19 +678,54 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search connections..."
-            className="flex-1 bg-transparent text-sm outline-none placeholder:opacity-40"
-            style={{ color: "var(--color-txt-primary)" }}
-            autoComplete="off"
-            spellCheck={false}
-          />
+          {/* Input + ghost-text overlay. The overlay sits behind the input
+              and shows the longest unambiguous extension so the user can
+              accept it with Tab or Right Arrow. */}
+          <div className="relative flex-1 min-w-0">
+            {ghostSuffix && (
+              <div
+                aria-hidden
+                className="absolute inset-0 text-sm pointer-events-none whitespace-pre"
+                style={{
+                  color: "var(--color-txt-primary)",
+                  opacity: 0.35,
+                  fontFamily: "inherit",
+                }}
+              >
+                <span style={{ visibility: "hidden" }}>{query}</span>
+                <span>{ghostSuffix}</span>
+              </div>
+            )}
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Search connections, or type : for commands…"
+              className="relative w-full bg-transparent text-sm outline-none placeholder:opacity-40"
+              style={{
+                color: commandError
+                  ? "var(--color-danger, #ef4444)"
+                  : "var(--color-txt-primary)",
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={!!commandError}
+              aria-describedby={commandError ? "cmd-palette-error" : undefined}
+            />
+          </div>
+          {commandError && (
+            <span
+              id="cmd-palette-error"
+              role="alert"
+              className="text-[11px] shrink-0 hidden sm:inline"
+              style={{ color: "var(--color-danger, #ef4444)" }}
+            >
+              {commandError}
+            </span>
+          )}
           <kbd
-            className="text-[10px] opacity-30 border rounded px-1.5 py-0.5 font-mono"
+            className="text-[10px] opacity-30 border rounded px-1.5 py-0.5 font-mono shrink-0"
             style={{ borderColor: "var(--color-border)" }}
           >
             ESC
@@ -284,12 +734,100 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
         {/* Results */}
         <div ref={listRef} className="max-h-[320px] overflow-y-auto py-1" role="listbox">
-          {loading && (
+          {isCommandMode && (
+            <>
+              {matchingCommands.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-10 gap-2">
+                  <span className="text-sm opacity-30">
+                    No commands match &ldquo;{query}&rdquo;
+                  </span>
+                </div>
+              )}
+              {matchingCommands.map((cmd, i) => {
+                const isSelected = i === selectedIndex;
+                const isBuiltin = (BUILTIN_COMMANDS as readonly string[]).includes(
+                  cmd.trigger
+                );
+                return (
+                  <div
+                    key={cmd.trigger}
+                    role="option"
+                    aria-selected={isSelected}
+                    aria-disabled={!cmd.valid}
+                    className="flex items-center gap-3 px-4 py-2.5 mx-1 rounded-lg cursor-pointer transition-colors duration-100"
+                    style={{
+                      background: isSelected ? "var(--color-accent-dim)" : "transparent",
+                      color: cmd.valid
+                        ? "var(--color-txt-primary)"
+                        : "var(--color-txt-tertiary)",
+                      opacity: cmd.valid ? 1 : 0.6,
+                    }}
+                    onClick={() => executeCommand(cmd)}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                  >
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 font-mono text-xs"
+                      style={{
+                        background: isSelected
+                          ? "var(--color-accent-glow)"
+                          : "rgba(255,255,255,0.05)",
+                        color: isSelected
+                          ? "var(--color-accent-light)"
+                          : "var(--color-txt-secondary)",
+                      }}
+                    >
+                      :
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium font-mono">
+                          :{cmd.trigger}
+                        </span>
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
+                          style={{
+                            background: isBuiltin
+                              ? "rgba(59,130,246,0.15)"
+                              : "rgba(168,85,247,0.15)",
+                            color: isBuiltin ? "#60a5fa" : "#c084fc",
+                          }}
+                        >
+                          {isBuiltin ? "built-in" : "custom"}
+                        </span>
+                        {!cmd.valid && cmd.invalidReason && (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
+                            style={{
+                              background: "rgba(239,68,68,0.15)",
+                              color: "#f87171",
+                            }}
+                          >
+                            {cmd.invalidReason}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs truncate opacity-50">{cmd.description}</div>
+                    </div>
+                    {isSelected && cmd.valid && (
+                      <kbd
+                        className="text-[10px] opacity-30 border rounded px-1.5 py-0.5 font-mono shrink-0"
+                        style={{ borderColor: "var(--color-border)" }}
+                      >
+                        ↵
+                      </kbd>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {!isCommandMode && loading && (
             <div className="flex items-center justify-center py-10 opacity-40 text-sm">
               Loading...
             </div>
           )}
-          {!loading && filtered.length === 0 && (
+          {!isCommandMode && !loading && filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-10 gap-2">
               <svg
                 width="24"
@@ -311,7 +849,8 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               </span>
             </div>
           )}
-          {!loading &&
+          {!isCommandMode &&
+            !loading &&
             filtered.map((conn, i) => {
               const isActive = activeConnectionIds.has(conn.id);
               const isSelected = i === selectedIndex;

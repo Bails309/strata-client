@@ -11,6 +11,9 @@ vi.mock("../api", () => ({
   getMyConnections: vi.fn(),
   getTags: vi.fn(),
   getConnectionTags: vi.fn(),
+  getConnectionFolders: vi.fn().mockResolvedValue([]),
+  postCommandAudit: vi.fn().mockResolvedValue(undefined),
+  BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands"],
 }));
 
 // Mock SessionManager
@@ -82,7 +85,7 @@ describe("CommandPalette", () => {
 
   it("renders search input and fetches connections", async () => {
     setup();
-    expect(screen.getByPlaceholderText("Search connections...")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Search connections/i)).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("Dev Server")).toBeInTheDocument();
       expect(screen.getByText("Prod DB")).toBeInTheDocument();
@@ -102,7 +105,7 @@ describe("CommandPalette", () => {
     setup();
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
-    await user.type(screen.getByPlaceholderText("Search connections..."), "prod");
+    await user.type(screen.getByPlaceholderText(/Search connections/i), "prod");
     expect(screen.queryByText("Dev Server")).not.toBeInTheDocument();
     expect(screen.getByText("Prod DB")).toBeInTheDocument();
   });
@@ -112,7 +115,7 @@ describe("CommandPalette", () => {
     setup();
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
-    await user.type(screen.getByPlaceholderText("Search connections..."), "qa.local");
+    await user.type(screen.getByPlaceholderText(/Search connections/i), "qa.local");
     expect(screen.queryByText("Dev Server")).not.toBeInTheDocument();
     expect(screen.getByText("QA Desktop")).toBeInTheDocument();
   });
@@ -122,7 +125,7 @@ describe("CommandPalette", () => {
     setup();
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
-    await user.type(screen.getByPlaceholderText("Search connections..."), "Work");
+    await user.type(screen.getByPlaceholderText(/Search connections/i), "Work");
     expect(screen.getByText("Dev Server")).toBeInTheDocument();
     expect(screen.queryByText("Prod DB")).not.toBeInTheDocument();
   });
@@ -132,14 +135,14 @@ describe("CommandPalette", () => {
     setup();
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
-    await user.type(screen.getByPlaceholderText("Search connections..."), "zzzznotfound");
+    await user.type(screen.getByPlaceholderText(/Search connections/i), "zzzznotfound");
     expect(screen.getByText(/No connections found/)).toBeInTheDocument();
   });
 
   it("navigates on Enter key", async () => {
     const user = userEvent.setup();
     const { onClose } = setup();
-    const input = screen.getByPlaceholderText("Search connections...");
+    const input = screen.getByPlaceholderText(/Search connections/i);
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     input.focus();
@@ -151,7 +154,7 @@ describe("CommandPalette", () => {
   it("navigates with ArrowDown + Enter to select second item", async () => {
     const user = userEvent.setup();
     const { onClose } = setup();
-    const input = screen.getByPlaceholderText("Search connections...");
+    const input = screen.getByPlaceholderText(/Search connections/i);
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     input.focus();
@@ -163,7 +166,7 @@ describe("CommandPalette", () => {
   it("closes on Escape", async () => {
     const user = userEvent.setup();
     const { onClose } = setup();
-    const input = screen.getByPlaceholderText("Search connections...");
+    const input = screen.getByPlaceholderText(/Search connections/i);
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     input.focus();
@@ -204,7 +207,7 @@ describe("CommandPalette", () => {
   it("ArrowUp does not go below 0", async () => {
     const user = userEvent.setup();
     setup();
-    const input = screen.getByPlaceholderText("Search connections...");
+    const input = screen.getByPlaceholderText(/Search connections/i);
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
     // Press up at index 0, should stay at 0, then Enter launches first item

@@ -1,3 +1,166 @@
+# What's New in v0.31.0
+
+> **The Command Palette grows up.** v0.31.0 adds **built-in commands**, **personal `:command` mappings** (including `open-path` for opening UNC shares and folders directly in remote Explorer), **ghost-text autocomplete**, and a brand-new **`command.executed` audit stream**, turning the in-session palette from a connection picker into a fully scriptable, user-extensible command surface. Up to 50 mappings per user, six action types, server-validated, hash-chain audited. **Drop-in upgrade from v0.30.2** — no new database migrations.
+
+---
+
+## ⌨️ Type `:` to enter command mode
+
+Pressing `Ctrl+K` (or your customised binding from v0.30.1) and typing
+a colon now switches the palette into **command mode**. Four built-ins
+ship out of the box:
+
+| Command       | What it does                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `:reload`     | Reconnect the active session (forces an IDR keyframe — clears stale GFX without dropping the tunnel)                              |
+| `:disconnect` | Close the active session and return to the dashboard                                                                              |
+| `:fullscreen` | Toggle fullscreen with Keyboard Lock (the same chord the SessionBar uses, so OS shortcuts stay captured)                          |
+| `:commands`   | Inline list of every command available to you — built-ins plus your personal mappings, with a colour-coded pill for each kind     |
+
+`:reload` and `:disconnect` are disabled (greyed) when there's no
+active session; the palette shows a clear reason rather than silently
+no-op'ing.
+
+---
+
+## 🎯 Personal `:command` mappings — define your own shortcuts
+
+Visit **Profile → Command Palette Mappings** to define up to **50** of
+your own `:command` triggers. Six action types are supported:
+
+| Action            | What it opens                                                                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open-connection` | A specific saved connection by its UUID                                                                                                                              |
+| `open-folder`     | The dashboard pre-filtered to a folder                                                                                                                               |
+| `open-tag`        | The dashboard pre-filtered to a tag                                                                                                                                  |
+| `open-page`       | An in-app route (`/dashboard`, `/profile`, `/credentials`, `/settings`, `/admin`, `/audit`, `/recordings`)                                                          |
+| `open-path`       | **Opens a path on the active remote session.** Drives the Windows Run dialog (Win+R → paste path → Enter), so a UNC share like `\\computer456\share`, a local folder like `C:\Users\Public`, or a `shell:` URI like `shell:startup` opens directly in Explorer on the remote box. The example everyone wants: `:comp1` → `\\computer456\share`. |
+| `paste-text`      | Sends free-form text into the active session via clipboard + Ctrl+V (no Enter, just a paste). Up to 4096 chars.                                                       |
+
+Triggers are validated against `^[a-z0-9_-]{1,32}$`, must not collide
+with built-in command names, and must be unique within your own list.
+The Profile UI surfaces every error inline — no toast soup, no silent
+trims.
+
+---
+
+## 📂 Open paths on the remote session — `open-path`
+
+The headline mapping action: **type `:comp1` and have
+`\\computer456\share` open in Explorer on the remote box.** Under the
+hood the palette drives the Windows Run dialog on the active session:
+
+1. Sends **Win+R** (keysyms `0xffeb` Super_L + `0x72` "r") to open the
+   Run dialog.
+2. Pushes the path onto the remote clipboard via
+   `Guacamole.Client.createClipboardStream`.
+3. Sends **Ctrl+V** to paste the path into the dialog.
+4. Sends **Enter** (`0xff0d`) — the Windows shell hands off to whichever
+   handler is registered for that URI scheme (Explorer for UNC shares
+   and folders, control-panel applets for `shell:…` URIs, the default
+   browser for `http://…`, etc.).
+
+Path-string validation is strict: ≤ 1024 characters, **no control
+characters** (newline injection through the Run dialog would let a
+stored mapping execute follow-up commands). The audit log captures
+only `{ path_length: N }`, never the literal path, so chained-hash
+review of the audit stream cannot leak share names or internal hosts.
+
+---
+
+## 👻 Ghost-text autocomplete (Tab to accept)
+
+While typing in command mode, the palette renders a low-opacity
+**ghost-text overlay** showing the longest unambiguous extension of your
+current input across every command available to you. Press **Tab** or
+**Right Arrow** (only when your caret is at the end of the input) to
+accept. The longest-common-prefix algorithm runs over the merged
+built-in + user-mapping list, so adding a `:reset` mapping correctly
+disambiguates against the built-in `:reload` rather than silently
+auto-jumping to the wrong command.
+
+---
+
+## 🔴 Friendly invalid-state UI
+
+Type a slug that doesn't resolve (`:nope`) or invoke a built-in that
+isn't currently usable (`:reload` with no active session) and the
+palette:
+
+- Switches the input border to `var(--color-danger)`
+- Renders a `role="alert"` reason line below the input on wide
+  viewports (and surfaces it in `title` for pointer hover / screen
+  readers)
+- Sets `aria-invalid="true"` on the input
+- Makes Enter a hard no-op — no audit event, no navigation
+
+Nothing surprises you. Nothing fires until the slug is valid.
+
+---
+
+## 📋 Every executed command writes one audit row
+
+Every successful command execution writes one `command.executed` row to
+the existing **append-only, SHA-256 chain-hashed `audit_logs` table**:
+
+```
+action_type = "command.executed"
+details     = { trigger, action, args, target_id }
+```
+
+The endpoint that backs this — **`POST /api/user/command-audit`** — is
+fire-and-forget from the frontend (audit failures must never block the
+action) and shares the same advisory-locked chain-hash code path used
+by every other Strata audit event. Security teams can review what
+operators ran, against which target, and when, with the same
+tamper-evidence guarantees as `tunnel.connected`, `checkout.activated`,
+and the rest of the existing audit taxonomy.
+
+The endpoint hard-codes `action_type` server-side, so a malicious
+client cannot poison the audit-event namespace by passing a fake
+type through the request body.
+
+---
+
+## 🛡️ Defence-in-depth validation
+
+`commandMappings` is enforced at the backend before the JSONB blob ever
+lands in `user_preferences`. The new `validate_command_mappings()` in
+[`backend/src/services/user_preferences.rs`](backend/src/services/user_preferences.rs)
+rejects:
+
+- Non-array values
+- Arrays with more than 50 entries
+- Triggers that don't match `^[a-z0-9_-]{1,32}$`
+- Triggers that collide with the built-in command names
+- Duplicate triggers within a single user's list
+- Actions outside the six-value allow-list
+- `open-page` paths outside the seven-value page allow-list
+- `args.connection_id` / `args.folder_id` / `args.tag_id` values that
+  don't parse as UUIDs
+
+12 unit tests in the same file cover every rejection branch plus the
+happy paths for all six action types. A modified frontend that
+bypasses client-side validation still cannot poison the database.
+
+---
+
+## 🚀 Upgrade notes
+
+- **No database migrations.** Mappings live in the existing
+  `user_preferences.preferences` JSONB column from v0.30.1.
+- **Operators on v0.30.2 can `docker compose pull && up`** without
+  further action.
+- **Existing users see exactly the same palette experience as v0.30.2**
+  until they explicitly add a mapping. Built-in commands become
+  available to everyone immediately — no per-user opt-in.
+- **External automation that PUTs `/api/user/preferences`** must now
+  submit a valid `commandMappings` array (or omit the key entirely).
+  Previously the JSONB blob was schema-less; v0.31.0 enforces the
+  shape at the backend.
+
+---
+
 # What's New in v0.30.2
 
 > **Maintenance & supply-chain hygiene release.** v0.30.2 lands the open Dependabot queue locally so dependency bumps don't accumulate against future feature work, clears a **CodeQL `rust/hardcoded-credentials` Critical finding** in a backend unit test, refreshes pinned-by-SHA GitHub Actions, and stabilises three CI-only test issues. **Drop-in upgrade from v0.30.1.** No database migrations, no API contract changes, no UI changes — operators on v0.30.1 can `docker compose pull && up` without further action.

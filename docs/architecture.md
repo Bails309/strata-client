@@ -516,6 +516,83 @@ password to disk in plaintext.
 user-facing checkout request is never blocked by mail delivery. All
 errors are logged via `tracing` and visible in `email_deliveries`.
 
+## Command Palette (v0.31.0)
+
+The in-session Command Palette (default `Ctrl+K`, user-rebindable per
+v0.30.1) exposes both **connection search** (typed text without a
+leading colon) and a **scriptable command surface** (typed text with a
+leading colon). The command surface is composed of two registries:
+
+1. **Built-in commands** — hard-coded in
+   [`frontend/src/components/CommandPalette.tsx`](../frontend/src/components/CommandPalette.tsx).
+   Names: `reload`, `disconnect`, `fullscreen`, `commands`. Built-in
+   handlers reuse the same primitives as the SessionBar (e.g.
+   `requestFullscreenWithLock`) so behaviour is identical regardless of
+   how the action is invoked. Built-in names are reserved — user
+   mappings cannot collide with them.
+2. **User mappings** — sourced from `user_preferences.preferences ->
+   commandMappings` (JSONB array, max 50 entries per user). Each
+   mapping is a discriminated union with `trigger`, `action`, and
+   `args`. The six allowed actions are `open-connection`, `open-folder`,
+   `open-tag`, `open-page`, `paste-text`, and `open-path`; the
+   `open-page` `args.path` is locked to the seven-value enum
+   `/dashboard | /profile | /credentials | /settings | /admin | /audit | /recordings`,
+   `paste-text` `args.text` is capped at 4096 characters, and
+   `open-path` `args.path` is capped at 1024 characters and rejected
+   if it contains any control characters. The `paste-text` action
+   writes `args.text` to the active session's remote clipboard via
+   `Guacamole.Client.createClipboardStream`, then fires a Ctrl+V
+   keystroke (keysyms `0xffe3` + `0x76`) so the focused remote
+   application actually receives the paste. The `open-path` action
+   drives the Windows Run dialog on the remote target: it sends Win+R
+   (keysyms `0xffeb` + `0x72`), pastes the path the same way, then
+   sends Enter (`0xff0d`) — which makes Explorer (or whichever app is
+   registered for that URI scheme) open the path. The audit stream
+   logs only `{ text_length }` / `{ path_length }` for these two
+   actions so potentially sensitive payloads never leave the
+   originating user's preferences blob.
+
+Validation is enforced server-side inside
+[`backend/src/services/user_preferences.rs`](../backend/src/services/user_preferences.rs)
+(`validate_command_mappings`), so a frontend that bypasses client-side
+checks still cannot poison the database.
+
+### Resolver and ghost-text autocomplete
+
+When the input starts with `:`, the palette merges the built-in registry
+with the user's mappings into a single sorted candidate list. Two
+quantities are derived from that list and the current query:
+
+- `matchingCommands` — every candidate whose name starts with the
+  query slug. Drives the inline `:commands` listing and the empty
+  state.
+- `ghostSuffix` — the longest common prefix shared by every member of
+  `matchingCommands` minus the already-typed slug. Rendered in a
+  zero-position-offset, `pointer-events-none`, `opacity: 0.35`
+  overlay. **Tab** or **Right Arrow** (when the caret is at end-of-
+  input) commits the suggestion.
+
+### Audit flow
+
+Every successful command execution writes one immutable, hash-chained
+`command.executed` row to the `audit_logs` table via the new
+fire-and-forget endpoint:
+
+```
+frontend executeCommand()
+  ├── await postCommandAudit({ trigger, action, args, target_id })   // best-effort, .catch swallowed
+  └── run the action (navigate / disconnect / reload / fullscreen)
+```
+
+The audit POST is intentionally invoked _before_ the action runs so
+the audit row captures intent even if the action throws. The endpoint
+([`POST /api/user/command-audit`](api-reference.md#post-apiusercommand-audit))
+hard-codes `action_type = "command.executed"` server-side; client-side
+poisoning of the audit-event taxonomy is impossible. The chain-hash
+integrity guarantees described in
+[security.md → Audit Trail](security.md#audit-trail) apply uniformly to
+this stream.
+
 ## Database Schema
 
 ```
@@ -544,7 +621,7 @@ user_account_mappings ───── user ↔ managed AD account (with self-app
 password_checkout_requests ─ checkout lifecycle tracking (Pending/Approved/Active/Expired/Denied/CheckedIn, timestamps, Vault-sealed password)
 email_deliveries ──── transactional-email audit trail (template_key, recipient, subject, status, attempts, last_error, related_entity_type/id) — status ∈ {queued,sent,failed,bounced,suppressed}
 users.notifications_opt_out ─ boolean column; honoured by every transactional message except the self-approved audit notice
-user_preferences ──── per-user UI preferences blob (JSONB, schema owned by the frontend); first key shipped is `commandPaletteBinding` (default `"Ctrl+K"`, added v0.30.1)
+user_preferences ──── per-user UI preferences blob (JSONB, schema owned by the frontend, validated server-side); keys: `commandPaletteBinding` (default `"Ctrl+K"`, added v0.30.1), `commandMappings` (default `[]`, added v0.31.0 — array of typed `:command` palette mappings, max 50 entries, validated by `services::user_preferences::validate_command_mappings`)
 ```
 
 See `backend/migrations/001_initial_schema.sql` through `058_user_preferences.sql` for the full DDL.

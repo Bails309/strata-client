@@ -110,8 +110,10 @@ describe("SessionWatermark", () => {
       expect(container.querySelector("canvas")).toBeTruthy();
     });
 
-    // Canvas painting runs in useEffect — fillText should have been called
-    expect(fillTextSpy).toHaveBeenCalled();
+    // Canvas painting runs in useEffect — fillText should have been called.
+    // Wait for the paint to complete; the effect runs after the user-state
+    // commit, which can take an extra tick beyond the canvas mount.
+    await waitFor(() => expect(fillTextSpy).toHaveBeenCalled());
     expect(mockCtx.rotate).toHaveBeenCalled();
     expect(mockCtx.save).toHaveBeenCalled();
     expect(mockCtx.restore).toHaveBeenCalled();

@@ -25,6 +25,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.0.0",
+    subtitle:
+      "General availability — Strata Client reaches 1.0.0 with a formal SemVer commitment for the REST API, database schema, and on-disk config",
+    sections: [
+      {
+        title: "Straight promotion of the v0.31.0 codebase",
+        description:
+          "Strata Client 1.0.0 is a version-only promotion of v0.31.0 — no source files outside VERSION, backend/Cargo.toml, backend/Cargo.lock, frontend/package.json, frontend/package-lock.json, and the README version badge changed in this release. Every feature shipped under v0.31.0 — built-in commands, personal :command mappings, ghost-text autocomplete, the new command.executed audit stream, and the validate_command_mappings server-side guard rail — carries forward verbatim. The 1232/1232 frontend test suite, 0-vulnerability npm audit, and clean cargo fmt / clippy state from v0.31.0 all apply to 1.0.0 unchanged.",
+      },
+      {
+        title: "Formal SemVer commitment from 1.0.0 onward",
+        description:
+          "From this release the public REST API surface (/api/*), the database schema (managed by the numbered migrations under backend/migrations/), and the on-disk configuration shape (config.toml keys + environment variable contracts) are stable. Breaking changes to any of those three surfaces will require a v2.0.0 bump. Internal Rust modules, the frontend component tree, and the WhatsNew/CHANGELOG narrative remain free to evolve in minor and patch releases. This formalises what has been implicit through the 0.x series and gives operators a clear upgrade-safety contract.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API changes, no UI changes",
+        description:
+          "Operators on v0.31.0 can docker compose pull && up without further action. No new database migrations land. No /api/* contract changes. No frontend UI changes beyond this WhatsNew card welcoming you to 1.0.0. The release pipeline publishes ghcr.io/<org>/strata-backend:1.0.0 and ghcr.io/<org>/strata-frontend:1.0.0 alongside the rolling :latest tag; the previous :0.31.0 images remain available and are byte-identical.",
+      },
+    ],
+  },
+  {
     version: "0.31.0",
     subtitle:
       "Built-in commands, personal `:command` mappings, ghost-text autocomplete, and a new `command.executed` audit stream",

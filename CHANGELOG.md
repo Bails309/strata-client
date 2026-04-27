@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] — 2026-04-27
+
+### General availability
+
+Strata Client reaches **1.0.0** — a straight promotion of the v0.31.0
+codebase with no functional changes. Every feature, fix, validation
+result, and dependency pin documented under v0.31.0 below carries
+forward verbatim; the only deltas in this release are the version
+strings in `VERSION`, `backend/Cargo.toml`, `backend/Cargo.lock`,
+`frontend/package.json`, `frontend/package-lock.json`, and the
+README badge.
+
+The 1.0.0 tag formalises a SemVer commitment that has been implicit
+through the 0.x series: from this release onward, the public REST
+API surface (`/api/*`), the database schema (managed by the numbered
+migrations under `backend/migrations/`), and the on-disk
+configuration shape (`config.toml` keys + environment variable
+contracts) are stable. Breaking changes to any of those surfaces
+will require a v2.0.0 bump. Internal Rust modules, the frontend
+component tree, and the WhatsNew/CHANGELOG narrative remain free
+to evolve in minor and patch releases.
+
+### Validation
+
+Identical to v0.31.0 — see below. No re-runs were performed for
+this promotion because no source files outside the version-string
+set changed.
+
+### Upgrade notes
+
+- **No database migrations.** Operators on v0.31.0 can
+  `docker compose pull && up` without further action.
+- **No `/api/*` contract changes.** No new endpoints, no removed
+  endpoints, no payload shape changes.
+- **No frontend UI changes** beyond the WhatsNew modal welcoming
+  users to 1.0.0.
+- **Image tags.** The release pipeline now publishes
+  `ghcr.io/<org>/strata-backend:1.0.0` and
+  `ghcr.io/<org>/strata-frontend:1.0.0` alongside the rolling
+  `:latest` tag. The previous `:0.31.0` images remain available
+  and are byte-identical.
+
 ## [0.31.0] — 2026-04-27
 
 ### User-defined `:command` palette mappings, built-in commands, ghost-text autocomplete, and a new `command.executed` audit stream

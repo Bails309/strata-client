@@ -1,3 +1,69 @@
+# What's New in v1.0.0
+
+> **General availability.** Strata Client reaches **1.0.0** — a
+> straight promotion of the v0.31.0 codebase with **no functional
+> changes**. The headline of this release is the **formal SemVer
+> commitment** that lands with the tag: from 1.0.0 onward, the
+> public REST API surface (`/api/*`), the database schema
+> (managed by the numbered migrations under `backend/migrations/`),
+> and the on-disk configuration shape (`config.toml` keys +
+> environment variable contracts) are stable. Breaking changes to
+> any of those surfaces will require a v2.0.0 bump. **Drop-in
+> upgrade from v0.31.0** — no new database migrations, no `/api/*`
+> contract changes, no UI changes beyond the WhatsNew modal welcoming
+> you to 1.0.0.
+
+---
+
+## 🎉 Why 1.0.0 now
+
+The 0.x series has been production-tracked at multiple sites since
+v0.27.0 and has accumulated nine consecutive minor releases without
+a regression-driven rollback. The feature surface — multi-protocol
+sessions (RDP / VNC / SSH / Web / VDI), managed-account checkout
+with approval workflows, hash-chained audit logging, recordings,
+folders, tags, custom keybindings, and the v0.31.0 scriptable
+Command Palette — has reached the maturity bar we set for a 1.0
+tag. Tagging now formalises the upgrade-safety contract operators
+have been relying on informally.
+
+## 📜 What the SemVer commitment covers
+
+- **Stable:** every documented `/api/*` endpoint (request shape,
+  response shape, status-code semantics); every column in every
+  table created by migrations `001`–`055`; every key in
+  `config.toml` and every `STRATA_*` environment variable read by
+  `backend/src/config.rs`.
+- **Free to evolve in minor / patch releases:** internal Rust
+  modules under `backend/src/services/` and `backend/src/routes/`
+  (function signatures, struct shapes, helper utilities), the
+  React component tree under `frontend/src/components/`, the
+  Vitest / Playwright test suites, the CHANGELOG / WHATSNEW /
+  documentation prose, the contents of the WhatsNew modal, and
+  any unreleased migration whose number exceeds `055` at tag time.
+- **Reserved for v2.0.0:** removing or breaking-shape-changing any
+  `/api/*` endpoint, dropping or renaming any column referenced by
+  a `/api/*` response, removing or renaming any `config.toml` key
+  or `STRATA_*` env var read by the running binary.
+
+## 🚢 What's actually in the release
+
+Everything that shipped under v0.31.0 — verbatim. The version
+strings in `VERSION`, `backend/Cargo.toml`, `backend/Cargo.lock`,
+`frontend/package.json`, `frontend/package-lock.json`, and the
+README badge are the only files that changed for the 1.0.0 tag.
+The release pipeline publishes `ghcr.io/<org>/strata-backend:1.0.0`
+and `ghcr.io/<org>/strata-frontend:1.0.0` alongside the rolling
+`:latest` tag; the previous `:0.31.0` images remain available and
+are byte-identical.
+
+For a refresher on the v0.31.0 feature set (built-in `:command`
+palette, personal `:command` mappings, ghost-text autocomplete, and
+the `command.executed` audit stream) see the v0.31.0 entry in
+[CHANGELOG.md](CHANGELOG.md).
+
+---
+
 # What's New in v0.31.0
 
 > **The Command Palette grows up.** v0.31.0 adds **built-in commands**, **personal `:command` mappings** (including `open-path` for opening UNC shares and folders directly in remote Explorer), **ghost-text autocomplete**, and a brand-new **`command.executed` audit stream**, turning the in-session palette from a connection picker into a fully scriptable, user-extensible command surface. Up to 50 mappings per user, six action types, server-validated, hash-chain audited. **Drop-in upgrade from v0.30.2** — no new database migrations.

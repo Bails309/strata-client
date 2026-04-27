@@ -567,12 +567,10 @@ pub async fn ws_tunnel(
                 "VDI connection is missing the 'image' extra field".into(),
             ));
         }
-        let home_base_raw = crate::services::settings::get(
-            &db.pool,
-            crate::services::vdi::SETTING_VDI_HOME_BASE,
-        )
-        .await?
-        .unwrap_or_else(|| "/var/lib/strata/vdi-home".to_owned());
+        let home_base_raw =
+            crate::services::settings::get(&db.pool, crate::services::vdi::SETTING_VDI_HOME_BASE)
+                .await?
+                .unwrap_or_else(|| "/var/lib/strata/vdi-home".to_owned());
         let spec = crate::services::vdi::VdiSpawnSpec {
             image: image.clone(),
             username: final_username.clone().unwrap_or_default(),
@@ -640,8 +638,7 @@ pub async fn ws_tunnel(
         // endpoint is `127.0.0.1:{5900+display}`, which we hand to
         // guacd in place of the operator-typed hostname/port (which
         // for `web` is a no-op placeholder, same as for `vdi`).
-        let cfg = match crate::services::web_session::WebSessionConfig::from_extra(&extra_json)
-        {
+        let cfg = match crate::services::web_session::WebSessionConfig::from_extra(&extra_json) {
             Some(c) => c,
             None => {
                 return Err(AppError::Validation(
@@ -725,9 +722,9 @@ pub async fn ws_tunnel(
             .map_err(|e| {
                 use crate::services::web_runtime::WebRuntimeError as WE;
                 match e {
-                    WE::DisplayExhausted | WE::CdpPortExhausted => AppError::Internal(format!(
-                        "web session capacity exhausted: {e}"
-                    )),
+                    WE::DisplayExhausted | WE::CdpPortExhausted => {
+                        AppError::Internal(format!("web session capacity exhausted: {e}"))
+                    }
                     WE::XvncNotReady(_) | WE::XvncSpawn(_) => {
                         AppError::Internal(format!("xvnc spawn failed: {e}"))
                     }

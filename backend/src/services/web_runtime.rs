@@ -261,11 +261,7 @@ impl WebRuntimeRegistry {
     /// Look up an existing session without spawning. Returned `Arc`
     /// keeps the session alive even if it's evicted between the
     /// lookup and the WebSocket upgrade.
-    pub async fn get(
-        &self,
-        connection_id: Uuid,
-        user_id: Uuid,
-    ) -> Option<Arc<WebSessionHandle>> {
+    pub async fn get(&self, connection_id: Uuid, user_id: Uuid) -> Option<Arc<WebSessionHandle>> {
         self.inner
             .lock()
             .await
@@ -346,16 +342,21 @@ impl WebRuntimeRegistry {
         // Step 4: Xvnc spawn (B9). Geometry is per-session, sourced
         // from the tunnel handler's viewport hint so the framebuffer
         // matches the operator's browser tab.
-        let geom_w = if spec.width == 0 { WEB_DEFAULT_WIDTH } else { spec.width };
-        let geom_h = if spec.height == 0 { WEB_DEFAULT_HEIGHT } else { spec.height };
-        let xvnc_argv = xvnc_command_args(
-            &spec.xvnc_binary.to_string_lossy(),
-            display,
-            geom_w,
-            geom_h,
-        );
+        let geom_w = if spec.width == 0 {
+            WEB_DEFAULT_WIDTH
+        } else {
+            spec.width
+        };
+        let geom_h = if spec.height == 0 {
+            WEB_DEFAULT_HEIGHT
+        } else {
+            spec.height
+        };
+        let xvnc_argv =
+            xvnc_command_args(&spec.xvnc_binary.to_string_lossy(), display, geom_w, geom_h);
         // argv[0] is the binary path; remaining elements are args.
-        let xvnc = spawn_silent(&xvnc_argv).map_err(|e| WebRuntimeError::XvncSpawn(e.to_string()))?;
+        let xvnc =
+            spawn_silent(&xvnc_argv).map_err(|e| WebRuntimeError::XvncSpawn(e.to_string()))?;
 
         // Step 4b: readiness (B10).
         if !wait_for_vnc_ready(display, WEB_VNC_READY_DEADLINE).await {

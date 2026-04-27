@@ -1,9 +1,8 @@
 -- 057_session_types_web_vdi.sql
 --
--- Phase 1 of the rustguac parity work (see
--- docs/runbooks/rustguac-parity-tracker.md). Strictly additive — admits two
--- new protocol values and adds the runtime tracking table for VDI
--- containers. No existing rows are mutated.
+-- Foundation for the `web` and `vdi` connection protocols. Strictly
+-- additive — admits two new protocol values and adds the runtime
+-- tracking table for VDI containers. No existing rows are mutated.
 --
 --   * `web`  — ephemeral Chromium kiosk inside Xvnc, surfaced to guacd as
 --              a standard VNC session. Phase 2.

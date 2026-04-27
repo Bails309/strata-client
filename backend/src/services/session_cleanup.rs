@@ -27,7 +27,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::services::app_state::SharedState;
-use crate::services::vdi::{AUDIT_VDI_CONTAINER_DESTROY, VdiDriver};
+use crate::services::vdi::{VdiDriver, AUDIT_VDI_CONTAINER_DESTROY};
 use crate::services::worker::{spawn_periodic, PeriodicConfig};
 
 /// Spawn the active-sessions expiry sweeper. Runs every 5 minutes with a
@@ -111,11 +111,10 @@ async fn run_vdi_reaper_once(state: &SharedState) -> anyhow::Result<()> {
     // minimum time.
     let (pool, driver) = {
         let s = state.read().await;
-        let pool = s
-            .db
-            .as_ref()
-            .map(|db| db.pool.clone())
-            .ok_or_else(|| anyhow::anyhow!("vdi reaper: no db pool available"))?;
+        let pool =
+            s.db.as_ref()
+                .map(|db| db.pool.clone())
+                .ok_or_else(|| anyhow::anyhow!("vdi reaper: no db pool available"))?;
         let driver: Arc<dyn VdiDriver> = s.vdi_driver.clone();
         (pool, driver)
     };
@@ -203,8 +202,7 @@ async fn run_vdi_reaper_once(state: &SharedState) -> anyhow::Result<()> {
         .fetch_all(&pool)
         .await
         .map_err(|e| anyhow::anyhow!("vdi reaper: known-set query failed: {e}"))?;
-        let known: std::collections::HashSet<String> =
-            known.into_iter().map(|(n,)| n).collect();
+        let known: std::collections::HashSet<String> = known.into_iter().map(|(n,)| n).collect();
 
         for name in managed {
             if known.contains(&name) {

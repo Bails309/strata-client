@@ -899,7 +899,7 @@ export default function AccessTab({
               gridTemplateColumns: (() => {
                 const proto = protocolDescriptor(formCore.protocol);
                 const cols = [
-                  "1fr",   // Name
+                  "1fr", // Name
                   "100px", // Protocol
                   proto.showHostname && "1fr",
                   proto.showPort && "80px",
@@ -948,7 +948,9 @@ export default function AccessTab({
                 <input
                   type="number"
                   value={formCore.port}
-                  onChange={(e) => setFormCore({ ...formCore, port: parseInt(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    setFormCore({ ...formCore, port: parseInt(e.target.value) || 0 })
+                  }
                 />
               </div>
             )}

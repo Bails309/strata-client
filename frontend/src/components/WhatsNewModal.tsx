@@ -82,7 +82,8 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "New backend/src/services/web_session.rs ships a thread-safe X-display allocator (:100–:199, 100-session cap per replica), the typed connections.extra schema (url / allowed_domains / login_script), the CIDR egress allow-list with fail-closed-on-empty semantics and all-resolved-IPs-must-pass for DNS hosts (defence against DNS rebinding via mixed A records), and the kiosk argv builder mirroring rustguac (--kiosk, ephemeral --user-data-dir, --host-rules for domain restriction, and crucially --remote-debugging-address=127.0.0.1 so the CDP socket is bound to localhost only and can never be reached from the network). Two new dependencies: ipnet 2 and url 2. 20 new unit tests cover the allocator, config edge cases, CIDR matching, host-lookup behaviour, and the kiosk argv emission.",
       },
       {
-        title: "`vdi` protocol — driver trait, image whitelist, deterministic naming, env injection",
+        title:
+          "`vdi` protocol — driver trait, image whitelist, deterministic naming, env injection",
         description:
           "New backend/src/services/vdi.rs ships an async VdiDriver trait with a NoopVdiDriver stub, the typed VdiConfig view (image / cpu_limit / memory_limit_mb / idle_timeout_mins / env_vars / persistent_home), reserved-key stripping (VDI_USERNAME and VDI_PASSWORD are silently dropped from operator env_vars so the runtime always wins), the operator-managed ImageWhitelist parser with strict-equality matching (no glob, no tag substitution — pinning is a security feature), deterministic per-(connection, user) container naming for persistent-home reuse, and the xrdp WTSChannel disconnect classifier with should_destroy_immediately() so the future reaper has a deterministic input. 16 new unit tests cover all of the above.",
       },

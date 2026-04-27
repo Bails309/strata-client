@@ -102,15 +102,13 @@ mrml = { version = "5", default-features = false, features = ["parse", "render"]
 tera = { version = "1", default-features = false }
 async-trait = "0.1"
 
-# Web Browser Sessions (rustguac parity, Phase 2 — see
-# docs/runbooks/rustguac-parity-tracker.md)
+# Web Browser Sessions (shipped in v0.30.0).
 # `ipnet`  — CIDR parsing for the `web_allowed_networks` egress allow-list.
 # `url`    — host extraction from connection URLs before the CIDR check.
 ipnet = "2"
 url = "2"
 
-# VDI Desktop Containers (rustguac parity, Phase 3 — see
-# docs/runbooks/rustguac-parity-tracker.md). `bollard` talks to the
+# VDI Desktop Containers (shipped in v0.30.0). `bollard` talks to the
 # Docker Engine API over /var/run/docker.sock. The dependency is
 # pulled in unconditionally because the trait surface is shared, but
 # `DockerVdiDriver` is only constructed when the operator opts in via

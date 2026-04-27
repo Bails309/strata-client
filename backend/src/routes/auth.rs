@@ -1373,8 +1373,14 @@ mod tests {
             session_registry: SessionRegistry::new(),
             guacd_pool: None,
             file_store: FileStore::new(std::env::temp_dir().join("strata-test-logout")).await,
-            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
-            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            web_displays: std::sync::Arc::new(
+                crate::services::web_session::WebDisplayAllocator::new(),
+            ),
+            web_runtime: std::sync::Arc::new(
+                crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(
+                    crate::services::web_session::WebDisplayAllocator::new(),
+                )),
+            ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }))

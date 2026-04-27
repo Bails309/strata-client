@@ -35,17 +35,52 @@ export interface ProtocolDescriptor {
 
 export const PROTOCOLS: ProtocolDescriptor[] = [
   // Full network target — connect by IP/hostname to an external box.
-  { value: "rdp", label: "RDP", defaultPort: 3389, showHostname: true, showPort: true, showDomain: true },
-  { value: "ssh", label: "SSH", defaultPort: 22, showHostname: true, showPort: true, showDomain: true },
-  { value: "vnc", label: "VNC", defaultPort: 5900, showHostname: true, showPort: true, showDomain: true },
+  {
+    value: "rdp",
+    label: "RDP",
+    defaultPort: 3389,
+    showHostname: true,
+    showPort: true,
+    showDomain: true,
+  },
+  {
+    value: "ssh",
+    label: "SSH",
+    defaultPort: 22,
+    showHostname: true,
+    showPort: true,
+    showDomain: true,
+  },
+  {
+    value: "vnc",
+    label: "VNC",
+    defaultPort: 5900,
+    showHostname: true,
+    showPort: true,
+    showDomain: true,
+  },
   // Strata-spawned local workloads — backend allocates a localhost
   // VNC display (`web`) or talks to a managed Docker container
   // (`vdi`). The hostname/port/domain trio is structurally meaningless
   // for these and was actively confusing operators, so the form hides
   // them. Defaults are kept harmless for any operator who downgrades a
   // connection from these protocols back to rdp/ssh/vnc.
-  { value: "web", label: "Web Browser", defaultPort: 5900, showHostname: false, showPort: false, showDomain: false },
-  { value: "vdi", label: "VDI Desktop", defaultPort: 3389, showHostname: false, showPort: false, showDomain: false },
+  {
+    value: "web",
+    label: "Web Browser",
+    defaultPort: 5900,
+    showHostname: false,
+    showPort: false,
+    showDomain: false,
+  },
+  {
+    value: "vdi",
+    label: "VDI Desktop",
+    defaultPort: 3389,
+    showHostname: false,
+    showPort: false,
+    showDomain: false,
+  },
 ];
 
 /** Lookup helper. Falls back to RDP if the key is unknown (defensive — should not happen). */

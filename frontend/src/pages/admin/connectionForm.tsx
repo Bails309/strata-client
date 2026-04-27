@@ -1536,13 +1536,13 @@ export function VncSections({
 
 // ── Web Browser Session Sections ────────────────────────────────────
 //
-// Phase 2 of rustguac parity (roadmap item `protocols-web-sessions`,
-// tracker docs/runbooks/rustguac-parity-tracker.md). A `web` connection
-// launches an ephemeral Chromium kiosk inside an Xvnc display and
-// tunnels it through guacd as a standard VNC session — the differences
-// from a normal VNC connection are entirely server-side, but admins
-// configure them through the fields below. All values land in
-// `connections.extra` JSONB alongside the regular protocol params.
+// Roadmap item `protocols-web-sessions` (shipped in v0.30.0). A
+// `web` connection launches an ephemeral Chromium kiosk inside an
+// Xvnc display and tunnels it through guacd as a standard VNC
+// session — the differences from a normal VNC connection are entirely
+// server-side, but admins configure them through the fields below.
+// All values land in `connections.extra` JSONB alongside the regular
+// protocol params.
 
 export function WebSections({
   ex,
@@ -1591,8 +1591,8 @@ export function WebSections({
 
       <Section title="Domain Allow-list">
         <p className="text-xs opacity-60 mb-2">
-          Hostnames the kiosk Chromium is permitted to resolve. Leave empty to allow any host
-          that passes the server-side egress check. Wildcards like <code>*.example.com</code>
+          Hostnames the kiosk Chromium is permitted to resolve. Leave empty to allow any host that
+          passes the server-side egress check. Wildcards like <code>*.example.com</code>
           are honoured by Chromium's <code>--host-rules</code>.
         </p>
         <FieldGrid>
@@ -1614,8 +1614,8 @@ export function WebSections({
       <Section title="Login Automation">
         <p className="text-xs opacity-60 mb-2">
           Optionally run a registered server-side script over Chrome DevTools Protocol after the
-          page loads. Scripts are administered separately and reference by name to keep
-          connection rows compact and auditable.
+          page loads. Scripts are administered separately and reference by name to keep connection
+          rows compact and auditable.
         </p>
         <FieldGrid>
           <div className="form-group !mb-0">
@@ -1646,12 +1646,12 @@ export function WebSections({
 
 // ── VDI Desktop Container Sections ──────────────────────────────────
 //
-// Phase 3 of rustguac parity (roadmap item `protocols-vdi`, tracker
-// docs/runbooks/rustguac-parity-tracker.md). A `vdi` connection
-// launches a Strata-managed Docker container running xrdp on port 3389
-// and tunnels it through guacd as a standard RDP session. Operator
-// constraints (image whitelist, CPU/memory caps, idle timeout, env
-// injection, persistent home) all land in `connections.extra`.
+// Roadmap item `protocols-vdi-containers` (shipped in v0.30.0). A
+// `vdi` connection launches a Strata-managed Docker container running
+// xrdp on port 3389 and tunnels it through guacd as a standard RDP
+// session. Operator constraints (image whitelist, CPU/memory caps,
+// idle timeout, env injection, persistent home) all land in
+// `connections.extra`.
 
 export function VdiSections({
   ex,
@@ -1789,8 +1789,8 @@ export function VdiSections({
       <Section title="Environment Variables">
         <p className="text-xs opacity-60 mb-2">
           Injected into the container at start-up. <code>VDI_USERNAME</code> and{" "}
-          <code>VDI_PASSWORD</code> are reserved — Strata always supplies them at runtime and
-          will silently drop any matching entries here.
+          <code>VDI_PASSWORD</code> are reserved — Strata always supplies them at runtime and will
+          silently drop any matching entries here.
         </p>
         <div className="space-y-2">
           {envEntries.map(([k, v], idx) => (
@@ -1840,4 +1840,3 @@ export function VdiSections({
     </>
   );
 }
-

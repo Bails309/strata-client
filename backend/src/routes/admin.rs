@@ -3991,8 +3991,14 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
-            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
-            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            web_displays: std::sync::Arc::new(
+                crate::services::web_session::WebDisplayAllocator::new(),
+            ),
+            web_runtime: std::sync::Arc::new(
+                crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(
+                    crate::services::web_session::WebDisplayAllocator::new(),
+                )),
+            ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));
@@ -4014,8 +4020,14 @@ mod tests {
                 "/tmp/strata-files",
             ))
             .await,
-            web_displays: std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()),
-            web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new()))),
+            web_displays: std::sync::Arc::new(
+                crate::services::web_session::WebDisplayAllocator::new(),
+            ),
+            web_runtime: std::sync::Arc::new(
+                crate::services::web_runtime::WebRuntimeRegistry::new(std::sync::Arc::new(
+                    crate::services::web_session::WebDisplayAllocator::new(),
+                )),
+            ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver::default()),
             started_at: std::time::Instant::now(),
         }));

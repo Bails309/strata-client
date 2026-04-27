@@ -7,14 +7,11 @@
 #![allow(dead_code)]
 
 //! Chrome DevTools Protocol (CDP) login-script command compiler —
-//! rustguac parity (Phase 2, tracker
-//! [`docs/runbooks/rustguac-parity-tracker.md`]).
+//! shipped in v0.30.0 as a scriptless fallback.
 //!
-//! ## Status: scriptless fallback only (rustguac parity D5)
+//! ## Status: scriptless fallback only
 //!
-//! After the rustguac design alignment audit (tracker section *D.
-//! CDP login automation*), Strata's **primary** login automation path
-//! is the external operator-supplied script runner in
+//! Strata's **primary** login automation path is the external operator-supplied script runner in
 //! [`web_login_script`](super::web_login_script) (rustguac parity
 //! D1–D4). Operator scripts get spawned via `tokio::process::Command`
 //! with stdin-JSON credentials and env-var context — that path keeps
@@ -111,10 +108,7 @@ pub enum LoginScriptStep {
     /// Type literal text into the matched input. Internally compiled
     /// to `Runtime.evaluate` that sets `.value` and dispatches the
     /// `input` and `change` events so React/Vue listeners fire.
-    Type {
-        selector: String,
-        text: String,
-    },
+    Type { selector: String, text: String },
 
     /// `Runtime.evaluate` that calls `.click()` on the matched node.
     Click(String),
@@ -220,10 +214,7 @@ fn compile_step(
                 }),
                 timeout_secs: DEFAULT_STEP_TIMEOUT_SECS,
                 is_poll: true,
-                poll_expression: Some(format!(
-                    "!!document.querySelector({})",
-                    js_string(selector)
-                )),
+                poll_expression: Some(format!("!!document.querySelector({})", js_string(selector))),
             })
         }
         LoginScriptStep::WaitForUrl(url) => {
@@ -240,10 +231,7 @@ fn compile_step(
                 }),
                 timeout_secs: DEFAULT_STEP_TIMEOUT_SECS,
                 is_poll: true,
-                poll_expression: Some(format!(
-                    "document.location.href === {}",
-                    js_string(url)
-                )),
+                poll_expression: Some(format!("document.location.href === {}", js_string(url))),
             })
         }
         LoginScriptStep::Type { selector, text } => {
@@ -379,7 +367,7 @@ pub fn js_string(s: &str) -> String {
     out.push('"');
     for c in s.chars() {
         match c {
-            '"'  => out.push_str("\\\""),
+            '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
@@ -539,7 +527,10 @@ mod tests {
         )
         .unwrap();
         let expr = cmds[0].params["expression"].as_str().unwrap();
-        assert!(expr.contains(r#""alice""#), "expected substituted username in {expr}");
+        assert!(
+            expr.contains(r#""alice""#),
+            "expected substituted username in {expr}"
+        );
         assert!(expr.contains("dispatchEvent(new Event('input'"));
         assert!(expr.contains("dispatchEvent(new Event('change'"));
     }
@@ -629,17 +620,25 @@ mod tests {
                 selector: "input[name=p]".into(),
                 text: "${PASSWORD}".into(),
             },
-            LoginScriptStep::Click("button[type=submit]".into())
-,
+            LoginScriptStep::Click("button[type=submit]".into()),
             LoginScriptStep::WaitForUrl("https://app/dash".into()),
         ];
         let cmds = compile_script(&steps, &ctx()).unwrap();
         assert_eq!(cmds.len(), 6);
         assert_eq!(cmds[0].method, "Page.navigate");
         assert!(cmds[1].is_poll);
-        assert!(cmds[2].params["expression"].as_str().unwrap().contains(r#""alice""#));
-        assert!(cmds[3].params["expression"].as_str().unwrap().contains(r#""hunter2""#));
-        assert!(cmds[4].params["expression"].as_str().unwrap().contains(".click()"));
+        assert!(cmds[2].params["expression"]
+            .as_str()
+            .unwrap()
+            .contains(r#""alice""#));
+        assert!(cmds[3].params["expression"]
+            .as_str()
+            .unwrap()
+            .contains(r#""hunter2""#));
+        assert!(cmds[4].params["expression"]
+            .as_str()
+            .unwrap()
+            .contains(".click()"));
         assert!(cmds[5].is_poll);
     }
 
@@ -656,10 +655,7 @@ mod tests {
         ]);
         let steps: Vec<LoginScriptStep> = serde_json::from_value(json).expect("deserialize");
         assert_eq!(steps.len(), 6);
-        assert_eq!(
-            steps[0],
-            LoginScriptStep::Navigate("https://idp".into())
-        );
+        assert_eq!(steps[0], LoginScriptStep::Navigate("https://idp".into()));
         assert_eq!(steps[3], LoginScriptStep::Click("#submit".into()));
         assert_eq!(steps[5], LoginScriptStep::Sleep { ms: 250 });
     }

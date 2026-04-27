@@ -275,9 +275,9 @@ async fn main() -> anyhow::Result<()> {
         ))
         .await,
         web_displays: web_displays.clone(),
-        web_runtime: std::sync::Arc::new(
-            crate::services::web_runtime::WebRuntimeRegistry::new(web_displays),
-        ),
+        web_runtime: std::sync::Arc::new(crate::services::web_runtime::WebRuntimeRegistry::new(
+            web_displays,
+        )),
         vdi_driver,
         started_at: std::time::Instant::now(),
     }));

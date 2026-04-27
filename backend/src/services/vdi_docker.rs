@@ -1,5 +1,5 @@
-//! Live Docker driver for the `vdi` connection protocol — Phase 3 of
-//! rustguac parity. See [`docs/runbooks/rustguac-parity-tracker.md`].
+//! Live Docker driver for the `vdi` connection protocol — shipped in
+//! v0.30.0.
 //!
 //! ## Threat model
 //!
@@ -139,9 +139,7 @@ impl DockerVdiDriver {
         // in `VDI_USERNAME` / `VDI_PASSWORD` (which are runtime-trusted).
         for (k, v) in &spec.env {
             if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                return Err(VdiError::InvalidEnv(format!(
-                    "invalid env var name: {k:?}"
-                )));
+                return Err(VdiError::InvalidEnv(format!("invalid env var name: {k:?}")));
             }
             if v.contains('\n') || v.contains('\r') {
                 return Err(VdiError::InvalidEnv(format!(
@@ -415,7 +413,9 @@ impl VdiDriver for DockerVdiDriver {
                     .await?;
                 // rustguac parity A6 — rotate the in-container password
                 // on every reuse so each session has a fresh credential.
-                if let Err(e) = self.rotate_password(&name, &spec.username, &spec.password).await
+                if let Err(e) = self
+                    .rotate_password(&name, &spec.username, &spec.password)
+                    .await
                 {
                     tracing::warn!(
                         container = %name,
@@ -516,9 +516,7 @@ impl VdiDriver for DockerVdiDriver {
         Ok(names)
     }
 
-    async fn list_managed_containers_detail(
-        &self,
-    ) -> Result<Vec<ManagedContainer>, VdiError> {
+    async fn list_managed_containers_detail(&self) -> Result<Vec<ManagedContainer>, VdiError> {
         // rustguac parity A11 — rich rows for the planned admin
         // "active desktops" UI (`/api/admin/vdi/containers`).
         let mut filters: HashMap<String, Vec<String>> = HashMap::new();
@@ -546,7 +544,9 @@ impl VdiDriver for DockerVdiDriver {
             let connection_id = labels
                 .get(LABEL_CONNECTION_ID)
                 .and_then(|s| Uuid::parse_str(s).ok());
-            let user_id = labels.get(LABEL_USER_ID).and_then(|s| Uuid::parse_str(s).ok());
+            let user_id = labels
+                .get(LABEL_USER_ID)
+                .and_then(|s| Uuid::parse_str(s).ok());
             let image = labels
                 .get(LABEL_IMAGE)
                 .cloned()
@@ -611,8 +611,7 @@ mod tests {
     }
 
     fn build_for(spec: &VdiSpawnSpec, conn: Uuid, user: Uuid, net: &str) -> Config<String> {
-        DockerVdiDriver::build_create_config(spec, conn, user, net)
-            .expect("fixture spec is valid")
+        DockerVdiDriver::build_create_config(spec, conn, user, net).expect("fixture spec is valid")
     }
 
     #[test]
@@ -676,7 +675,10 @@ mod tests {
         let user = Uuid::new_v4();
         let cfg = build_for(&spec, conn, user, "guac-internal");
         let labels = cfg.labels.expect("labels present");
-        assert_eq!(labels.get("strata.managed").map(String::as_str), Some("true"));
+        assert_eq!(
+            labels.get("strata.managed").map(String::as_str),
+            Some("true")
+        );
         assert_eq!(
             labels.get("strata.connection_id").map(String::as_str),
             Some(conn.to_string()).as_deref()

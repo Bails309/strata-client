@@ -1,8 +1,7 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! External login-script runner — rustguac parity D1–D4 (tracker
-//! [`docs/runbooks/rustguac-parity-tracker.md`]).
+//! External login-script runner — shipped in v0.30.0.
 //!
 //! ## Overview
 //!
@@ -119,7 +118,10 @@ pub fn resolve_script_path(
             "absolute paths not allowed: {script_identifier}"
         )));
     }
-    if raw.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if raw
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err(LoginScriptError::InvalidPath(format!(
             "`..` traversal not allowed: {script_identifier}"
         )));
@@ -127,9 +129,9 @@ pub fn resolve_script_path(
 
     // Canonicalise both sides so symlinks, `.` segments, and casing
     // (on case-insensitive filesystems) compare consistently.
-    let dir_canon = scripts_dir.canonicalize().map_err(|e| {
-        LoginScriptError::InvalidPath(format!("scripts_dir not accessible: {e}"))
-    })?;
+    let dir_canon = scripts_dir
+        .canonicalize()
+        .map_err(|e| LoginScriptError::InvalidPath(format!("scripts_dir not accessible: {e}")))?;
     let candidate = dir_canon.join(raw);
     let candidate_canon = candidate.canonicalize().map_err(|e| {
         LoginScriptError::InvalidPath(format!("script not found: {script_identifier} ({e})"))
@@ -173,7 +175,10 @@ pub async fn run_login_script(
 
     let mut child = Command::new(script_path)
         .env_clear()
-        .env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
         .env("DISPLAY", display)
         .env("STRATA_CDP_PORT", credentials.cdp_port.to_string())
         .env("STRATA_URL", &credentials.url)
@@ -269,10 +274,12 @@ mod tests {
         let path = dir.path().join("login.sh");
         let mut f = std::fs::File::create(&path).expect("create");
         writeln!(f, "#!/bin/sh\nexit 0").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let resolved = resolve_script_path(dir.path(), "login.sh").expect("resolve");
-        assert_eq!(resolved.canonicalize().unwrap(), path.canonicalize().unwrap());
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            path.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -308,8 +315,7 @@ mod tests {
         // Read stdin to /dev/null so the pipe doesn't EPIPE-trip the
         // parent-side write.
         writeln!(f, "#!/bin/sh\ncat >/dev/null\nexit 0").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let creds = Credentials {
             username: "u".into(),
             password: "p".into(),
@@ -331,8 +337,7 @@ mod tests {
         let path = dir.path().join("fail.sh");
         let mut f = std::fs::File::create(&path).expect("create");
         writeln!(f, "#!/bin/sh\ncat >/dev/null\nexit 7").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let creds = Credentials {
             username: "u".into(),
             password: "p".into(),
@@ -343,7 +348,10 @@ mod tests {
         let err = run_login_script(&path, ":101", &creds, Duration::from_secs(5))
             .await
             .unwrap_err();
-        assert!(matches!(err, LoginScriptError::NonZeroExit(_)), "got {err:?}");
+        assert!(
+            matches!(err, LoginScriptError::NonZeroExit(_)),
+            "got {err:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -355,8 +363,7 @@ mod tests {
         let path = dir.path().join("slow.sh");
         let mut f = std::fs::File::create(&path).expect("create");
         writeln!(f, "#!/bin/sh\nsleep 30\nexit 0").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let creds = Credentials {
             username: "u".into(),
             password: "p".into(),

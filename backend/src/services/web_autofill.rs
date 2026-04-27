@@ -1,8 +1,7 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Chromium Login Data autofill — rustguac parity (Phase 2,
-//! tracker [`docs/runbooks/rustguac-parity-tracker.md`]).
+//! Chromium Login Data autofill — shipped in v0.30.0.
 //!
 //! Encrypts a plaintext password into the byte format that Chromium's
 //! `password_manager` reads from the `password_value` BLOB column of
@@ -44,9 +43,9 @@
 //! - It does not "decrypt" — Chromium decrypts. We expose
 //!   [`decrypt_chromium_v10`] for round-trip tests only.
 
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
 #[cfg(test)]
 use aes::cipher::BlockDecryptMut;
+use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
 
 /// Magic prefix Chromium prepends to every basic-profile-encrypted
 /// `password_value`.
@@ -124,8 +123,7 @@ pub(crate) fn decrypt_chromium_v10(blob: &[u8]) -> Result<Vec<u8>, &'static str>
 
 /// Full Chromium 134 `Login Data` schema that the spawn-runtime layer
 /// writes into the per-session SQLite file. Sourced byte-for-byte from
-/// rustguac's `populate_login_data` (see
-/// [`docs/runbooks/rustguac-parity-tracker.md`] item C2).
+/// rustguac's `populate_login_data`.
 ///
 /// Without `meta` (mmap_status, version=43, last_compatible_version=40)
 /// Chromium's `PasswordStore` migration step crashes on first read.
@@ -513,11 +511,9 @@ mod tests {
         assert!(db.is_file(), "Login Data not written");
         let conn = rusqlite::Connection::open(&db).expect("open db");
         let version: String = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'version'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT value FROM meta WHERE key = 'version'", [], |r| {
+                r.get(0)
+            })
             .expect("meta.version row");
         assert_eq!(version, "43");
         let count: i64 = conn

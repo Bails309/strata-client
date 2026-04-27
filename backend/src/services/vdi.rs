@@ -1,5 +1,4 @@
-//! VDI desktop container support — Phase 3 of rustguac parity (see
-//! `docs/runbooks/rustguac-parity-tracker.md`).
+//! VDI desktop container support — shipped in v0.30.0.
 //!
 //! This module is the **pure-logic foundation** for the `vdi` protocol:
 //! typed views over `connections.extra`, image whitelist parsing,
@@ -404,9 +403,7 @@ pub trait VdiDriver: Send + Sync {
     /// for the admin "active desktops" UI (rustguac parity item A11).
     /// Default impl returns an empty vec so existing test fakes
     /// (`NoopVdiDriver`) don't have to implement it.
-    async fn list_managed_containers_detail(
-        &self,
-    ) -> Result<Vec<ManagedContainer>, VdiError> {
+    async fn list_managed_containers_detail(&self) -> Result<Vec<ManagedContainer>, VdiError> {
         Ok(Vec::new())
     }
 
@@ -529,7 +526,10 @@ mod tests {
         assert_eq!(cfg.cpu_limit, Some(2.0));
         assert_eq!(cfg.memory_limit_mb, Some(4096));
         assert_eq!(cfg.idle_timeout_mins, Some(45));
-        assert_eq!(cfg.env_vars.get("LANG").map(String::as_str), Some("en_GB.UTF-8"));
+        assert_eq!(
+            cfg.env_vars.get("LANG").map(String::as_str),
+            Some("en_GB.UTF-8")
+        );
         assert!(cfg.persistent_home);
     }
 
@@ -563,7 +563,10 @@ mod tests {
         assert!(!cfg.env_vars.contains_key("VDI_USERNAME"));
         assert!(!cfg.env_vars.contains_key("VDI_PASSWORD"));
         assert!(!cfg.env_vars.contains_key(""));
-        assert_eq!(cfg.env_vars.get("LANG").map(String::as_str), Some("en_GB.UTF-8"));
+        assert_eq!(
+            cfg.env_vars.get("LANG").map(String::as_str),
+            Some("en_GB.UTF-8")
+        );
     }
 
     #[test]
@@ -581,9 +584,15 @@ mod tests {
     #[test]
     fn effective_idle_timeout_falls_back_when_zero_or_unset() {
         let mut cfg = VdiConfig::default();
-        assert_eq!(cfg.effective_idle_timeout_mins(), VDI_DEFAULT_IDLE_TIMEOUT_MINS);
+        assert_eq!(
+            cfg.effective_idle_timeout_mins(),
+            VDI_DEFAULT_IDLE_TIMEOUT_MINS
+        );
         cfg.idle_timeout_mins = Some(0);
-        assert_eq!(cfg.effective_idle_timeout_mins(), VDI_DEFAULT_IDLE_TIMEOUT_MINS);
+        assert_eq!(
+            cfg.effective_idle_timeout_mins(),
+            VDI_DEFAULT_IDLE_TIMEOUT_MINS
+        );
         cfg.idle_timeout_mins = Some(15);
         assert_eq!(cfg.effective_idle_timeout_mins(), 15);
     }
@@ -657,10 +666,22 @@ mod tests {
 
     #[test]
     fn disconnect_reason_classification() {
-        assert_eq!(DisconnectReason::from_xrdp_code(0), DisconnectReason::Logout);
-        assert_eq!(DisconnectReason::from_xrdp_code(1), DisconnectReason::TabClose);
-        assert_eq!(DisconnectReason::from_xrdp_code(2), DisconnectReason::IdleTimeout);
-        assert_eq!(DisconnectReason::from_xrdp_code(99), DisconnectReason::Other);
+        assert_eq!(
+            DisconnectReason::from_xrdp_code(0),
+            DisconnectReason::Logout
+        );
+        assert_eq!(
+            DisconnectReason::from_xrdp_code(1),
+            DisconnectReason::TabClose
+        );
+        assert_eq!(
+            DisconnectReason::from_xrdp_code(2),
+            DisconnectReason::IdleTimeout
+        );
+        assert_eq!(
+            DisconnectReason::from_xrdp_code(99),
+            DisconnectReason::Other
+        );
     }
 
     #[test]
@@ -698,7 +719,10 @@ mod tests {
     #[test]
     fn sanitise_posix_username_lowercases_and_strips_unsafe_chars() {
         assert_eq!(sanitise_posix_username("Alice.Smith"), "alice_smith");
-        assert_eq!(sanitise_posix_username("user@example.com"), "user_example_com");
+        assert_eq!(
+            sanitise_posix_username("user@example.com"),
+            "user_example_com"
+        );
         assert_eq!(sanitise_posix_username("ALICE"), "alice");
     }
 

@@ -89,7 +89,9 @@ mod tests {
             guacd_pool: None,
             file_store: FileStore::new(std::path::PathBuf::from("/tmp/strata-files")).await,
             web_displays: Arc::new(WebDisplayAllocator::new()),
-            web_runtime: Arc::new(WebRuntimeRegistry::new(Arc::new(WebDisplayAllocator::new()))),
+            web_runtime: Arc::new(WebRuntimeRegistry::new(
+                Arc::new(WebDisplayAllocator::new()),
+            )),
             vdi_driver: Arc::new(NoopVdiDriver::default()),
             started_at: Instant::now(),
         };

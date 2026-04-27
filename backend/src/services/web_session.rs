@@ -1,9 +1,8 @@
 // Copyright 2026 Strata Client Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Web Browser Sessions — rustguac parity (roadmap item
-//! `protocols-web-sessions`, tracker
-//! [`docs/runbooks/rustguac-parity-tracker.md`]).
+//! Web Browser Sessions — shipped in v0.30.0 (roadmap item
+//! `protocols-web-sessions`).
 //!
 //! A `web` connection launches an ephemeral Chromium kiosk inside an
 //! Xvnc display and tunnels it through guacd as a standard VNC session.
@@ -150,7 +149,10 @@ impl CdpPortAllocator {
     /// Reserve the next free CDP port, or return `None` when the
     /// range is exhausted.
     pub fn allocate(&self) -> Option<u16> {
-        let mut in_use = self.in_use.lock().expect("CDP port allocator mutex poisoned");
+        let mut in_use = self
+            .in_use
+            .lock()
+            .expect("CDP port allocator mutex poisoned");
         for n in WEB_CDP_PORT_MIN..=WEB_CDP_PORT_MAX {
             if in_use.insert(n) {
                 return Some(n);
@@ -199,7 +201,10 @@ impl WebDisplayAllocator {
     /// Reserve the next free display number, or return `None` when the
     /// range is exhausted.
     pub fn allocate(&self) -> Option<u16> {
-        let mut in_use = self.in_use.lock().expect("display allocator mutex poisoned");
+        let mut in_use = self
+            .in_use
+            .lock()
+            .expect("display allocator mutex poisoned");
         for n in WEB_DISPLAY_MIN..=WEB_DISPLAY_MAX {
             if in_use.insert(n) {
                 return Some(n);
@@ -220,10 +225,7 @@ impl WebDisplayAllocator {
     /// Number of currently-allocated displays. Primarily used by the
     /// `/api/admin/web-sessions/stats` endpoint and by tests.
     pub fn in_use_count(&self) -> usize {
-        self.in_use
-            .lock()
-            .map(|s| s.len())
-            .unwrap_or(0)
+        self.in_use.lock().map(|s| s.len()).unwrap_or(0)
     }
 
     /// Total number of displays this allocator can hand out.
@@ -332,7 +334,10 @@ pub fn host_lookup_passes(host: &str, resolved: &[IpAddr], networks: &[IpNet]) -
     if let Ok(ip) = host.parse::<IpAddr>() {
         return is_ip_allowed_by_cidr(ip, networks);
     }
-    !resolved.is_empty() && resolved.iter().all(|ip| is_ip_allowed_by_cidr(*ip, networks))
+    !resolved.is_empty()
+        && resolved
+            .iter()
+            .all(|ip| is_ip_allowed_by_cidr(*ip, networks))
 }
 
 /// Extract the host from a URL string for CIDR checking. Returns
@@ -412,10 +417,7 @@ pub fn chromium_command_args(spec: &ChromiumLaunchSpec<'_>) -> Vec<String> {
         // and `--start-fullscreen` doesn't stick on a bare Xvnc with
         // no window manager.
         format!("--window-position=0,0"),
-        format!(
-            "--window-size={},{}",
-            spec.window_width, spec.window_height
-        ),
+        format!("--window-size={},{}", spec.window_width, spec.window_height),
         "--noerrdialogs".into(),
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
@@ -534,8 +536,7 @@ pub const fn vnc_port_for_display(display: u16) -> u16 {
 /// Default VNC-readiness deadline. Rustguac uses 2 s flat — Xvnc
 /// binds its listener within ~50 ms on every Linux distro tested, so
 /// 2 s is generous enough that a slow CI runner doesn't false-fail.
-pub const WEB_VNC_READY_DEADLINE: std::time::Duration =
-    std::time::Duration::from_secs(2);
+pub const WEB_VNC_READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Poll `127.0.0.1:{5900+display}` until a TCP connect succeeds or
 /// `deadline` elapses. Returns `true` on connect, `false` on timeout.
@@ -573,8 +574,7 @@ pub async fn wait_for_vnc_ready(display: u16, deadline: std::time::Duration) -> 
 /// immediately. Rustguac uses 500 ms — long enough to surface
 /// argv-parse rejections and missing-binary failures, short enough
 /// not to delay the operator's first frame.
-pub const WEB_CHROMIUM_SETTLE: std::time::Duration =
-    std::time::Duration::from_millis(500);
+pub const WEB_CHROMIUM_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Outcome of [`detect_immediate_chromium_crash`].
 #[derive(Debug)]
@@ -659,7 +659,9 @@ mod tests {
         // All numbers must be unique and within range.
         let unique: HashSet<u16> = handed_out.iter().copied().collect();
         assert_eq!(unique.len(), handed_out.len());
-        assert!(handed_out.iter().all(|n| (WEB_DISPLAY_MIN..=WEB_DISPLAY_MAX).contains(n)));
+        assert!(handed_out
+            .iter()
+            .all(|n| (WEB_DISPLAY_MIN..=WEB_DISPLAY_MAX).contains(n)));
     }
 
     #[test]
@@ -743,7 +745,10 @@ mod tests {
         assert!(is_ip_allowed_by_cidr("10.5.5.5".parse().unwrap(), &nets));
         assert!(!is_ip_allowed_by_cidr("11.0.0.1".parse().unwrap(), &nets));
         assert!(is_ip_allowed_by_cidr("2001:db8::1".parse().unwrap(), &nets));
-        assert!(!is_ip_allowed_by_cidr("2001:dead::1".parse().unwrap(), &nets));
+        assert!(!is_ip_allowed_by_cidr(
+            "2001:dead::1".parse().unwrap(),
+            &nets
+        ));
     }
 
     #[test]
@@ -768,8 +773,14 @@ mod tests {
 
     #[test]
     fn extract_host_works() {
-        assert_eq!(extract_host("https://example.com/login").as_deref(), Some("example.com"));
-        assert_eq!(extract_host("http://10.0.0.1:8080/").as_deref(), Some("10.0.0.1"));
+        assert_eq!(
+            extract_host("https://example.com/login").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            extract_host("http://10.0.0.1:8080/").as_deref(),
+            Some("10.0.0.1")
+        );
         assert_eq!(extract_host("not a url"), None);
         assert_eq!(extract_host("file:///etc/passwd"), None);
     }

@@ -78,9 +78,9 @@ export default function VdiTab({
           </label>
           <p className="text-xs text-txt-secondary mb-3">
             One image reference per line (or comma-separated). Strict equality — no glob, no
-            <code> :latest</code> shortcut, no digest fuzziness. Lines starting with{" "}
-            <code>#</code> are treated as comments. Currently <strong>{lineCount}</strong>{" "}
-            image{lineCount === 1 ? "" : "s"} approved.
+            <code> :latest</code> shortcut, no digest fuzziness. Lines starting with <code>#</code>{" "}
+            are treated as comments. Currently <strong>{lineCount}</strong> image
+            {lineCount === 1 ? "" : "s"} approved.
           </p>
           <textarea
             id="vdi-whitelist"
@@ -117,20 +117,15 @@ export default function VdiTab({
         </div>
 
         <div className="rounded-md p-4 bg-warning/10 border border-warning/30 text-sm">
-          <strong className="text-warning">Reminder:</strong>{" "}
-          Strata's <code>DockerVdiDriver</code> mounts <code>/var/run/docker.sock</code>, which
-          gives the backend root on the host. Treat the backend container as a privileged
-          service. See <code>docs/vdi.md</code> for the full threat model.
+          <strong className="text-warning">Reminder:</strong> Strata's <code>DockerVdiDriver</code>{" "}
+          mounts <code>/var/run/docker.sock</code>, which gives the backend root on the host. Treat
+          the backend container as a privileged service. See <code>docs/vdi.md</code> for the full
+          threat model.
         </div>
       </div>
 
       <div className="mt-8 pt-6 border-t border-border/10 flex justify-end">
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={handleSave}
-          disabled={saving}
-        >
+        <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
           {saving ? "Saving..." : "Save VDI settings"}
         </button>
       </div>

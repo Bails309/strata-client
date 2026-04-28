@@ -95,7 +95,11 @@ export default function SessionClient() {
 
   const commandPaletteOpenRef = useRef(false);
   const containerFocusedRef = useRef(false);
-  const { open: openCommandPalette, isOpen: globalPaletteOpen, setSuppressed: setGlobalPaletteSuppressed } = useCommandPalette();
+  const {
+    open: openCommandPalette,
+    isOpen: globalPaletteOpen,
+    setSuppressed: setGlobalPaletteSuppressed,
+  } = useCommandPalette();
   // Mirror the global palette open state into the ref that gates Guacamole
   // keyboard forwarding so the canvas stops swallowing keys while the
   // palette has focus.

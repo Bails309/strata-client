@@ -257,7 +257,8 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/admin/vdi/images", get(admin::list_vdi_images))
         .route("/api/admin/vdi/containers", get(admin::list_vdi_containers))
         .route("/api/admin/vdi/health", get(admin::vdi_health))
-        .route("/api/admin/web-sessions/stats",
+        .route(
+            "/api/admin/web-sessions/stats",
             get(admin::web_sessions_stats),
         )
         .route("/api/recordings/{filename}", get(user::get_recording))

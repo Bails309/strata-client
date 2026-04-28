@@ -222,11 +222,7 @@ pub async fn require_csrf(req: Request, next: Next) -> Result<Response, AppError
             Ok(next.run(req).await)
         }
         _ => {
-            tracing::warn!(
-                "CSRF check failed for {} {}",
-                method,
-                req.uri().path()
-            );
+            tracing::warn!("CSRF check failed for {} {}", method, req.uri().path());
             Err(AppError::Forbidden)
         }
     }

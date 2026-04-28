@@ -117,10 +117,10 @@ export default function VdiTab({
         </div>
 
         <div className="rounded-md p-4 bg-warning/10 border border-warning/30 text-sm">
-          <strong className="text-warning">Reminder:</strong> Strata&apos;s <code>DockerVdiDriver</code>{" "}
-          mounts <code>/var/run/docker.sock</code>, which gives the backend root on the host. Treat
-          the backend container as a privileged service. See <code>docs/vdi.md</code> for the full
-          threat model.
+          <strong className="text-warning">Reminder:</strong> Strata&apos;s{" "}
+          <code>DockerVdiDriver</code> mounts <code>/var/run/docker.sock</code>, which gives the
+          backend root on the host. Treat the backend container as a privileged service. See{" "}
+          <code>docs/vdi.md</code> for the full threat model.
         </div>
       </div>
 

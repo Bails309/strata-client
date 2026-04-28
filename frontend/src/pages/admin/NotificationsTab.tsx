@@ -327,8 +327,8 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
                 />
                 <p className="text-sm text-txt-secondary mt-1">
                   Use <code>STARTTLS</code> for most corporate relays, <code>Implicit TLS</code> for
-                  legacy &ldquo;SMTPS&rdquo; on port 465, or <code>None</code> for unauthenticated in-VPC relays
-                  on port 25. The port auto-syncs unless you pick <code>Other</code>.
+                  legacy &ldquo;SMTPS&rdquo; on port 465, or <code>None</code> for unauthenticated
+                  in-VPC relays on port 25. The port auto-syncs unless you pick <code>Other</code>.
                 </p>
               </div>
 

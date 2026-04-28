@@ -146,8 +146,9 @@ export default function SecurityTab({
                   Session Watermark
                 </span>
                 <p className="text-txt-secondary text-sm mt-0.5">
-                  Overlay a semi-transparent watermark on all active sessions showing the user&apos;s
-                  name, IP address, and timestamp. Helps deter unauthorized screen capture.
+                  Overlay a semi-transparent watermark on all active sessions showing the
+                  user&apos;s name, IP address, and timestamp. Helps deter unauthorized screen
+                  capture.
                 </p>
               </div>
             </label>

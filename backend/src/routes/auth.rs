@@ -828,8 +828,7 @@ pub async fn check_auth(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string());
-    let cookie_tok =
-        crate::services::middleware::extract_cookie_value(&headers, "access_token");
+    let cookie_tok = crate::services::middleware::extract_cookie_value(&headers, "access_token");
     let token_string = match bearer.or(cookie_tok) {
         Some(t) => t,
         None => return not_auth(),

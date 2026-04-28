@@ -828,6 +828,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   color: "var(--color-txt-primary)",
                   opacity: 0.35,
                   fontFamily: "inherit",
+                  fontSize: "inherit",
+                  fontWeight: "inherit",
+                  letterSpacing: "inherit",
                 }}
               >
                 <span style={{ visibility: "hidden" }}>{query}</span>
@@ -843,6 +846,17 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               className="relative w-full bg-transparent text-sm outline-none placeholder:opacity-40"
               style={{
                 color: commandError ? "var(--color-danger, #ef4444)" : "var(--color-txt-primary)",
+                // Inputs do not inherit font-family / size by default —
+                // force them so the hidden-text spacer in the ghost-text
+                // overlay above lines up character-for-character with the
+                // user's typed query.
+                fontFamily: "inherit",
+                fontSize: "inherit",
+                fontWeight: "inherit",
+                letterSpacing: "inherit",
+                padding: 0,
+                margin: 0,
+                border: 0,
               }}
               autoComplete="off"
               spellCheck={false}

@@ -209,14 +209,61 @@ export default function Layout({
           </button>
         )}
 
+        {/* ── Floating "hide sidebar" chevron — only visible while in a
+             session AND the sidebar is shown. Mirrors the right-side
+             SessionBar collapse handle: a pill protruding from the outer
+             edge of the panel. Rendered as a sibling of the <aside> so it
+             stays visible when the sidebar collapses to a narrow rail and
+             can be positioned independently. ── */}
+        {inSession && !hidden && (
+          <button
+            onClick={() => setSessionHidden(true)}
+            title="Hide menu"
+            aria-label="Hide menu"
+            className="fixed top-1/2 z-[60] -translate-y-1/2 w-8 h-24 flex items-center justify-center rounded-r-xl text-txt-secondary hover:text-txt-primary transition-all duration-200"
+            style={{
+              left: sidebarWidth,
+              background: "rgba(15, 15, 20, 0.75)",
+              backdropFilter: "blur(16px)",
+              WebkitBackdropFilter: "blur(16px)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              borderLeft: "none",
+            }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+        )}
+
         {/* ── Sidebar ── */}
         <aside
           className="fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-hidden transition-[width] duration-200 ease-out"
           style={{
             width: sidebarWidth,
             padding: hidden ? 0 : collapsed ? "1.25rem 0.5rem" : "1.25rem 0.75rem",
-            background: "var(--color-nav-bg)",
-            borderRight: hidden ? "none" : "1px solid var(--color-nav-border)",
+            // While inside a session the sidebar floats over the remote
+            // canvas — use the same translucent + blurred surface that
+            // the right-side SessionBar uses so it reads as an overlay
+            // rather than an opaque side rail.
+            background: inSession ? "rgba(15, 15, 20, 0.75)" : "var(--color-nav-bg)",
+            backdropFilter: inSession ? "blur(16px)" : undefined,
+            WebkitBackdropFilter: inSession ? "blur(16px)" : undefined,
+            borderRight: hidden
+              ? "none"
+              : inSession
+                ? "1px solid rgba(255, 255, 255, 0.08)"
+                : "1px solid var(--color-nav-border)",
+            boxShadow: inSession && !hidden ? "10px 0 30px rgba(0, 0, 0, 0.4)" : undefined,
           }}
         >
           <div className="flex flex-col gap-6">
@@ -409,31 +456,6 @@ export default function Layout({
                 </svg>
                 {!collapsed && <span className="text-[0.75rem]">Collapse</span>}
               </button>
-
-              {/* Hide-completely toggle — only useful while in a session, so
-                   it is rendered conditionally to keep the menu uncluttered
-                   on regular pages. */}
-              {inSession && (
-                <button
-                  className={`flex items-center gap-2.5 text-txt-secondary hover:text-txt-primary rounded-sm cursor-pointer transition-all duration-150 p-2 hover:bg-nav-link-hover ${collapsed ? "justify-center" : ""}`}
-                  onClick={() => setSessionHidden(true)}
-                  title="Hide menu (session view)"
-                >
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points="15 18 9 12 15 6" />
-                  </svg>
-                  {!collapsed && <span className="text-[0.75rem]">Hide menu</span>}
-                </button>
-              )}
             </div>
           </div>
         </aside>

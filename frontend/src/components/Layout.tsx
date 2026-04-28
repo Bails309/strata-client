@@ -167,13 +167,21 @@ export default function Layout({
     if (inSession) setSessionHidden(true);
   }, [inSession, location.pathname]);
   const hidden = inSession && sessionHidden;
+  // Width of the actual sidebar element. When the sidebar is hidden it
+  // collapses to 0; otherwise it expands to its normal width.
   const sidebarWidth = hidden ? 0 : collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
+  // Width that downstream layout consumers see. While inside a session the
+  // sidebar floats over the remote canvas (matching the right-side
+  // SessionBar behaviour) so the canvas never gets resized when the user
+  // toggles the menu — report 0 so SessionClient/TiledView keep using the
+  // full viewport width.
+  const layoutSidebarWidth = inSession ? 0 : sidebarWidth;
   const { theme, preference, cycle } = useTheme();
 
   const initial = (user?.full_name || user?.username || "S").charAt(0).toUpperCase();
 
   return (
-    <SidebarContext.Provider value={sidebarWidth}>
+    <SidebarContext.Provider value={layoutSidebarWidth}>
       <div className="flex min-h-screen">
         {/* ── Floating "show sidebar" chevron — only visible while in a
              session AND the sidebar is hidden. Mirrors the right-side
@@ -433,7 +441,7 @@ export default function Layout({
         {/* ── Main Content ── */}
         <main
           className="flex-1 min-h-screen animate-fade-in transition-[margin-left] duration-200 ease-out"
-          style={{ marginLeft: sidebarWidth, padding: "2rem 2.5rem" }}
+          style={{ marginLeft: layoutSidebarWidth, padding: "2rem 2.5rem" }}
         >
           <Outlet />
         </main>

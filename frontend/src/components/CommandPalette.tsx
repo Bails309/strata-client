@@ -366,9 +366,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         description: "List all available commands",
         valid: true,
         run: () => {
-          // Handled inline — typing `:commands` shows the list in the
-          // results pane, so executing it is a no-op (just close).
-          onClose();
+          // Reset the input to a bare `:` so the palette stays open and
+          // the matching-commands list shows every available trigger.
+          setQuery(":");
         },
         audit: { action: "commands", args: {} },
       },

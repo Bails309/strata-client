@@ -1553,14 +1553,19 @@ mod tests {
 
     #[tokio::test]
     async fn logout_missing_auth_header() {
+        // Logout is best-effort: with no token at all it must still succeed
+        // so a client whose session has already expired can clear cookies.
         let state = test_state().await;
         let headers = HeaderMap::new();
         let result = logout(State(state), headers).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().status(), 200);
     }
 
     #[tokio::test]
     async fn logout_invalid_auth_header() {
+        // A non-Bearer Authorization header is treated as "no token" and
+        // logout still succeeds (best-effort cookie clearing).
         let state = test_state().await;
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1568,7 +1573,8 @@ mod tests {
             "Basic dXNlcjpwYXNz".parse().unwrap(),
         );
         let result = logout(State(state), headers).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().status(), 200);
     }
 
     #[tokio::test]

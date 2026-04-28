@@ -1,5 +1,21 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { refreshAccessToken } from "../api";
+import { refreshAccessToken, readCookie } from "../api";
+
+/**
+ * Read the access-token expiry timestamp.
+ *
+ * The backend sets a non-HttpOnly `session_expires` cookie alongside the
+ * HttpOnly access token. Its value is the unix epoch (seconds) at which
+ * the access token expires. Returning the value in milliseconds matches
+ * `Date.now()` arithmetic.
+ */
+function readExpiryMs(): number | null {
+  const value = readCookie("session_expires");
+  if (!value) return null;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return seconds * 1000;
+}
 
 /** Show a warning toast this many seconds before the access token expires. */
 const WARNING_LEAD_SECS = 120;
@@ -29,10 +45,10 @@ export default function SessionTimeoutWarning({ onExpired }: { onExpired?: () =>
   /* ── Proactive activity-based refresh ── */
   useEffect(() => {
     function onActivity() {
-      const expiry = localStorage.getItem("token_expiry");
+      const expiry = readExpiryMs();
       if (!expiry) return;
 
-      const remaining = Math.floor((Number(expiry) - Date.now()) / 1000);
+      const remaining = Math.floor((expiry - Date.now()) / 1000);
       if (remaining <= 0 || remaining > PROACTIVE_REFRESH_THRESHOLD_SECS) return;
 
       // Enforce cooldown
@@ -53,12 +69,12 @@ export default function SessionTimeoutWarning({ onExpired }: { onExpired?: () =>
 
   useEffect(() => {
     const id = setInterval(() => {
-      const expiry = localStorage.getItem("token_expiry");
+      const expiry = readExpiryMs();
       if (!expiry) {
         setSecondsLeft(null);
         return;
       }
-      const remaining = Math.max(0, Math.floor((Number(expiry) - Date.now()) / 1000));
+      const remaining = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
       setSecondsLeft(remaining);
 
       // Reset dismissed state when a new token pushes expiry further out

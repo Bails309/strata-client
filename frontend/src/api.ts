@@ -3,14 +3,52 @@
 
 const API_BASE = "/api";
 
-/** Default access token TTL in seconds (must match backend ACCESS_TOKEN_TTL). */
-const DEFAULT_ACCESS_TTL = 1200;
-
 /** Flag to prevent concurrent refresh attempts. */
 let isRefreshing = false;
 let refreshPromise: Promise<boolean> | null = null;
 
-/** Attempt to refresh the access token using the HttpOnly refresh cookie. */
+/**
+ * Read a non-HttpOnly cookie value by name.
+ *
+ * Used to fish out the CSRF token cookie (which is intentionally readable
+ * by JS). The HttpOnly access/refresh cookies are NOT readable here; they
+ * travel automatically because every fetch in this module passes
+ * `credentials: "include"`.
+ */
+export function readCookie(name: string): string | null {
+  const target = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(target)) return trimmed.slice(target.length);
+  }
+  return null;
+}
+
+/** Mutating HTTP methods that require an X-CSRF-Token header. */
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Build a headers object with the CSRF token attached when the request is
+ * a state-changing method. Idempotent reads (GET/HEAD/OPTIONS) skip the
+ * header — the backend exempts them too.
+ */
+function buildHeaders(
+  method: string | undefined,
+  base: Record<string, string> = {}
+): Record<string, string> {
+  const upper = (method ?? "GET").toUpperCase();
+  if (!MUTATING_METHODS.has(upper)) return base;
+  const csrf = readCookie("csrf_token");
+  return csrf ? { ...base, "X-CSRF-Token": csrf } : base;
+}
+
+/**
+ * Attempt to refresh the access token using the HttpOnly refresh cookie.
+ *
+ * Both access_token and csrf_token cookies are rotated server-side; we
+ * just need to surface success/failure. No token value is ever stored in
+ * JS-accessible storage.
+ */
 export async function refreshAccessToken(): Promise<boolean> {
   if (isRefreshing && refreshPromise) return refreshPromise;
   isRefreshing = true;
@@ -20,14 +58,7 @@ export async function refreshAccessToken(): Promise<boolean> {
         method: "POST",
         credentials: "include",
       });
-      if (res.ok) {
-        const data = await res.json();
-        localStorage.setItem("access_token", data.access_token);
-        const ttl = data.expires_in ?? DEFAULT_ACCESS_TTL;
-        localStorage.setItem("token_expiry", String(Date.now() + ttl * 1000));
-        return true;
-      }
-      return false;
+      return res.ok;
     } catch {
       return false;
     } finally {
@@ -39,28 +70,21 @@ export async function refreshAccessToken(): Promise<boolean> {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem("access_token");
-  const headers: Record<string, string> = {
+  const headers = buildHeaders(options?.method, {
     "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
+  });
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
 
-  // If we get a 401 and this isn't the refresh endpoint itself, try refreshing.
-  // Only attempt refresh if we actually had a token (expired); if no token was
-  // sent at all, just surface the 401 to the caller without a redirect—this
-  // prevents an infinite reload loop when unauthenticated components (e.g.
-  // SettingsProvider) call protected endpoints on the login page.
-  if (res.status === 401 && path !== "/auth/refresh" && token) {
+  // 401 → try refreshing once. Unlike the bearer flow, we can't tell from
+  // JS whether a session cookie was actually sent, so always attempt
+  // refresh on 401 (except on the refresh endpoint itself to avoid loops).
+  if (res.status === 401 && path !== "/auth/refresh") {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
-      // Retry with the new token
-      const newToken = localStorage.getItem("access_token");
-      const retryHeaders: Record<string, string> = {
+      const retryHeaders = buildHeaders(options?.method, {
         "Content-Type": "application/json",
-        ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
-      };
+      });
       const retryRes = await fetch(`${API_BASE}${path}`, {
         ...options,
         headers: retryHeaders,
@@ -73,10 +97,18 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       const retryText = await retryRes.text();
       return (retryText ? JSON.parse(retryText) : undefined) as T;
     }
-    // Refresh failed — clear local state and redirect to login
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("token_expiry");
-    window.location.href = "/login";
+    // Refresh failed — server-side cookies are already cleared by the
+    // failure path. Bounce to login, unless we're already on a public
+    // route (login / shared viewer) where forcing a navigation would
+    // abort other in-flight requests (e.g. /api/status during page
+    // bootstrap) and leave the page stuck on a loading spinner.
+    if (typeof window !== "undefined") {
+      const path = window.location.pathname;
+      const isPublicRoute = path === "/login" || path.startsWith("/shared/");
+      if (!isPublicRoute) {
+        window.location.href = "/login";
+      }
+    }
     throw new ApiError(401, "Session expired");
   }
 
@@ -129,9 +161,15 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
+  /** Echo of the access JWT. Cookie-mode logins ignore this — kept in the
+   *  type for back-compat with non-browser API clients that still use the
+   *  bearer-header path (e.g. integration scripts). */
   access_token: string;
   token_type: string;
   expires_in?: number;
+  /** CSRF token mirrored into the response body for clients that can't
+   *  read cookies (rare). The browser SPA reads it from the cookie. */
+  csrf_token?: string;
   user: {
     id: string;
     username: string;
@@ -165,19 +203,16 @@ export const login = async (data: LoginRequest): Promise<LoginResponse> => {
 
 export async function logout() {
   try {
-    const token = localStorage.getItem("access_token");
-    if (token) {
-      await fetch(`${API_BASE}/auth/logout`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        credentials: "include",
-      });
-    }
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: "POST",
+      headers: buildHeaders("POST"),
+      credentials: "include",
+    });
   } catch {
-    // Best-effort — proceed with local cleanup even if server call fails
+    // Best-effort — server-side cookies might not get cleared if this
+    // throws, but the cookies are short-lived and SameSite=Strict so the
+    // failure mode is acceptable.
   }
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("token_expiry");
 }
 
 // ── Password Change ─────────────────────────────────────────────────
@@ -339,13 +374,11 @@ export interface AuthCheckResponse {
   user?: MeResponse;
 }
 export async function checkAuthStatus(): Promise<AuthCheckResponse> {
-  const token = localStorage.getItem("access_token");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
   try {
-    const res = await fetch(`${API_BASE}/auth/check`, { headers, credentials: "include" });
+    const res = await fetch(`${API_BASE}/auth/check`, {
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
     if (res.ok) return res.json();
     return { authenticated: false };
   } catch {
@@ -1212,13 +1245,14 @@ export const getRecordings = (
 
 /**
  * Build a WebSocket URL for historical recording playback.
+ *
+ * Authentication travels via the HttpOnly `access_token` cookie that the
+ * browser attaches automatically to the WebSocket upgrade request — we
+ * no longer embed the JWT in the query string.
  */
 export function buildRecordingStreamUrl(recordingId: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const token = localStorage.getItem("access_token");
-  const params = new URLSearchParams();
-  if (token) params.set("token", token);
-  return `${proto}//${window.location.host}/api/admin/recordings/${encodeURIComponent(recordingId)}/stream?${params}`;
+  return `${proto}//${window.location.host}/api/admin/recordings/${encodeURIComponent(recordingId)}/stream`;
 }
 
 // ── My Recordings (user-scoped) ─────────────────────────────────────
@@ -1235,43 +1269,33 @@ export const getMyRecordings = (
 
 export function buildMyRecordingStreamUrl(recordingId: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const token = localStorage.getItem("access_token");
-  const params = new URLSearchParams();
-  if (token) params.set("token", token);
-  return `${proto}//${window.location.host}/api/user/recordings/${encodeURIComponent(recordingId)}/stream?${params}`;
+  return `${proto}//${window.location.host}/api/user/recordings/${encodeURIComponent(recordingId)}/stream`;
 }
 
 /**
- * Ensure the access token in localStorage is fresh.  If the token has
- * expired (or is about to within 30 s), try a silent refresh first.
- * Returns the current valid token, or `null` if refresh failed.
+ * Ensure the access token cookie is fresh by proactively calling refresh.
+ *
+ * WebSocket connections can't use the request<>retry interceptor (the
+ * upgrade is one-shot), so callers proactively call this before opening
+ * the socket to avoid a stale-cookie 401 mid-stream. Returns true if a
+ * usable session is in place; false if the user must reauthenticate.
  */
-export async function ensureFreshToken(): Promise<string | null> {
-  const token = localStorage.getItem("access_token");
-  const expiry = Number(localStorage.getItem("token_expiry") || "0");
-  if (token && expiry > Date.now() + 30_000) return token;
-  // Token missing or expiring soon — try refresh
-  const ok = await refreshAccessToken();
-  return ok ? localStorage.getItem("access_token") : token;
+export async function ensureFreshToken(): Promise<boolean> {
+  return refreshAccessToken();
 }
 
 /**
  * Build a WebSocket URL for the NVR observe endpoint.
- * Ensures the access token is fresh before embedding it in the URL
- * (WebSocket connections cannot use the normal 401-retry interceptor).
- * @param sessionId  The active session to observe
- * @param offsetSecs How many seconds of buffer to replay (0 = live only)
- * @param speed      Playback speed multiplier (default 4×, 0 = instant)
+ * Refreshes the access cookie first to avoid stale-session disconnects.
  */
 export async function buildNvrObserveUrl(
   sessionId: string,
   offsetSecs = 300,
   speed = 4
 ): Promise<string> {
-  const token = await ensureFreshToken();
+  await ensureFreshToken();
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const params = new URLSearchParams();
-  if (token) params.set("token", token);
   params.set("offset", String(offsetSecs));
   params.set("speed", String(speed));
   return `${proto}//${window.location.host}/api/admin/sessions/${encodeURIComponent(sessionId)}/observe?${params}`;
@@ -1286,10 +1310,9 @@ export async function buildUserNvrObserveUrl(
   offsetSecs = 300,
   speed = 4
 ): Promise<string> {
-  const token = await ensureFreshToken();
+  await ensureFreshToken();
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const params = new URLSearchParams();
-  if (token) params.set("token", token);
   params.set("offset", String(offsetSecs));
   params.set("speed", String(speed));
   return `${proto}//${window.location.host}/api/user/sessions/${encodeURIComponent(sessionId)}/observe?${params}`;
@@ -1373,25 +1396,26 @@ export interface QuickShareFile {
 }
 
 export async function uploadQuickShareFile(sessionId: string, file: File): Promise<QuickShareFile> {
-  const token = localStorage.getItem("access_token");
   const form = new FormData();
   form.append("session_id", sessionId);
   form.append("file", file);
 
+  // multipart upload — don't set Content-Type; let the browser pick the
+  // boundary. We DO need the CSRF header though (mutating method).
   const res = await fetch(`${API_BASE}/files/upload`, {
     method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: buildHeaders("POST"),
     credentials: "include",
     body: form,
   });
 
-  if (res.status === 401 && token) {
+  if (res.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
-      const newToken = localStorage.getItem("access_token");
+      // Re-read CSRF header in case the cookie rotated on refresh.
       const retry = await fetch(`${API_BASE}/files/upload`, {
         method: "POST",
-        headers: newToken ? { Authorization: `Bearer ${newToken}` } : {},
+        headers: buildHeaders("POST"),
         credentials: "include",
         body: form,
       });

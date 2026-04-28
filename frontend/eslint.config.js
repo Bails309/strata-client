@@ -18,6 +18,11 @@ export default [
       "node_modules/**",
       "backend/**",
       "public/**",
+      "scripts/**",
+      // Vendored third-party Guacamole client — patched fork. Excluded from
+      // lint because we maintain it as a vendored dependency, not as
+      // first-party code. Upstream upgrades are handled via diff-and-merge.
+      "src/lib/guacamole-vendor.js",
       "**/*.config.js",
       "**/*.config.ts",
     ],
@@ -68,6 +73,13 @@ export default [
       "jsx-a11y/anchor-is-valid": "warn",
       "jsx-a11y/click-events-have-key-events": "warn",
       "jsx-a11y/no-static-element-interactions": "warn",
+      // The two rules below dominate the historical baseline (~200 issues,
+      // mostly visual `<label>` blocks above inputs that aren't programmatically
+      // associated, plus a handful of `autoFocus` UX choices). They're real
+      // a11y debt but not security/correctness — we surface them as warnings
+      // and ratchet them up per-page as forms are touched. Tracked under W4-2.
+      "jsx-a11y/label-has-associated-control": "warn",
+      "jsx-a11y/no-autofocus": "warn",
 
       // Security — errors
       ...security.configs.recommended.rules,

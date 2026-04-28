@@ -15,29 +15,14 @@ export default function Login({ onLogin }: Props) {
   const { theme } = useTheme();
 
   useEffect(() => {
-    // Check for token in URL fragment (from SSO redirect).
-    // We use a fragment (#token=) instead of a query parameter so the JWT
-    // is never sent to servers in Referer headers or logged by proxies.
-    const hash = window.location.hash;
-    const tokenMatch = hash.match(/[#&]token=([^&]*)/);
-    const token = tokenMatch ? decodeURIComponent(tokenMatch[1]) : null;
-    // Defence-in-depth: only accept values that look like a JWT
-    // (three base64url segments separated by dots). The backend still
-    // validates the signature on every subsequent API call — this check
-    // just prevents obviously-bogus user-supplied strings from being
-    // written to localStorage and later echoed in Authorization headers.
-    const isJwtShaped =
-      typeof token === "string" &&
-      token.length > 0 &&
-      token.length < 4096 &&
-      /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token);
-    if (isJwtShaped) {
-      // Clear the fragment to remove the token from the URL / browser history
+    // Legacy SSO redirect used to pass the access JWT in a URL fragment
+    // (#token=...). The cookie-based flow returns the user straight to
+    // `/` from the backend, so a fragment is normally absent. We still
+    // strip any stray `#token=` left in the URL (e.g. from a bookmarked
+    // pre-migration redirect) so the JWT does not linger in browser
+    // history.
+    if (window.location.hash.includes("token=")) {
       window.history.replaceState(null, "", window.location.pathname);
-      localStorage.setItem("access_token", token);
-      localStorage.setItem("token_expiry", String(Date.now() + 1200 * 1000));
-      onLogin();
-      return;
     }
 
     // Fetch system status to see enabled auth methods
@@ -58,10 +43,10 @@ export default function Login({ onLogin }: Props) {
     setError("");
 
     try {
-      const res = await login({ username, password });
-      localStorage.setItem("access_token", res.access_token);
-      const ttl = res.expires_in ?? 1200;
-      localStorage.setItem("token_expiry", String(Date.now() + ttl * 1000));
+      // Server sets HttpOnly access_token, refresh_token cookies and a
+      // JS-readable csrf_token cookie. We don't touch the response token
+      // values — the browser holds them in cookie storage now.
+      await login({ username, password });
       onLogin();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");

@@ -238,7 +238,7 @@ function WhatsNewContent() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-txt-primary mb-1">What's New</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-txt-primary mb-1">What&apos;s New</h1>
         <p className="text-sm text-txt-tertiary">
           Release highlights for Strata Client. Current version:{" "}
           <span className="font-semibold text-accent">{WHATS_NEW_VERSION}</span>
@@ -608,7 +608,7 @@ function RoadmapContent({ user }: { user?: MeResponse | null }) {
         <p className="text-sm text-txt-tertiary max-w-2xl">
           Proposed feature work beyond the current shipped releases. Items here represent direction
           and intent — not committed delivery dates. Shipped features move to the{" "}
-          <strong className="text-txt-secondary font-semibold">What's New</strong> tab.
+          <strong className="text-txt-secondary font-semibold">What&apos;s New</strong> tab.
         </p>
         {loadError && (
           <p className="mt-2 text-xs" style={{ color: "#f87171" }}>

@@ -22,7 +22,7 @@ import Select from "../components/Select";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
-import CommandPalette from "../components/CommandPalette";
+import { useCommandPalette } from "../components/CommandPaletteProvider";
 import { useUserPreferences } from "../components/UserPreferencesProvider";
 import {
   parseBinding,
@@ -93,9 +93,63 @@ export default function SessionClient() {
     credential_profile_id?: string;
   }>({ username: "", password: "" });
 
-  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const commandPaletteOpenRef = useRef(false);
   const containerFocusedRef = useRef(false);
+  const { open: openCommandPalette, isOpen: globalPaletteOpen, setSuppressed: setGlobalPaletteSuppressed } = useCommandPalette();
+  // Mirror the global palette open state into the ref that gates Guacamole
+  // keyboard forwarding so the canvas stops swallowing keys while the
+  // palette has focus.
+  useEffect(() => {
+    commandPaletteOpenRef.current = globalPaletteOpen;
+  }, [globalPaletteOpen]);
+
+  // Restore canvas focus after the palette closes so the remote regains
+  // keyboard input without the user having to click back in.
+  const wasOpenRef = useRef(false);
+  // "Keyboard shield" — when the palette closes, the user is often still
+  // physically holding the key they pressed to execute the command (Enter,
+  // Space, etc.). The OS continues to auto-repeat keydown events for that
+  // key, and once focus returns to the canvas those repeats would be
+  // forwarded to the remote — opening many `cmd` windows, hammering the
+  // focused button, and so on. While the shield is active we drop every
+  // keydown (real or auto-repeat) until the user releases at least one key
+  // OR a short timeout elapses.
+  const keyboardShieldRef = useRef(false);
+  const keyboardShieldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lowerShield = useCallback(() => {
+    keyboardShieldRef.current = false;
+    if (keyboardShieldTimerRef.current) {
+      clearTimeout(keyboardShieldTimerRef.current);
+      keyboardShieldTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => {
+    if (wasOpenRef.current && !globalPaletteOpen) {
+      containerRef.current?.focus();
+      // Raise the shield. It is lowered by the next keyup observed on the
+      // document (see effect below), or after 1.5s as a safety net in case
+      // the user had already released the key before the shield went up.
+      keyboardShieldRef.current = true;
+      if (keyboardShieldTimerRef.current) clearTimeout(keyboardShieldTimerRef.current);
+      keyboardShieldTimerRef.current = setTimeout(lowerShield, 1500);
+    }
+    wasOpenRef.current = globalPaletteOpen;
+  }, [globalPaletteOpen, lowerShield]);
+
+  // Lower the shield on the first keyup after it goes up.
+  useEffect(() => {
+    const onKeyUp = () => {
+      if (keyboardShieldRef.current) lowerShield();
+    };
+    document.addEventListener("keyup", onKeyUp, true);
+    return () => document.removeEventListener("keyup", onKeyUp, true);
+  }, [lowerShield]);
+
+  // On unmount, make sure we don't leave the global Ctrl+K listener
+  // suppressed for the next route the user lands on.
+  useEffect(() => {
+    return () => setGlobalPaletteSuppressed(false);
+  }, [setGlobalPaletteSuppressed]);
 
   // Live ref to the user-configured command-palette binding. Stored as a
   // pre-parsed object so the hot keydown trap doesn't re-parse on every
@@ -337,7 +391,6 @@ export default function SessionClient() {
         if (!container) return;
 
         try {
-          const token = localStorage.getItem("access_token") || "";
           const dpr = window.devicePixelRatio || 1;
 
           const resp = await createTunnelTicket({
@@ -351,7 +404,8 @@ export default function SessionClient() {
           if (userDisconnectRef.current) return;
 
           const connectParams = new URLSearchParams();
-          connectParams.set("token", token);
+          // Auth via HttpOnly access_token cookie (sent automatically on
+          // the WS upgrade). Ticket binds the connection to the credentials.
           connectParams.set("ticket", resp.ticket);
           connectParams.set("width", String(container.clientWidth));
           connectParams.set("height", String(container.clientHeight));
@@ -527,7 +581,6 @@ export default function SessionClient() {
     userDisconnectRef.current = false;
 
     const container = containerRef.current;
-    const token = localStorage.getItem("access_token") || "";
     const dpr = window.devicePixelRatio || 1;
 
     try {
@@ -540,7 +593,7 @@ export default function SessionClient() {
       });
 
       const connectParams = new URLSearchParams();
-      connectParams.set("token", token);
+      // Auth via HttpOnly cookie; ticket binds the connection.
       connectParams.set("ticket", resp.ticket);
       connectParams.set("width", String(container.clientWidth));
       connectParams.set("height", String(container.clientHeight));
@@ -604,7 +657,6 @@ export default function SessionClient() {
     // Defer to next frame so the fixed-position portal container has its final layout dimensions.
     let cancelled = false;
     const raf = requestAnimationFrame(async () => {
-      const token = localStorage.getItem("access_token") || "";
       const dpr = window.devicePixelRatio || 1;
       const creds = pendingCredsRef.current;
 
@@ -630,7 +682,7 @@ export default function SessionClient() {
       if (cancelled) return;
 
       const connectParams = new URLSearchParams();
-      connectParams.set("token", token);
+      // Auth via HttpOnly cookie; ticket binds the connection.
       connectParams.set("ticket", ticketId);
       connectParams.set("width", String(container.clientWidth));
       connectParams.set("height", String(container.clientHeight));
@@ -1018,6 +1070,10 @@ export default function SessionClient() {
         // input (or any other in-page input outside the canvas).
         return true;
       }
+      // Drop keydowns while the post-palette shield is up so OS
+      // auto-repeats from the still-held activation key don't bleed
+      // into the remote.
+      if (keyboardShieldRef.current) return true;
       return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {
@@ -1052,12 +1108,18 @@ export default function SessionClient() {
         // raised by kb.reset() are dropped and the modifier stays stuck
         // on the server after the palette closes.
         kb.reset();
-        setCommandPaletteOpen(true);
-        commandPaletteOpenRef.current = true;
+        openCommandPalette();
         return;
       }
       // While command palette is open, don't trap keys — let it handle them
       if (commandPaletteOpenRef.current) return;
+      // Post-palette shield: swallow stray keydowns (including OS
+      // auto-repeats) until the user releases the key they were holding.
+      if (keyboardShieldRef.current) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       e.preventDefault();
     };
     document.addEventListener("keydown", trapKeyDown, true);
@@ -1080,11 +1142,10 @@ export default function SessionClient() {
       // invariant. Reject cross-origin frames that may also relay postMessage.
       if (e.origin !== window.location.origin) return;
       if (e.data?.type === "strata:open-command-palette") {
-        // Release any held keys on the server BEFORE flipping the guard
+        // Release any held keys on the server BEFORE opening the palette
         // so the generated keyup events are not swallowed.
         kb.reset();
-        setCommandPaletteOpen(true);
-        commandPaletteOpenRef.current = true;
+        openCommandPalette();
       }
     };
     window.addEventListener("message", handlePaletteMessage);
@@ -1248,14 +1309,22 @@ export default function SessionClient() {
     >
       <div
         ref={containerRef}
+        // Container is intentionally focusable so keyboard input is captured
+        // by the remote session canvas (RDP/VNC/SSH key passthrough).
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
         tabIndex={0}
         onFocus={() => {
           containerFocusedRef.current = true;
+          // Hand the keyboard to the remote: suppress the app-wide Ctrl+K
+          // listener so we can flush held modifier keys (Ctrl etc.) on the
+          // remote before opening the palette.
+          setGlobalPaletteSuppressed(true);
         }}
         onBlur={() => {
           // Release any keys still held on the remote before disabling the trap
           currentSession?.keyboard.reset();
           containerFocusedRef.current = false;
+          setGlobalPaletteSuppressed(false);
         }}
         onMouseDown={() => {
           containerRef.current?.focus();
@@ -1685,15 +1754,7 @@ export default function SessionClient() {
         </div>
       )}
 
-      {/* Command Palette (Ctrl+K) */}
-      <CommandPalette
-        open={commandPaletteOpen}
-        onClose={() => {
-          setCommandPaletteOpen(false);
-          commandPaletteOpenRef.current = false;
-          containerRef.current?.focus();
-        }}
-      />
+      {/* Command Palette is rendered globally by CommandPaletteProvider. */}
 
       {sshRequired && (
         <div

@@ -110,24 +110,22 @@ describe("api request helper", () => {
     vi.restoreAllMocks();
   });
 
-  it("includes Authorization header when token is stored", async () => {
-    localStorage.setItem("access_token", "test-jwt-token");
+  it("includes X-CSRF-Token header on mutating requests when csrf cookie is set", async () => {
+    document.cookie = "csrf_token=test-csrf; path=/";
 
     let capturedHeaders: HeadersInit | undefined;
     globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
       capturedHeaders = init?.headers;
-      return new Response(JSON.stringify({ phase: "running" }), {
+      return new Response("{}", {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }) as unknown as typeof fetch;
 
-    await getStatus();
+    await updateSettings([{ key: "k", value: "v" }]);
 
-    expect(capturedHeaders).toBeDefined();
-    expect((capturedHeaders as Record<string, string>)["Authorization"]).toBe(
-      "Bearer test-jwt-token"
-    );
+    expect((capturedHeaders as Record<string, string>)["X-CSRF-Token"]).toBe("test-csrf");
+    document.cookie = "csrf_token=; path=/; max-age=0";
   });
 
   it("omits Authorization header when no token", async () => {
@@ -163,16 +161,17 @@ describe("logout", () => {
     localStorage.clear();
   });
 
-  it("clears localStorage even if server call fails", async () => {
-    localStorage.setItem("access_token", "old-token");
-
-    globalThis.fetch = vi.fn(async () => {
+  it("calls server logout endpoint regardless of local state", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url: string) => {
+      calls.push(String(url));
       throw new Error("network error");
     }) as unknown as typeof fetch;
 
+    // Even when the network call fails, logout() should not throw.
     await logout();
 
-    expect(localStorage.getItem("access_token")).toBeNull();
+    expect(calls.some((u) => u.includes("/api/auth/logout"))).toBe(true);
   });
 });
 
@@ -727,10 +726,9 @@ describe("buildRecordingStreamUrl", () => {
     });
   });
 
-  it("builds wss: URL with token", () => {
-    localStorage.setItem("access_token", "jwt_rec");
+  it("builds wss: URL without token query (cookie auth)", () => {
     const url = buildRecordingStreamUrl("rec_123");
-    expect(url).toBe("wss://app.example.com/api/admin/recordings/rec_123/stream?token=jwt_rec");
+    expect(url).toBe("wss://app.example.com/api/admin/recordings/rec_123/stream");
   });
 
   it("handles encoding of recording ID", () => {
@@ -749,12 +747,10 @@ describe("buildNvrObserveUrl", () => {
       value: { protocol: "https:", host: "app.example.com" },
       writable: true,
     });
-    localStorage.setItem("access_token", "jwt123");
-    localStorage.setItem("token_expiry", String(Date.now() + 600_000));
     const url = await buildNvrObserveUrl("sess1", 120);
     expect(url).toContain("wss://app.example.com");
     expect(url).toContain("/api/admin/sessions/sess1/observe");
-    expect(url).toContain("token=jwt123");
+    expect(url).not.toContain("token="); // cookie auth
     expect(url).toContain("offset=120");
     expect(url).toContain("speed=4"); // default speed
   });
@@ -895,8 +891,7 @@ describe("request 401 retry logic", () => {
   });
 
   it("redirects to login when refresh fails after 401", async () => {
-    localStorage.setItem("access_token", "expired-token");
-    const mockHref = { href: "" };
+    const mockHref = { href: "", pathname: "/" };
     Object.defineProperty(window, "location", { value: mockHref, writable: true });
 
     let callCount = 0;
@@ -908,21 +903,41 @@ describe("request 401 retry logic", () => {
     }) as unknown as typeof fetch;
 
     await expect(getStatus()).rejects.toThrow("Session expired");
-    expect(localStorage.getItem("access_token")).toBeNull();
     expect(mockHref.href).toBe("/login");
   });
 
-  it("does not retry 401 when no token was sent", async () => {
-    // No token in localStorage
+  it("does not redirect when refresh fails on the login page", async () => {
+    const mockHref = { href: "", pathname: "/login" };
+    Object.defineProperty(window, "location", { value: mockHref, writable: true });
+
     globalThis.fetch = vi.fn(async () => {
+      return new Response("", { status: 401 });
+    }) as unknown as typeof fetch;
+
+    await expect(getStatus()).rejects.toThrow("Session expired");
+    // Already on /login: forcing a navigation would abort in-flight requests
+    // (e.g. /api/status during page bootstrap) and freeze the page.
+    expect(mockHref.href).toBe("");
+  });
+
+  it("always attempts refresh on 401 (cookie auth)", async () => {
+    // Cookie auth: client cannot tell whether it has a token (it's HttpOnly),
+    // so every 401 triggers a refresh attempt.
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      callCount++;
+      if (String(url).includes("/auth/refresh")) {
+        return new Response("", { status: 401 });
+      }
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { "Content-Type": "application/json" },
       });
     }) as unknown as typeof fetch;
 
-    await expect(getStatus()).rejects.toThrow("Unauthorized");
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // no retry
+    await expect(getStatus()).rejects.toThrow("Session expired");
+    // initial 401 + refresh attempt
+    expect(callCount).toBeGreaterThanOrEqual(2);
   });
 
   it("throws ApiError when retry response is not ok", async () => {
@@ -1001,7 +1016,7 @@ describe("refreshAccessToken", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns true and stores token on success", async () => {
+  it("returns true on success (cookie set by server)", async () => {
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ access_token: "fresh", expires_in: 600 }), {
         status: 200,
@@ -1011,10 +1026,11 @@ describe("refreshAccessToken", () => {
 
     const result = await refreshAccessToken();
     expect(result).toBe(true);
-    expect(localStorage.getItem("access_token")).toBe("fresh");
+    // The HttpOnly access_token cookie is set by the server; we don't see it.
+    expect(localStorage.getItem("access_token")).toBeNull();
   });
 
-  it("uses default TTL when expires_in is missing", async () => {
+  it("returns true even when expires_in is missing", async () => {
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ access_token: "tok" }), {
         status: 200,
@@ -1022,11 +1038,8 @@ describe("refreshAccessToken", () => {
       });
     }) as unknown as typeof fetch;
 
-    const before = Date.now();
-    await refreshAccessToken();
-    const expiry = Number(localStorage.getItem("token_expiry"));
-    // Default TTL is 1200s = 1,200,000ms
-    expect(expiry).toBeGreaterThanOrEqual(before + 1200 * 1000 - 100);
+    const result = await refreshAccessToken();
+    expect(result).toBe(true);
   });
 
   it("returns false when server returns non-ok", async () => {
@@ -1075,18 +1088,7 @@ describe("ensureFreshToken", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns token directly when not near expiry", async () => {
-    localStorage.setItem("access_token", "valid");
-    localStorage.setItem("token_expiry", String(Date.now() + 120_000));
-
-    const token = await ensureFreshToken();
-    expect(token).toBe("valid");
-  });
-
-  it("refreshes token when near expiry", async () => {
-    localStorage.setItem("access_token", "old");
-    localStorage.setItem("token_expiry", String(Date.now() + 10_000)); // < 30s threshold
-
+  it("returns true when refresh succeeds", async () => {
     globalThis.fetch = vi.fn(async () => {
       return new Response(JSON.stringify({ access_token: "refreshed", expires_in: 600 }), {
         status: 200,
@@ -1094,29 +1096,26 @@ describe("ensureFreshToken", () => {
       });
     }) as unknown as typeof fetch;
 
-    const token = await ensureFreshToken();
-    expect(token).toBe("refreshed");
+    const ok = await ensureFreshToken();
+    expect(ok).toBe(true);
   });
 
-  it("returns old token when refresh fails", async () => {
-    localStorage.setItem("access_token", "stale");
-    localStorage.setItem("token_expiry", String(Date.now() + 5_000));
+  it("returns false when refresh fails (network)", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("net");
+    }) as unknown as typeof fetch;
 
+    const ok = await ensureFreshToken();
+    expect(ok).toBe(false);
+  });
+
+  it("returns false when refresh fails (401)", async () => {
     globalThis.fetch = vi.fn(async () => {
       return new Response("", { status: 401 });
     }) as unknown as typeof fetch;
 
-    const token = await ensureFreshToken();
-    expect(token).toBe("stale");
-  });
-
-  it("returns null when no token stored and refresh fails", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response("", { status: 401 });
-    }) as unknown as typeof fetch;
-
-    const token = await ensureFreshToken();
-    expect(token).toBeNull();
+    const ok = await ensureFreshToken();
+    expect(ok).toBe(false);
   });
 });
 
@@ -1161,12 +1160,12 @@ describe("logout with no token", () => {
     vi.restoreAllMocks();
   });
 
-  it("skips server call when no token", async () => {
-    const fn = vi.fn() as unknown as typeof fetch;
+  it("calls server logout endpoint (cookie auth has no client-visible token)", async () => {
+    const fn = vi.fn(async () => new Response("", { status: 200 })) as unknown as typeof fetch;
     globalThis.fetch = fn;
 
     await logout();
-    expect(fn).not.toHaveBeenCalled();
+    expect(fn).toHaveBeenCalled();
   });
 });
 
@@ -1334,12 +1333,10 @@ describe("additional endpoint functions", () => {
       value: { protocol: "https:", host: "app.example.com" },
       writable: true,
     });
-    localStorage.setItem("access_token", "jwt_user");
-    localStorage.setItem("token_expiry", String(Date.now() + 600_000));
     const url = await buildUserNvrObserveUrl("sess1", 60, 2);
     expect(url).toContain("wss://app.example.com");
     expect(url).toContain("/api/user/sessions/sess1/observe");
-    expect(url).toContain("token=jwt_user");
+    expect(url).not.toContain("token="); // cookie auth
     expect(url).toContain("offset=60");
     expect(url).toContain("speed=2");
   });
@@ -1461,16 +1458,15 @@ describe("buildMyRecordingStreamUrl", () => {
     localStorage.clear();
   });
 
-  it("builds wss URL when on https with token", () => {
+  it("builds wss URL when on https without token query (cookie auth)", () => {
     Object.defineProperty(window, "location", {
       value: { protocol: "https:", host: "app.example.com" },
       writable: true,
     });
-    localStorage.setItem("access_token", "jwt-abc");
 
     const url = buildMyRecordingStreamUrl("rec-1");
     expect(url).toContain("wss://app.example.com/api/user/recordings/rec-1/stream");
-    expect(url).toContain("token=jwt-abc");
+    expect(url).not.toContain("token=");
   });
 
   it("builds ws URL when on http without token", () => {

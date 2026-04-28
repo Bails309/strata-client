@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { getDisplaySettings, updateSettings as apiUpdateSettings } from "../api";
+import { getDisplaySettings, updateSettings as apiUpdateSettings, readCookie } from "../api";
 import { TimeSettings, formatDateTime as formatUtil } from "../utils/time";
 
 interface SettingsContextType {
@@ -19,8 +19,11 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const refreshSettings = useCallback(async () => {
     // Skip fetching admin settings when not authenticated — avoids noisy
-    // 401 errors in the browser console on the login page.
-    if (!localStorage.getItem("access_token")) {
+    // 401 errors in the browser console on the login page. The
+    // access_token cookie is HttpOnly so we can't read it from JS; the
+    // csrf_token cookie is set alongside it and is JS-readable, so we
+    // use its presence as a "session live" signal.
+    if (!readCookie("csrf_token")) {
       setLoading(false);
       return;
     }

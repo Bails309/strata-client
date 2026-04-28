@@ -734,7 +734,7 @@ export default function AdSyncTab({
                       type="radio"
                       className="radio"
                       name="pm_cred_source"
-                      checked={editing.pm_bind_user != null && editing.pm_bind_user !== undefined}
+                      checked={editing.pm_bind_user !== null && editing.pm_bind_user !== undefined}
                       onChange={() =>
                         setEditing({
                           ...editing,
@@ -746,7 +746,7 @@ export default function AdSyncTab({
                     Use separate credentials for password management
                   </label>
                 </div>
-                {editing.pm_bind_user != null && editing.pm_bind_user !== undefined && (
+                {editing.pm_bind_user !== null && editing.pm_bind_user !== undefined && (
                   <div className="grid grid-cols-2 gap-4 mt-2 ml-6">
                     <label className="block">
                       <span className="text-xs font-medium">PM Bind DN</span>

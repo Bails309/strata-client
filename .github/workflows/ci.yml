@@ -188,12 +188,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # TODO: drop continue-on-error once the 198 baseline ESLint errors are
-      # cleared (tracked under a follow-up to W4-1). Currently advisory so the
-      # gate is visible without forcing a single mega-PR to green-ify the
-      # whole codebase.
+      # ESLint runs as a hard gate. The historical 198-error baseline of
+      # `jsx-a11y/label-has-associated-control` and `no-autofocus` issues has
+      # been demoted to warnings (tracked under W4-2 for per-page ratchet);
+      # all remaining errors are correctness/security and must stay at zero.
       - name: ESLint (frontend)
-        continue-on-error: true
         run: npm run lint
 
       - name: Prettier format check (frontend)

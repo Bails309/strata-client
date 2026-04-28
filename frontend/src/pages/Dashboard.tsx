@@ -353,7 +353,10 @@ export default function Dashboard() {
       else next.add(fid);
       try {
         localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...next]));
-      } catch {}
+      } catch {
+        // localStorage may be unavailable (private mode, quota); persistence
+        // is best-effort and not required for correctness.
+      }
       return next;
     });
   }, []);
@@ -538,7 +541,6 @@ export default function Dashboard() {
       containerEl.style.height = "600px";
 
       for (const conn of conns) {
-        const token = localStorage.getItem("access_token") || "";
         const dpr = window.devicePixelRatio || 1;
         const connCreds = creds[conn.id];
 
@@ -564,7 +566,9 @@ export default function Dashboard() {
         }
 
         const connectParams = new URLSearchParams();
-        connectParams.set("token", token);
+        // Authentication: the HttpOnly access_token cookie is sent
+        // automatically on the WebSocket upgrade. The ticket binds this
+        // connection request to the credentials we just submitted.
         connectParams.set("ticket", ticketId);
         connectParams.set("width", "800");
         connectParams.set("height", "600");
@@ -948,6 +952,7 @@ export default function Dashboard() {
                   onChange={toggleAllChecked}
                   className="checkbox"
                   title="Select all"
+                  aria-label="Select all connections"
                 />
               </th>
               <th>Connection Name</th>
@@ -1336,7 +1341,13 @@ function ConnectionRow({
   return (
     <tr>
       <td>
-        <input type="checkbox" checked={checked} onChange={onToggleChecked} className="checkbox" />
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onToggleChecked}
+          className="checkbox"
+          aria-label={`Select connection ${conn.name}`}
+        />
       </td>
       <td>
         <div className="font-medium">{conn.name}</div>

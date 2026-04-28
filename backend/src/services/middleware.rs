@@ -140,6 +140,110 @@ pub fn extract_token_from_query(query: &str) -> Option<String> {
     })
 }
 
+/// Extract a named cookie value from the `Cookie` header. Returns the raw
+/// value (URL-decoding is the caller's responsibility — none of our cookies
+/// carry encoded characters).
+pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|pair| {
+                let pair = pair.trim();
+                pair.strip_prefix(&format!("{}=", name)).map(String::from)
+            })
+        })
+}
+
+/// CSRF protection middleware for cookie-authenticated requests (W4-3).
+///
+/// Implements the **double-submit cookie** pattern:
+/// - On login the server sets a non-HttpOnly `csrf_token` cookie. The SPA
+///   reads it and echoes it on every state-changing request as the
+///   `X-CSRF-Token` header. The middleware rejects the request if the two
+///   values do not match.
+/// - Requests authenticated via `Authorization: Bearer ...` are exempt:
+///   bearer tokens are not sent automatically by browsers, so no CSRF
+///   primitive exists to protect against.
+/// - Idempotent methods (`GET`, `HEAD`, `OPTIONS`) are exempt — they should
+///   never have side effects, and exempting them avoids breaking simple
+///   navigation/preflight flows.
+/// - WebSocket upgrade requests are exempt: the upgrade handshake is a GET,
+///   and the underlying tunnel ticket is single-use and short-lived.
+///
+/// Must be layered **before** `require_auth` (so the request body is still
+/// the original incoming request) on the protected router. Returns
+/// `AppError::Forbidden` on mismatch.
+pub async fn require_csrf(req: Request, next: Next) -> Result<Response, AppError> {
+    let method = req.method();
+    if matches!(
+        *method,
+        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS
+    ) {
+        return Ok(next.run(req).await);
+    }
+
+    // WebSocket upgrades use GET — already covered above. Belt-and-braces in
+    // case some custom client uses a non-GET method.
+    let is_ws_upgrade = req
+        .headers()
+        .get(http::header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    if is_ws_upgrade {
+        return Ok(next.run(req).await);
+    }
+
+    // Bearer-authenticated requests are CSRF-exempt: bearer tokens are not
+    // automatically attached by browsers, so a third-party site cannot make
+    // an authenticated request on the user's behalf.
+    let has_bearer = req
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("Bearer "))
+        .unwrap_or(false);
+    if has_bearer {
+        return Ok(next.run(req).await);
+    }
+
+    // Cookie-authenticated path: require matching X-CSRF-Token header and
+    // csrf_token cookie. Reject if either is missing or they differ.
+    let cookie_value = extract_cookie_value(req.headers(), "csrf_token");
+    let header_value = req
+        .headers()
+        .get("x-csrf-token")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
+    match (cookie_value, header_value) {
+        (Some(c), Some(h)) if !c.is_empty() && constant_time_eq(c.as_bytes(), h.as_bytes()) => {
+            Ok(next.run(req).await)
+        }
+        _ => {
+            tracing::warn!(
+                "CSRF check failed for {} {}",
+                method,
+                req.uri().path()
+            );
+            Err(AppError::Forbidden)
+        }
+    }
+}
+
+/// Constant-time byte comparison to avoid timing oracles on the CSRF token.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Axum middleware that validates the Bearer token (local JWT or OIDC),
 /// looks up the user in the database, and injects `AuthUser` as a request extension.
 pub async fn require_auth(
@@ -173,6 +277,14 @@ pub async fn require_auth(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.to_string())
+        .or_else(|| {
+            // Cookie path: SPA sessions authenticate via the `access_token`
+            // cookie set at login. The cookie is HttpOnly + SameSite=Strict +
+            // Secure so it cannot be read by JS or sent cross-site. State-
+            // changing requests authenticated this way are additionally
+            // gated by the CSRF middleware (see `require_csrf`).
+            extract_cookie_value(req.headers(), "access_token")
+        })
         .or_else(|| {
             // Only allow ?token= for WebSocket upgrade requests
             if !is_ws_upgrade {

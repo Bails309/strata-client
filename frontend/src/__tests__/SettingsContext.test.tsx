@@ -4,6 +4,13 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 vi.mock("../api", () => ({
   getDisplaySettings: vi.fn(),
   updateSettings: vi.fn(),
+  readCookie: (name: string) => {
+    const m = document.cookie
+      .split(";")
+      .map((c) => c.trim())
+      .find((c) => c.startsWith(name + "="));
+    return m ? decodeURIComponent(m.slice(name.length + 1)) : null;
+  },
 }));
 
 import { SettingsProvider, useSettings } from "../contexts/SettingsContext";
@@ -25,7 +32,7 @@ function Consumer() {
 
 describe("SettingsContext", () => {
   beforeEach(() => {
-    localStorage.setItem("access_token", "test-token");
+    document.cookie = "csrf_token=test-csrf; path=/";
     vi.mocked(getDisplaySettings).mockResolvedValue({
       display_timezone: "America/New_York",
       display_date_format: "MM/DD/YYYY",
@@ -36,6 +43,7 @@ describe("SettingsContext", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    document.cookie = "csrf_token=; path=/; max-age=0";
     localStorage.clear();
   });
 
@@ -76,7 +84,7 @@ describe("SettingsContext", () => {
   });
 
   it("skips fetch when no access_token", async () => {
-    localStorage.removeItem("access_token");
+    document.cookie = "csrf_token=; path=/; max-age=0";
     await act(async () => {
       render(
         <SettingsProvider>

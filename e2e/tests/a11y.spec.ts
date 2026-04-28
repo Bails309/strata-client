@@ -44,13 +44,14 @@ test.describe("Accessibility (authenticated)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/login");
     await page.evaluate(async () => {
-      const res = await fetch("/api/auth/login", {
+      // Same-origin login: server returns Set-Cookie headers (access_token,
+      // refresh_token, csrf_token, session_expires) which the browser stores
+      // automatically. No localStorage write needed under cookie auth.
+      await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: "admin", password: "admin" }),
       });
-      const data = await res.json();
-      localStorage.setItem("access_token", data.access_token);
     });
   });
 

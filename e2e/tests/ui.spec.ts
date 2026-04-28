@@ -32,8 +32,9 @@ test.describe('Login UI', () => {
     await expect(page).not.toHaveURL(/\/login/, { timeout: 10000 });
   });
 
-  test('unauthenticated user is redirected to login', async ({ page }) => {
-    // Clear any stored tokens
+  test('unauthenticated user is redirected to login', async ({ page, context }) => {
+    // Clear any stored auth state.
+    await context.clearCookies();
     await page.goto('/');
     await page.evaluate(() => localStorage.clear());
     await page.goto('/');
@@ -44,19 +45,15 @@ test.describe('Login UI', () => {
 
 test.describe('Authenticated navigation', () => {
   test.beforeEach(async ({ page }) => {
-    // Login via API and set token in localStorage
+    // Same-origin login via the actual UI form. The browser stores the
+    // HttpOnly access/refresh cookies + the JS-readable csrf_token and
+    // session_expires cookies automatically; subsequent navigations are
+    // authenticated.
     await page.goto('/login');
-    const token = await page.evaluate(async () => {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: 'admin', password: 'admin' }),
-      });
-      const data = await res.json();
-      localStorage.setItem('access_token', data.access_token);
-      return data.access_token;
-    });
-    expect(token).toBeTruthy();
+    await page.getByPlaceholder('admin').fill('admin');
+    await page.getByPlaceholder('••••••••').fill('admin');
+    await page.getByRole('button', { name: /sign in/i }).click();
+    await expect(page).not.toHaveURL(/\/login/, { timeout: 10000 });
   });
 
   test('dashboard loads after login', async ({ page }) => {

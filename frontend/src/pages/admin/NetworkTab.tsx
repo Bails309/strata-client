@@ -84,7 +84,7 @@ export default function NetworkTab({
           <h3 className="text-lg font-semibold text-txt-primary">Network &amp; DNS Settings</h3>
           <p className="text-sm text-txt-secondary mt-0.5">
             Configure custom DNS servers for the guacd proxy containers. This is required when
-            target servers use internal DNS zones (e.g. <code>.dmz.local</code>) that Docker's
+            target servers use internal DNS zones (e.g. <code>.dmz.local</code>) that Docker&apos;s
             built-in DNS cannot resolve.
           </p>
         </div>

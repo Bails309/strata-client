@@ -1593,7 +1593,7 @@ export function WebSections({
         <p className="text-xs opacity-60 mb-2">
           Hostnames the kiosk Chromium is permitted to resolve. Leave empty to allow any host that
           passes the server-side egress check. Wildcards like <code>*.example.com</code>
-          are honoured by Chromium's <code>--host-rules</code>.
+          are honoured by Chromium&apos;s <code>--host-rules</code>.
         </p>
         <FieldGrid>
           <div className="form-group !mb-0 col-span-2">

@@ -153,7 +153,7 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
             <p className="text-xs text-txt-tertiary">PostgreSQL Persistence Layer</p>
           </div>
           <div className="mt-auto space-y-2 text-xs">
-            {health.database.latency_ms != null && (
+            {health.database.latency_ms !== null && health.database.latency_ms !== undefined && (
               <div className="flex justify-between">
                 <span className="text-txt-tertiary">Latency</span>
                 <span className="font-semibold text-txt-primary">

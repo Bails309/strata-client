@@ -900,6 +900,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                   <div
                     key={cmd.trigger}
                     role="option"
+                    tabIndex={-1}
                     aria-selected={isSelected}
                     aria-disabled={!cmd.valid}
                     className="flex items-center gap-3 px-4 py-2.5 mx-1 rounded-lg cursor-pointer transition-colors duration-100"
@@ -1005,6 +1006,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 <div
                   key={conn.id}
                   role="option"
+                  tabIndex={-1}
                   aria-selected={isSelected}
                   className="flex items-center gap-3 px-4 py-2.5 mx-1 rounded-lg cursor-pointer transition-colors duration-100"
                   style={{

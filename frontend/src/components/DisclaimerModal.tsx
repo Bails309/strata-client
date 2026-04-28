@@ -88,6 +88,9 @@ export default function DisclaimerModal({ onAccept, onDecline }: Props) {
           ref={contentRef}
           className="px-6 py-4 overflow-y-auto flex-1 text-sm text-txt-secondary space-y-5"
           onScroll={handleScroll}
+          // Region is intentionally focusable so keyboard users can scroll
+          // through the disclaimer with arrow/Page keys before accepting.
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
           tabIndex={0}
           role="region"
           aria-label="Disclaimer content"

@@ -34,6 +34,10 @@ vi.mock("../components/SessionManager", () => ({
   SessionManagerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock("../components/SessionBar", () => ({ default: () => null }));
+vi.mock("../components/CommandPaletteProvider", () => ({
+  default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useCommandPalette: () => ({ open: () => {}, isOpen: false, setSuppressed: () => {} }),
+}));
 vi.mock("../components/ThemeProvider", () => ({
   useTheme: () => ({ theme: "dark", setTheme: vi.fn() }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -106,12 +110,11 @@ describe("App routing", () => {
   });
 
   it("clears stale token when /auth/check says not authenticated", async () => {
-    localStorage.setItem("access_token", fakeJwt());
+    // Cookie auth: server says not authenticated, App falls through to login.
     mockFetch({ authenticated: false });
 
     renderApp("/");
     expect(await screen.findByText("Login Page")).toBeInTheDocument();
-    expect(localStorage.getItem("access_token")).toBeNull();
   });
 
   it("renders dashboard when authenticated", async () => {
@@ -139,25 +142,23 @@ describe("App routing", () => {
   });
 
   it("logs out and redirects to login", async () => {
-    localStorage.setItem("access_token", fakeJwt());
     mockFetch(authedUser);
 
     renderApp("/");
     expect(await screen.findByText("Dashboard")).toBeInTheDocument();
     await userEvent.click(screen.getByText("mock-logout"));
     expect(await screen.findByText("Login Page")).toBeInTheDocument();
-    expect(localStorage.getItem("access_token")).toBeNull();
   });
 
   it("calls handleLogin and navigates to dashboard", async () => {
-    // Start at login — no token
+    // Pre-mount: not authenticated. (Avoids leakage from a sibling test that
+    // installs a never-resolving fetch.)
+    mockFetch({ authenticated: false });
     renderApp("/login");
     await screen.findByText("Login Page");
 
-    // Simulate login: set token and wire up success responses
-    localStorage.setItem("access_token", fakeJwt());
-    localStorage.setItem("token_expiry", String(Date.now() + 3600000));
-    // handleLogin calls checkAuthStatus → /auth/check, and SettingsProvider calls /admin/settings
+    // Backend has now set HttpOnly cookies; simulate by wiring up the auth
+    // check to return an authenticated user.
     mockFetch(authedUser);
 
     await act(async () => {
@@ -169,20 +170,18 @@ describe("App routing", () => {
     });
   });
 
-  it("handleLogin clears tokens when auth check returns not authenticated", async () => {
+  it("handleLogin falls back to login when auth check returns not authenticated", async () => {
+    mockFetch({ authenticated: false });
     renderApp("/login");
     await screen.findByText("Login Page");
 
-    localStorage.setItem("access_token", fakeJwt());
-    localStorage.setItem("token_expiry", String(Date.now() + 3600000));
     mockFetch({ authenticated: false });
 
     await act(async () => {
       await userEvent.click(screen.getByText("mock-login"));
     });
 
-    expect(localStorage.getItem("access_token")).toBeNull();
-    expect(localStorage.getItem("token_expiry")).toBeNull();
+    expect(await screen.findByText("Login Page")).toBeInTheDocument();
   });
 
   it("shows disclaimer modal when terms not accepted", async () => {

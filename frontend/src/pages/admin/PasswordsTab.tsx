@@ -298,7 +298,7 @@ export default function PasswordsTab({
                   <div>
                     <h4 className="text-sm font-semibold mb-1">Managed Account Scope</h4>
                     <p className="text-txt-secondary text-xs mb-2">
-                      Select which managed accounts this role's approvers can approve checkout
+                      Select which managed accounts this role&apos;s approvers can approve checkout
                       requests for. Only accounts that have been discovered and mapped to users are
                       shown.
                     </p>

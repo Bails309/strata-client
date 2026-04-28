@@ -102,7 +102,7 @@ export default function VdiTab({
           </label>
           <p className="text-xs text-txt-secondary mb-3">
             Hard cap on simultaneously-running VDI containers across all users. Leave blank for
-            unbounded (limited only by the host's resources).
+            unbounded (limited only by the host&apos;s resources).
           </p>
           <input
             id="vdi-max-containers"
@@ -117,7 +117,7 @@ export default function VdiTab({
         </div>
 
         <div className="rounded-md p-4 bg-warning/10 border border-warning/30 text-sm">
-          <strong className="text-warning">Reminder:</strong> Strata's <code>DockerVdiDriver</code>{" "}
+          <strong className="text-warning">Reminder:</strong> Strata&apos;s <code>DockerVdiDriver</code>{" "}
           mounts <code>/var/run/docker.sock</code>, which gives the backend root on the host. Treat
           the backend container as a privileged service. See <code>docs/vdi.md</code> for the full
           threat model.

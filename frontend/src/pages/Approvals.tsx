@@ -153,7 +153,7 @@ export default function Approvals({ user: _user }: { user: MeResponse }) {
                         border: "1px solid var(--color-glass-border)",
                       }}
                     >
-                      "{p.justification_comment}"
+                      &ldquo;{p.justification_comment}&rdquo;
                     </div>
                   </div>
                 )}

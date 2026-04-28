@@ -168,7 +168,7 @@ export default function ProfileEditor(props: ProfileEditorProps) {
           <div className="form-group">
             <label>Link Checked-Out Account</label>
             <p className="text-txt-tertiary text-xs mb-2">
-              Populate this profile with credentials from an active password checkout. The profile's
+              Populate this profile with credentials from an active password checkout. The profile&apos;s
               expiry will match the checkout duration.
             </p>
             {(() => {

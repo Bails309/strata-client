@@ -22,6 +22,7 @@ import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
 import { checkAuthStatus, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { UserPreferencesProvider } from "./components/UserPreferencesProvider";
+import CommandPaletteProvider from "./components/CommandPaletteProvider";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -29,19 +30,13 @@ export default function App() {
   const navigate = useNavigate();
 
   const checkAuth = useCallback(async () => {
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setAuthenticated(false);
-      return;
-    }
-
-    // Use /api/auth/check which always returns 200 (never 401).
-    // This avoids the browser logging a noisy 401 in the console when the
-    // token is stale, expired, or signed with a rotated key.
+    // Bootstrap the SPA session by asking the server whether we're
+    // authenticated. The HttpOnly access_token cookie travels automatically
+    // because checkAuthStatus passes credentials: "include". This endpoint
+    // returns 200 unconditionally so a stale cookie does not produce a
+    // noisy 401 in the browser console.
     const result = await checkAuthStatus();
     if (!result.authenticated || !result.user) {
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("token_expiry");
       setAuthenticated(false);
       return;
     }
@@ -62,15 +57,11 @@ export default function App() {
       setAuthenticated(true);
       navigate("/");
     } else {
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("token_expiry");
       setAuthenticated(false);
     }
   }
 
   function handleLogout() {
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("token_expiry");
     setAuthenticated(false);
     setUser(null);
     navigate("/login");
@@ -122,7 +113,7 @@ export default function App() {
               onDecline={handleLogout}
             />
           ) : (
-            <>
+            <CommandPaletteProvider>
               <Routes>
                 <Route element={<Layout user={user} onLogout={handleLogout} />}>
                   <Route path="/" element={<Dashboard />} />
@@ -208,7 +199,7 @@ export default function App() {
               <SessionBar />
               <SessionTimeoutWarning onExpired={handleLogout} />
               <WhatsNewModal userId={user?.id} />
-            </>
+            </CommandPaletteProvider>
           )}
         </SessionManagerProvider>
       </UserPreferencesProvider>

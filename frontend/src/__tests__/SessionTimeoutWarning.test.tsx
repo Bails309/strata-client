@@ -4,31 +4,50 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("../api", () => ({
   refreshAccessToken: vi.fn(),
+  readCookie: (name: string) => {
+    const m = document.cookie
+      .split(";")
+      .map((c) => c.trim())
+      .find((c) => c.startsWith(name + "="));
+    return m ? decodeURIComponent(m.slice(name.length + 1)) : null;
+  },
 }));
 
 import SessionTimeoutWarning from "../components/SessionTimeoutWarning";
 import { refreshAccessToken } from "../api";
 
+/**
+ * The component reads `session_expires` cookie holding **unix epoch seconds**.
+ * These helpers prime / clear that cookie consistently across tests.
+ */
+function setExpiryMs(absMs: number) {
+  const seconds = Math.floor(absMs / 1000);
+  document.cookie = `session_expires=${seconds}; path=/`;
+}
+function clearExpiry() {
+  document.cookie = "session_expires=; path=/; max-age=0";
+}
+
 describe("SessionTimeoutWarning", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.mocked(refreshAccessToken).mockResolvedValue(true);
-    localStorage.clear();
+    clearExpiry();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    localStorage.clear();
+    clearExpiry();
   });
 
-  it("renders nothing when no token_expiry in localStorage", () => {
+  it("renders nothing when no session_expires cookie", () => {
     const { container } = render(<SessionTimeoutWarning />);
     expect(container.innerHTML).toBe("");
   });
 
   it("renders nothing when expiry is far in the future", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 600_000));
+    setExpiryMs(Date.now() + 600_000);
     const { container } = render(<SessionTimeoutWarning />);
     act(() => {
       vi.advanceTimersByTime(1100);
@@ -37,7 +56,7 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("shows warning when expiry is within 120 seconds", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 60_000));
+    setExpiryMs(Date.now() + 60_000);
     render(<SessionTimeoutWarning />);
     act(() => {
       vi.advanceTimersByTime(1100);
@@ -46,16 +65,18 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("shows time remaining", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 90_000));
+    // session_expires cookie holds whole seconds, so we set ~91s ahead so the
+    // floored display falls in the 1:28-1:30 range after a 1.1s tick.
+    setExpiryMs(Date.now() + 91_000);
     render(<SessionTimeoutWarning />);
     act(() => {
       vi.advanceTimersByTime(1100);
     });
-    expect(screen.getByText(/1:29|1:30/)).toBeInTheDocument();
+    expect(screen.getByText(/1:2[7-9]|1:30/)).toBeInTheDocument();
   });
 
   it("shows Extend Session button", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 60_000));
+    setExpiryMs(Date.now() + 60_000);
     render(<SessionTimeoutWarning />);
     act(() => {
       vi.advanceTimersByTime(1100);
@@ -64,7 +85,7 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("calls refreshAccessToken on Extend click", async () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 60_000));
+    setExpiryMs(Date.now() + 60_000);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<SessionTimeoutWarning />);
     act(() => {
@@ -75,7 +96,7 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("hides warning after dismiss", async () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 60_000));
+    setExpiryMs(Date.now() + 60_000);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<SessionTimeoutWarning />);
     act(() => {
@@ -87,7 +108,7 @@ describe("SessionTimeoutWarning", () => {
 
   it("calls onExpired when timer reaches zero", () => {
     const onExpired = vi.fn();
-    localStorage.setItem("token_expiry", String(Date.now() + 2000));
+    setExpiryMs(Date.now() + 2000);
     render(<SessionTimeoutWarning onExpired={onExpired} />);
     act(() => {
       vi.advanceTimersByTime(3000);
@@ -96,7 +117,7 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("hides warning after successful extend", async () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 60_000));
+    setExpiryMs(Date.now() + 60_000);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<SessionTimeoutWarning />);
     act(() => {
@@ -109,7 +130,7 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("shows seconds-only display when under a minute", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 30_000));
+    setExpiryMs(Date.now() + 30_000);
     render(<SessionTimeoutWarning />);
     act(() => {
       vi.advanceTimersByTime(1100);
@@ -118,14 +139,14 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("triggers proactive refresh on user activity within threshold", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 300_000));
+    setExpiryMs(Date.now() + 300_000);
     render(<SessionTimeoutWarning />);
     window.dispatchEvent(new Event("mousedown"));
     expect(refreshAccessToken).toHaveBeenCalled();
   });
 
   it("does not trigger proactive refresh outside threshold", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 900_000));
+    setExpiryMs(Date.now() + 900_000);
     render(<SessionTimeoutWarning />);
     window.dispatchEvent(new Event("mousedown"));
     expect(refreshAccessToken).not.toHaveBeenCalled();
@@ -133,7 +154,7 @@ describe("SessionTimeoutWarning", () => {
 
   it("does not hide warning when extend fails", async () => {
     vi.mocked(refreshAccessToken).mockResolvedValue(false);
-    localStorage.setItem("token_expiry", String(Date.now() + 60_000));
+    setExpiryMs(Date.now() + 60_000);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<SessionTimeoutWarning />);
     act(() => {
@@ -146,7 +167,7 @@ describe("SessionTimeoutWarning", () => {
   });
 
   it("enforces proactive refresh cooldown", () => {
-    localStorage.setItem("token_expiry", String(Date.now() + 300_000));
+    setExpiryMs(Date.now() + 300_000);
     render(<SessionTimeoutWarning />);
     window.dispatchEvent(new Event("mousedown"));
     expect(refreshAccessToken).toHaveBeenCalledTimes(1);

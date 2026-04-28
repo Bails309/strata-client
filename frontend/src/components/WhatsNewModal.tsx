@@ -1706,7 +1706,7 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
             {isWelcome ? (
               <>
                 <p>
-                  We're excited to have you here! Strata is your unified gateway for
+                  We&apos;re excited to have you here! Strata is your unified gateway for
                   high-performance remote access.
                 </p>
                 <div className="grid gap-4 mt-2">

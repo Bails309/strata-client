@@ -143,9 +143,9 @@ describe("keyboardLock", () => {
   describe("installKeyboardLock", () => {
     it("installs fullscreenchange listener and returns teardown", () => {
       installKeyboardMock();
-      const listeners: Record<string, Function> = {};
+      const listeners: Record<string, EventListener> = {};
       const mockDoc = {
-        addEventListener: vi.fn((evt: string, fn: Function) => {
+        addEventListener: vi.fn((evt: string, fn: EventListener) => {
           listeners[evt] = fn;
         }),
         removeEventListener: vi.fn(),
@@ -162,13 +162,13 @@ describe("keyboardLock", () => {
 
       // Trigger entering fullscreen
       (mockDoc as any).fullscreenElement = document.createElement("div");
-      listeners["fullscreenchange"]();
+      listeners["fullscreenchange"](new Event("fullscreenchange"));
       expect(mockKeyboard.lock).toHaveBeenCalled();
 
       // Trigger exiting fullscreen
       mockKeyboard.lock.mockClear();
       (mockDoc as any).fullscreenElement = null;
-      listeners["fullscreenchange"]();
+      listeners["fullscreenchange"](new Event("fullscreenchange"));
       expect(mockKeyboard.unlock).toHaveBeenCalled();
 
       // Teardown removes listener and unlocks

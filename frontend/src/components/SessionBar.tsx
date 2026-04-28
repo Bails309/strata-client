@@ -1105,7 +1105,7 @@ function SessionThumbnail({
                   )}
                   {userTags.length > 0 && filteredTags.length === 0 && (
                     <div className="px-3 py-6 text-center text-sm text-txt-tertiary">
-                      No tags match "{tagFilter}".
+                      No tags match &ldquo;{tagFilter}&rdquo;.
                     </div>
                   )}
                 </div>

@@ -392,6 +392,21 @@ pub async fn login(
         REFRESH_TOKEN_TTL,
     )?;
 
+    // Generate a fresh CSRF token bound to this session. The token is
+    // returned both as a cookie and in the response body so the SPA can
+    // start sending the X-CSRF-Token header immediately on subsequent
+    // state-changing requests.
+    let csrf_token = generate_csrf_token();
+
+    // Unix epoch seconds when the access token expires. Surfaced to the
+    // SPA via a non-HttpOnly cookie so SessionTimeoutWarning can display
+    // a countdown without needing access to the JWT payload.
+    let session_expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + ACCESS_TOKEN_TTL as u64;
+
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -421,11 +436,46 @@ pub async fn login(
     let response = axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "application/json")
+        // Refresh token (HttpOnly): scoped to /api so the SPA can call
+        // /api/auth/refresh AND /api/auth/logout (which both need to read
+        // it). Previously scoped to /api/auth/refresh only — that was too
+        // narrow once we needed cookie-based logout.
         .header(
             "Set-Cookie",
             format!(
-                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age={}",
+                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
                 refresh_token, REFRESH_TOKEN_TTL
+            ),
+        )
+        // Access token cookie (HttpOnly) — replaces localStorage for SPA
+        // sessions. Path=/api so it's sent on every API call. The SPA never
+        // sees this value; it cannot be exfiltrated by stored XSS.
+        .header(
+            "Set-Cookie",
+            format!(
+                "access_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
+                access_token, ACCESS_TOKEN_TTL
+            ),
+        )
+        // CSRF token cookie (NOT HttpOnly — the SPA must read it to echo as
+        // the X-CSRF-Token header on state-changing requests). The SameSite
+        // attribute is the primary defence; the double-submit echo is the
+        // safety net.
+        .header(
+            "Set-Cookie",
+            format!(
+                "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+                csrf_token, ACCESS_TOKEN_TTL
+            ),
+        )
+        // session_expires cookie — surfaces the access-token expiry to
+        // SessionTimeoutWarning. NOT HttpOnly, holds only a unix epoch
+        // timestamp (no secret).
+        .header(
+            "Set-Cookie",
+            format!(
+                "session_expires={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+                session_expires_at, ACCESS_TOKEN_TTL
             ),
         )
         .body(axum::body::Body::from(
@@ -433,6 +483,7 @@ pub async fn login(
                 "access_token": access_token,
                 "token_type": "Bearer",
                 "expires_in": ACCESS_TOKEN_TTL,
+                "csrf_token": csrf_token,
                 "user": {
                     "id": user.id,
                     "username": user.username,
@@ -459,6 +510,16 @@ pub async fn login(
 const ACCESS_TOKEN_TTL: usize = 1200;
 /// Refresh token TTL (8 hours).
 const REFRESH_TOKEN_TTL: usize = 28800;
+
+/// Generate a fresh CSRF token. 32 random bytes encoded as URL-safe base64
+/// (no padding) — gives 256 bits of entropy and is safe to place in cookies
+/// and headers without further escaping.
+fn generate_csrf_token() -> String {
+    use base64::Engine;
+    use rand::RngExt;
+    let bytes: [u8; 32] = rand::rng().random();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
 
 /// Create a local JWT signed with a server-side HMAC key.
 /// `token_type` should be `"access"` or `"refresh"`.
@@ -523,11 +584,16 @@ pub async fn logout(
     State(state): State<SharedState>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, AppError> {
-    let token = headers
+    // Accept the access token from either the Authorization header (legacy
+    // bearer flow + non-browser clients) or the access_token cookie (SPA).
+    // Logout is best-effort even if neither is present so a client whose
+    // session has already expired can still clear server-side state.
+    let token: Option<String> = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Auth("Missing Authorization header".into()))?;
+        .map(|s| s.to_string())
+        .or_else(|| extract_cookie(&headers, "access_token").map(|s| s.to_string()));
 
     // Try to decode as a local JWT to extract the real exp claim.
     // If decode fails (e.g. OIDC token), use a default 24h TTL so
@@ -544,30 +610,36 @@ pub async fn logout(
     validation.set_issuer(&["strata-local"]);
     validation.set_required_spec_claims(&["exp"]);
 
-    let exp = if let Ok(data) = decode::<ExpClaims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        data.claims.exp
+    let exp = if let Some(ref tok) = token {
+        if let Ok(data) = decode::<ExpClaims>(
+            tok,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &validation,
+        ) {
+            data.claims.exp
+        } else {
+            // Non-local token (OIDC) — use 24h from now as a conservative TTL
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            now + 86400
+        }
     } else {
-        // Non-local token (OIDC) — use 24h from now as a conservative TTL
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        now + 86400
+        0
     };
 
-    crate::services::token_revocation::revoke(token, exp);
+    if let Some(ref tok) = token {
+        crate::services::token_revocation::revoke(tok, exp);
+    }
 
     // Persist to DB (best-effort) so revocations survive restarts
     let db_pool = {
         let s = state.read().await;
         s.db.as_ref().map(|d| d.pool.clone())
     };
-    if let Some(pool) = &db_pool {
-        crate::services::token_revocation::persist_revocation(pool, token, exp).await;
+    if let (Some(pool), Some(tok)) = (&db_pool, token.as_ref()) {
+        crate::services::token_revocation::persist_revocation(pool, tok, exp).await;
     }
 
     // Also revoke the refresh token if present in cookies
@@ -584,13 +656,27 @@ pub async fn logout(
         }
     }
 
-    // Clear the refresh token cookie
+    // Clear all session cookies. The Set-Cookie expiry pattern (Max-Age=0)
+    // tombstones each cookie. Path and SameSite must match the cookies we
+    // originally set or the browser will keep the live cookie alive.
     let response = axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "application/json")
         .header(
             "Set-Cookie",
-            "refresh_token=; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age=0",
+            "refresh_token=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0",
+        )
+        .header(
+            "Set-Cookie",
+            "access_token=; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=0",
+        )
+        .header(
+            "Set-Cookie",
+            "csrf_token=; Secure; SameSite=Strict; Path=/; Max-Age=0",
+        )
+        .header(
+            "Set-Cookie",
+            "session_expires=; Secure; SameSite=Strict; Path=/; Max-Age=0",
         )
         .body(axum::body::Body::from(
             serde_json::to_string(&json!({ "status": "logged_out" }))
@@ -691,6 +777,11 @@ pub async fn change_password(
 // ── Token Refresh ──────────────────────────────────────────────────────
 
 /// Extract a named cookie value from the Cookie header.
+///
+/// Thin wrapper around `crate::services::middleware::extract_cookie_value`
+/// that preserves the existing `&str` borrow signature used by the rest of
+/// this module. The middleware version returns `String` because that's what
+/// the request-passing path needs.
 // CodeQL note: `rust/unused-variable` misfires on the `pair` rebinding in the
 // `find_map` closure (alert #71). The rebinding shadows to strip whitespace.
 #[allow(unused_variables)]
@@ -731,15 +822,19 @@ pub async fn check_auth(
 
     let not_auth = || Json(json!({ "authenticated": false }));
 
-    // Extract Bearer token
-    let token = match headers
+    // Extract token from Authorization header (Bearer) or access_token cookie.
+    let bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-    {
+        .map(|s| s.to_string());
+    let cookie_tok =
+        crate::services::middleware::extract_cookie_value(&headers, "access_token");
+    let token_string = match bearer.or(cookie_tok) {
         Some(t) => t,
         None => return not_auth(),
     };
+    let token = token_string.as_str();
 
     // Check revocation
     if crate::services::token_revocation::is_revoked(token) {
@@ -857,7 +952,7 @@ pub async fn check_auth(
 pub async fn refresh(
     State(state): State<SharedState>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let refresh_token = extract_cookie(&headers, "refresh_token")
         .ok_or_else(|| AppError::Auth("Missing refresh token".into()))?;
 
@@ -924,11 +1019,52 @@ pub async fn refresh(
     let (access_token, _jti) =
         create_local_jwt(user_id, &username, &role, "access", ACCESS_TOKEN_TTL)?;
 
-    Ok(Json(json!({
-        "access_token": access_token,
-        "token_type": "Bearer",
-        "expires_in": ACCESS_TOKEN_TTL
-    })))
+    // Rotate the CSRF token on every refresh — even though same-site cookies
+    // already cover most of the threat model, rotating limits the window of
+    // a stolen-cookie replay attack.
+    let csrf_token = generate_csrf_token();
+    let session_expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + ACCESS_TOKEN_TTL as u64;
+
+    let response = axum::response::Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .header(
+            "Set-Cookie",
+            format!(
+                "access_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
+                access_token, ACCESS_TOKEN_TTL
+            ),
+        )
+        .header(
+            "Set-Cookie",
+            format!(
+                "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+                csrf_token, ACCESS_TOKEN_TTL
+            ),
+        )
+        .header(
+            "Set-Cookie",
+            format!(
+                "session_expires={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+                session_expires_at, ACCESS_TOKEN_TTL
+            ),
+        )
+        .body(axum::body::Body::from(
+            serde_json::to_string(&json!({
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": ACCESS_TOKEN_TTL,
+                "csrf_token": csrf_token,
+            }))
+            .map_err(|e| AppError::Internal(format!("JSON serialization error: {e}")))?,
+        ))
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
+
+    Ok(response)
 }
 
 // ── SSO / OIDC ─────────────────────────────────────────────────────────
@@ -1151,19 +1287,49 @@ pub async fn sso_callback(
     )
     .await?;
 
-    // Redirect back to frontend with the access token in a URL fragment.
-    // Fragments (#) are never sent to servers in Referer headers, never logged
-    // by proxies/CDNs, and don't appear in server access logs.
-    // The refresh token is set as an HttpOnly cookie for security.
-    let redirect_url = format!("/login#token={}", access_token);
+    // Redirect back to frontend root. The access_token + csrf_token cookies
+    // bootstrap the SPA session; the refresh_token cookie is HttpOnly so the
+    // browser will attach it automatically to /api/auth/refresh.
+    //
+    // Previous implementation passed the access token as a URL fragment and
+    // the SPA stuffed it into localStorage. Now obsolete — keeping the
+    // redirect target as `/` avoids leaving stale `#token=` artefacts in
+    // the browser history.
+    let csrf_token = generate_csrf_token();
+    let session_expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + ACCESS_TOKEN_TTL as u64;
     let response = axum::response::Response::builder()
         .status(303)
-        .header("Location", &redirect_url)
+        .header("Location", "/")
         .header(
             "Set-Cookie",
             format!(
-                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age={}",
+                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
                 refresh_token, REFRESH_TOKEN_TTL
+            ),
+        )
+        .header(
+            "Set-Cookie",
+            format!(
+                "access_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
+                access_token, ACCESS_TOKEN_TTL
+            ),
+        )
+        .header(
+            "Set-Cookie",
+            format!(
+                "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+                csrf_token, ACCESS_TOKEN_TTL
+            ),
+        )
+        .header(
+            "Set-Cookie",
+            format!(
+                "session_expires={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
+                session_expires_at, ACCESS_TOKEN_TTL
             ),
         )
         .body(axum::body::Body::empty())

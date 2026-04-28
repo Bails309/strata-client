@@ -20,7 +20,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 
 use crate::services::app_state::SharedState;
-use crate::services::middleware::{require_admin, require_auth};
+use crate::services::middleware::{require_admin, require_auth, require_csrf};
 
 pub fn build_router(state: SharedState) -> Router {
     let cors = build_cors_layer();
@@ -263,7 +263,11 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/recordings/{filename}", get(user::get_recording))
         .route("/api/admin/roadmap/{item_id}", put(roadmap::set_status))
         .layer(middleware::from_fn(require_admin))
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        // CSRF runs first on the request path (outermost layer). It inspects
+        // the Authorization header itself to decide whether to enforce, so
+        // it's independent of `require_auth` having run yet.
+        .layer(middleware::from_fn(require_csrf));
 
     // ── Authenticated user routes ────────────────────────────────────
     let user_routes = Router::new()
@@ -384,7 +388,8 @@ pub fn build_router(state: SharedState) -> Router {
             get(files::list_session_files),
         )
         .route("/api/files/delete/{token}", delete(files::delete_file))
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        .layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        .layer(middleware::from_fn(require_csrf));
 
     public
         .merge(admin)

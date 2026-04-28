@@ -116,7 +116,9 @@ describe("Login page", () => {
       expect(onLogin).toHaveBeenCalled();
     });
 
-    expect(localStorage.getItem("access_token")).toBe("jwt-abc-123");
+    // Cookie auth: the access token is delivered via HttpOnly Set-Cookie by
+    // the backend, so the client never sees it in localStorage.
+    expect(localStorage.getItem("access_token")).toBeNull();
   });
 
   it("shows loading state while submitting", async () => {
@@ -133,21 +135,21 @@ describe("Login page", () => {
     expect(await screen.findByText(/signing in/i)).toBeInTheDocument();
   });
 
-  it("extracts SSO token from URL fragment and calls onLogin", async () => {
+  it("strips stray SSO token fragment from URL without dispatching login", async () => {
     const onLogin = vi.fn();
-    // Fake JWT-shaped token (three base64url segments). Assembled at runtime
-    // so static scanners (gitleaks) don't flag the literal as a real secret.
-    // Login now rejects values that don't match this shape as defence-in-depth.
+    // Legacy SSO callback handed the access token via URL fragment. The new
+    // cookie-based flow rejects this path; the page should clean the fragment
+    // for hygiene and ignore the value.
     const fakeJwt = ["aaaa", "bbbb", "cccc"].join(".");
     window.location.hash = `#token=${fakeJwt}`;
 
     renderLogin(onLogin);
 
-    await vi.waitFor(() => {
-      expect(onLogin).toHaveBeenCalled();
-    });
-    expect(localStorage.getItem("access_token")).toBe(fakeJwt);
-    // Fragment should be cleared
+    // Allow effects to flush.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onLogin).not.toHaveBeenCalled();
+    expect(localStorage.getItem("access_token")).toBeNull();
+    // Fragment should be cleared.
     expect(window.location.hash).toBe("");
   });
 

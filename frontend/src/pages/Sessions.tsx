@@ -352,7 +352,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                         <td className="p-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
-                              className="btn btn-secondary text-xs py-1 px-2"
+                              className="btn-live"
                               onClick={() =>
                                 navigate(
                                   `/observe/${encodeURIComponent(session.session_id)}?offset=0&admin=1&name=${encodeURIComponent(session.connection_name)}&user=${encodeURIComponent(session.username)}`
@@ -360,12 +360,11 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                               }
                               title="Watch live"
                             >
-                              <span className="inline-flex items-center gap-1 animate-pulse text-red-500">
-                                ● Live
-                              </span>
+                              <span className="live-dot" aria-hidden="true" />
+                              LIVE
                             </button>
                             <button
-                              className="btn btn-secondary text-xs py-1 px-2"
+                              className="btn-rewind"
                               onClick={() =>
                                 navigate(
                                   `/observe/${encodeURIComponent(session.session_id)}?offset=300&admin=1&name=${encodeURIComponent(session.connection_name)}&user=${encodeURIComponent(session.username)}`
@@ -382,7 +381,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                         <td className="p-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
-                              className="btn btn-secondary text-xs py-1 px-2"
+                              className="btn-live"
                               onClick={() =>
                                 navigate(
                                   `/observe/${encodeURIComponent(session.session_id)}?offset=0&name=${encodeURIComponent(session.connection_name)}&user=${encodeURIComponent(session.username)}`
@@ -390,12 +389,11 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                               }
                               title="Watch live"
                             >
-                              <span className="inline-flex items-center gap-1 animate-pulse text-red-500">
-                                ● Live
-                              </span>
+                              <span className="live-dot" aria-hidden="true" />
+                              LIVE
                             </button>
                             <button
-                              className="btn btn-secondary text-xs py-1 px-2"
+                              className="btn-rewind"
                               onClick={() =>
                                 navigate(
                                   `/observe/${encodeURIComponent(session.session_id)}?offset=300&name=${encodeURIComponent(session.connection_name)}&user=${encodeURIComponent(session.username)}`

@@ -254,6 +254,7 @@ pub async fn dispatch(
         let msg = EmailMessage::builder(from.clone(), to, &subject)
             .html(rendered.html_body.clone())
             .text(rendered.text_body.clone())
+            .inline(crate::services::email::templates::logo_attachment())
             .build();
 
         match SmtpTransport::from_settings(&smtp_settings) {

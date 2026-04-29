@@ -181,13 +181,19 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
         enabled,
         host: host.trim(),
         port,
-        username: username.trim(),
+        // When the relay is unauthenticated (TLS "none"/port 25) we send empty
+        // creds so the server can't keep stale auth around — the inputs are
+        // hidden in that mode, so any retained values would never be visible
+        // to the admin and silently survive a downgrade to plaintext.
+        username: tlsMode === "none" ? "" : username.trim(),
         password:
-          newPassword === null
-            ? { action: "keep" }
-            : newPassword === ""
-              ? { action: "clear" }
-              : { action: "set", value: newPassword },
+          tlsMode === "none"
+            ? { action: "clear" }
+            : newPassword === null
+              ? { action: "keep" }
+              : newPassword === ""
+                ? { action: "clear" }
+                : { action: "set", value: newPassword },
         tls_mode: tlsMode,
         from_address: fromAddress.trim(),
         from_name: fromName.trim(),
@@ -332,55 +338,69 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
                 </p>
               </div>
 
-              <div className="form-group">
-                <label className="form-label">Username</label>
-                <input
-                  className="input"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="service-account@corp.example.com"
-                  autoComplete="off"
-                />
-              </div>
-
-              <div className="form-group md:col-span-2">
-                <label className="form-label">Password</label>
-                <div className="flex gap-2">
+              {tlsMode !== "none" && (
+                <div className="form-group">
+                  <label className="form-label">Username</label>
                   <input
-                    type="password"
-                    className="input flex-1"
-                    value={newPassword ?? ""}
-                    placeholder={cfg.password_set ? "•••••••• (sealed in Vault)" : "Not set"}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    autoComplete="new-password"
+                    className="input"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="service-account@corp.example.com"
+                    autoComplete="off"
                   />
-                  {cfg.password_set && newPassword === null && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setNewPassword("")}
-                      title="Clear the stored password on save"
-                    >
-                      Clear
-                    </button>
-                  )}
-                  {newPassword !== null && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setNewPassword(null)}
-                      title="Discard the change and keep the existing sealed password"
-                    >
-                      Keep existing
-                    </button>
-                  )}
                 </div>
-                <p className="text-sm text-txt-secondary mt-1">
-                  The SMTP password is <strong>sealed in Vault before storage</strong>. If Vault is
-                  sealed or running in stub mode, saving will be rejected. Leave blank to keep the
-                  existing sealed value.
-                </p>
-              </div>
+              )}
+
+              {tlsMode !== "none" && (
+                <div className="form-group md:col-span-2">
+                  <label className="form-label">Password</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      className="input flex-1"
+                      value={newPassword ?? ""}
+                      placeholder={cfg.password_set ? "•••••••• (sealed in Vault)" : "Not set"}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                    {cfg.password_set && newPassword === null && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setNewPassword("")}
+                        title="Clear the stored password on save"
+                      >
+                        Clear
+                      </button>
+                    )}
+                    {newPassword !== null && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setNewPassword(null)}
+                        title="Discard the change and keep the existing sealed password"
+                      >
+                        Keep existing
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-sm text-txt-secondary mt-1">
+                    The SMTP password is <strong>sealed in Vault before storage</strong>. If Vault is
+                    sealed or running in stub mode, saving will be rejected. Leave blank to keep the
+                    existing sealed value.
+                  </p>
+                </div>
+              )}
+
+              {tlsMode === "none" && (
+                <div className="form-group md:col-span-2">
+                  <p className="text-sm text-txt-secondary rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+                    Username and password are disabled because the relay is configured for
+                    unauthenticated plaintext on port 25. Any previously stored credentials will be
+                    cleared on save.
+                  </p>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">From address</label>

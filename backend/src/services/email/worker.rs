@@ -206,6 +206,7 @@ async fn retry_one(
     let msg = EmailMessage::builder(from, to, &subject)
         .html(rendered.html_body)
         .text(rendered.text_body)
+        .inline(crate::services::email::templates::logo_attachment())
         .build();
 
     let transport = SmtpTransport::from_settings(&smtp_settings)

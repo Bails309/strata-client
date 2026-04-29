@@ -19,7 +19,31 @@ use std::sync::OnceLock;
 use serde::Serialize;
 use tera::{Context, Tera};
 
+use crate::services::email::message::InlineAttachment;
 use crate::services::email::outlook;
+
+/// Stable Content-ID used by every templated email's `<mj-image src="cid:…">`.
+/// Keep this constant in lock-step with the value baked into the four MJML
+/// templates — drift produces a "broken image" placeholder in the header.
+pub const LOGO_CONTENT_ID: &str = "strata-logo";
+
+/// PNG bytes for the inline-attached header logo.  Embedded at compile time
+/// so the production container has no on-disk asset dependency.  The dark
+/// variant is used because the MJML header sits on the tenant accent colour,
+/// which is dark/saturated by default — the dark logo's white wordmark
+/// reads cleanly against any reasonably-contrasted accent.
+const LOGO_BYTES: &[u8] = include_bytes!("templates/strata-logo.png");
+
+/// Build the inline logo attachment that pairs with `cid:strata-logo` in
+/// every templated email body.  Cheap to call (a `Cow::Borrowed` over the
+/// embedded bytes — no copy until the SMTP transport serialises the part).
+pub fn logo_attachment() -> InlineAttachment {
+    InlineAttachment {
+        content_id: LOGO_CONTENT_ID.to_owned(),
+        content_type: "image/png".to_owned(),
+        data: std::borrow::Cow::Borrowed(LOGO_BYTES),
+    }
+}
 
 /// Identifier for the four supported notification templates.  Maps to
 /// both the MJML template name and the plaintext companion.

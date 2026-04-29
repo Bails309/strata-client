@@ -363,10 +363,16 @@ pub async fn test_send(
         ("Strata SMTP test".to_string(), html, text)
     };
 
-    let msg = EmailMessage::builder(from, EmailAddress::new(recipient), &subject)
+    // Generic plaintext probe has no `cid:` reference, so the logo is
+    // only attached for the templated branch where the MJML header relies
+    // on it.
+    let mut builder = EmailMessage::builder(from, EmailAddress::new(recipient), &subject)
         .html(html)
-        .text(text)
-        .build();
+        .text(text);
+    if template.is_some() {
+        builder = builder.inline(email::templates::logo_attachment());
+    }
+    let msg = builder.build();
 
     transport
         .send(&msg)

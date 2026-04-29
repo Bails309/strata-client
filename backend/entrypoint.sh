@@ -74,7 +74,18 @@ RECORDINGS_DIR=/var/lib/guacamole/recordings
 if [ -d "$RECORDINGS_DIR" ]; then
     # Find a guacd-written file to read its gid; fall back to the dir's
     # gid if the volume is empty on first boot.
+    #
+    # NB: `find ... | head -n1` races with SIGPIPE — once `head` closes
+    # its stdin after the first line, `find` keeps writing and gets
+    # killed with SIGPIPE (exit 141). With `set -euo pipefail` at the
+    # top of this script, that 141 propagates and aborts the entire
+    # entrypoint *before* `exec gosu strata strata-backend` runs. The
+    # symptom is a backend container in a crash loop with empty logs
+    # and exit code 141. Disable pipefail just for this pipeline so
+    # the (harmless) SIGPIPE on `find` does not kill the script.
+    set +o pipefail
     REC_GID=$(find "$RECORDINGS_DIR" -maxdepth 1 -type f -printf '%g\n' 2>/dev/null | head -n1)
+    set -o pipefail
     if [ -z "${REC_GID:-}" ]; then
         REC_GID=$(stat -c '%g' "$RECORDINGS_DIR")
     fi

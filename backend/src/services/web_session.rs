@@ -445,8 +445,17 @@ pub fn chromium_command_args(spec: &ChromiumLaunchSpec<'_>) -> Vec<String> {
     // rustguac parity B6 — `--no-sandbox` is required when running as
     // root; Chromium otherwise refuses to start with `Running as root
     // without --no-sandbox is not supported`.
+    //
+    // `--no-sandbox` triggers the yellow "You are using an unsupported
+    // command-line flag" infobar at the top of every tab. `--test-type`
+    // suppresses that infobar (and a handful of related "not your
+    // default browser" / "session restore" prompts) without altering
+    // rendering or security behaviour. We only add it when we already
+    // had to pass `--no-sandbox`, so kiosks running under an
+    // unprivileged user keep a vanilla flag set.
     if spec.running_as_root {
         args.push("--no-sandbox".into());
+        args.push("--test-type".into());
     }
 
     if !spec.allowed_domains.is_empty() {
@@ -859,6 +868,31 @@ mod tests {
         };
         let args = chromium_command_args(&spec);
         assert!(args.contains(&"--no-sandbox".to_string()));
+        // `--test-type` accompanies `--no-sandbox` so Chromium does
+        // not paint the "unsupported command-line flag" infobar over
+        // every kiosk tab.
+        assert!(args.contains(&"--test-type".to_string()));
+    }
+
+    #[test]
+    fn chromium_args_omit_test_type_for_unprivileged_runtime() {
+        // `--test-type` is only useful as a paired suppressor for
+        // `--no-sandbox`. When we don't need `--no-sandbox` we don't
+        // want `--test-type` either — leaving it in would suppress
+        // genuinely useful infobars (e.g. translation prompts) for
+        // no benefit.
+        let dir = std::path::PathBuf::from("/tmp/x");
+        let spec = ChromiumLaunchSpec {
+            url: "https://example.com",
+            user_data_dir: &dir,
+            allowed_domains: &[],
+            remote_debugging_port: 9222,
+            running_as_root: false,
+            window_width: 1920,
+            window_height: 1080,
+        };
+        let args = chromium_command_args(&spec);
+        assert!(!args.contains(&"--test-type".to_string()));
     }
 
     #[test]

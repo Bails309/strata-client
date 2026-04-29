@@ -72,6 +72,7 @@ vi.mock("../api", () => ({
   testRotation: vi.fn(),
   getCheckoutRequests: vi.fn().mockResolvedValue([]),
   getVdiImages: vi.fn().mockResolvedValue({ images: [] }),
+  getTrustedCasForPicker: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../contexts/SettingsContext", () => ({

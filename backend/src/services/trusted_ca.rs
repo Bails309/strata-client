@@ -64,6 +64,7 @@ pub struct UpdateTrustedCa {
 }
 
 /// Cached metadata extracted from a freshly-validated PEM bundle.
+#[derive(Debug)]
 struct ParsedMetadata {
     subject: Option<String>,
     not_after: Option<DateTime<Utc>>,
@@ -310,6 +311,9 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
 ///
 /// Requires `certutil` from the `libnss3-tools` package on the host
 /// container — installed by the backend Dockerfile.
+#[allow(dead_code)] // Pool-based convenience wrapper kept for future callers; the
+                    // kiosk launcher currently calls `import_pem_into_nss_db` directly with the
+                    // PEM it already carries on `WebSpawnSpec`.
 pub async fn materialise_into_nss_db(
     pool: &PgPool,
     bundle_id: Uuid,

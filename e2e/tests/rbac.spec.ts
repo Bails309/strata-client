@@ -19,7 +19,7 @@
  * from UI flake.
  */
 
-import { test, expect, request as pwRequest, APIRequestContext } from '@playwright/test';
+import { test, expect, APIRequestContext } from '@playwright/test';
 
 // ── Shared state ─────────────────────────────────────────────────────
 

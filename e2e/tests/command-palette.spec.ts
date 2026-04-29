@@ -12,6 +12,21 @@ test.describe('Command palette is global', () => {
     await page.getByPlaceholder('••••••••').fill('admin');
     await page.getByRole('button', { name: /sign in|log in/i }).click();
     await expect(page).toHaveURL(/\/$|\/dashboard/i, { timeout: 10_000 });
+
+    // Dismiss the Session Recording Disclaimer modal if it's blocking the
+    // app. On a fresh CI database the seeded admin has not accepted the
+    // current TERMS_VERSION, so CommandPaletteProvider is not mounted until
+    // the modal is accepted. Scroll the disclaimer body to the bottom to
+    // enable the "I Accept" button, then click it.
+    const acceptBtn = page.getByRole('button', { name: /i accept/i });
+    if (await acceptBtn.isVisible().catch(() => false)) {
+      await page
+        .getByRole('region', { name: /disclaimer content/i })
+        .evaluate((el) => el.scrollTo(0, el.scrollHeight));
+      await expect(acceptBtn).toBeEnabled({ timeout: 5_000 });
+      await acceptBtn.click();
+      await expect(acceptBtn).toBeHidden({ timeout: 5_000 });
+    }
   });
 
   test('Ctrl+K opens the palette on Dashboard (Connections)', async ({ page }) => {

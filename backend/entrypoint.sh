@@ -10,8 +10,14 @@ set -euo pipefail
 
 # Fix ownership on mount points (needed when volumes were created by
 # root). The `|| true` swallows EACCES on read-only mounts.
+#
+# NB: We deliberately do NOT chown /var/lib/guacamole here. That volume
+# is shared with the guacd container, which writes recording files as
+# its own `guacd:guacd` (gid 101). Re-chowning to strata:strata would
+# (a) race with in-flight guacd writes and (b) destroy the gid signal
+# the supplementary-group block below uses to grant strata read
+# access to recordings. Backend never needs to write into this volume.
 chown -R strata:strata /app/config 2>/dev/null || true
-chown -R strata:strata /var/lib/guacamole 2>/dev/null || true
 chown -R strata:strata /etc/krb5 2>/dev/null || true
 
 # Web-session ephemeral directory tree. Owned by strata so the backend
@@ -47,6 +53,42 @@ if [ -S /var/run/docker.sock ]; then
         chmod g+rw /var/run/docker.sock 2>/dev/null || true
         chgrp strata /var/run/docker.sock 2>/dev/null || true
         echo "[entrypoint] docker.sock owned by root:root; granted strata group access on the bind-mount"
+    fi
+fi
+
+# ── Recording playback access ─────────────────────────────────────────
+# guacd writes session recordings into the shared `guac-recordings`
+# volume as its in-container `guacd:guacd` user (typically uid/gid
+# 100/101) with mode 0640 — group-only read. The backend reads those
+# files back when the UI requests historic playback (HistoricalPlayer
+# → /api/{admin,user}/recordings/{id}/stream → tokio::fs::File::open).
+# Without group membership the open() returns EACCES and the playback
+# WebSocket closes immediately, surfacing as "Tunnel error" in the UI.
+#
+# To match the writer's gid we create a local group with the same
+# numeric id (looked up off the recordings directory at runtime, since
+# different guacd builds may pick a different system gid) and add
+# strata to it as a supplementary group. Mirrors the docker.sock
+# pattern above.
+RECORDINGS_DIR=/var/lib/guacamole/recordings
+if [ -d "$RECORDINGS_DIR" ]; then
+    # Find a guacd-written file to read its gid; fall back to the dir's
+    # gid if the volume is empty on first boot.
+    REC_GID=$(find "$RECORDINGS_DIR" -maxdepth 1 -type f -printf '%g\n' 2>/dev/null | head -n1)
+    if [ -z "${REC_GID:-}" ]; then
+        REC_GID=$(stat -c '%g' "$RECORDINGS_DIR")
+    fi
+    if [ -n "${REC_GID:-}" ] && [ "$REC_GID" != "0" ]; then
+        STRATA_GID=$(id -g strata)
+        if [ "$REC_GID" != "$STRATA_GID" ]; then
+            EXISTING_GROUP=$(getent group "$REC_GID" | cut -d: -f1 || true)
+            if [ -z "$EXISTING_GROUP" ]; then
+                groupadd -g "$REC_GID" guac-recordings
+                EXISTING_GROUP=guac-recordings
+            fi
+            usermod -aG "$EXISTING_GROUP" strata
+            echo "[entrypoint] Added strata to ${EXISTING_GROUP} (gid=${REC_GID}) for recording playback access"
+        fi
     fi
 fi
 

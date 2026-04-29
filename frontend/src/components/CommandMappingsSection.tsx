@@ -6,7 +6,6 @@ import {
   COMMAND_MAPPING_PAGES,
   COMMAND_TRIGGER_RE,
   CommandMapping,
-  CommandMappingPage,
   Connection,
   ConnectionFolder,
   MAX_COMMAND_MAPPINGS,
@@ -451,7 +450,7 @@ function MappingRow({
           />
         )}
         {mapping.action === "open-page" && (
-          <StyledSelect<CommandMappingPage>
+          <StyledSelect
             ariaLabel="Page path"
             value={mapping.args.path}
             onChange={(p) => onChange({ ...mapping, args: { path: p } })}

@@ -398,8 +398,13 @@ impl WebRuntimeRegistry {
             window_width: geom_w,
             window_height: geom_h,
         });
-        let chromium = spawn_chromium(&spec.chromium_binary, &chromium_args, display)
-            .map_err(|e| WebRuntimeError::ChromiumSpawn(e.to_string()))?;
+        let chromium = spawn_chromium(
+            &spec.chromium_binary,
+            &chromium_args,
+            display,
+            profile_dir.path(),
+        )
+        .map_err(|e| WebRuntimeError::ChromiumSpawn(e.to_string()))?;
 
         // Step 6: crash-detect (B11). Mutate-in-place: detect_*
         // borrows the child mutably to call `try_wait`.
@@ -520,14 +525,24 @@ fn spawn_silent(argv: &[String]) -> std::io::Result<Child> {
 
 /// Chromium needs the `DISPLAY` env var pointing at the Xvnc display
 /// we just spawned. Everything else is silenced as in `spawn_silent`.
+///
+/// `HOME` is set to `user_data_dir` so Chromium's NSS-based cert
+/// verifier reads from the per-session `<user_data_dir>/.pki/nssdb`
+/// that [`super::trusted_ca::import_pem_into_nss_db`] populates. NSS
+/// resolves the DB path relative to `$HOME`, not `--user-data-dir`,
+/// so without this override the imported trust roots are silently
+/// ignored and the kiosk surfaces `NET::ERR_CERT_AUTHORITY_INVALID`
+/// for any site signed by the operator-attached CA.
 fn spawn_chromium(
     binary: &std::path::Path,
     args: &[String],
     display: u16,
+    user_data_dir: &std::path::Path,
 ) -> std::io::Result<Child> {
     Command::new(binary)
         .args(args)
         .env("DISPLAY", format!(":{display}"))
+        .env("HOME", user_data_dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)

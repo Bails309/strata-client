@@ -869,6 +869,21 @@ pub async fn ws_tunnel(
         .unwrap_or_else(|| "UTC".to_string());
 
     let audit_pool = db.pool.clone();
+    // Capture for the web-kiosk eviction after the WebSocket closes.
+    // When the user closes their browser tab the upgraded WebSocket
+    // half-closes; without explicit eviction the kiosk handle stays
+    // in `WebRuntimeRegistry`, holding the Chromium + Xvnc children
+    // alive. The next `ensure()` would then return that stale handle
+    // and the user sees the abandoned tab in whatever state it was
+    // left in (often a closed/blank window). Evicting on disconnect
+    // drops the Arc → kills both children → removes the profile dir,
+    // so the *next* reopen spawns a fresh kiosk.
+    let web_runtime = if protocol == "web" {
+        Some(state.read().await.web_runtime.clone())
+    } else {
+        None
+    };
+    let web_user_id = user_id;
     Ok(ws
         .protocols(["guacamole"])
         .max_message_size(1024 * 1024)
@@ -905,6 +920,31 @@ pub async fn ws_tunnel(
                     &serde_json::json!({
                         "connection_id": connection_id.to_string(),
                         "error": e.to_string()
+                    }),
+                )
+                .await;
+            }
+
+            // Web kiosk teardown on disconnect. Runs whether the
+            // tunnel proxy returned Ok or Err — both mean the
+            // browser-side WebSocket is gone and there's no point
+            // keeping Chromium + Xvnc burning a display slot. The
+            // `evict` call drops the registry's `Arc` reference; if
+            // no other tab is currently holding the same handle the
+            // refcount hits zero, `WebSessionHandle::Drop` runs, and
+            // the children are SIGKILL'd via `kill_on_drop(true)` and
+            // the profile tempdir is removed. Eviction is also a
+            // no-op when the entry was already removed (e.g. by an
+            // admin force-close), so it's safe to always call.
+            if let Some(rt) = web_runtime {
+                let _ = rt.evict(connection_id, web_user_id).await;
+                let _ = crate::services::audit::log(
+                    &audit_pool,
+                    Some(web_user_id),
+                    crate::services::web_session::AUDIT_WEB_SESSION_END,
+                    &serde_json::json!({
+                        "connection_id": connection_id.to_string(),
+                        "reason": "tunnel_disconnect",
                     }),
                 )
                 .await;

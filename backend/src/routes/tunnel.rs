@@ -684,6 +684,19 @@ pub async fn ws_tunnel(
             _ => None,
         };
 
+        // Resolve the trusted-CA bundle (if attached) into the PEM
+        // the runtime will hand to certutil. Doing this lookup here
+        // keeps `web_runtime` sqlx-free.
+        let (trusted_ca_pem, trusted_ca_label) = match cfg.trusted_ca_id {
+            Some(id) => {
+                let pem = crate::services::trusted_ca::get(&db.pool, id)
+                    .await?
+                    .map(|d| d.pem);
+                (pem, Some(id.to_string()))
+            }
+            None => (None, None),
+        };
+
         let spec = crate::services::web_runtime::WebSpawnSpec {
             config: cfg,
             credentials,
@@ -703,6 +716,8 @@ pub async fn ws_tunnel(
             // expose chromium-sandbox SUID-root in the image; once
             // that's in place this can be flipped to `false`.
             running_as_root: true,
+            trusted_ca_pem,
+            trusted_ca_label,
         };
 
         let runtime = {
@@ -734,6 +749,9 @@ pub async fn ws_tunnel(
                     WE::LoginScript(_) => AppError::Internal(format!("login script failed: {e}")),
                     WE::Profile(_) | WE::Autofill(_) => {
                         AppError::Internal(format!("web profile prep failed: {e}"))
+                    }
+                    WE::TrustedCaImport(_) => {
+                        AppError::Internal(format!("trusted CA import failed: {e}"))
                     }
                 }
             })?;

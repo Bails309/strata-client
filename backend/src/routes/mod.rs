@@ -220,6 +220,21 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/connection-tags",
             get(admin::list_admin_connection_tags).post(admin::set_admin_connection_tags),
         )
+        // ── Trusted CA bundles for web kiosk ───────────────────────
+        .route(
+            "/api/admin/trusted-cas",
+            get(admin::list_trusted_cas).post(admin::create_trusted_ca),
+        )
+        .route(
+            "/api/admin/trusted-cas/{id}",
+            put(admin::update_trusted_ca).delete(admin::delete_trusted_ca),
+        )
+        // Slim, read-only picker list for connection editors. Visible
+        // to any authenticated user — exposes only id/name/subject.
+        .route(
+            "/api/user/trusted-cas",
+            get(admin::list_trusted_cas_for_picker),
+        )
         // ── Password Management admin routes ─────────────────────────
         .route(
             "/api/admin/approval-roles",

@@ -5,6 +5,193 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-04-29
+
+### Reusable Trusted CA bundles for Web Sessions, tenant-aware checkout-email rendering, and SMTP / NVR UX polish
+
+This minor release rounds off a cluster of work that landed against
+the 1.1.x line: a brand-new admin-managed Trusted CA store that lets
+operators upload a PEM bundle once and attach it to any number of
+`web` connections via a dropdown (no more re-pasting certificates
+into every kiosk row), a complete cleanup of the four checkout
+notification emails so that timestamps render in the tenant's
+configured timezone, the *target account* line shows the friendly
+name an operator actually sees in the Credentials UI, the
+`cid:strata-logo` banner is no longer a broken image, and the
+**SMTP TLS = none** mode finally hides authentication fields and
+clears any stored credentials on save. The admin Sessions page also
+gets a UX polish on the *LIVE* / *Rewind* action buttons with a
+gradient-on-hover treatment plus a dual-keyframe pulsing-dot motion
+that respects `prefers-reduced-motion`.
+
+### Added
+
+- **Reusable Trusted CA bundles for Web Sessions.**
+  - New table `trusted_ca_bundles` (migration
+    [`backend/migrations/059_trusted_ca_bundles.sql`](backend/migrations/059_trusted_ca_bundles.sql))
+    storing `id`, `name` (UNIQUE on `LOWER(name)`), `description`,
+    `pem`, cached `subject`, `not_after`, `fingerprint` (SHA-256 hex,
+    colon-separated), `created_at` / `updated_at`, and `created_by`.
+  - New service module
+    [`backend/src/services/trusted_ca.rs`](backend/src/services/trusted_ca.rs)
+    exposing `parse_and_validate()` (rustls-pemfile + x509-parser),
+    `list` / `get` / `create` / `update` / `delete`, plus
+    `materialise_into_nss_db()` and `import_pem_into_nss_db()` helpers
+    that drive `certutil -N` + `certutil -A -d sql:<dir> -n <name> -t "C,," -i <pem>`
+    against a per-session NSS database under
+    `<user-data-dir>/.pki/nssdb`.
+  - New backend dependency `x509-parser = "0.18"`.
+  - New apt package `libnss3-tools` baked into
+    [`backend/Dockerfile`](backend/Dockerfile) so `certutil` is
+    available at runtime.
+  - New admin endpoints (require **Manage System** + audit-log every
+    write):
+    - `GET    /api/admin/trusted-cas`
+    - `POST   /api/admin/trusted-cas`
+    - `PUT    /api/admin/trusted-cas/{id}`
+    - `DELETE /api/admin/trusted-cas/{id}`
+  - New auth-only endpoint `GET /api/user/trusted-cas` returning the
+    slim `{ id, name, subject }[]` shape used by the connection-editor
+    dropdown — so users with **Create Connections** permission but
+    *not* **Manage System** can still pick from the curated list.
+  - New admin tab **Admin → Trusted CAs** with table view + upload
+    form (file picker accepts `.pem` / `.crt` / `.cer`, plus a
+    paste-as-text fallback), surfacing parsed subject / expiry /
+    fingerprint preview.
+  - New optional **Trusted Certificate Authority** dropdown in the
+    Web-protocol section of the connection editor; selection persists
+    as `extra.trusted_ca_id` (UUID).
+  - Six unit tests in `services/trusted_ca.rs` cover empty input,
+    blank input, malformed PEM, well-formed RSA / ECDSA roots, and
+    the duplicate-name rejection path.
+- **Tenant-aware date/time rendering in checkout emails.** New
+  `services/display.rs::format_datetime_for_display()` reads
+  `system_settings.display_timezone` (IANA zone), `display_date_format`
+  (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `DD-MM-YYYY`), and
+  `display_time_format` (`HH:mm`, `HH:mm:ss`, `hh:mm A`, `hh:mm:ss A`)
+  to convert UTC `DateTime<Utc>` into a human-readable string with
+  zone abbreviation (`%Z`). Backend gains `chrono-tz = "0.10"`.
+- **RFC 4514-aware Common Name parser.**
+  `services/display.rs::cn_from_dn()` correctly handles escaped commas
+  (`\,`), escaped plus signs (`\+`), hex-encoded bytes (`\2C`), and
+  case-insensitive `cn=` attribute labels — replacing the previous
+  naive `dn.split(',').next()` which mis-displayed CNs containing
+  commas.
+- **`friendly_name`-first display priority for "Target account" in
+  emails.** All four checkout email emit-sites
+  ([`backend/src/routes/user.rs`](backend/src/routes/user.rs))
+  resolve the displayed account name in this order: explicit
+  `mapping.friendly_name` → `checkout.friendly_name` →
+  `cn_from_dn(distinguished_name)` → raw DN.
+- **Inline `cid:strata-logo` attachment.** New
+  [`backend/src/services/email/templates/strata-logo.png`](backend/src/services/email/templates/strata-logo.png)
+  + helpers `LOGO_CONTENT_ID`, `LOGO_BYTES`, `logo_attachment()` in
+  `email/templates.rs`. The dispatcher
+  ([`services/notifications.rs`](backend/src/services/notifications.rs)),
+  the retry worker ([`services/email/worker.rs`](backend/src/services/email/worker.rs)),
+  and the test-send route
+  ([`routes/notifications.rs`](backend/src/routes/notifications.rs))
+  all now attach the inline part on every send.
+- **Premium *LIVE* / *Rewind* buttons in the admin Sessions table.**
+  New CSS classes `.btn-live`, `.btn-rewind`, and `.live-dot` in
+  [`frontend/src/index.css`](frontend/src/index.css) with a
+  dual-keyframe animation (1.1 s scaled core dot + an expanding halo
+  ring), gradient-on-hover treatment, and a
+  `@media (prefers-reduced-motion: reduce)` block that disables the
+  pulse for affected users.
+
+### Changed
+
+- **`WebSessionConfig` schema** gains an optional
+  `trusted_ca_id: Option<Uuid>` field, deserialised from
+  `extra.trusted_ca_id`. Existing rows without the key continue to
+  use the OS default trust store.
+- **`WebSpawnSpec`** in
+  [`backend/src/services/web_runtime.rs`](backend/src/services/web_runtime.rs)
+  gains `trusted_ca_pem: Option<String>` and
+  `trusted_ca_label: Option<String>`. A new `TrustedCaImport(String)`
+  variant is added to `WebRuntimeError`.
+- **Tunnel route** ([`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs))
+  resolves the configured `trusted_ca_id` to a PEM via
+  `services::trusted_ca::get()` *before* constructing the spawn spec,
+  threading the bytes + label into `WebSpawnSpec`.
+- **`AdminSettings.tsx` `Tab` union** gains the `"trusted-cas"`
+  variant; the new tab renders below VDI in the tab list.
+- **SMTP form** ([`frontend/src/pages/admin/NotificationsTab.tsx`](frontend/src/pages/admin/NotificationsTab.tsx))
+  hides the username and password rows when `tlsMode === "none"` and
+  sends `password: { action: "clear" }` on save in that mode, so
+  switching from STARTTLS / implicit-TLS to plaintext relay no longer
+  leaves stale Vault-encrypted credentials in the row.
+
+### Fixed
+
+- **Broken-image icon on every transactional email.** The MJML
+  templates referenced `cid:strata-logo` but no inline part was being
+  attached. All real send paths now wire `logo_attachment()` into the
+  outbound `EmailMessage`.
+- **Wrong "Target account" name in checkout emails.** Emails
+  previously displayed `mapping.distinguished_name` verbatim, which
+  for accounts whose CN contains an escaped comma (e.g.
+  `CN=Smith\, John,OU=Service Accounts,DC=corp`) showed the *entire*
+  DN. Now displays the friendly name when set, otherwise an
+  RFC 4514-aware extracted CN.
+- **Wrong expiry timezone in checkout emails.** Expiry timestamps
+  were emitted as `YYYY-MM-DD HH:MM UTC` regardless of operator
+  configuration; they now render in the configured display timezone
+  using the configured date and time formats.
+
+### Security
+
+- **Trusted CA bundles are treated as public material.** PEMs hold
+  certificate chains (signatures over public keys) — they are *not*
+  envelope-encrypted via Vault. A row's PEM is readable by any
+  operator with **Manage System**; the picker endpoint
+  (`/api/user/trusted-cas`) returns only `{id, name, subject}` and
+  deliberately omits the PEM bytes.
+- **Reference-guarded delete.** `DELETE /api/admin/trusted-cas/{id}`
+  refuses with HTTP 400 when at least one row in `connections` (with
+  `protocol = 'web'`) still references the bundle via
+  `extra->>'trusted_ca_id'`. Prevents silent breakage of an active
+  kiosk by an admin housekeeping the CA list.
+- **Per-session ephemeral NSS database.** The kiosk's Chromium
+  `--user-data-dir` is created fresh per spawn under `/tmp` and
+  destroyed on session end. The NSS DB lives inside that profile dir,
+  so trust grants do not survive the tab close.
+- **Audit-log every CA mutation.** `trusted_ca.created`,
+  `trusted_ca.updated`, and `trusted_ca.deleted` events are written
+  to the existing SHA-256-hash-chained `audit_logs` table.
+- **SMTP TLS = none clears credentials.** Switching the SMTP
+  transport to plaintext explicitly sends `password: { action: "clear" }`
+  to the backend so the Vault-encrypted password column is wiped —
+  no stale credential survives the mode change.
+
+### Validation
+
+- `cargo fmt` / `cargo clippy --all-targets -- -D warnings` clean.
+- `cargo test -p strata-backend` passes.
+- `npm test -- --run` clean (`Sessions.test.tsx` 38 / 38,
+  `NotificationsTab.test.tsx` 17 / 17).
+- `docker-compose up -d --build` succeeds (exit code 0). Backend
+  image now layers `libnss3-tools` over the v1.1.0 baseline; image
+  size delta is ~12 MiB.
+
+### Upgrade notes
+
+- **Mandatory image rebuild.** The backend image gains
+  `libnss3-tools` (provides `certutil`); a `docker compose pull` is
+  not enough — operators must `docker compose up -d --build` or rely
+  on CI to publish a new tag.
+- **Database migration is automatic.** `059_trusted_ca_bundles.sql`
+  runs on first boot of the new backend.
+- **No `/api/*` breaking changes.** All five new endpoints are
+  additive. The `web_session.WebSessionConfig` schema gains an
+  optional `trusted_ca_id` field; old `connections.extra` rows are
+  forward-compatible.
+- **Operator action: review SMTP rows.** If you previously stored a
+  username/password against an `smtp.tls_mode = "none"` row, those
+  credentials will be cleared on the next save from the UI. The
+  database row is untouched until that save event.
+
 ## [1.1.0] — 2026-04-29
 
 ### RDP graphics-pipeline parity with rustguac, recording-playback EACCES fix, sidebar collapse, stuck-key cleanup, and Playwright RBAC pack

@@ -126,6 +126,7 @@ selected as the protocol. The fields land in `connections.extra` (JSONB):
 | Initial URL       | `url`             | Required. Must include the scheme (`https://...`).                                          |
 | Allowed Domains   | `allowed_domains` | JSON-encoded `string[]`. Empty ⇒ no extra Chromium-level restriction (server CIDR still applies). |
 | Login Script      | `login_script`    | Free-text identifier of a registered server-side script. Blank ⇒ no automation.             |
+| Trusted CA        | `trusted_ca_id`   | Optional UUID into `trusted_ca_bundles`. Selected via dropdown (v1.2.0). Empty ⇒ OS default trust store. |
 
 The connection's hostname / port fields are unused on the wire — the
 backend allocates a localhost VNC display and tunnels guacd to that.
@@ -146,6 +147,41 @@ Example:
 # OAuth IdP
 13.107.6.152/31
 ```
+
+### Trusted CA bundles (v1.2.0)
+
+Internal-PKI roots can be uploaded once and re-used across kiosks
+instead of pasted into every connection. Workflow:
+
+1. **Admin → Trusted CAs → Upload** — paste or upload a PEM file
+   (`.pem` / `.crt` / `.cer`), give it a friendly name and an
+   optional description. The form previews the parsed subject,
+   `not_after`, and SHA-256 fingerprint after a successful upload.
+2. In the connection editor's Web section, pick the bundle from the
+   **Trusted Certificate Authority** dropdown. The selection persists
+   as `extra.trusted_ca_id` (UUID).
+3. At spawn time the backend resolves the UUID to the PEM, creates an
+   ephemeral NSS database under
+   `<user-data-dir>/.pki/nssdb` with `certutil -N --empty-password`,
+   then imports the PEM with
+   `certutil -A -d sql:<dir> -n <label> -t "C,," -i <pem>`. Chromium
+   reads from that NSS DB and trusts the supplied roots — no
+   `--ignore-certificate-errors` flag is used.
+4. The NSS DB lives inside the per-session profile directory, so it
+   is destroyed with the kiosk on session end.
+
+Limits and contracts:
+
+- The `name` column is unique on `LOWER(name)`.
+- A bundle that is referenced by at least one `web` connection
+  cannot be deleted; the API returns
+  *"Cannot delete: this CA is still attached to N web connection(s)"*.
+- The PEM is **public material** and is not Vault-sealed.
+- Non-admin users with **Create Connections** can pick from the
+  curated list via `GET /api/user/trusted-cas`, which returns only
+  `{ id, name, subject }`.
+- Requires `libnss3-tools` in the backend image (default since
+  v1.2.0).
 
 ---
 
@@ -266,6 +302,19 @@ couldn't construct the encrypted credential blob. The most common
 cause is a backend image mismatch — autofill expects Chromium's
 per-profile encryption layout, which changed in upstream Chromium
 v120+; the default backend image pins a known-compatible version.
+
+### "trusted CA import failed" (v1.2.0)
+
+The per-session `certutil` invocation returned non-zero. Verify
+`libnss3-tools` is present in the backend image
+(`docker exec strata-client-backend-1 which certutil`); if absent,
+rebuild with `docker compose up -d --build`. If `certutil` is
+present, inspect the audit log for the `web.session.end` event —
+the failure reason includes the trailing characters of `certutil`'s
+stderr. The most common cause is a malformed PEM, but the upload
+endpoint validates with `rustls-pemfile` + `x509-parser` so this
+should not occur post-upload; if it does, re-upload the bundle
+forcing a fresh round-trip through the validator.
 
 ---
 

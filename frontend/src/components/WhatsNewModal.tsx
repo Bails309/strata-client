@@ -25,6 +25,48 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.2.0",
+    subtitle:
+      "Reusable Trusted CA bundles for Web Sessions, tenant-aware checkout-email rendering, and SMTP / NVR UX polish",
+    sections: [
+      {
+        title: "Upload a PEM once, reuse it on every web kiosk",
+        description:
+          "A new admin surface — Admin → Trusted CAs — lets you upload a PEM bundle with a friendly name, description, and parsed metadata preview (subject, expiry, SHA-256 fingerprint), then attach it to any number of web-protocol connections via a dropdown in the connection editor. At kiosk launch the backend creates a per-session NSS database under <user-data-dir>/.pki/nssdb and runs certutil -A -d sql:<dir> -n <label> -t \"C,,\" -i <pem> so Chromium trusts the supplied roots without resorting to --ignore-certificate-errors. PEMs are validated at upload time with rustls-pemfile + x509-parser; deletion of a CA still referenced by an active connection is refused with a clear error message. New endpoints: GET/POST /api/admin/trusted-cas, PUT/DELETE /api/admin/trusted-cas/{id}, plus a slim auth-only GET /api/user/trusted-cas for the connection-editor dropdown.",
+      },
+      {
+        title: "Checkout emails now respect your tenant's display timezone and date format",
+        description:
+          "Approval / approved / rejected / self-approved checkout emails previously rendered every expiry timestamp as YYYY-MM-DD HH:MM UTC, regardless of the operator's settings. They now use a new format_datetime_for_display() helper backed by chrono-tz that reads system_settings.display_timezone (IANA zone), display_date_format (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY), and display_time_format (HH:mm, HH:mm:ss, hh:mm A, hh:mm:ss A). The zone abbreviation is appended (BST, EST, etc.) so the recipient can disambiguate the local time at a glance.",
+      },
+      {
+        title: "\"Target account\" line on emails finally shows the friendly name",
+        description:
+          "Where an admin has set a friendly_name on the account mapping (or where the user's Credentials page checkout request stored one), that name is now what appears on the email. Otherwise the displayed Common Name is extracted with a proper RFC 4514-aware parser that handles escaped commas (CN=Smith\\, John,...), escaped plus signs, hex-encoded bytes (\\2C), and case-insensitive cn= attribute labels. Previously the naive dn.split(',').next() implementation displayed the full Distinguished Name on accounts whose CN contained an escaped comma.",
+      },
+      {
+        title: "Inline cid:strata-logo banner on every transactional email",
+        description:
+          "The MJML templates already referenced cid:strata-logo in the banner image, but no inline part was actually being attached, so every recipient saw a broken-image icon. The dispatcher, retry worker, and admin test-send route now all attach templates/strata-logo.png as a multipart/related inline part with content-id strata-logo at every real send site, so the white wordmark renders on the accent banner across Outlook, Gmail, Apple Mail, Thunderbird, and K-9.",
+      },
+      {
+        title: "SMTP TLS = none mode hides — and clears — credentials",
+        description:
+          "Selecting TLS = none under Admin → Notifications → SMTP (typical for an internal port-25 relay) now hides the username and password fields entirely and sends password: { action: \"clear\" } on save. Switching from STARTTLS or implicit-TLS to plaintext relay can no longer leave stale Vault-encrypted credentials behind. A short helper sentence under the TLS dropdown documents the unauthenticated-mode contract so operators don't have to read the source.",
+      },
+      {
+        title: "Premium LIVE / Rewind buttons in the admin Sessions table",
+        description:
+          "The two NVR action buttons on the admin Sessions page have been reworked into an inverted, gradient-on-hover style with a dual-keyframe pulsing dot — a 1.1 s scaled core dot plus an expanding halo ring — so the broadcast-LIVE affordance reads instantly even on a busy table. Honours @media (prefers-reduced-motion: reduce) by disabling the pulse for affected users.",
+      },
+      {
+        title: "Drop-in upgrade — but a rebuild is required",
+        description:
+          "One new database migration (059_trusted_ca_bundles.sql) runs automatically on first boot. The backend image gains the libnss3-tools apt package (provides certutil), so a docker compose pull is not enough — operators must docker compose up -d --build or rely on CI to publish a new image tag. No /api/* breaking changes; all five new endpoints are additive. Old connections.extra rows without trusted_ca_id continue to use the OS default trust store. cargo fmt / clippy clean; cargo test green; Sessions.test.tsx 38/38; NotificationsTab.test.tsx 17/17.",
+      },
+    ],
+  },
+  {
     version: "1.1.0",
     subtitle:
       "RDP graphics-pipeline parity with rustguac, recording-playback EACCES fix, sidebar collapse, stuck-key cleanup, and a new Playwright RBAC pack",

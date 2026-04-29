@@ -27,6 +27,7 @@ import PasswordsTab from "./admin/PasswordsTab";
 import AdSyncTab from "./admin/AdSyncTab";
 import AccessTab from "./admin/AccessTab";
 import NotificationsTab from "./admin/NotificationsTab";
+import TrustedCAsTab from "./admin/TrustedCAsTab";
 import VdiTab from "./admin/VdiTab";
 
 type Tab =
@@ -44,6 +45,7 @@ type Tab =
   | "notifications"
   | "sessions"
   | "vdi"
+  | "trusted-cas"
   | "security";
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
@@ -116,6 +118,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
             "notifications",
             "sessions",
             "vdi",
+            "trusted-cas",
             "security",
           ] as Tab[]
         )
@@ -153,7 +156,9 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
                         ? "Sessions"
                         : t === "vdi"
                           ? "VDI"
-                          : t.charAt(0).toUpperCase() + t.slice(1)}
+                          : t === "trusted-cas"
+                            ? "Trusted CAs"
+                            : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
       </div>
@@ -264,6 +269,11 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
               .catch(() => {});
           }}
         />
+      )}
+
+      {/* ── Trusted CAs ── */}
+      {tab === "trusted-cas" && (
+        <TrustedCAsTab onSave={() => flash("Trusted CAs updated")} />
       )}
 
       {/* ── Security ── */}

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import Select from "../../components/Select";
 import { getTimezones } from "../../utils/time";
-import { getVdiImages } from "../../api";
+import { getVdiImages, getTrustedCasForPicker, TrustedCaPickerEntry } from "../../api";
 import { RDP_KEYBOARD_LAYOUTS } from "./rdpKeyboardLayouts";
 
 // ── Helper: Collapsible Section ─────────────────────────────────────
@@ -1603,6 +1603,23 @@ export function WebSections({
     setEx("allowed_domains", cleaned.length ? JSON.stringify(cleaned) : "");
   };
 
+  // Trusted CA picker — populated lazily so the widget shows up
+  // even if the user lacks Manage System (the slim picker route is
+  // open to any authenticated user). Failures are silenced because
+  // an empty list simply hides the dropdown.
+  const [trustedCas, setTrustedCas] = useState<TrustedCaPickerEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getTrustedCasForPicker()
+      .then((rows) => {
+        if (!cancelled) setTrustedCas(rows);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <>
       <Section title="Target URL" defaultOpen>
@@ -1658,6 +1675,32 @@ export function WebSections({
               value={ex("login_script")}
               onChange={(e) => setEx("login_script", e.target.value)}
               placeholder="okta-saml"
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Trusted Certificate Authority">
+        <p className="text-xs opacity-60 mb-2">
+          Pick a stored CA bundle to inject into the kiosk Chromium&apos;s
+          per-session NSS database. Use this when the target site&apos;s
+          TLS certificate chains to a private root the public trust
+          store doesn&apos;t recognise. Manage entries under{" "}
+          <strong>Admin → Trusted CAs</strong>.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0 col-span-2">
+            <label>Trusted CA</label>
+            <Select
+              value={ex("trusted_ca_id")}
+              onChange={(v) => setEx("trusted_ca_id", v)}
+              options={[
+                { value: "", label: "— Use system default trust store —" },
+                ...trustedCas.map((c) => ({
+                  value: c.id,
+                  label: c.subject ? `${c.name} (${c.subject})` : c.name,
+                })),
+              ]}
             />
           </div>
         </FieldGrid>

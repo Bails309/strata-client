@@ -690,6 +690,7 @@ strata-client/
 │           ├── session_cleanup.rs  Periodic active_sessions expiry sweep
 │           ├── session_registry.rs  NVR ring buffer + live session tracking
 │           ├── settings.rs    system_settings CRUD
+│           ├── trusted_ca.rs  Trusted CA bundle CRUD + per-session NSS DB import via `certutil` (v1.2.0)
 │           ├── user_cleanup.rs  Hard-delete soft-deleted users after configurable window (default 90 days)
 │           ├── file_store.rs  Session-scoped temporary file storage
 │           ├── vault.rs       Envelope encryption
@@ -826,6 +827,35 @@ user_id)` pair if one is registered and still alive, so a tab refresh
 doesn't pay the spawn cost twice. When the tunnel closes the registry
 keeps the handle for a short grace window; an idle reaper destroys it
 afterwards.
+
+#### Trusted CA bundles for Web Sessions (v1.2.0)
+
+A new admin-managed table `trusted_ca_bundles` stores PEMs once with
+a friendly name; any `web` connection can attach a bundle via
+`extra.trusted_ca_id`. The runtime path is:
+
+1. `routes/tunnel.rs` resolves `cfg.trusted_ca_id` to the PEM bytes
+   via `services::trusted_ca::get(&pool, id)` *before* constructing
+   the `WebSpawnSpec`.
+2. `WebSpawnSpec.trusted_ca_pem` and `trusted_ca_label` flow into the
+   spawn worker.
+3. The worker calls `services::trusted_ca::import_pem_into_nss_db(
+   &pem, profile_dir, label)` which executes
+   `certutil -N --empty-password -d sql:<profile>/.pki/nssdb` followed
+   by `certutil -A -d sql:<profile>/.pki/nssdb -n <label> -t "C,," -i <tmp.pem>`.
+4. Chromium reads the NSS DB at startup and trusts the supplied roots
+   without any `--ignore-certificate-errors` flag.
+5. The NSS DB lives inside the per-session profile directory and is
+   destroyed with it on session end.
+
+`certutil` is provided by the `libnss3-tools` apt package, baked into
+the backend image since v1.2.0. PEMs are validated at upload time
+with `rustls-pemfile::certs` + `x509_parser::parse_x509_certificate`
+and the parsed `subject` / `not_after` / `fingerprint` (SHA-256 hex,
+colon-separated) are cached on the row so list views never re-parse.
+The PEM column is treated as **public material** (signatures over
+public keys) and is *not* envelope-encrypted via Vault — see the
+[Security](security.md) document for the rationale.
 
 ### VDI runtime (shipped v0.30.0)
 

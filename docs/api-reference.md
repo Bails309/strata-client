@@ -1416,6 +1416,115 @@ Return rows from `email_deliveries`, newest first. Use the `status` query parame
 
 ---
 
+## Trusted CA Bundles (v1.2.0)
+
+Reusable PEM bundles used by the `web` protocol's Chromium kiosk so
+operators can attach an internal-PKI root to many connections without
+re-pasting it. PEMs are validated at upload time with `rustls-pemfile`
++ `x509-parser`; the parsed subject, expiry, and SHA-256 fingerprint
+are cached on the row so the admin list view never has to re-parse.
+
+The PEM is treated as **public material** and is not envelope-encrypted
+via Vault. Read access to the PEM column requires `can_manage_system`.
+The picker endpoint (`GET /api/user/trusted-cas`) is auth-only and
+returns only `{id, name, subject}` — never the PEM bytes.
+
+### `GET /api/admin/trusted-cas`
+
+Required permission: `can_manage_system`.
+
+**Response** `200 OK`
+```json
+[
+  {
+    "id": "f1e2d3c4-...",
+    "name": "Corporate Root 2024",
+    "description": "Internal PKI root for *.corp.example",
+    "subject": "CN=Corp Root CA, O=Example, C=GB",
+    "not_after": "2034-04-29T00:00:00Z",
+    "fingerprint": "AB:CD:EF:01:02:03:...",
+    "created_at": "2026-04-29T10:00:00Z",
+    "updated_at": "2026-04-29T10:00:00Z"
+  }
+]
+```
+
+### `POST /api/admin/trusted-cas`
+
+Upload a new bundle.
+
+Required permission: `can_manage_system`.
+
+**Request Body**
+```json
+{
+  "name": "Corporate Root 2024",
+  "description": "Internal PKI root for *.corp.example",
+  "pem": "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----\n"
+}
+```
+
+**Response** `200 OK` returns the parsed summary as above.
+
+**Errors**
+- `400 Bad Request` — `name` empty, blank PEM, malformed PEM, or no certificate found in the input.
+- `400 Bad Request` — `name` collides (case-insensitive UNIQUE on `LOWER(name)`).
+
+Writes a `trusted_ca.created` audit event.
+
+### `PUT /api/admin/trusted-cas/{id}`
+
+Update a bundle. All fields are optional; sending a blank `pem` keeps
+the existing PEM untouched.
+
+Required permission: `can_manage_system`.
+
+**Request Body**
+```json
+{
+  "name": "Corporate Root 2024 (rotated)",
+  "description": "Refreshed root after CA rotation",
+  "pem": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
+}
+```
+
+**Response** `200 OK` returns the updated summary.
+
+Writes a `trusted_ca.updated` audit event.
+
+### `DELETE /api/admin/trusted-cas/{id}`
+
+Required permission: `can_manage_system`.
+
+**Response** `200 OK`
+```json
+{ "status": "deleted" }
+```
+
+**Errors**
+- `400 Bad Request` — at least one row in `connections` (with
+  `protocol = 'web'`) still references this bundle via
+  `extra->>'trusted_ca_id'`. Detach the bundle from those connections
+  first.
+- `404 Not Found` — no such bundle.
+
+Writes a `trusted_ca.deleted` audit event.
+
+### `GET /api/user/trusted-cas`
+
+Authenticated read-only picker used by the connection editor's
+**Trusted Certificate Authority** dropdown. No special permission is
+required, but the response intentionally omits the PEM bytes.
+
+**Response** `200 OK`
+```json
+[
+  { "id": "f1e2d3c4-...", "name": "Corporate Root 2024", "subject": "CN=Corp Root CA, O=Example, C=GB" }
+]
+```
+
+---
+
 ## Audit Event Types
 
 | Action Type | Trigger |
@@ -1466,6 +1575,9 @@ Return rows from `email_deliveries`, newest first. Use the `status` query parame
 | `vdi.container.ensure` | `DockerVdiDriver::ensure_container()` succeeded (spawn or reuse). `details`: `{ connection_id, container_name, image }`. Added in v0.30.0 |
 | `vdi.container.destroy` | Reaper destroyed a VDI container. `details`: `{ connection_id, container_name, reason }` where `reason` is one of `Logout`, `IdleTimeout`, or `Other`. Added in v0.30.0 |
 | `vdi.image.rejected` | A VDI tunnel attempt referenced an image not present in the operator whitelist. `details`: `{ connection_id, image }`. Added in v0.30.0 |
+| `trusted_ca.created` | Admin uploaded a new Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0 |
+| `trusted_ca.updated` | Admin edited a Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0 |
+| `trusted_ca.deleted` | Admin deleted a Trusted CA bundle. `details`: `{ id, name }`. Added in v1.2.0 |
 
 ---
 

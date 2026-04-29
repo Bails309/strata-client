@@ -3568,6 +3568,107 @@ pub async fn web_sessions_stats(
     })))
 }
 
+// ── Trusted CA Bundles ────────────────────────────────────────────────
+//
+// Reusable trust roots for the web-session kiosk. Admin uploads PEM
+// once with a friendly name; web connections then attach by UUID. The
+// `/api/user/trusted-cas` route exposes a slim list (id + name) to
+// any authenticated user so the connection editor dropdown works
+// without granting Manage System.
+
+pub async fn list_trusted_cas(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::services::trusted_ca::TrustedCaSummary>>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let rows = crate::services::trusted_ca::list(&db.pool).await?;
+    Ok(Json(rows))
+}
+
+pub async fn create_trusted_ca(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<crate::services::trusted_ca::CreateTrustedCa>,
+) -> Result<Json<crate::services::trusted_ca::TrustedCaSummary>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let row = crate::services::trusted_ca::create(&db.pool, &body, Some(user.id)).await?;
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "trusted_ca.created",
+        &json!({ "id": row.id.to_string(), "name": row.name }),
+    )
+    .await?;
+    Ok(Json(row))
+}
+
+pub async fn update_trusted_ca(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<crate::services::trusted_ca::UpdateTrustedCa>,
+) -> Result<Json<crate::services::trusted_ca::TrustedCaSummary>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let row = crate::services::trusted_ca::update(&db.pool, id, &body)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Trusted CA not found".into()))?;
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "trusted_ca.updated",
+        &json!({ "id": row.id.to_string(), "name": row.name }),
+    )
+    .await?;
+    Ok(Json(row))
+}
+
+pub async fn delete_trusted_ca(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    if !crate::services::trusted_ca::delete(&db.pool, id).await? {
+        return Err(AppError::NotFound("Trusted CA not found".into()));
+    }
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "trusted_ca.deleted",
+        &json!({ "id": id.to_string() }),
+    )
+    .await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+/// Slim list for the connection-editor dropdown. Returns id + name +
+/// subject only — no PEM, no creator metadata. Authenticated users
+/// with permission to edit *any* connection can see this; the actual
+/// permission check on save happens in the connections create/update
+/// route.
+pub async fn list_trusted_cas_for_picker(
+    State(state): State<SharedState>,
+    Extension(_user): Extension<AuthUser>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows = crate::services::trusted_ca::list(&db.pool).await?;
+    let slim: Vec<_> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "name": r.name,
+                "subject": r.subject,
+            })
+        })
+        .collect();
+    Ok(Json(slim))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

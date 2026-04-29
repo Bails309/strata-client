@@ -250,6 +250,13 @@ pub struct WebSessionConfig {
     /// auditable.
     #[serde(default)]
     pub login_script: Option<String>,
+
+    /// Optional reference to a row in `trusted_ca_bundles`. When
+    /// present the kiosk launcher materialises that PEM into the
+    /// per-session NSS DB so Chromium trusts the supplied roots
+    /// without resorting to `--ignore-certificate-errors`.
+    #[serde(default)]
+    pub trusted_ca_id: Option<uuid::Uuid>,
 }
 
 impl WebSessionConfig {
@@ -278,10 +285,15 @@ impl WebSessionConfig {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
+        let trusted_ca_id = obj
+            .get("trusted_ca_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| uuid::Uuid::parse_str(s.trim()).ok());
         Some(Self {
             url: url.to_string(),
             allowed_domains,
             login_script,
+            trusted_ca_id,
         })
     }
 }

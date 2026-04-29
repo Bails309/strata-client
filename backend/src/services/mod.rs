@@ -31,6 +31,7 @@ pub mod settings;
 pub mod shares;
 pub mod display;
 pub mod token_revocation;
+pub mod trusted_ca;
 pub mod tunnel_tickets;
 pub mod user_cleanup;
 pub mod user_credentials;

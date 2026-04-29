@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.1.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.2.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.95-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
@@ -35,6 +35,15 @@
 # Strata Client
 
 ## ✨ Features
+
+- **Reusable Trusted CA bundles for Web Sessions (v1.2.0)** — A new admin surface (**Admin → Trusted CAs**) lets operators upload PEM bundles once with a friendly label; any `web` connection can then attach the bundle from a dropdown in the connection editor. At kiosk launch the backend writes the PEM into a per-session NSS database under `<user-data-dir>/.pki/nssdb` via `certutil` (from `libnss3-tools`, baked into the backend image), so Chromium trusts the supplied roots without ever resorting to `--ignore-certificate-errors`. PEMs are validated at upload time with `rustls-pemfile` + `x509-parser`; the parsed subject, expiry, and SHA-256 fingerprint are cached on the row so the admin list view never has to re-parse. CAs in active use cannot be deleted — the API returns a clear *"Cannot delete: this CA is still attached to N web connection(s)"* error rather than silently breaking a kiosk. Migration `059_trusted_ca_bundles.sql`; new endpoints `GET/POST /api/admin/trusted-cas`, `PUT/DELETE /api/admin/trusted-cas/{id}`, plus a slim read-only `GET /api/user/trusted-cas` for the connection-editor dropdown so users without **Manage System** can still pick from the curated list.
+- **Tenant-aware date/time in checkout emails (v1.2.0)** — Approval / approved / rejected / self-approved emails now render expiry timestamps in the operator's configured display timezone, date format, and clock format (12 / 24 hour) instead of the previous hard-coded `YYYY-MM-DD HH:MM UTC`. The conversion uses `chrono-tz` against the IANA zone stored in `display_timezone`, with `display_date_format` (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, `DD-MM-YYYY`) and `display_time_format` (`HH:mm`, `HH:mm:ss`, `hh:mm A`, `hh:mm:ss A`) controlling the surface format. The zone abbreviation (`%Z`) is appended so the recipient can disambiguate `BST` from `UTC`.
+- **Correct target-account display in checkout emails (v1.2.0)** — The "Target account" line in checkout emails now prefers the admin-set `friendly_name` (matching what the user sees on the Credentials page when checking out), falling back to an RFC 4514-aware Common Name parser that correctly handles escaped commas (`\,`), escaped plus signs (`\+`), hex pairs (`\2C`), and the case-insensitive `cn=` attribute label. Previously the naive `dn.split(',').next()` parser displayed the user's full Distinguished Name on accounts whose CN contained an escaped comma, and ignored the friendly name entirely.
+- **Inline logo on every transactional email (v1.2.0)** — The MJML templates already referenced `cid:strata-logo` in the banner image, but no inline part was being attached, so every recipient saw a broken-image icon. The dispatcher now attaches `templates/strata-logo.png` as a `multipart/related` inline part with content-id `strata-logo` at every real send site (initial dispatch and the retry worker), so the white wordmark renders on the accent banner across Outlook, Gmail, Apple Mail, Thunderbird, and K-9.
+- **SMTP unauthenticated relay support (v1.2.0)** — Selecting **TLS = none** under **Admin → Notifications → SMTP** (typical for a port-25 internal relay) now hides the username and password fields entirely and clears any stored credentials on save. Trying to type credentials and then switching to plaintext relay can no longer leave stale Vault-encrypted values behind. A short helper sentence under the TLS dropdown documents the unauthenticated-mode contract so operators don't have to read the source.
+- **Premium "LIVE" / "Rewind" buttons in the Sessions table (v1.2.0)** — The two NVR action buttons on the admin Sessions page have been reworked into an inverted, gradient-on-hover style with a dual-keyframe pulsing dot (1.1 s scaled core plus an expanding halo ring) so the *broadcast LIVE* affordance reads instantly even on a busy table. Honours `prefers-reduced-motion: reduce`.
+
+## ✨ Features (1.0 baseline + earlier deltas)
 
 - **Custom `guacd` daemon** — Apache Guacamole server compiled with FreeRDP 3 and Kerberos (GSSAPI) support
 - **Rust proxy / API** — High-performance middle tier (Tokio + Axum) handling WebSocket tunnelling, OIDC auth, and dynamic configuration

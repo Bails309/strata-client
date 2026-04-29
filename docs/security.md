@@ -978,6 +978,26 @@ operator-facing documentation.
 - **Domain restriction.** Chromium's `--host-rules` rewrites every
   non-allowed host to `~NOTFOUND`. This is in addition to the egress
   CIDR allow-list, not a replacement for it.
+- **Trusted CA bundles (v1.2.0).** Operators can attach a reusable
+  PEM bundle to a `web` connection via the **Trusted Certificate
+  Authority** dropdown in the connection editor. At spawn time the
+  backend writes the PEM into a per-session NSS database under
+  `<user-data-dir>/.pki/nssdb` via `certutil -N --empty-password` +
+  `certutil -A -d sql:<dir> -n <label> -t "C,," -i <pem>` (provided
+  by the `libnss3-tools` apt package, baked into the backend image).
+  Trust grants do not survive the tab close — the NSS DB lives
+  inside the ephemeral profile dir and is destroyed with it. The
+  PEM holds certificate chains (signatures over public keys), so it
+  is treated as **public material** and is *not* envelope-encrypted
+  via Vault — read access to the PEM column requires
+  `can_manage_system`. The dropdown for non-admin users
+  (`GET /api/user/trusted-cas`) returns only `{id, name, subject}`
+  and deliberately omits the PEM bytes. Deletion is reference-guarded:
+  `DELETE /api/admin/trusted-cas/{id}` refuses with HTTP 400 when at
+  least one row in `connections` (with `protocol = 'web'`) still
+  references the bundle via `extra->>'trusted_ca_id'`. CRUD events
+  emit `trusted_ca.created`, `trusted_ca.updated`, and
+  `trusted_ca.deleted` audit rows.
 
 ### VDI Desktop Containers (`vdi` protocol)
 

@@ -1532,3 +1532,28 @@ export const listEmailDeliveries = (status?: string, limit = 50) => {
   params.set("limit", String(limit));
   return request<EmailDelivery[]>(`/admin/notifications/deliveries?${params.toString()}`);
 };
+
+// -- Trusted CA bundles ----------------------------------------------
+export interface TrustedCaSummary {
+  id: string;
+  name: string;
+  description: string;
+  subject: string | null;
+  not_after: string | null;
+  fingerprint: string | null;
+  created_at: string;
+  updated_at: string;
+}
+export interface TrustedCaPickerEntry {
+  id: string;
+  name: string;
+  subject: string | null;
+}
+export const getTrustedCas = () => request<TrustedCaSummary[]>("/admin/trusted-cas");
+export const createTrustedCa = (body: { name: string; description: string; pem: string }) =>
+  request<TrustedCaSummary>("/admin/trusted-cas", { method: "POST", body: JSON.stringify(body) });
+export const updateTrustedCa = (id: string, body: { name?: string; description?: string; pem?: string }) =>
+  request<TrustedCaSummary>(`/admin/trusted-cas/${id}`, { method: "PUT", body: JSON.stringify(body) });
+export const deleteTrustedCa = (id: string) =>
+  request<{ status: string }>(`/admin/trusted-cas/${id}`, { method: "DELETE" });
+export const getTrustedCasForPicker = () => request<TrustedCaPickerEntry[]>("/user/trusted-cas");

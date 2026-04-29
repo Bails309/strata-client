@@ -107,6 +107,15 @@ pub struct WebSpawnSpec {
     /// compose stack). Mirrors rustguac's `geteuid() == 0` check;
     /// passed through to [`ChromiumLaunchSpec::running_as_root`].
     pub running_as_root: bool,
+    /// PEM bundle to import into the per-session NSS DB before
+    /// Chromium launches. Threaded from `WebSessionConfig::trusted_ca_id`
+    /// after the tunnel route resolves it through `services::trusted_ca`.
+    /// `None` skips the NSS import entirely (default Chromium trust
+    /// store is used).
+    pub trusted_ca_pem: Option<String>,
+    /// Stable label for the NSS nickname — typically the trusted-CA
+    /// bundle's UUID. Only consulted when `trusted_ca_pem` is `Some`.
+    pub trusted_ca_label: Option<String>,
 }
 
 /// Plaintext username/password pair for autofill. Caller is expected
@@ -167,6 +176,8 @@ pub enum WebRuntimeError {
     ChromiumImmediateExit(String),
     #[error("login script failed: {0}")]
     LoginScript(#[from] LoginScriptError),
+    #[error("trusted CA import failed: {0}")]
+    TrustedCaImport(String),
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -362,6 +373,22 @@ impl WebRuntimeRegistry {
         if !wait_for_vnc_ready(display, WEB_VNC_READY_DEADLINE).await {
             // `xvnc` is dropped here → SIGKILL'd via kill_on_drop.
             return Err(WebRuntimeError::XvncNotReady(display));
+        }
+
+        // Step 4c: optional trusted-CA import. Done **before** chromium
+        // spawns so the NSS DB exists in the user-data-dir at startup.
+        // A failure here is fatal — the operator explicitly attached a
+        // CA and silently launching without trust would either ignore
+        // their intent or surface a confusing TLS error inside the
+        // kiosk.
+        if let Some(pem) = &spec.trusted_ca_pem {
+            let label = spec
+                .trusted_ca_label
+                .as_deref()
+                .unwrap_or("attached");
+            super::trusted_ca::import_pem_into_nss_db(pem, profile_dir.path(), label)
+                .await
+                .map_err(WebRuntimeError::TrustedCaImport)?;
         }
 
         // Step 5: Chromium spawn (B2–B6).

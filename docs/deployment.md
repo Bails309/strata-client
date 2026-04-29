@@ -534,6 +534,38 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v1.1.0 → v1.2.0 (mandatory image rebuild)
+
+v1.2.0 introduces reusable Trusted CA bundles for the `web`
+protocol (see [`web-sessions.md`](web-sessions.md) and
+[`security.md`](security.md)) and a small cluster of email and UX
+fixes. The backend image gains a new apt package — `libnss3-tools`,
+which provides the `certutil` binary used at kiosk launch to import
+the per-connection PEM into a per-session NSS database — so a
+`docker compose pull` alone is **not** sufficient unless your
+registry has already published the new image tag:
+
+```bash
+cd strata-client
+git pull
+docker compose pull
+docker compose build --pull       # picks up libnss3-tools
+docker compose up -d
+```
+
+One new database migration runs automatically on first boot:
+`059_trusted_ca_bundles.sql`. No existing rows are touched. No
+`/api/*` breaking changes are introduced; the five new endpoints
+(`/api/admin/trusted-cas` × 4 plus `/api/user/trusted-cas`) are
+purely additive. The `WebSessionConfig` schema gains an optional
+`trusted_ca_id` field; old `connections.extra` rows without the key
+continue to use the OS default trust store unchanged.
+
+Operator action — review SMTP rows: if you previously stored a
+username and password against an `smtp.tls_mode = "none"` row, the
+new UI clears those credentials on the next save. The database row
+is untouched until that save event.
+
 #### v1.0.0 → v1.1.0 (mandatory image rebuild)
 
 v1.1.0 ships a runtime fix for historic-recording playback that

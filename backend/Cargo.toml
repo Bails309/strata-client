@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"
@@ -70,6 +70,11 @@ ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ri
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 rustls-pemfile = "2"
 rustls-native-certs = "0.8"
+# x509-parser — used by `services::trusted_ca` to validate uploaded
+# CA bundles and pre-extract subject / expiry / fingerprint metadata
+# for the admin UI list view, so the kiosk launcher doesn't have to
+# reparse PEMs on every session start.
+x509-parser = "0.18"
 
 # Misc
 uuid = { version = "1", features = ["v4", "serde"] }

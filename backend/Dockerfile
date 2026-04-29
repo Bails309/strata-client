@@ -97,6 +97,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
         chromium \
         chromium-sandbox \
         x11-utils \
+        libnss3-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/strata-backend /usr/local/bin/strata-backend

@@ -11,8 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The first feature release on the 1.x SemVer line. The headline change
 is a deliberate UX-and-defaults rework of the RDP graphics-pipeline
-controls so that fresh connections behave identically to the upstream
-[sol1/rustguac](https://github.com/sol1/rustguac) baseline that
+controls so that fresh connections behave identically to the upstream baseline that
 Strata's custom guacd is patched against — `disable-gfx=true` and
 `enable-h264=false` are now the *visible* defaults in the connection
 form (previously the UI rendered as if GFX were on while the backend

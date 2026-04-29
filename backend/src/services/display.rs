@@ -24,10 +24,7 @@ use crate::services::settings;
 /// vocabulary):
 ///   * Date: `YYYY-MM-DD` (default), `DD/MM/YYYY`, `MM/DD/YYYY`, `DD-MM-YYYY`
 ///   * Time: `HH:mm:ss` (default), `HH:mm`, `hh:mm:ss A`, `hh:mm A`
-pub async fn format_datetime_for_display(
-    pool: &Pool<Postgres>,
-    ts: DateTime<Utc>,
-) -> String {
+pub async fn format_datetime_for_display(pool: &Pool<Postgres>, ts: DateTime<Utc>) -> String {
     let tz_name = settings::get(pool, "display_timezone")
         .await
         .ok()
@@ -113,9 +110,7 @@ pub fn cn_from_dn(dn: &str) -> Option<String> {
                     if let Some(&h2) = chars.peek() {
                         if h2.is_ascii_hexdigit() {
                             let h2 = chars.next().unwrap();
-                            if let Ok(byte) =
-                                u8::from_str_radix(&format!("{h1}{h2}"), 16)
-                            {
+                            if let Ok(byte) = u8::from_str_radix(&format!("{h1}{h2}"), 16) {
                                 value.push(byte as char);
                                 continue;
                             }
@@ -171,10 +166,7 @@ mod tests {
 
     #[test]
     fn cn_from_dn_lowercase_attr() {
-        assert_eq!(
-            cn_from_dn("cn=svc-foo,DC=corp").as_deref(),
-            Some("svc-foo")
-        );
+        assert_eq!(cn_from_dn("cn=svc-foo,DC=corp").as_deref(), Some("svc-foo"));
     }
 
     #[test]

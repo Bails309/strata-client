@@ -272,9 +272,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
       )}
 
       {/* ── Trusted CAs ── */}
-      {tab === "trusted-cas" && (
-        <TrustedCAsTab onSave={() => flash("Trusted CAs updated")} />
-      )}
+      {tab === "trusted-cas" && <TrustedCAsTab onSave={() => flash("Trusted CAs updated")} />}
 
       {/* ── Security ── */}
       {tab === "security" && (

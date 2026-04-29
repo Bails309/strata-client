@@ -95,7 +95,10 @@ fn parse_and_validate(pem: &str) -> Result<(String, ParsedMetadata), AppError> {
     // typically lead with the root or intermediate the admin actually
     // cares about, and we want a stable single-row preview rather than
     // dumping the full chain.
-    let first_der = certs.first().expect("certs non-empty checked above").as_ref();
+    let first_der = certs
+        .first()
+        .expect("certs non-empty checked above")
+        .as_ref();
     let (_, parsed) = x509_parser::parse_x509_certificate(first_der)
         .map_err(|e| AppError::Validation(format!("X.509 parse error: {e}")))?;
 
@@ -268,9 +271,7 @@ pub async fn update(
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
-            AppError::Validation(format!(
-                "A trusted CA called \"{new_name}\" already exists"
-            ))
+            AppError::Validation(format!("A trusted CA called \"{new_name}\" already exists"))
         }
         _ => AppError::Database(e),
     })?;

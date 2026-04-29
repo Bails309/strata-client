@@ -382,10 +382,7 @@ impl WebRuntimeRegistry {
         // their intent or surface a confusing TLS error inside the
         // kiosk.
         if let Some(pem) = &spec.trusted_ca_pem {
-            let label = spec
-                .trusted_ca_label
-                .as_deref()
-                .unwrap_or("attached");
+            let label = spec.trusted_ca_label.as_deref().unwrap_or("attached");
             super::trusted_ca::import_pem_into_nss_db(pem, profile_dir.path(), label)
                 .await
                 .map_err(WebRuntimeError::TrustedCaImport)?;

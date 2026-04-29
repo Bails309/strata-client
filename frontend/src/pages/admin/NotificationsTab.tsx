@@ -385,9 +385,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
                     )}
                   </div>
                   <p className="text-sm text-txt-secondary mt-1">
-                    The SMTP password is <strong>sealed in Vault before storage</strong>. If Vault is
-                    sealed or running in stub mode, saving will be rejected. Leave blank to keep the
-                    existing sealed value.
+                    The SMTP password is <strong>sealed in Vault before storage</strong>. If Vault
+                    is sealed or running in stub mode, saving will be rejected. Leave blank to keep
+                    the existing sealed value.
                   </p>
                 </div>
               )}

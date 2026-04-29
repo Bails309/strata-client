@@ -1682,10 +1682,9 @@ export function WebSections({
 
       <Section title="Trusted Certificate Authority">
         <p className="text-xs opacity-60 mb-2">
-          Pick a stored CA bundle to inject into the kiosk Chromium&apos;s
-          per-session NSS database. Use this when the target site&apos;s
-          TLS certificate chains to a private root the public trust
-          store doesn&apos;t recognise. Manage entries under{" "}
+          Pick a stored CA bundle to inject into the kiosk Chromium&apos;s per-session NSS database.
+          Use this when the target site&apos;s TLS certificate chains to a private root the public
+          trust store doesn&apos;t recognise. Manage entries under{" "}
           <strong>Admin → Trusted CAs</strong>.
         </p>
         <FieldGrid>

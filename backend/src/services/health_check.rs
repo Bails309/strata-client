@@ -114,11 +114,13 @@ fn web_probe_target(extra: &serde_json::Value) -> Option<(String, u16)> {
     }
     let parsed = url::Url::parse(raw).ok()?;
     let host = parsed.host_str()?.to_owned();
-    let port = parsed.port_or_known_default().or_else(|| match parsed.scheme() {
-        "https" => Some(443),
-        "http" => Some(80),
-        _ => None,
-    })?;
+    let port = parsed
+        .port_or_known_default()
+        .or_else(|| match parsed.scheme() {
+            "https" => Some(443),
+            "http" => Some(80),
+            _ => None,
+        })?;
     Some((host, port))
 }
 

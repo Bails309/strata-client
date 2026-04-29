@@ -1,10 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  TrustedCaSummary,
-  getTrustedCas,
-  createTrustedCa,
-  deleteTrustedCa,
-} from "../../api";
+import { TrustedCaSummary, getTrustedCas, createTrustedCa, deleteTrustedCa } from "../../api";
 
 /**
  * Admin tab for managing reusable Trusted CA bundles. Web kiosk
@@ -73,14 +68,11 @@ export default function TrustedCAsTab({ onSave }: { onSave: () => void }) {
     <div className="card">
       <h2>Trusted Certificate Authorities</h2>
       <p className="text-sm text-muted mb-4">
-        Upload a PEM bundle once; web connections can then attach it
-        from a dropdown so the kiosk Chromium trusts your private CAs
-        without disabling certificate validation.
+        Upload a PEM bundle once; web connections can then attach it from a dropdown so the kiosk
+        Chromium trusts your private CAs without disabling certificate validation.
       </p>
 
-      {error && (
-        <div className="rounded-md mb-4 px-4 py-2 bg-danger/10 text-danger">{error}</div>
-      )}
+      {error && <div className="rounded-md mb-4 px-4 py-2 bg-danger/10 text-danger">{error}</div>}
 
       <form onSubmit={handleAdd} className="mb-6">
         <div className="form-group">
@@ -137,9 +129,7 @@ export default function TrustedCAsTab({ onSave }: { onSave: () => void }) {
               <tr key={r.id}>
                 <td>
                   <div className="font-medium">{r.name}</div>
-                  {r.description && (
-                    <div className="text-xs text-muted">{r.description}</div>
-                  )}
+                  {r.description && <div className="text-xs text-muted">{r.description}</div>}
                 </td>
                 <td className="text-xs">{r.subject ?? "—"}</td>
                 <td className="text-xs">

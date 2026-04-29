@@ -1552,8 +1552,14 @@ export interface TrustedCaPickerEntry {
 export const getTrustedCas = () => request<TrustedCaSummary[]>("/admin/trusted-cas");
 export const createTrustedCa = (body: { name: string; description: string; pem: string }) =>
   request<TrustedCaSummary>("/admin/trusted-cas", { method: "POST", body: JSON.stringify(body) });
-export const updateTrustedCa = (id: string, body: { name?: string; description?: string; pem?: string }) =>
-  request<TrustedCaSummary>(`/admin/trusted-cas/${id}`, { method: "PUT", body: JSON.stringify(body) });
+export const updateTrustedCa = (
+  id: string,
+  body: { name?: string; description?: string; pem?: string }
+) =>
+  request<TrustedCaSummary>(`/admin/trusted-cas/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 export const deleteTrustedCa = (id: string) =>
   request<{ status: string }>(`/admin/trusted-cas/${id}`, { method: "DELETE" });
 export const getTrustedCasForPicker = () => request<TrustedCaPickerEntry[]>("/user/trusted-cas");

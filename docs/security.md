@@ -454,15 +454,129 @@ If any permission is missing, the service account will receive an LDAP error whe
 
 ---
 
-## Connection Health Checks
+## Recordings Volume — Cross-Container POSIX Permissions Model
 
-The backend runs a background worker that TCP-probes every non-deleted connection's `hostname:port` every 2 minutes. Each probe uses a 5-second connect timeout. Results are stored as `health_status` (online/offline/unknown) and `health_checked_at` in the connections table. Health checks run concurrently across all connections using `tokio::spawn` tasks. This feature provides operational visibility without requiring agents on target machines.
+**Status:** invariant from v1.1.0 onwards. Documented after the
+v1.1.0 EACCES playback regression (see `CHANGELOG.md` 1.1.0
+*"Recording playback Tunnel error caused by EACCES on the shared
+recordings volume"*).
+
+Session `.guac` recordings are stored on the shared `guac-recordings`
+Docker volume, mounted into both the `guacd` and `backend`
+containers at `/var/lib/guacamole/recordings`. The two containers run
+as different POSIX users (Alpine guacd vs Debian backend), so a
+defined permissions contract is required to keep playback working
+without elevating either side's privileges.
+
+**Writer side (guacd):**
+
+- File ownership: `guacd:guacd` (uid/gid `100:101` inside the
+  Alpine-based `strata/custom-guacd` image).
+- File mode: `0640` — owner read/write, group read, no world access.
+  This is hard-coded by upstream `guacamole-server`'s
+  `recording.c` `open()` call and is not affected by the
+  in-container `umask`.
+- Directory mode: `0750` (set at image build by `chmod 0750
+  /var/lib/guacamole/recordings`).
+- The guacd entrypoint sets `umask 0027` defensively so any
+  non-recording artefacts (e.g. sidecar metadata) also stay
+  group-readable.
+
+**Reader side (backend):**
+
+- The backend runs `strata-backend` as the unprivileged `strata`
+  user (`gosu strata` in `backend/entrypoint.sh`). The user's
+  primary gid does not match the writer's gid by construction.
+- On every container start, `backend/entrypoint.sh` reads the
+  numeric gid off whichever guacd-written file is present in
+  `/var/lib/guacamole/recordings`, falling back to the directory
+  gid on first boot when the volume is empty.
+- If the discovered gid does not already exist inside the backend
+  container's `/etc/group`, a local group named `guac-recordings`
+  is created with that gid. Either way, the `strata` user is added
+  to the group via `usermod -aG`, becoming a supplementary-group
+  member.
+- After the supplementary-group bootstrap, standard POSIX
+  group-read on the `0640` recording files is sufficient — no
+  capabilities required at read time.
+
+**What we deliberately do *not* do:**
+
+- We do not use `DAC_OVERRIDE`. The backend's Linux capability
+  set keeps `DAC_OVERRIDE` for the directory-management ops
+  needed by ephemeral web-session storage (`/var/lib/strata`),
+  but the recording-read path resolves through standard POSIX
+  group-read. If `DAC_OVERRIDE` is dropped from the backend's
+  capability set in a future hardening pass, recording playback
+  continues to work.
+- We do not `chown -R strata:strata /var/lib/guacamole` in the
+  backend entrypoint (that line was previously present and was
+  removed in v1.1.0). It races with in-flight guacd writes and
+  destroys the gid signal the supplementary-group lookup needs.
+- We do not chmod recordings to world-readable (`0644`). On a
+  multi-tenant Linux host where the volume is bind-mounted from
+  a shared directory, world-read would expose recording byte
+  streams to any unrelated process under any unrelated UID on
+  the host.
+
+**Volume-driver compatibility:**
+
+- Docker named volumes — works. The kernel preserves uid/gid
+  natively across the overlay.
+- Bind-mounts from the host — works as long as the host
+  filesystem preserves uid/gid.
+- NFSv3 / NFSv4 — works as long as the export preserves
+  numeric ownership (default behaviour; broken only by
+  `all_squash` or aggressive uid-mapping).
+- CIFS / SMB — works only when the mount line uses
+  `uid=,gid=` to pin file ownership; without it CIFS reports
+  every file as the mount-time user and the gid bootstrap will
+  short-circuit.
+
+**Azure Blob Storage path is unaffected.** Recordings stored in
+Azure (`recording.storage_type == "azure"`) stream over HTTPS
+via `reqwest` and never touch the local filesystem; the
+permissions model above is irrelevant for that storage backend.
+Authentication for Azure-stored recordings is via the connection
+string / managed identity sealed in Vault, not POSIX uid/gid.
 
 ---
 
-## Connection Health Checks
+## Session Keyboard Cleanup
 
-The backend runs a background worker that TCP-probes every non-deleted connection's `hostname:port` every 2 minutes. Each probe uses a 5-second connect timeout. Results are stored as `health_status` (online/offline/unknown) and `health_checked_at` in the connections table. Health checks run concurrently across all connections using `tokio::spawn` tasks. This feature provides operational visibility without requiring agents on target machines.
+**Status:** invariant from v1.1.0 onwards.
+
+When an operator navigates away from an active session — whether
+by clicking a sidebar entry, using the Command Palette, or
+closing the session manager tab — the `SessionClient.tsx`
+keyboard-effect cleanup path performs three operations *in this
+order*:
+
+1. Set `kb.onkeydown = null` and `kb.onkeyup = null` so any
+   in-flight DOM keyboard event no longer reaches the tunnel.
+2. Call `kb.reset()` on the `Guacamole.Keyboard` instance. This
+   cancels the synthetic auto-repeat timer that
+   `Guacamole.Keyboard.press()` starts at 500 ms and ticks every
+   50 ms, and clears the internal `pressed[]` set.
+3. Call `kb.disconnect()` to detach the listener from the
+   container.
+
+**Why step 2 matters from a security perspective.** Without the
+explicit `kb.reset()`, a key held down at the moment of teardown
+(e.g. an operator pressing Enter to confirm a Command Palette
+selection that closes their current session) would leave a
+synthetic-repeat `setInterval` running with stale references. If
+the same effect re-attached on return — or if an attacker could
+keep the page alive with stale callbacks reattached — the
+remote target could continue receiving phantom keystrokes
+without operator awareness, potentially confirming a dialog or
+dispatching a queued shell command. The `kb.reset()` call
+guarantees keystroke-clean teardowns and is exercised by both
+the unit and Playwright suites.
+
+---
+
+
 
 **Security properties:**
 - Health checks use TCP connect only — no authentication data is transmitted during probes

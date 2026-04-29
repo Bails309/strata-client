@@ -532,6 +532,53 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ## Upgrading
 
+### Version-specific upgrade notes
+
+#### v1.0.0 → v1.1.0 (mandatory image rebuild)
+
+v1.1.0 ships a runtime fix for historic-recording playback that
+lives in the `entrypoint.sh` layer of both the `backend` and
+`guacd` images, *not* in the Rust binary or the frontend bundle.
+Operators must therefore rebuild both images, not just pull new
+tags:
+
+```bash
+cd strata-client
+git pull
+docker compose pull              # refresh base images (vault, postgres, etc.)
+docker compose build --pull      # rebuild backend + guacd with new entrypoints
+docker compose up -d
+```
+
+A `docker compose pull` alone is **not** sufficient if your
+registry has not yet rebuilt the images. The fix establishes a
+runtime supplementary-group bootstrap inside the backend
+container (see [security.md — Recordings Volume](security.md))
+that grants the unprivileged `strata` user POSIX group-read on
+`.guac` files written by guacd as `guacd:guacd`.
+
+After the upgrade, all existing recordings on the shared
+`guac-recordings` volume become readable on first backend boot
+with no file-rewriting, re-encoding, or `chmod` sweep required.
+Verify with:
+
+```bash
+docker compose logs backend | grep "for recording playback access"
+# Expected: [entrypoint] Added strata to <group> (gid=<n>) for recording playback access
+```
+
+If the line is absent on first boot of a brand-new deployment
+(empty recordings volume), it will appear automatically the
+first time the backend restarts after guacd has captured a
+recording. Operators on a clean install can also force the
+bootstrap deterministically by capturing one short test
+recording and restarting the backend container.
+
+No database migrations land in v1.1.0; no `/api/*` contract
+changes; no `config.toml` schema changes.
+
+#### General upgrade procedure
+
 ### Application (Backend + Frontend)
 
 ```bash

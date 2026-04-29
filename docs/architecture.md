@@ -59,6 +59,8 @@ Volumes:
 
 **Custom DNS resolution:** The guacd container uses a custom `entrypoint.sh` wrapper that checks for `/app/config/resolv.conf` on startup. If present, it copies the file to `/etc/resolv.conf`, enabling the container to resolve internal hostnames (e.g. `.local`, `.dmz.local` domains). The entrypoint then drops privileges to the `guacd` user via `su-exec` before launching the daemon. DNS servers and search domains are configured via the Admin Settings Network tab and written to the shared `backend-config` volume by the backend. Docker's embedded DNS (`127.0.0.11`) is always appended as a fallback nameserver so existing connections that resolve via public DNS continue working.
 
+**Recording write semantics (v1.1.0+):** guacd writes session recordings into the shared `guac-recordings` volume as `guacd:guacd` (uid/gid 100/101 inside the Alpine guacd container) at mode `0640` — group-only-read. The upstream `guacamole-server` `recording.c` `open()` hard-codes mode `0640`, so this is independent of the in-container `umask`. This gid is the integration point with the backend: the backend's `entrypoint.sh` reads the gid off the volume at startup and adds the `strata` user to a matching local group via `usermod -aG`, so historic playback works under standard POSIX group-read without requiring `DAC_OVERRIDE`. The fix is volume-agnostic — Docker named volumes, bind-mounts, NFSv3/v4 with preserved gids, and CIFS with `uid=,gid=` mount options all work transparently.
+
 ### 2. Rust Backend
 
 | Item | Value |
@@ -293,15 +295,37 @@ The four cooperating components:
    frame queue has drained. **Stock `guacamole-common-js` does not handle
    the `h264` opcode**; the vendored bundle is required.
 3. **Backend RDP defaults** ([`backend/src/tunnel.rs`](../backend/src/tunnel.rs)) —
-   `full_param_map()` seeds `color-depth=32`, `disable-gfx=false`,
-   `enable-h264=true`, `force-lossless=false`, `cursor=local`, plus
+   `full_param_map()` seeds `color-depth=32`, `disable-gfx=true`,
+   `enable-h264=false`, `force-lossless=false`, `cursor=local`, plus
    the explicit `enable-*` / `disable-*` toggles that FreeRDP's
    `settings.c` requires (empty ≠ `"false"` in many guacd code paths).
-   The per-connection `extras` allowlist permits `disable-gfx`,
-   `disable-offscreen-caching`, `disable-auth`, `enable-h264`,
-   `force-lossless`, and the related GFX toggles so the admin UI can
-   override defaults per connection.
-4. **Windows host AVC444 configuration** — the helper script
+   These defaults match the upstream
+   [sol1/rustguac](https://github.com/sol1/rustguac) baseline that
+   Strata's custom guacd is patched against, so a brand-new
+   connection with no admin overrides behaves identically to a
+   stock rustguac deployment. The per-connection `extras` allowlist
+   permits `disable-gfx`, `disable-offscreen-caching`, `disable-auth`,
+   `enable-h264`, `force-lossless`, and the related GFX toggles so
+   the admin UI can override defaults per connection. The handshake
+   driver gates `video/h264` mimetype advertisement on the resolved
+   `enable-h264` value, so leaving GFX disabled or H.264 disabled
+   will silently fall back to the bitmap path even on AVC444-capable
+   hosts.
+4. **Connection-form GFX/H.264 interlock (v1.1.0+)** — the RDP
+   Codecs panel of `frontend/src/pages/admin/connectionForm.tsx`
+   renders the *Enable graphics pipeline (GFX)* checkbox as ticked
+   only when `disable-gfx === "false"` (i.e. it reflects what the
+   backend will actually negotiate, not the absence of a value).
+   The companion *Enable H.264 (AVC444)* checkbox is rendered
+   disabled whenever GFX is off — the `video/h264` mimetype cannot
+   be negotiated without GFX. Ticking H.264 forces
+   `disable-gfx="false"` for you, and unticking GFX clears any
+   previously-set `enable-h264`, so the form cannot be saved into
+   an unreachable state. The `AdSyncTab.tsx` default-parameter
+   editor mirrors this interlock so AD-synced connections inherit
+   the same UX. See `CHANGELOG.md` 1.1.0 for the full UX
+   rationale.
+5. **Windows host AVC444 configuration** — the helper script
    [`docs/Configure-RdpAvc444.ps1`](Configure-RdpAvc444.ps1) audits
    the host registry, detects whether a hardware GPU is usable, and
    prompts before applying the recommended values. The full operator

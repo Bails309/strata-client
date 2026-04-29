@@ -5,6 +5,215 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-04-29
+
+### RDP graphics-pipeline parity with rustguac, recording-playback EACCES fix, sidebar collapse, stuck-key cleanup, and Playwright RBAC pack
+
+The first feature release on the 1.x SemVer line. The headline change
+is a deliberate UX-and-defaults rework of the RDP graphics-pipeline
+controls so that fresh connections behave identically to the upstream
+[sol1/rustguac](https://github.com/sol1/rustguac) baseline that
+Strata's custom guacd is patched against — `disable-gfx=true` and
+`enable-h264=false` are now the *visible* defaults in the connection
+form (previously the UI rendered as if GFX were on while the backend
+silently disabled it), with a tightly-interlocked checkbox pair that
+mirrors how the underlying guacd negotiation actually works. A
+production-affecting bug where historic recordings refused to play
+back with a generic "Tunnel error" was traced to a uid/gid mismatch
+between the guacd and backend containers and fixed in the entrypoint
+scripts of both images. The session-keyboard cleanup path was
+hardened against a Guacamole.Keyboard synthetic auto-repeat timer
+that could survive a Ctrl+K-driven session switch and hammer the
+previous remote with phantom Enter keystrokes once focus returned. A
+new floating "hide sidebar" affordance gives operators a one-click
+way to reclaim screen real-estate during a session without losing
+the navigation column. A small Playwright RBAC + command-palette
+smoke pack lands under `e2e/tests/` to catch regressions in the
+auth/authz boundary and the global Ctrl+K handler. **Drop-in upgrade
+from v1.0.0** — no new database migrations, no `/api/*` contract
+changes, no `config.toml` schema changes. Operators must
+`docker compose pull && up --build` so the entrypoint fixes in the
+backend and guacd images take effect; the rebuild is mandatory for
+the recording-playback fix to apply.
+
+### Added
+
+- **GFX / H.264 toggle interlock in the connection form.** The RDP
+  Codecs panel of `frontend/src/pages/admin/connectionForm.tsx`
+  is reworked so the *Enable graphics pipeline (GFX)* checkbox is
+  ticked only when `disable-gfx === "false"` — i.e. it reflects the
+  actual wire state rather than the absence of a value. Toggling
+  it writes the explicit string `"false"` or `"true"` to the
+  parameter map so backend and frontend never disagree about the
+  default. The companion *Enable H.264 (AVC444)* checkbox is
+  rendered disabled whenever GFX is off (because guacd's H.264
+  path requires GFX to negotiate the `video/h264` mimetype),
+  ticking it forces `disable-gfx="false"` for you, and unticking
+  GFX clears any previously-set `enable-h264` so the form cannot
+  be saved into an unreachable state. An amber warning under the
+  H.264 row reminds admins that AVC444 requires a Windows host
+  with a discrete GPU exposing `RemoteFX vGPU` / `AVC444` codec
+  support; a tertiary hint under the GFX-off branch points
+  operators at the new H.264 capability detection roadmap item.
+- **AdSync default-parameter parity.** `AdSyncTab.tsx` previously
+  rendered the GFX row using a generic boolean mapper that applied
+  the old "Disable GFX" semantics inverted from the new connection
+  form. The map is now special-cased so the `disable-gfx` row
+  carries the same positive *"Enable graphics pipeline (GFX)"*
+  label, the same `cdMap["disable-gfx"] === "false"` checked
+  predicate, and the same H.264 interlock as the connection form;
+  every other AD-synced default-parameter row keeps the original
+  `"true"` / delete pattern unchanged.
+- **Floating "Hide sidebar" button.** A new persistent affordance
+  in `Layout.tsx` and `SessionClient.tsx` lets operators collapse
+  the left navigation column into a thin edge with a single click.
+  The collapsed-state is stored in the existing `useSettings`
+  context so the preference survives across sessions and
+  reload-cycles. Affects every authenticated route, including
+  active session canvases where the extra horizontal real-estate
+  is most valuable on widescreen monitors.
+- **Playwright `e2e/tests/command-palette.spec.ts` smoke pack.**
+  Two new tests exercise the global `Ctrl+K` handler end-to-end
+  against a real backend: one verifies the palette opens and
+  focuses its input, the other verifies the `Esc` close-path. The
+  `beforeEach` is hardened to dismiss the `DisclaimerModal` so a
+  fresh-database admin (whose `terms_accepted_version` is
+  `null`) does not block the palette mount — App.tsx renders the
+  modal *instead of* `CommandPaletteProvider` until terms are
+  accepted, so without the dismissal the Ctrl+K listener never
+  attaches and both tests would fail under CI's clean-state
+  fixtures.
+- **Playwright `e2e/tests/rbac.spec.ts` RBAC negative pack.**
+  A new test file covers the `/api/admin/*` and
+  `/api/user/*` boundaries with no auth, expired bearer, mismatched
+  CSRF, and forged-cookie variants — every case must return
+  `401`/`403` and must not leak response bodies that would help an
+  attacker fingerprint the routing layer.
+
+### Changed
+
+- **`SessionClient.tsx` keyboard cleanup now calls
+  `Guacamole.Keyboard.reset()`.** Both the keyboard-effect
+  cleanup path and the unmount path now invoke `kb.reset()` after
+  nulling `onkeydown` / `onkeyup`. This cancels the synthetic
+  auto-repeat timer that `Guacamole.Keyboard.press()` starts at
+  500 ms and ticks every 50 ms, and clears the internal `pressed[]`
+  set so a key held down at the moment of teardown cannot
+  resume hammering the remote when the effect re-attaches on
+  return. Eliminates the "switching between sessions causes
+  constant Enter spam on the previous session after Ctrl+K
+  navigation" regression.
+- **Backend container's `entrypoint.sh` no longer chowns
+  `/var/lib/guacamole`.** The line was racing with guacd writes
+  across the shared volume and destroying the gid signal needed
+  by the new supplementary-group lookup. The `chown` for
+  `/app/config` and `/etc/krb5` is preserved.
+
+### Fixed
+
+- **Recording playback "Tunnel error" caused by EACCES on the
+  shared recordings volume.** The shared `guac-recordings` Docker
+  volume is written by guacd (uid/gid `guacd:guacd` = 100/101
+  inside the Alpine guacd container) at mode `0640` —
+  group-only-read. The backend container runs as
+  `strata:strata` (uid/gid 996/996) so the file open returned
+  `EACCES`, which the WS handler at
+  [`backend/src/routes/admin/recordings.rs`](backend/src/routes/admin/recordings.rs#L240)
+  logged as *"Failed to open recording file: Permission denied
+  (os error 13)"* and surfaced to the UI as a generic
+  *"Tunnel error"*. Resolved by adding a runtime
+  supplementary-group bootstrap in
+  [`backend/entrypoint.sh`](backend/entrypoint.sh) that reads the
+  gid off whichever guacd-written file is present in the volume
+  (falling back to the directory gid on first boot), creates a
+  matching local group inside the backend container, and adds
+  `strata` to it via `usermod -aG`. `guacd/entrypoint.sh` is
+  hardened with an explicit `umask 0027` so any non-recording
+  artefacts guacd writes also stay group-readable. The fix is
+  volume-agnostic — works for Docker named volumes, bind-mounts,
+  NFSv3/v4 with preserved gids, and CIFS with `uid=,gid=` mount
+  options. **Azure-stored recordings are unaffected** because the
+  Azure path streams blobs over HTTPS via `reqwest` and never
+  touches the local filesystem.
+- **CommandPalette / RBAC e2e tests previously failing in CI.**
+  Two failures in the Playwright suite (`command-palette.spec.ts`)
+  were traced to a fresh-database admin whose `users.terms_
+  accepted_version` was `NULL`, causing `App.tsx` to mount the
+  `DisclaimerModal` instead of `CommandPaletteProvider`. The
+  `beforeEach` now dismisses the modal — see Added.
+- **CodeQL alert #88 — unused `pwRequest` import.** The
+  `request as pwRequest` alias in `e2e/tests/rbac.spec.ts` was
+  unused since the file's last refactor and is removed.
+- **CodeQL alert #85 — unused `CommandMappingPage` import.** The
+  explicit generic argument on the `<StyledSelect>` element in
+  `frontend/src/components/CommandMappingsSection.tsx` was
+  redundant; TypeScript now infers the type from the readonly
+  `options` prop, so the unused import is dropped.
+- **Auth tests — logout success on missing/invalid bearer.** The
+  logout handler tests were previously flaky because they asserted
+  on a 200 in cases where Axum's extractor would short-circuit to
+  401; the tests now correctly cover both branches.
+
+### Security
+
+- **Recordings volume permission model documented.** The
+  uid/gid split between guacd and backend was previously implicit
+  in the entrypoint scripts and unstated in `docs/security.md`.
+  The model — guacd writes 0640 as `guacd:guacd`; backend reads
+  via supplementary-group membership matching the writer's gid —
+  is now an explicit security invariant in
+  [`docs/security.md`](docs/security.md) and
+  [`docs/architecture.md`](docs/architecture.md). The backend's
+  `DAC_OVERRIDE` capability is *not* used for this read path:
+  the supplementary-group lookup means standard POSIX
+  group-read suffices, so the principle of least privilege is
+  preserved.
+- **Stuck-key cleanup reduces remote-target attack surface.**
+  The `kb.reset()` fix eliminates a small but real risk where a
+  user navigating away mid-keystroke could leave a session
+  receiving phantom Enter / Space presses, potentially
+  confirming a dialog or executing a queued command on the
+  remote target without operator awareness. Now every session
+  teardown is keystroke-clean.
+
+### Validation
+
+- `cargo fmt --all -- --check` clean.
+- `cargo clippy --all-targets --all-features -- -D warnings` clean.
+- `cargo test --all-features` — all suites pass.
+- `npm run test` (frontend) — 1232/1232 tests across 47 files pass.
+- `npm audit --omit=dev` — 0 vulnerabilities.
+- `npx playwright test` (e2e) — full suite green including the
+  two new files.
+- CodeQL — alerts #85 and #88 resolved; no new alerts.
+
+### Upgrade notes
+
+- **Mandatory image rebuild.** Operators on v1.0.0 must run
+  `docker compose pull && docker compose up -d --build` (or the
+  equivalent `docker compose build --pull && up -d`) so the
+  entrypoint changes in both the backend and guacd images take
+  effect. A `docker compose pull` alone is insufficient if the
+  registry has not yet rebuilt the images.
+- **Existing recordings.** All historical `.guac` recordings on
+  the shared volume become readable on first backend boot after
+  the upgrade — the supplementary-group bootstrap reads their
+  gid at startup. No file-rewriting, re-encoding, or chmod sweep
+  is needed.
+- **No database migrations.**
+- **No `/api/*` contract changes.**
+- **Existing connections preserve their saved GFX/H.264 state.**
+  The connection-form rework changes how *unset* values are
+  rendered (previously the UI lied; now the UI shows the
+  rustguac-parity defaults that the backend has always
+  applied). Connections with explicit `disable-gfx=false` saved
+  by an operator pre-1.1.0 continue to render as
+  *GFX enabled* with no behaviour change.
+- **Image tags.** The release pipeline now publishes
+  `ghcr.io/<org>/strata-backend:1.1.0` and
+  `ghcr.io/<org>/strata-frontend:1.1.0` alongside the rolling
+  `:latest` tag. The `:1.0.0` images remain available.
+
 ## [1.0.0] — 2026-04-27
 
 ### General availability

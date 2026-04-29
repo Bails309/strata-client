@@ -923,7 +923,7 @@ List the calling user's own historical recordings. Supports optional filtering a
     "username": "jdoe",
     "started_at": "2026-04-15T10:00:00Z",
     "duration_secs": 3600,
-    "storage_path": "/recordings/uuid.m4v",
+    "storage_path": "08c6776c-7fc1-4869-864e-c1a823864ad4-1776293653790.guac",
     "storage_type": "local"
   }
 ]
@@ -931,11 +931,33 @@ List the calling user's own historical recordings. Supports optional filtering a
 
 ### `GET /api/user/recordings/:id/stream`
 
-Stream a recording for playback. Only accessible for recordings owned by the authenticated user.
+Stream a recording for playback. Only accessible for recordings owned by the authenticated user. Admin equivalent: `GET /api/admin/recordings/:id/stream` (no ownership filter).
 
 **Path Parameter**: `id` (uuid) — recording ID
 
-**Response**: `200 OK` with binary stream (WebSocket upgrade for Guacamole protocol replay)
+**Query Parameters**:
+
+| Name    | Type    | Default | Description                                                                                                  |
+| ------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `seek`  | integer | `0`     | Position in milliseconds to start playback from. `0` plays from the beginning.                                |
+| `speed` | number  | `1.0`   | Playback rate clamped server-side to `[0.25, 16.0]`. Frontend players currently surface `1×`, `2×`, `4×`, `8×`. |
+
+**Response**: `101 Switching Protocols` with WebSocket subprotocol `guacamole`. The server emits a Guacamole-style instruction stream paced to wall-clock time. Custom NVR opcodes used by the frontend players (`HistoricalPlayer.tsx`, `NvrPlayer.tsx`):
+
+| Opcode        | Payload                              | Direction          | Meaning                                                                          |
+| ------------- | ------------------------------------ | ------------------ | -------------------------------------------------------------------------------- |
+| `nvrheader`   | `[total_ms]`                         | server → client    | Total duration of the recording in milliseconds, sent as the first instruction.  |
+| `nvrprogress` | `[current_ms]`                       | server → client    | Wall-clock progress within the recording.                                        |
+| `nvrseeked`   | `[position_ms]`                      | server → client    | Acknowledges a `seek` query parameter or in-stream seek request.                 |
+| `nvrend`      | `[]`                                 | server → client    | Sent when playback reaches the end of the recording.                             |
+| `nvrpause`    | `[]`                                 | client → server    | Pause playback timing without closing the WebSocket.                             |
+| `nvrresume`   | `[]`                                 | client → server    | Resume from `nvrpause`.                                                          |
+| `nvrspeed`    | `[multiplier]`                       | client → server    | Change playback rate without reconnecting.                                       |
+
+**Storage backends**:
+
+- `storage_type = "local"` — file is read from the shared `guac-recordings` Docker volume at `/var/lib/guacamole/recordings/<storage_path>`. Cross-container POSIX permissions are documented in [security.md — Recordings Volume](./security.md). EACCES on the file open closes the WebSocket immediately and the frontend renders a *"Tunnel error"* badge; check backend logs for *"Failed to open recording file"* to disambiguate from network-level failures.
+- `storage_type = "azure"` — file is streamed from the configured Azure Storage container over HTTPS via `reqwest`. Auth is via the connection string / managed identity sealed in Vault; POSIX permissions are not involved in this path.
 
 ### `GET /api/user/connections`
 

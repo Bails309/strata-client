@@ -25,6 +25,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.1.0",
+    subtitle:
+      "RDP graphics-pipeline parity with rustguac, recording-playback EACCES fix, sidebar collapse, stuck-key cleanup, and a new Playwright RBAC pack",
+    sections: [
+      {
+        title: "RDP GFX & H.264 toggles now reflect the real wire state",
+        description:
+          "The Codecs panel of the connection form is reworked so the Enable graphics pipeline (GFX) checkbox is ticked only when disable-gfx === \"false\" — i.e. it reflects what the backend will actually negotiate, not the absence of a value. Toggling it writes the explicit string \"false\" or \"true\" to the parameter map so frontend and backend never disagree about the default. The companion Enable H.264 (AVC444) checkbox is rendered disabled whenever GFX is off (because guacd's H.264 path requires GFX to negotiate the video/h264 mimetype), ticking it forces disable-gfx=\"false\" for you, and unticking GFX clears any previously-set enable-h264 so the form cannot be saved into an unreachable state. An amber warning under the H.264 row reminds admins that AVC444 needs a Windows host with a discrete GPU exposing RemoteFX vGPU / AVC444 codec support. The AdSync default-parameter tab is updated in lockstep so AD-synced new connections inherit the same interlock.",
+      },
+      {
+        title: "Historic recording playback no longer fails with \"Tunnel error\"",
+        description:
+          "A production-affecting bug where the Play button on a historic recording opened the player to a black canvas with a red \"Tunnel error / Retry\" badge has been fixed. Root cause: the shared guac-recordings Docker volume is written by guacd as guacd:guacd (uid/gid 100/101 inside the Alpine guacd container) at mode 0640 — group-only-read — but the backend container runs as strata:strata (uid/gid 996/996), so the file open returned EACCES. The fix is a runtime supplementary-group bootstrap in backend/entrypoint.sh that reads the gid off whichever guacd-written file is present, creates a matching local group inside the backend container, and adds strata to it. The backend's DAC_OVERRIDE capability is deliberately NOT used — standard POSIX group-read suffices, preserving least-privilege. All existing recordings become readable on first boot after the upgrade with no file-rewriting or chmod sweep needed; Azure-stored recordings are unaffected because that path streams blobs over HTTPS and never touches the local filesystem.",
+      },
+      {
+        title: "Stuck-key cleanup — Ctrl+K mid-keystroke can no longer spam the previous remote",
+        description:
+          "Both keyboard-effect cleanup paths in SessionClient.tsx now invoke kb.reset() after nulling onkeydown / onkeyup. This cancels the synthetic auto-repeat timer that Guacamole.Keyboard.press() starts at 500 ms and ticks every 50 ms, and clears the internal pressed[] set so a key held down at the moment of teardown cannot resume hammering the remote when the effect re-attaches on return. Eliminates the regression where switching between sessions via the command palette while still pressing Enter / Space would cause the previous session to receive phantom keystrokes once focus came back.",
+      },
+      {
+        title: "Floating \"Hide sidebar\" button reclaims screen real-estate",
+        description:
+          "A new persistent affordance lets you collapse the left navigation column into a thin edge with a single click. The collapsed-state is stored in your existing settings context so the preference survives across sessions, browsers, and reload-cycles. Most useful on widescreen monitors during active sessions where every pixel of horizontal space matters for the remote canvas.",
+      },
+      {
+        title: "Playwright RBAC + command-palette smoke pack",
+        description:
+          "Two new Playwright test files land under e2e/tests/. command-palette.spec.ts exercises the global Ctrl+K handler end-to-end (open, focus, Esc-close), with a hardened beforeEach that dismisses the Session Recording Disclaimer modal so a fresh-database admin's null terms_accepted_version doesn't block the palette mount. rbac.spec.ts is an RBAC negative pack covering the /api/admin/* and /api/user/* boundaries with no auth, expired bearer, mismatched CSRF, and forged-cookie variants — every case must return 401/403 and must not leak response bodies that would help an attacker fingerprint the routing layer.",
+      },
+      {
+        title: "Drop-in upgrade — but a rebuild is mandatory",
+        description:
+          "No new database migrations land in v1.1.0; no /api/* contract changes; no config.toml schema changes. Operators on v1.0.0 must run docker compose pull && docker compose up -d --build (or the equivalent build --pull && up) so the entrypoint changes in both the backend and guacd images take effect. A docker compose pull alone is insufficient if your registry has not yet rebuilt — the recording-playback fix lives in the new entrypoint.sh layer, not in the Rust binary. Existing connections preserve their saved GFX/H.264 state; the form rework only changes how unset values are rendered. Frontend test suite is green at 1232/1232 across 47 files; npm audit reports 0 vulnerabilities; CodeQL alerts #85 and #88 resolved.",
+      },
+    ],
+  },
+  {
     version: "1.0.0",
     subtitle:
       "General availability — Strata Client reaches 1.0.0 with a formal SemVer commitment for the REST API, database schema, and on-disk config",

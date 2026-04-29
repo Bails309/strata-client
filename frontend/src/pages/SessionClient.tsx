@@ -748,151 +748,16 @@ export default function SessionClient() {
     const client = currentSession.client;
     const display = client.getDisplay();
 
-    // ── Ghost-pixel mitigation for RDP GFX / H.264 minimise animations ──
-    //
-    // Symptom: minimising / maximising a Windows window over RDP
-    // occasionally leaves stale pixels in the display canvas. The pixel
-    // data is correct at the protocol level (Guacamole.Display has
-    // already processed the draw instructions) but the browser
-    // compositor doesn't know it needs to repaint the affected region
-    // because no CSS property on the display element has changed. Any
-    // browser-side resize (sidebar collapse, window resize) clears the
-    // ghost because it triggers display.scale() with a different factor,
-    // which changes the CSS transform and forces recomposition.
-    //
-    // Fix: re-apply the current scale with a sub-pixel nudge. This
-    // changes the CSS transform (forcing compositor invalidation) but
-    // is imperceptible visually. Much cheaper than toggling a layout
-    // property and safe to call at any time.
-    function forceDisplayRepaint() {
-      const cw = container!.clientWidth;
-      const ch = container!.clientHeight;
-      const dw = display.getWidth();
-      const dh = display.getHeight();
-      if (cw <= 0 || ch <= 0 || dw <= 0 || dh <= 0) return;
-      const baseScale = Math.min(cw / dw, ch / dh);
-      // Sub-pixel nudge: scale slightly off base so the CSS transform
-      // string differs, then restore on the next frame. This is the
-      // cheapest way to force the browser compositor to invalidate its
-      // cached tile for the display layer.
-      //
-      // Why `1 / dw` rather than a fixed `1e-4`: on hardware-accelerated
-      // compositors some Chromium builds round transforms to device
-      // pixels before deciding whether to repaint, so a fixed tiny
-      // delta can be collapsed to a no-op. `1 / dw` guarantees the
-      // delta is exactly one source pixel when the display is
-      // rendered at 1:1, which is below the visible threshold at any
-      // realistic viewport size but always crosses the rounding gate.
-      //
-      // The synchronous read of `offsetHeight` between the two scale()
-      // calls forces a layout flush, so the intermediate scale is
-      // actually committed to the layer tree before we restore. Without
-      // this, browsers are free to collapse the pair into a single
-      // no-op transform.
-      const displayEl = display.getElement();
-      display.scale(baseScale + 1 / Math.max(dw, 1));
-      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-      displayEl.offsetHeight; // force synchronous layout
-      requestAnimationFrame(() => display.scale(baseScale));
-    }
-
-    // `forceDisplayRepaint` only clears ghosts that are compositor-level
-    // (correct pixel data, stale cached tile in the GPU compositor).
-    // This covers the common case where a minimise/snap animation leaves
-    // visible edge artefacts that a transform change can invalidate.
-    //
-    // It does NOT fix pixel-data ghosts — if FreeRDP's H.264 GFX encoder
-    // has accumulated reference-frame corruption (symptom: multiple
-    // overlapping window states on the canvas, persisting through mouse
-    // movement and across sweeps), no client-side operation can recover
-    // the true frame. The only reliable fix is a full session
-    // teardown+reconnect, which users can trigger via the Reconnect
-    // button in the Session Bar — that cleanly re-initialises the codec
-    // state on both ends of the tunnel.
-    //
-    // See: docs/architecture.md § "H.264 GFX reference-frame corruption"
-    // for the full diagnosis and the v0.27.0 roadmap fix (guacd patch to
-    // expose RDP Refresh Rect for in-session IDR request without reconnect).
-
-    // Fire a handful of forced repaints at the timings that cover
-    // Windows 10/11's default minimise-animation duration (~200ms) and
-    // one late sweep at 500ms for the occasional slow animation. Coarse
-    // but effective; the work per call is trivial (one CSS transform).
-    const ghostSweepTimers: number[] = [];
-    function scheduleGhostSweep() {
-      ghostSweepTimers.forEach((id) => window.clearTimeout(id));
-      ghostSweepTimers.length = 0;
-      for (const delay of [50, 200, 500]) {
-        ghostSweepTimers.push(window.setTimeout(forceDisplayRepaint, delay));
-      }
-    }
-
-    // Drives a double two-step SuppressOutput toggle in our forked guacd
-    // (see guacd/patches/004-refresh-on-noop-size.patch):
-    //   t=0    : sendSize → guacd: SuppressOutput(allow=0)   [pair 1 step 1]
-    //   t=150ms: sendSize → guacd: SuppressOutput(allow=1)   [pair 1 step 2]
-    //   t=400ms: sendSize → guacd: SuppressOutput(allow=0)   [pair 2 step 1]
-    //   t=550ms: sendSize → guacd: SuppressOutput(allow=1)   [pair 2 step 2]
-    //
-    // Empirically Windows Server's RDP GFX encoder requires TWO full
-    // suppress/resume cycles before it commits to a fresh IDR keyframe
-    // rather than retransmitting P-frames against the already-corrupted
-    // reference chain. One cycle leaves the H.264 ghost intact; two
-    // cycles reliably clears it. The state machine in guacd resets its
-    // internal timestamp to 0 after each step 2, so pair 2 step 1 hits
-    // the "last == 0" branch and is accepted unconditionally.
-    //
-    // Stock (un-patched) guacd silently ignores no-op resize instructions
-    // so this is safe against servers without our patch applied.
-    const manualRefreshTimers: number[] = [];
-    function manualRefresh() {
-      forceDisplayRepaint();
-      // Cancel any pending stages from a prior invocation.
-      manualRefreshTimers.forEach((id) => window.clearTimeout(id));
-      manualRefreshTimers.length = 0;
-
-      const cw = container!.clientWidth;
-      const ch = container!.clientHeight;
-      if (cw <= 0 || ch <= 0) return;
-
-      const sendStage = (label: string) => {
-        try {
-          const cw2 = container?.clientWidth ?? 0;
-          const ch2 = container?.clientHeight ?? 0;
-          // Abort mid-sequence if the container was actually resized —
-          // no point driving a ghost-refresh when a real resize is
-          // already in flight.
-          if (cw2 !== cw || ch2 !== ch) return;
-          client.sendSize(cw, ch);
-        } catch (e) {
-          console.warn(`manualRefresh ${label}: sendSize failed`, e);
-        }
-      };
-
-      // Stage 0 runs inline; stages 1-3 are scheduled.
-      sendStage("pair1/step1");
-      for (const [delay, label] of [
-        [150, "pair1/step2"],
-        [400, "pair2/step1"],
-        [550, "pair2/step2"],
-      ] as const) {
-        manualRefreshTimers.push(window.setTimeout(() => sendStage(label), delay));
-      }
-    }
-
-    // Auto-refresh is now handled SERVER-SIDE by our forked guacd
-    // (see guacd/patches/004-refresh-on-noop-size.patch). guacd watches
-    // the RDPGFX frame stream for the burst-then-idle pattern that
-    // indicates a Windows window-management animation has completed
-    // (the exact situation that desynchronises the H.264 reference
-    // chain) and issues the SuppressOutput toggle itself. Detecting
-    // this pattern browser-side proved unreliable — every input-level
-    // signal we tried either over-fired (causing screen flashes on
-    // normal double-clicks) or under-fired (missing real ghosts).
-    //
-    // The frontend retains the `manualRefresh` function so the Refresh
-    // Display button in the session bar remains available as an
-    // explicit user-invoked fallback.
+    // Resize handling matches sol1/rustguac's reference implementation:
+    // a single `display.scale()` call driven by `display.onresize` (server
+    // side) and `ResizeObserver` (browser side), debounced via rAF. No
+    // sub-pixel scale nudges, no `display.onflush` sweeps, no input-driven
+    // repaint timers — all of that was added when Strata still re-encoded
+    // RDPGFX through guacd's JPEG path; with the H.264 passthrough port
+    // (vendored guacamole-common-js 1.6.0 + guacd patch 004) those
+    // mitigations actively perturb the new Display pipeline and the RDP
+    // codec's reference state. Genuine codec corruption is unrecoverable
+    // client-side and is handled by the SessionBar's Reconnect button.
 
     function handleResize() {
       const cw = container!.clientWidth;
@@ -953,64 +818,11 @@ export default function SessionClient() {
           handleResize();
         });
       }
-      // Windows minimise/maximise animations run for roughly 200–250ms.
-      // During that window FreeRDP 3's GFX pipeline occasionally sends
-      // partial updates that leave ghost pixels in the display canvas.
-      // `scheduleGhostSweep` internally cancels any prior pending timers,
-      // so rapid-fire resizes don't stack their repaint sweeps.
-      scheduleGhostSweep();
+      // Genuine codec corruption (H.264 reference chain, RDPGFX tile
+      // cache) is unrecoverable client-side; the SessionBar's Reconnect
+      // button tears down and recreates the session, which cleanly
+      // re-initialises codec state on both ends.
     };
-
-    // Hook `display.onflush` to auto-clear ghost pixels after any burst
-    // of drawing activity settles — this covers minimise/maximise and
-    // window-move animations *inside* the remote session, which do NOT
-    // change the desktop resolution and therefore do NOT fire onresize.
-    //
-    // Behaviour:
-    //  - Every flush reschedules the sweep timers (50/200/500ms cascade).
-    //  - Continuous activity (video playback, scrolling) keeps rescheduling
-    //    the 50ms timer so the first sweep in the cascade never runs until
-    //    activity actually settles. No flicker during video.
-    //  - Once activity stops, the 50ms timer fires and does a sub-pixel
-    //    compositor nudge (one source pixel of scale delta + forced
-    //    reflow) — imperceptible visually but forces the browser to
-    //    discard any stale cached tile.
-    //  - The 200/500ms follow-ups catch the occasional slow animation.
-    //
-    // Per-sweep cost is a single CSS transform change, not a canvas
-    // repaint, so even pathological "flush every frame" clients stay
-    // cheap. Ghost frames from `copy`/`rect` animation artefacts now
-    // self-heal without any user interaction.
-    const prevOnFlush = display.onflush;
-    display.onflush = () => {
-      if (prevOnFlush) prevOnFlush();
-      scheduleGhostSweep();
-    };
-
-    // Safety-net sweep on user input. Covers the residual case where
-    // guacd coalesces `sync` instructions under load so `onflush` never
-    // fires for a batch that produced a ghost frame. When the user is
-    // actively interacting with the session (mouse movement, keystroke),
-    // any visible ghost gets swept within 50ms of the next input event.
-    //
-    // `scheduleGhostSweep` already debounces via timer cancellation:
-    //  - Continuous mouse movement → timers keep resetting → no flicker.
-    //  - User pauses → 50ms later the sweep runs once → ghost cleared.
-    //  - Idle → no input → no sweeps → no cost.
-    //
-    // NOTE: this only catches compositor-level ghosts. Pixel-data ghosts
-    // (H.264 reference-frame corruption) need a full session reconnect
-    // via the Session Bar's Reconnect button — there is no reliable
-    // client-side recovery.
-    //
-    // We listen on the display element itself (not `container`) so we
-    // don't fire sweeps for movements over the sidebar or session bar.
-    // `passive: true` guarantees we never delay scroll/input handling.
-    const displayEl = display.getElement();
-    const onInputActivity = () => scheduleGhostSweep();
-    displayEl.addEventListener("pointermove", onInputActivity, { passive: true });
-    displayEl.addEventListener("pointerdown", onInputActivity, { passive: true });
-    window.addEventListener("keydown", onInputActivity, { passive: true });
 
     const observer = new ResizeObserver(() => {
       handleResize();
@@ -1021,29 +833,11 @@ export default function SessionClient() {
     // Fallback for window resize too
     window.addEventListener("resize", handleResize);
 
-    // Expose the manual refresh to the SessionBar's "Refresh display"
-    // button. Auto-refresh on ghost detection is implemented SERVER-SIDE
-    // in guacd/patches/004-refresh-on-noop-size.patch; the frontend only
-    // exposes this as a manual fallback. Stock guacd silently ignores
-    // no-op resize instructions so the manual path is also safe against
-    // un-patched servers.
-    currentSession.refreshDisplay = manualRefresh;
-
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", handleResize);
-      window.removeEventListener("keydown", onInputActivity);
-      displayEl.removeEventListener("pointermove", onInputActivity);
-      displayEl.removeEventListener("pointerdown", onInputActivity);
-      ghostSweepTimers.forEach((id) => window.clearTimeout(id));
-      manualRefreshTimers.forEach((id) => window.clearTimeout(id));
-      manualRefreshTimers.length = 0;
-      // Restore previous handlers (if any) to avoid leaking our closures.
+      // Restore previous handler (if any) to avoid leaking our closure.
       display.onresize = prevOnResize ?? null;
-      display.onflush = prevOnFlush ?? null;
-      if (currentSession.refreshDisplay === manualRefresh) {
-        currentSession.refreshDisplay = undefined;
-      }
     };
   }, [currentSession, isMultiMonitor, getLayout]);
 

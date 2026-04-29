@@ -293,17 +293,41 @@ export function RdpSections({
           <div className="form-group !mb-0 col-span-2">
             <label>&nbsp;</label>
             <label
-              className="flex items-center gap-2"
-              title="H.264 GFX passthrough is enabled by default and dramatically reduces bandwidth on modern RDP hosts (frames are decoded by the browser's WebCodecs VideoDecoder rather than re-encoded server-side). If you see ghost pixels or overlapping window artefacts during rapid window minimise/maximise on this connection, disabling H.264 falls back to the legacy RemoteFX codec which has no cross-frame reference chain and cannot exhibit that class of rendering corruption — at the cost of 2–4× higher bandwidth. Requires AVC444 to be configured on the Windows host (see docs/Configure-RdpAvc444.ps1)."
+              className={`flex items-center gap-2 ${ex("disable-gfx") !== "false" ? "opacity-50" : ""}`}
+              title="H.264 GFX passthrough sends raw H.264 NAL units to the browser's WebCodecs VideoDecoder, dramatically reducing bandwidth on modern RDP hosts. Off by default because it requires the Windows host to actually support H.264 — either a GPU is present, or AVC444 has been enabled in the registry (run docs/Configure-RdpAvc444.ps1 on the host). Enabling this on a host without H.264 capability causes RDPGFX to negotiate a codec it can't deliver, producing persistent ghost tiles. Requires the graphics pipeline (GFX) to be enabled."
             >
               <input
                 type="checkbox"
-                checked={ex("enable-h264") === "false"}
-                onChange={(e) => setEx("enable-h264", e.target.checked ? "false" : "")}
+                checked={ex("enable-h264") === "true"}
+                disabled={ex("disable-gfx") !== "false"}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setEx("enable-h264", "true");
+                    // H.264 requires GFX — ensure it's explicitly enabled.
+                    if (ex("disable-gfx") !== "false") setEx("disable-gfx", "false");
+                  } else {
+                    setEx("enable-h264", "");
+                  }
+                }}
                 className="checkbox"
               />
-              Disable H.264 codec (fixes rendering corruption on some hosts, uses more bandwidth)
+              Enable H.264 codec (browser-side passthrough, lower bandwidth)
             </label>
+            {ex("enable-h264") === "true" && (
+              <p className="text-xs text-amber-400/90 mt-1 ml-6">
+                ⚠ Requires AVC444 to be configured on the Windows host (run{" "}
+                <code className="font-mono">docs/Configure-RdpAvc444.ps1</code> on the server){" "}
+                <strong>or</strong> a GPU available to the RDP session. Enabling this on a host that
+                does not support H.264 will cause rendering corruption (ghost tiles bleeding across
+                the desktop).
+              </p>
+            )}
+            {ex("disable-gfx") !== "false" && (
+              <p className="text-xs text-txt-tertiary mt-1 ml-6">
+                Disabled because the graphics pipeline (GFX) is turned off in Performance — H.264
+                only works inside GFX.
+              </p>
+            )}
           </div>
         </FieldGrid>
       </Section>
@@ -649,15 +673,23 @@ export function RdpSections({
             <label>&nbsp;</label>
             <label
               className="flex items-center gap-2"
-              title="Disables the Graphics Pipeline Extension (GFX) which accelerates display rendering. Enabled by default; disable if the server does not support it."
+              title="Enables the Graphics Pipeline Extension (RDPGFX) — the modern surface-based rendering path used for RemoteFX progressive codec and H.264 passthrough. Off by default; the legacy bitmap pipeline is used instead, which is the safest choice for hosts without GPU/AVC444 support. Turn on for modern Windows Server hosts to get smoother rendering and (with H.264 also enabled) much lower bandwidth."
             >
               <input
                 type="checkbox"
-                checked={ex("disable-gfx") === "true"}
-                onChange={(e) => setEx("disable-gfx", e.target.checked ? "true" : "")}
+                checked={ex("disable-gfx") === "false"}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setEx("disable-gfx", "false");
+                  } else {
+                    setEx("disable-gfx", "true");
+                    // H.264 lives inside GFX — turn it off too.
+                    if (ex("enable-h264") === "true") setEx("enable-h264", "");
+                  }
+                }}
                 className="checkbox"
               />
-              Disable graphics pipeline (GFX)
+              Enable graphics pipeline (GFX)
             </label>
           </div>
         </FieldGrid>

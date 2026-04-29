@@ -593,38 +593,74 @@ export default function AdSyncTab({
                     ],
                     [
                       "disable-gfx",
-                      "Disable graphics pipeline (GFX)",
-                      "Disables the Graphics Pipeline Extension (GFX) which accelerates display rendering. Enabled by default; disable if the server does not support it.",
+                      "Enable graphics pipeline (GFX)",
+                      "Enables the Graphics Pipeline Extension (RDPGFX) \u2014 the modern surface-based rendering path used for the RemoteFX progressive codec and H.264 passthrough. Off by default; the legacy bitmap pipeline is used instead, which is the safest choice for hosts without GPU/AVC444 support. Tick to force GFX on for AD-synced connections.",
+                    ],
+                    [
+                      "enable-h264",
+                      "Enable H.264 codec",
+                      "Enables H.264 passthrough to the browser's WebCodecs decoder. Requires the host to support H.264 \u2014 either a GPU is present, or AVC444 has been enabled in the registry (run docs/Configure-RdpAvc444.ps1 on the host). Ticking this also forces GFX on.",
                     ],
                   ] as [string, string, string][]
-                ).map(([param, label, tooltip]) => (
-                  <label key={param} className="flex items-center gap-2" title={tooltip}>
-                    <input
-                      type="checkbox"
-                      className="checkbox"
-                      checked={(editing.connection_defaults ?? {})[param] === "true"}
-                      onChange={(e) => {
-                        const cd = { ...(editing.connection_defaults ?? {}) };
-                        if (e.target.checked) {
-                          cd[param] = "true";
-                        } else {
-                          delete cd[param];
-                        }
-                        setEditing({ ...editing, connection_defaults: cd });
-                      }}
-                    />
-                    <span className="text-sm">{label}</span>
-                    <svg
-                      className="w-3.5 h-3.5 opacity-40 shrink-0"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
+                ).map(([param, label, tooltip]) => {
+                  const cdMap = editing.connection_defaults ?? {};
+                  // disable-gfx uses inverted semantics: positive label ("Enable GFX"),
+                  // checked === "false" means GFX explicitly enabled, "true" means disabled.
+                  const isGfx = param === "disable-gfx";
+                  const isH264 = param === "enable-h264";
+                  const gfxEnabled = cdMap["disable-gfx"] === "false";
+                  const checked = isGfx ? gfxEnabled : cdMap[param] === "true";
+                  const disabled = isH264 && !gfxEnabled;
+                  return (
+                    <label
+                      key={param}
+                      className={`flex items-center gap-2 ${disabled ? "opacity-50" : ""}`}
+                      title={tooltip}
                     >
-                      <circle cx="12" cy="12" r="10" strokeWidth="2" />
-                      <path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" />
-                    </svg>
-                  </label>
-                ))}
+                      <input
+                        type="checkbox"
+                        className="checkbox"
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const cd = { ...(editing.connection_defaults ?? {}) };
+                          if (isGfx) {
+                            if (e.target.checked) {
+                              cd["disable-gfx"] = "false";
+                            } else {
+                              cd["disable-gfx"] = "true";
+                              // H.264 lives inside GFX — turn it off too.
+                              delete cd["enable-h264"];
+                            }
+                          } else if (isH264) {
+                            if (e.target.checked) {
+                              cd["enable-h264"] = "true";
+                              // H.264 requires GFX — force it on.
+                              cd["disable-gfx"] = "false";
+                            } else {
+                              delete cd["enable-h264"];
+                            }
+                          } else if (e.target.checked) {
+                            cd[param] = "true";
+                          } else {
+                            delete cd[param];
+                          }
+                          setEditing({ ...editing, connection_defaults: cd });
+                        }}
+                      />
+                      <span className="text-sm">{label}</span>
+                      <svg
+                        className="w-3.5 h-3.5 opacity-40 shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle cx="12" cy="12" r="10" strokeWidth="2" />
+                        <path strokeLinecap="round" strokeWidth="2" d="M12 16v-4m0-4h.01" />
+                      </svg>
+                    </label>
+                  );
+                })}
               </div>
 
               <div className="text-xs font-semibold uppercase tracking-wider opacity-60 mb-2 mt-4">

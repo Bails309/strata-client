@@ -143,10 +143,20 @@ impl HandshakeParams {
             // AVC444 negotiation, and the `enable-*` toggles must be set
             // explicitly (empty != "false" everywhere in guacd's settings.c).
             m.entry("color-depth".into()).or_insert_with(|| "32".into());
+            // RDPGFX (graphics pipeline) and H.264 are OPT-IN, matching rustguac's
+            // per-entry defaults. Forcing them on for every RDP connection causes
+            // tile-cache ghosting on Windows hosts that don't actually support
+            // H.264 / AVC444 (e.g. servers without a GPU and without the AVC444
+            // registry config): FreeRDP advertises the codec, the server
+            // negotiates RDPGFX, then can't deliver H.264 and falls back into a
+            // corrupted progressive-codec bitmap-cache state — Notepad fragments
+            // bleed into Chrome, switching apps doesn't repaint cleanly, etc.
+            // Per-connection extras can re-enable GFX/H.264 for servers that
+            // genuinely support them.
             m.entry("disable-gfx".into())
-                .or_insert_with(|| "false".into());
-            m.entry("enable-h264".into())
                 .or_insert_with(|| "true".into());
+            m.entry("enable-h264".into())
+                .or_insert_with(|| "false".into());
             m.entry("force-lossless".into())
                 .or_insert_with(|| "false".into());
             m.entry("cursor".into()).or_insert_with(|| "local".into());
@@ -416,21 +426,24 @@ async fn handle_guac_handshake(
 
     tracing::debug!("guacd args: {:?}", arg_names);
 
+    // Build the resolved param map up front so the video handshake can mirror
+    // the connect-time `enable-h264` value (matches rustguac's behaviour).
+    let param_map = handshake.full_param_map();
+
     // Step 3: Send client handshake instructions (size, audio, video, image, timezone)
     // These are required by the Guacamole protocol before the "connect" instruction.
     let w = handshake.width.to_string();
     let h = handshake.height.to_string();
     let d = handshake.dpi.to_string();
-    // Advertise H.264 video support for RDP so guacd's patch 004 H.264
-    // passthrough (AVC420/AVC444 → WebCodecs VideoDecoder) actually fires.
-    // Without this, guacd falls back to JPEG/WebP re-encoding, which produces
-    // tile-cache ghosting around windows that update via RDPGFX surface ops
-    // (Chrome being the most visible example). Other protocols don't use it.
-    let video_mimetypes: &[&str] = if handshake.protocol == "rdp" {
-        &["video/h264"]
-    } else {
-        &[]
-    };
+    // Only advertise H.264 to guacd when the resolved RDP params actually have
+    // `enable-h264=true`. Advertising it unconditionally on servers that can't
+    // deliver H.264 (no GPU, no AVC444 registry config) causes RDPGFX to
+    // negotiate a codec it then can't honour, which corrupts the bitmap cache
+    // and produces persistent ghost tiles across the desktop. rustguac gates
+    // this the same way — see sol1/rustguac src/guacd.rs `send_handshake`.
+    let h264_enabled = handshake.protocol == "rdp"
+        && param_map.get("enable-h264").map(String::as_str) == Some("true");
+    let video_mimetypes: &[&str] = if h264_enabled { &["video/h264"] } else { &[] };
     let client_handshake: Vec<Vec<u8>> = vec![
         guac_instruction("size", &[&w, &h, &d]),
         guac_instruction("audio", &["audio/L16", "audio/L8"]),
@@ -449,7 +462,6 @@ async fn handle_guac_handshake(
     // guacd prepends the protocol version as arg_names[0] (e.g. "VERSION_1_5_0").
     // Unknown args (including the version) fall through to empty string, matching
     // the approach used by rustguac. Credentials are passed upfront.
-    let param_map = handshake.full_param_map();
 
     // Debug: log the args and what we're sending for each
     for name in &arg_names {
@@ -1058,9 +1070,11 @@ mod tests {
         // RDP: drive is NOT enabled unless admin sets `enable-drive=true` explicitly.
         assert!(!m.contains_key("enable-drive"));
         assert!(!m.contains_key("drive-path"));
-        // Non-drive defaults still applied
-        assert_eq!(m["disable-gfx"], "false");
-        assert_eq!(m["enable-h264"], "true");
+        // Non-drive defaults still applied. RDPGFX and H.264 are opt-in
+        // (matches rustguac) — forcing them on for every RDP connection
+        // produces tile-cache ghosting on hosts without H.264/AVC444 support.
+        assert_eq!(m["disable-gfx"], "true");
+        assert_eq!(m["enable-h264"], "false");
         assert_eq!(m["color-depth"], "32");
         // Clipboard
         assert_eq!(m["disable-copy"], "false");

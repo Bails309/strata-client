@@ -851,9 +851,18 @@ export default function SessionClient() {
     if (dialogOpen || currentSession.id !== activeSessionId) {
       kb.onkeydown = null;
       kb.onkeyup = null;
+      // Cancel any stuck synthetic key-repeat (Guacamole.Keyboard kicks off
+      // a 500ms→then-50ms setInterval on press() that calls onkeyup/
+      // onkeydown until release() is invoked). Without this reset, holding
+      // Enter in the command palette to navigate to another session leaves
+      // pressed[Enter]=true and the interval ticking; when this effect re-
+      // attaches callbacks on return to the original tab the interval starts
+      // hammering Enter at the remote.
+      kb.reset();
       return () => {
         kb.onkeydown = null;
         kb.onkeyup = null;
+        kb.reset();
       };
     }
 
@@ -951,6 +960,10 @@ export default function SessionClient() {
     return () => {
       kb.onkeydown = null;
       kb.onkeyup = null;
+      // Same reasoning as above — ensure the synthetic key-repeat timer
+      // and pressed[] state are cleared so a stuck key in this session
+      // can't resume hammering the remote when the effect re-attaches.
+      kb.reset();
       document.removeEventListener("keydown", trapKeyDown, true);
       window.removeEventListener("message", handlePaletteMessage);
       removeShortcutProxy();

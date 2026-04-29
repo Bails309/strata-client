@@ -351,7 +351,7 @@ async fn build_context(pool: &Pool<Postgres>, event: &CheckoutEvent) -> serde_js
             "requester_display_name": requester_display_name,
             "approver_display_name": approver_display_name,
             "target_account_cn": target_account_cn,
-            "expiry_human": expires_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            "expiry_human": crate::services::display::format_datetime_for_display(pool, *expires_at).await,
         }),
         CheckoutEvent::Rejected {
             requester_display_name,
@@ -377,7 +377,7 @@ async fn build_context(pool: &Pool<Postgres>, event: &CheckoutEvent) -> serde_js
             "profile_url": profile_url,
             "requester_display_name": requester_display_name,
             "target_account_cn": target_account_cn,
-            "expiry_human": expires_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            "expiry_human": crate::services::display::format_datetime_for_display(pool, *expires_at).await,
         }),
     }
 }

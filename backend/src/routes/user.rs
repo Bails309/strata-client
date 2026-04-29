@@ -1381,12 +1381,18 @@ pub async fn request_checkout(
     // audit-grade "self-approved" template, and a normal request fans
     // out the "pending" template to all approvers.
     {
-        let target_cn = dn
-            .split(',')
-            .next()
-            .and_then(|s| s.strip_prefix("CN="))
-            .unwrap_or(dn)
-            .to_owned();
+        // Prefer the friendly_name the admin has set on the mapping —
+        // that's what every user-facing surface (My Checkouts card, the
+        // request form, the approver queue header) shows for this
+        // account, so the audit-grade email needs to read identically.
+        // Fall back to a properly-escaped CN extraction when no
+        // friendly name is configured.
+        let target_cn = mapping
+            .friendly_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| crate::services::display::cn_from_dn(dn))
+            .unwrap_or_else(|| dn.to_owned());
         let requester_display = user
             .full_name
             .clone()
@@ -1551,12 +1557,11 @@ pub async fn decide_checkout(
         // Notification: tell the requester their request was approved.
         {
             let target_cn = checkout
-                .managed_ad_dn
-                .split(',')
-                .next()
-                .and_then(|s| s.strip_prefix("CN="))
-                .unwrap_or(&checkout.managed_ad_dn)
-                .to_owned();
+                .friendly_name
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| crate::services::display::cn_from_dn(&checkout.managed_ad_dn))
+                .unwrap_or_else(|| checkout.managed_ad_dn.clone());
             let approver_display = user
                 .full_name
                 .clone()
@@ -1617,12 +1622,11 @@ pub async fn decide_checkout(
         // Notification: tell the requester their request was declined.
         {
             let target_cn = checkout
-                .managed_ad_dn
-                .split(',')
-                .next()
-                .and_then(|s| s.strip_prefix("CN="))
-                .unwrap_or(&checkout.managed_ad_dn)
-                .to_owned();
+                .friendly_name
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| crate::services::display::cn_from_dn(&checkout.managed_ad_dn))
+                .unwrap_or_else(|| checkout.managed_ad_dn.clone());
             let approver_display = user
                 .full_name
                 .clone()

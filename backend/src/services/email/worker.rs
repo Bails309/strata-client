@@ -152,13 +152,15 @@ async fn retry_one(
         .await?
         .ok_or_else(|| anyhow::anyhow!("source checkout {checkout_id} no longer exists"))?;
 
+    // Mirror the dispatcher's account-label resolution: friendly_name
+    // first (matches every UI surface), then a properly-escaped CN
+    // parse, then the raw DN as a last resort.
     let target_cn = checkout
-        .managed_ad_dn
-        .split(',')
-        .next()
-        .and_then(|s| s.strip_prefix("CN="))
-        .unwrap_or(&checkout.managed_ad_dn)
-        .to_owned();
+        .friendly_name
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| crate::services::display::cn_from_dn(&checkout.managed_ad_dn))
+        .unwrap_or_else(|| checkout.managed_ad_dn.clone());
 
     let accent = crate::services::settings::get(pool, "branding_accent_color")
         .await
@@ -171,6 +173,11 @@ async fn retry_one(
         .flatten()
         .unwrap_or_else(|| "https://strata.local".into());
 
+    let expiry_human = match checkout.expires_at {
+        Some(t) => crate::services::display::format_datetime_for_display(pool, t).await,
+        None => String::new(),
+    };
+
     let ctx = serde_json::json!({
         "accent": accent,
         "approve_url": format!("{}/admin/checkouts", base_url.trim_end_matches('/')),
@@ -181,10 +188,7 @@ async fn retry_one(
         "target_account_cn": target_cn,
         "justification": checkout.justification_comment,
         "requested_ttl_minutes": checkout.requested_duration_mins,
-        "expiry_human": checkout
-            .expires_at
-            .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-            .unwrap_or_default(),
+        "expiry_human": expiry_human,
     });
 
     let rendered = crate::services::email::render(template, &ctx)

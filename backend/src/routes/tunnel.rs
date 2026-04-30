@@ -773,7 +773,7 @@ pub async fn ws_tunnel(
         (hostname, safe_port)
     };
 
-    let recording_name = recording_path.as_ref().map(|_| {
+    let mut recording_name = recording_path.as_ref().map(|_| {
         format!(
             "{}-{}.guac",
             connection_id,
@@ -835,32 +835,40 @@ pub async fn ws_tunnel(
     let nvr_username = user.username.clone();
     let started_at = chrono::Utc::now();
 
-    // Log the start of the recording if enabled
+    // Log the start of the recording if enabled.
+    //
+    // This used to be `tokio::spawn`-and-forget. That race-loses on short
+    // sessions: the finalize UPDATE in tunnel.rs runs against `session_id`,
+    // and if the INSERT hasn't reached the DB yet the UPDATE matches 0
+    // rows and the recording's duration_secs stays NULL forever. It also
+    // hides INSERT failures (FK violation, pool exhaustion) entirely — we
+    // would happily record bytes to disk for a session with no DB row,
+    // producing an orphaned file the cleanup task never sees. Await it
+    // here; the round-trip cost is trivial next to the guacd handshake
+    // that's already in flight.
     if let Some(ref rn) = recording_name {
-        let pool_for_init = db.pool.clone();
-        let sid = nvr_session_id.clone();
-        let cid = connection_id;
-        let cname = connection_name.clone();
-        let uid = user_id;
-        let uname = user.username.clone();
-        let rname = rn.clone();
-
-        tokio::spawn(async move {
-            if let Err(e) = recordings::insert_start(
-                &pool_for_init,
-                sid,
-                cid,
-                cname,
-                uid,
-                uname,
-                rname,
-                started_at,
-            )
-            .await
-            {
-                tracing::error!("Failed to log recording start: {e}");
-            }
-        });
+        if let Err(e) = recordings::insert_start(
+            &db.pool,
+            nvr_session_id.clone(),
+            connection_id,
+            connection_name.clone(),
+            user_id,
+            user.username.clone(),
+            rn.clone(),
+            started_at,
+        )
+        .await
+        {
+            tracing::error!(
+                "Failed to insert recording row for session '{}': {e} — \
+                 aborting recording for this session to avoid orphaned files",
+                nvr_session_id
+            );
+            // Drop the recording_name so the writer below doesn't open a
+            // file we can never finalize. The session itself proceeds
+            // unrecorded — better than silently losing audit data.
+            recording_name = None;
+        }
     }
 
     // Fetch timezone for the Guacamole handshake

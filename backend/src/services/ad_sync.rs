@@ -179,6 +179,75 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         config.search_bases,
     );
 
+    // Safety guards against catastrophic deletion-by-omission.
+    //
+    // Phase 4 below soft-deletes every connection whose `ad_dn` is not in
+    // `dns`. If the LDAP query silently returns an empty (or near-empty)
+    // result set — DC reachable but search base now invalid, replication
+    // hole, paging bug, account suddenly lacks read rights to the OU,
+    // operator typo in the search base, etc. — that UPDATE wipes the entire
+    // AD-synced inventory in one statement, and Phase 5 hard-deletes
+    // everything older than 7 days. One bad sync followed by a quiet week
+    // is silent total data loss. We refuse to proceed if the discovered
+    // set looks suspicious compared to what's already on disk for this
+    // config.
+    let live_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM connections
+         WHERE ad_source_id = $1 AND ad_dn IS NOT NULL AND soft_deleted_at IS NULL",
+    )
+    .bind(config.id)
+    .fetch_one(pool)
+    .await?;
+
+    if computers.is_empty() && live_count > 0 {
+        anyhow::bail!(
+            "AD sync '{}': LDAP returned 0 computers but {} live AD-synced connection(s) \
+             exist for this config — refusing to soft-delete inventory. Verify the search \
+             bases, bind account permissions, and DC reachability, then retry.",
+            config.label,
+            live_count
+        );
+    }
+
+    // Reject syncs that would soft-delete more than 50% of the existing
+    // inventory in a single run. Genuine bulk decommissioning still works:
+    // the operator just needs to run the sync incrementally, or temporarily
+    // bump this threshold via a new `allow_bulk_delete` config flag (not
+    // implemented here — when we need it we can add it).
+    if live_count >= 10 {
+        let discovered = computers.len() as i64;
+        // Number of currently-live rows whose DN is in the discovered set.
+        let surviving: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM connections
+             WHERE ad_source_id = $1
+               AND ad_dn IS NOT NULL
+               AND soft_deleted_at IS NULL
+               AND ad_dn = ANY($2)",
+        )
+        .bind(config.id)
+        .bind(
+            &computers
+                .iter()
+                .map(|c| c.dn.clone())
+                .collect::<Vec<_>>(),
+        )
+        .fetch_one(pool)
+        .await?;
+        let would_soft_delete = live_count - surviving;
+        if would_soft_delete * 2 > live_count {
+            anyhow::bail!(
+                "AD sync '{}': run would soft-delete {} of {} live connection(s) \
+                 (LDAP discovered {}). Refusing as a safety check — inventory shrinking \
+                 by >50% in one run is almost always a misconfiguration. Verify the \
+                 search bases and bind account permissions before retrying.",
+                config.label,
+                would_soft_delete,
+                live_count,
+                discovered
+            );
+        }
+    }
+
     // Phase 2: Processing computer list
     tracing::info!(
         "AD sync '{}' (Phase 2/4): Processing computer list...",

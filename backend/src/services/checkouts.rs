@@ -252,6 +252,37 @@ pub async fn activate_checkout(
         )));
     }
 
+    // Idempotency on Active. The original race fix (FOR UPDATE around
+    // the status check + update) only protects *concurrent* activations
+    // within the same lock window. It does not protect against a second,
+    // separate request after the first has fully committed: the row is
+    // now `Active`, the status check above passes, and without this
+    // short-circuit we would push a second AD password reset and seal a
+    // second credential profile — invalidating the first profile that
+    // was issued seconds earlier. Common trigger: user clicks Activate,
+    // LDAP is slow, they refresh, the page re-fires activation on mount.
+    //
+    // If the row is already `Active`, return the existing
+    // `vault_credential_id`; do not touch AD.
+    if req.status == "Active" {
+        if let Some(existing_profile_id) = req.vault_credential_id {
+            tx.commit().await?;
+            tracing::info!(
+                "Checkout {} already Active — skipping AD reset, existing credential profile {}",
+                checkout_id,
+                existing_profile_id
+            );
+            return Ok(());
+        }
+        // Active but no profile linked: this should not happen — fall
+        // through and rebuild the credential. We log it so it shows up
+        // if some out-of-band process ever zeroes the column.
+        tracing::warn!(
+            "Checkout {} is Active but vault_credential_id is NULL — re-running activation",
+            checkout_id
+        );
+    }
+
     let config_id = req
         .ad_sync_config_id
         .ok_or_else(|| AppError::Validation("Checkout has no associated AD sync config".into()))?;

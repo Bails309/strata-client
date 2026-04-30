@@ -221,6 +221,20 @@ impl HandshakeParams {
             }
         }
 
+        // VNC defaults — mirrors rustguac (sol1/rustguac src/guacd.rs).
+        // `cursor=local` is the impactful one: it renders the cursor in the
+        // browser rather than waiting on a round-trip to the VNC server for
+        // every cursor move, which is dramatically smoother on lossy networks
+        // and on KVM/IPMI consoles whose cursor sprites are slow to update.
+        if self.protocol == "vnc" {
+            m.entry("cursor".into()).or_insert_with(|| "local".into());
+            m.entry("color-depth".into()).or_insert_with(|| "24".into());
+            m.entry("read-only".into())
+                .or_insert_with(|| "false".into());
+            m.entry("swap-red-blue".into())
+                .or_insert_with(|| "false".into());
+        }
+
         // Clipboard — enable for all protocols
         m.entry("disable-copy".into())
             .or_insert_with(|| "false".into());
@@ -866,23 +880,41 @@ async fn handle_guac_handshake(
             );
         }
 
-        // Update recording duration + bandwidth
+        // Update recording duration + bandwidth.
+        //
+        // The matching INSERT happens in routes/tunnel.rs::ws_tunnel before
+        // this finalize runs — we wait on it there now (it used to be a
+        // fire-and-forget spawn, which raced with very short sessions and
+        // left rows with NULL duration_secs forever). If `rows_affected`
+        // comes back zero here, either the INSERT failed earlier (logged
+        // there) or the recording row was deleted out from under us; warn
+        // so the orphan recording file is at least visible in logs.
         let duration = (chrono::Utc::now() - ctx.started_at).num_seconds() as i32;
         let sid = ctx.session_id.clone();
         let pool = ctx.db_pool.clone();
 
         tokio::spawn(async move {
-            let res = sqlx::query(
+            match sqlx::query(
                 "UPDATE recordings SET duration_secs = $1, bytes_from_guacd = $2, bytes_to_guacd = $3 WHERE session_id = $4"
             )
                 .bind(duration)
                 .bind(bw_from)
                 .bind(bw_to)
-                .bind(sid)
+                .bind(&sid)
                 .execute(&pool)
-                .await;
-            if let Err(e) = res {
-                tracing::error!("Failed to update recording duration: {e}");
+                .await
+            {
+                Ok(r) if r.rows_affected() == 0 => {
+                    tracing::warn!(
+                        "Recording finalize matched 0 rows for session_id='{}' — \
+                         INSERT likely failed at session start; recording file may be orphaned",
+                        sid
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!("Failed to update recording duration: {e}");
+                }
             }
         });
     }

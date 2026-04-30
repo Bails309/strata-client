@@ -47,7 +47,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
       {
         title: "guacd image build is resilient to harmless context drift",
         description:
-          "docker compose build guacd previously failed with error: patch does not apply if a hunk's surrounding context drifted by even a single whitespace line. The Dockerfile now installs the patch utility and falls back to patch -p1 -F3 <\"$p\" when git apply rejects a hunk, allowing up to three lines of fuzz. The upstream apache/guacamole-server commit pin (2980cf0) is unchanged and the actual patch contents are unchanged. A stray diagnostic patch (005-alt-screen-trace.patch) that was used during the SSH terminal investigation has been removed from the patches directory; the fix that superseded it lives entirely in backend tunnel.rs.",
+          'docker compose build guacd previously failed with error: patch does not apply if a hunk\'s surrounding context drifted by even a single whitespace line. The Dockerfile now installs the patch utility and falls back to patch -p1 -F3 <"$p" when git apply rejects a hunk, allowing up to three lines of fuzz. The upstream apache/guacamole-server commit pin (2980cf0) is unchanged and the actual patch contents are unchanged. A stray diagnostic patch (005-alt-screen-trace.patch) that was used during the SSH terminal investigation has been removed from the patches directory; the fix that superseded it lives entirely in backend tunnel.rs.',
       },
       {
         title: "Drop-in upgrade — rebuild required",

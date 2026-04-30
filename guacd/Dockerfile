@@ -37,10 +37,10 @@ RUN git clone https://github.com/apache/guacamole-server.git /src && \
 
 # Apply FreeRDP 3 compatibility + Kerberos NLA patches (from sol1/rustguac)
 COPY patches/ /tmp/patches/
-RUN cd /src && \
+RUN apk add --no-cache patch && cd /src && \
     for p in /tmp/patches/*.patch; do \
         echo "Applying $(basename $p)..." && \
-        git apply "$p" || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
+        (git apply "$p" 2>/dev/null || patch -p1 -F3 < "$p") || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
     done
 
 WORKDIR /src

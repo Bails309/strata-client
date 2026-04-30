@@ -193,8 +193,28 @@ impl HandshakeParams {
                 .or_insert_with(|| "8388608".into());
         }
 
-        // SFTP for SSH connections — only when explicitly enabled in extras.
+        // SSH terminal defaults — mirrors rustguac (sol1/rustguac src/guacd.rs)
+        // so the in-browser terminal renders 256-color output and behaves
+        // correctly with TUI apps that use the alternate-screen buffer
+        // (nano, vim, less, htop, etc.). Without these, guacd's SSH client
+        // sets `TERM=linux` (no alt-screen, 8 colors), which leaves nano's
+        // contents on screen after exit and strips ANSI colors.
         if self.protocol == "ssh" {
+            m.entry("terminal-type".into())
+                .or_insert_with(|| "xterm-256color".into());
+            m.entry("color-scheme".into())
+                .or_insert_with(|| "gray-black".into());
+            m.entry("font-name".into())
+                .or_insert_with(|| "monospace".into());
+            m.entry("font-size".into()).or_insert_with(|| "12".into());
+            m.entry("scrollback".into())
+                .or_insert_with(|| "1000".into());
+            m.entry("backspace".into()).or_insert_with(|| "127".into());
+            m.entry("locale".into())
+                .or_insert_with(|| "en_US.UTF-8".into());
+            m.entry("server-alive-interval".into())
+                .or_insert_with(|| "0".into());
+
             let sftp_enabled = self.extra.get("enable-sftp").map(String::as_str) == Some("true");
             if sftp_enabled {
                 m.insert("enable-sftp".into(), "true".into());
@@ -254,6 +274,9 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "font-size"
             | "backspace"
             | "terminal-type"
+            | "color-scheme"
+            | "locale"
+            | "server-alive-interval"
             | "typescript-path"
             | "typescript-name"
             | "create-typescript-path"
@@ -1514,6 +1537,9 @@ mod tests {
             "font-name",
             "backspace",
             "terminal-type",
+            "color-scheme",
+            "locale",
+            "server-alive-interval",
             "typescript-path",
             "typescript-name",
             "create-typescript-path",

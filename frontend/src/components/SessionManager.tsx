@@ -199,6 +199,25 @@ export function SessionManagerProvider({
       client.sendMouseState(e.state, true);
     });
 
+    // Release any held mouse buttons when the cursor leaves the canvas or
+    // the window loses focus. Without this, a mousedown on the canvas
+    // followed by a mouseup outside the document (on browser chrome, a
+    // popped-out devtools window, or another tab during drag) is never
+    // delivered to us — guacd then thinks the button is still held, and
+    // the next mousemove (e.g. moving the cursor toward the tab strip)
+    // extends a phantom text selection across the SSH terminal.
+    const releaseMouseButtons = () => {
+      const s = mouse.currentState;
+      if (s.left || s.middle || s.right) {
+        s.left = false;
+        s.middle = false;
+        s.right = false;
+        client.sendMouseState(s, true);
+      }
+    };
+    displayEl.addEventListener("mouseleave", releaseMouseButtons);
+    window.addEventListener("blur", releaseMouseButtons);
+
     // Touch
     const touch = new Guacamole.Mouse.Touchscreen(displayEl);
     touch.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {

@@ -225,12 +225,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
                AND ad_dn = ANY($2)",
         )
         .bind(config.id)
-        .bind(
-            &computers
-                .iter()
-                .map(|c| c.dn.clone())
-                .collect::<Vec<_>>(),
-        )
+        .bind(&computers.iter().map(|c| c.dn.clone()).collect::<Vec<_>>())
         .fetch_one(pool)
         .await?;
         let would_soft_delete = live_count - surviving;

@@ -353,6 +353,32 @@ v0.27.0's Refresh Rect mitigation (below) targeted: there is no
 intermediate transcode step that can lose state across frames. The
 v0.27.0 Refresh Display button has been retired from the Session Bar.
 
+### Backend SSH defaults (v1.3.1+)
+
+`full_param_map()` in [`backend/src/tunnel.rs`](../backend/src/tunnel.rs)
+also seeds a parallel set of defaults for `protocol == "ssh"`
+connections so a brand-new SSH connection behaves identically to
+the upstream [sol1/rustguac](https://github.com/sol1/rustguac)
+baseline:
+
+| Parameter               | Default                | Why                                                                                                  |
+| ----------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `terminal-type`         | `xterm-256color`       | Exported as `TERM` on the remote PTY. Without it OpenSSH defaults to `TERM=linux`, which does not advertise `smcup`/`rmcup` and breaks `nano` / `less` alt-screen restore. |
+| `color-scheme`          | `gray-black`           | Rustguac-default SGR palette; without it guacd falls back to `black-white` and inverts most users' expectations. |
+| `scrollback`            | `1000`                 | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000.                         |
+| `font-name`             | `monospace`            | Rustguac parity.                                                                                     |
+| `font-size`             | `12`                   | Rustguac parity.                                                                                     |
+| `backspace`             | `127`                  | DEL — what every modern Linux distro ships as the SSH default; stops `^?` characters appearing on Backspace. |
+| `locale`                | `en_US.UTF-8`          | Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars.                       |
+| `server-alive-interval` | `0`                    | Disables guacd-side keepalives — Guacamole's own keep-alive instructions already provide liveness.   |
+
+The corresponding three keys (`color-scheme`, `locale`,
+`server-alive-interval`) have been added to
+`is_allowed_guacd_param` so admin overrides via the per-connection
+`extras` map can set them explicitly. The SFTP wiring lives in
+the same `if self.protocol == "ssh"` branch so all SSH-only
+parameter logic is in one place.
+
 Verification flows in priority order:
 
 1. **Authoritative** — Windows Event Viewer →

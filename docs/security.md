@@ -574,6 +574,49 @@ dispatching a queued shell command. The `kb.reset()` call
 guarantees keystroke-clean teardowns and is exercised by both
 the unit and Playwright suites.
 
+### Mouse-button hygiene on canvas-leave / window-blur (v1.3.1+)
+
+The keyboard-reset discipline above has a parallel on the mouse
+side: `frontend/src/components/SessionManager.tsx` wires a
+`releaseMouseButtons()` helper to `mouseleave` on the Guacamole
+display element and `blur` on the `window`. When fired, the
+helper inspects `mouse.currentState`; if any of `left` / `middle`
+/ `right` is still set, it constructs a buttons-released
+`Guacamole.Mouse.State` and sends it to guacd via
+`client.sendMouseState(s, true)`.
+
+**Why this is a security property, not just a UX fix.** When a
+user clicks inside the Guacamole canvas and the matching
+`mouseup` event lands outside the page's document (browser
+chrome, devtools, popped-out windows, the OS desktop after an
+alt-tab-out), the page never receives the `mouseup` and
+guacd's terminal stays in *"left button held"* state. Without a
+reset event:
+
+- **SSH** would continue building a text selection across
+  whatever the cursor passed over on its next return to the
+  canvas, leaving a giant unintended highlight that the user
+  did not initiate.
+- **RDP / VNC** would not extend a selection (the remote OS
+  doesn't have that semantic) but would forward a stale
+  *"left button held"* state to the remote desktop on the next
+  `mousemove`, potentially triggering a drag-drop on icons the
+  cursor crossed.
+- An attacker exploiting a click-jacking flow on a sibling
+  origin (cross-origin iframe drag, malicious popout window)
+  could in principle keep `mouse.currentState.left = true` for
+  longer than the operator intended, racing a programmatic
+  `mousemove` against the operator's awareness.
+
+The `mouseleave` + `blur` reset closes that window: the moment
+the cursor leaves the canvas *or* the tab loses focus (which
+covers every alt-tab and popped-out-devtools case), held buttons
+are released. The release is a **no-op when no buttons are
+held**, so it costs zero round-trips during normal interaction.
+The pattern intentionally mirrors the keyboard `kb.reset()`
+discipline — both are defensive *"send a clean state on every
+opportunity for input to escape our event handlers"* hooks.
+
 ---
 
 

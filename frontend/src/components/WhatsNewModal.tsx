@@ -25,6 +25,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.3.1",
+    subtitle:
+      "SSH terminal fidelity, phantom-selection mouse hygiene, recording-playback URL fix, and guacd patch resilience",
+    sections: [
+      {
+        title: "SSH sessions look right out of the box",
+        description:
+          "Brand-new SSH connections now ship with the same terminal defaults that upstream rustguac uses: terminal-type=xterm-256color, color-scheme=gray-black, scrollback=1000, plus matching font / locale / backspace / server-alive parameters. The first one is load-bearing — without it guacd's bundled SSH terminal exports TERM=linux to the remote PTY, so nano and less cannot save and restore the alternate screen (the bug where closing nano leaves the file contents stuck on your terminal). The colour-scheme default fixes 16-colour-only rendering of vim syntax highlighting and ls --color. The scrollback default lifts guacd's in-buffer line count from ~256 to 1000 so a single journalctl invocation actually fits. Per-connection admin overrides via the extras allowlist still win — the defaults only fill in keys you haven't set.",
+      },
+      {
+        title: "No more phantom text selection across the SSH terminal",
+        description:
+          "Long-running annoyance: click inside the SSH terminal, then move the cursor to the browser tab strip without physically releasing the mouse button, and guacd's terminal would keep extending a text selection across whatever the cursor passed over. Root cause is that when the matching mouseup lands outside the document (browser chrome, devtools, popped-out windows), the page never receives it and guacd stays in left-button-held state. SessionManager.tsx now wires a releaseMouseButtons handler to mouseleave on the canvas and blur on the window — when fired, it inspects the live mouse state and, if any button is still held, sends a buttons-released state to guacd. No-op when nothing is held, so it costs zero round-trips during normal use.",
+      },
+      {
+        title: "Seek and speed buttons on the recording player work again",
+        description:
+          "Clicking any seek (30S, 1M, 3M, 5M either direction) or speed (2x, 4x, 8x) button on a recording-playback page would render a red Tunnel error badge over the player. The frontend URL builder in HistoricalPlayer.tsx prepended &seek=… and &speed=… to a base URL that didn't contain a ? yet, producing a malformed path like …/stream&seek=3114&speed=2 that the WebSocket route correctly rejected. Fixed by collecting params into a list and prepending ? when the base has no query string, & when it does. The /api/{user,admin}/recordings/:id/stream endpoint and its documented seek / speed query parameters were always correct; only the frontend was wrong. No backend or API changes.",
+      },
+      {
+        title: "guacd image build is resilient to harmless context drift",
+        description:
+          "docker compose build guacd previously failed with error: patch does not apply if a hunk's surrounding context drifted by even a single whitespace line. The Dockerfile now installs the patch utility and falls back to patch -p1 -F3 <\"$p\" when git apply rejects a hunk, allowing up to three lines of fuzz. The upstream apache/guacamole-server commit pin (2980cf0) is unchanged and the actual patch contents are unchanged. A stray diagnostic patch (005-alt-screen-trace.patch) that was used during the SSH terminal investigation has been removed from the patches directory; the fix that superseded it lives entirely in backend tunnel.rs.",
+      },
+      {
+        title: "Drop-in upgrade — rebuild required",
+        description:
+          "All fixes are confined to the backend Rust binary, the frontend bundle, and the guacd Dockerfile patch step. Run docker compose up -d --build (or pull freshly published CI tags); a docker compose pull of an old tag is not enough. No database migrations. No /api/* contract changes. No config.toml schema changes. Existing SSH connections pick up the new defaults on first reconnect; admin extras overrides keep winning.",
+      },
+    ],
+  },
+  {
     version: "1.3.0",
     subtitle:
       "Web-kiosk lifecycle correctness, Chromium trust-store fix, production-resilience hardening, and protocol-aware Quick Share",

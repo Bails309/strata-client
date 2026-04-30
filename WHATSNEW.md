@@ -1,3 +1,199 @@
+# What's New in v1.3.1
+
+> **Same-day patch release on top of v1.3.0.** Five small,
+> orthogonal fixes that all surfaced while validating the v1.3.0
+> production rollout: SSH terminal defaults so `nano`, `less`,
+> `vim`, and `ls --color` actually look right; a mouse-leave /
+> window-blur button-release that kills the long-standing
+> *"phantom text selection extends across the SSH terminal as I
+> move my cursor to the browser tab strip"* bug; a recording
+> playback URL fix so seek and speed buttons no longer surface
+> *"Tunnel error"*; a fuzz-tolerant guacd patch step so image
+> builds survive harmless upstream context drift; and the
+> deletion of a stray diagnostic patch that was superseded by the
+> SSH defaults work. **Drop-in upgrade from v1.3.0** — no
+> database migrations, no `/api/*` contract changes, no
+> `config.toml` schema changes; rebuild the backend, frontend,
+> and guacd images so the new bits actually run.
+
+---
+
+## 🖥️ SSH terminals that look right out of the box
+
+The connect-instruction parameter map in
+[`backend/src/tunnel.rs`](backend/src/tunnel.rs) `full_param_map()`
+now seeds the same SSH terminal defaults that upstream
+[sol1/rustguac](https://github.com/sol1/rustguac) sends — for
+every `protocol == "ssh"` connection where the admin has not
+explicitly overridden them:
+
+| Parameter               | Default                | Why it matters                                                                                       |
+| ----------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `terminal-type`         | `xterm-256color`       | Exported as `TERM` on the remote PTY. Without it, OpenSSH sees the empty string and most distros fall back to `TERM=linux` — a 16-colour profile that does *not* advertise `smcup`/`rmcup`, so `nano` and `less` cannot save and restore the alternate screen. **This is what made closing `nano` leave the file stuck on your viewport.** |
+| `color-scheme`          | `gray-black`           | Rustguac-default colour palette. Without it, guacd renders SGR escape sequences in the `black-white` palette, inverting most users' expectations and visually obliterating dark prompts. |
+| `scrollback`            | `1000`                 | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000, matching `xterm`'s historical default. Below ~500 lines, a single `journalctl -xe` doesn't fit. |
+| `font-name`             | `monospace`            | The browser-side default already happened to be monospace; we now make the wire value explicit. |
+| `font-size`             | `12`                   | Rustguac parity.                                                                                     |
+| `backspace`             | `127`                  | DEL — what every Linux distro ships as the SSH default. Stops `^?` characters appearing in the terminal when you press Backspace on certain remote shells. |
+| `locale`                | `en_US.UTF-8`          | Exported as `LC_*`. Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars, etc. |
+| `server-alive-interval` | `0`                    | Disables guacd-side keepalives — the WebSocket tunnel already provides liveness via Guacamole's own keep-alive instructions. |
+
+Three of these (`color-scheme`, `locale`, `server-alive-interval`)
+have also been added to the `is_allowed_guacd_param` allowlist so
+admin overrides via the per-connection `extras` map can set them
+explicitly. The `tunnel_param_allowlist_pins_legal_keys` test
+pins those new keys against accidental removal in future
+refactors. The SFTP block has been folded into the same
+`if self.protocol == "ssh"` branch so the SSH parameter wiring
+now lives in one place rather than two.
+
+**No operator action.** Existing SSH connections start using the
+new defaults on the first reconnect after the upgrade. Anything
+the admin has explicitly set in the per-connection `extras` map
+keeps winning — the defaults only fill in keys you haven't set.
+
+---
+
+## 🖱️ No more phantom text selection across the SSH terminal
+
+Long-running annoyance: click inside the SSH terminal, then move
+the cursor up to the browser tab strip — or anywhere else outside
+the canvas, including a popped-out devtools window — without
+physically releasing the mouse button, and guacd's terminal would
+keep extending a text selection across whatever the cursor passed
+over. The selection would then survive coming back into the
+terminal, leaving the operator with a giant highlight they
+hadn't asked for and couldn't easily clear short of clicking
+fresh inside the terminal.
+
+**Root cause:** when the user clicks inside the Guacamole canvas
+and the matching `mouseup` event lands outside the page's
+document (on browser chrome, on a popped-out devtools window, on
+another tab during a drag, on the OS desktop after an
+alt-tab-out), the page never receives the `mouseup` and
+`mouse.currentState.left` stays `true`. The next `mousemove`
+guacd receives is then interpreted as a drag-extend-selection,
+because as far as guacd's terminal is concerned the user is
+still holding the button.
+
+**Fix:** [`frontend/src/components/SessionManager.tsx`](frontend/src/components/SessionManager.tsx)
+now wires a `releaseMouseButtons()` helper to two events:
+
+- `mouseleave` on the Guacamole display element — catches every
+  in-tab leave (cursor moves to the tab strip, the address bar,
+  any other DOM element outside the canvas).
+- `blur` on the `window` — catches every tab-switch / focus-loss
+  case where `mouseleave` doesn't fire (e.g. Alt-Tab to another
+  application, or the user opens a popped-out devtools window
+  that takes focus without the cursor crossing the canvas
+  boundary).
+
+When fired, the helper inspects the live `mouse.currentState`;
+if any of `left` / `middle` / `right` is still set, it builds a
+cleared `Guacamole.Mouse.State` and sends it via
+`client.sendMouseState(s, true)`. The release is a **no-op when
+no buttons are held**, so it costs zero round-trips during normal
+interaction.
+
+> **Why not handle this in `Guacamole.Mouse` itself?** Upstream
+> `guacamole-common-js` doesn't wire any leave/blur reset
+> either, and rustguac's `static/client.html` likewise has the
+> same bare `mouse.onEach(['mousedown','mousemove','mouseup'])`
+> pattern with no leave handler. We're choosing to fix this on
+> the Strata side rather than try to upstream a vendored-bundle
+> patch that would deviate from rustguac for everyone.
+
+---
+
+## ⏯️ Seek and speed buttons on the recording player work again
+
+Symptom: opening a recording playback page (Sessions → LIVE/Rewind
+button → Recorded Session) and clicking **any** of the seek
+buttons (`30S`, `1M`, `3M`, `5M` in either direction) or speed
+buttons (`2x`, `4x`, `8x`) at the bottom of the player would
+render a red *"Tunnel error"* badge over the player and stop
+playback. Pressing **Retry** would just reproduce the same
+error.
+
+**Root cause:** the recording-playback URL builder in
+[`frontend/src/components/HistoricalPlayer.tsx`](frontend/src/components/HistoricalPlayer.tsx)
+was prepending `&seek=…` and `&speed=…` to a base URL that did
+not yet contain a `?`. The base URL is built by
+`buildRecordingStreamUrl()` and ends in `…/stream` with no query
+string, so the resulting URL became
+`wss://strata.example.com/api/admin/recordings/<uuid>/stream&seek=3114&speed=2`
+— a malformed path that the WebSocket upgrader on the backend
+correctly rejected as an unknown route, surfacing as the
+*"Tunnel error"* the user saw.
+
+**Fix:** collect the parameters into a list, then prepend `?`
+when the base URL has no existing query string and `&` when it
+does, before splitting on `?` for the
+`tunnel.connect(tunnelQuery)` call. The split semantics are
+preserved, so the `seek` and `speed` values continue to travel
+as Guacamole connect-protocol args (which is what the backend
+recording-stream route already reads them as) rather than as
+URL query string. The
+[`GET /api/{user,admin}/recordings/:id/stream`](docs/api-reference.md#get-apiuserrecordingsidstream)
+endpoint and its documented `seek` and `speed` query parameters
+were always correct — only the frontend was wrong.
+
+---
+
+## 🐳 guacd image build resilient to harmless context drift
+
+`docker compose build guacd` previously failed with
+`error: patch does not apply` if any patch hunk's surrounding
+context had drifted by even a single whitespace line — the
+`git apply` invocation in [`guacd/Dockerfile`](guacd/Dockerfile)
+is strict by design. We pin the upstream
+`apache/guacamole-server` commit to `2980cf0` for
+reproducibility, but a future commit-pin bump (or a local
+maintenance branch with whitespace cleanup) could trip this even
+when our patches don't actually conflict.
+
+The patch step now installs the GNU `patch` utility via
+`apk add --no-cache patch` and falls back to
+`patch -p1 -F3 < "$p"` when `git apply` rejects a hunk, allowing
+up to three lines of fuzz on each hunk. Hard rejects still fail
+the build (we exit on patch failure) — only the contextual
+fuzz is relaxed.
+
+A stray diagnostic patch
+(`guacd/patches/005-alt-screen-trace.patch`) that was used
+during the SSH terminal investigation earlier in the v1.3.x
+cycle has been removed; the fix that superseded it (the SSH
+defaults above) lives entirely in `backend/src/tunnel.rs`, so
+removing the patch causes no behaviour change.
+
+---
+
+## 🚢 Upgrading from v1.3.0
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+- **Mandatory image rebuild.** All fixes live in the backend
+  Rust binary, the frontend bundle, and the guacd Dockerfile
+  patch step — all three are baked into their respective
+  images. A `docker compose pull` of an old tag is *not*
+  enough.
+- **No database migrations.** v1.3.1 is schema-stable relative
+  to v1.3.0 and v1.2.0.
+- **No `/api/*` contract changes.** All existing endpoints
+  behave identically; the documented query parameters on the
+  recording-stream WebSocket endpoint were always correct.
+- **No `config.toml` / env-var changes.** Nothing for an
+  operator to update.
+- **First reconnect picks up the SSH defaults automatically.**
+  No need to re-save existing SSH connections; the defaults
+  only fill in `extras` keys the admin hasn't explicitly set,
+  so any per-connection terminal overrides keep winning.
+
+---
+
 # What's New in v1.0.0
 
 > **General availability.** Strata Client reaches **1.0.0** — a

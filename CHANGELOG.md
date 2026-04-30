@@ -5,6 +5,187 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-04-30
+
+### SSH terminal fidelity, phantom-selection mouse hygiene, recording-playback URL fix, and guacd patch resilience
+
+A same-day patch release that closes five separate small bugs that
+all surfaced together while validating the v1.3.0 production
+rollout. None of them affect the database schema, the `/api/*`
+contract, or the on-disk config shape — every fix is confined to
+the backend `tunnel.rs` parameter map, the frontend session /
+recording-playback components, and the guacd image build pipeline.
+The only operator-visible behaviour change is that **brand-new SSH
+sessions look correct out of the box** (256-colour `vim`, working
+`nano` alt-screen restore, sane scrollback) without the operator
+having to set any per-connection `terminal-type` / `color-scheme`
+override. The other four fixes are pure-correctness changes that
+remove user-facing failure modes that were never supposed to occur.
+
+### Added
+
+- **Rustguac-parity SSH defaults in the connect-instruction parameter
+  map.** [`backend/src/tunnel.rs`](backend/src/tunnel.rs) `full_param_map()`
+  now seeds — for every `protocol == "ssh"` connection where the
+  admin has not explicitly overridden them — the same SSH terminal
+  parameters that upstream
+  [sol1/rustguac](https://github.com/sol1/rustguac) sends:
+  `terminal-type=xterm-256color`, `color-scheme=gray-black`,
+  `font-name=monospace`, `font-size=12`, `scrollback=1000`,
+  `backspace=127`, `locale=en_US.UTF-8`, and
+  `server-alive-interval=0`. Three of these are load-bearing on
+  guacd's bundled SSH terminal emulator
+  ([`guac_terminal`](https://github.com/apache/guacamole-server/tree/2980cf0/src/terminal)):
+  - **`terminal-type=xterm-256color`** is exported as the `TERM`
+    environment variable on the remote PTY. Without it, guacd sends
+    the empty default which `OpenSSH` translates to `TERM=linux` on
+    most distros — a 16-colour profile that does *not* advertise
+    `smcup`/`rmcup`, so `nano` and `less` cannot save and restore
+    the alternate screen. That was the user-visible *"after I close
+    nano my SSH window still shows the file"* bug. With the new
+    default, the remote shell sees `TERM=xterm-256color` and the
+    alt-screen save/restore works.
+  - **`color-scheme=gray-black`** is the rustguac-default colour
+    palette; without it guacd renders SGR escape sequences with the
+    `black-white` palette which inverts most users' expectations
+    (and visually obliterates dark-themed prompts). The new default
+    matches what users actually see when they SSH from a normal
+    terminal emulator.
+  - **`scrollback=1000`** raises guacd's in-buffer line count from
+    its built-in default (~256) to 1000, matching `xterm`'s
+    historical default and rustguac's choice. Below ~500 lines the
+    output of a single `journalctl -xe` invocation cannot be
+    scrolled back through.
+  - The remaining five (`font-name`, `font-size`, `backspace`,
+    `locale`, `server-alive-interval`) are bit-for-bit identical to
+    the rustguac defaults so a Strata SSH session is now visually
+    indistinguishable from a rustguac one.
+  - The corresponding entries (`color-scheme`, `locale`,
+    `server-alive-interval`) have been added to
+    `is_allowed_guacd_param` so the per-connection `extras`
+    allowlist accepts admin overrides for them, and the
+    `tunnel_param_allowlist_pins_legal_keys` test pins those new
+    keys against accidental removal. The SFTP block has been
+    folded into the same `if self.protocol == "ssh"` branch so the
+    SSH parameter wiring is in one place rather than two.
+- **Mouse-button release on canvas-leave / window-blur in
+  `SessionManager.tsx`.** A new `releaseMouseButtons()` helper now
+  watches `mouseleave` on the Guacamole display element and `blur`
+  on the window. When fired, it inspects the live `mouse.currentState`
+  and, if any of `left` / `middle` / `right` is still set, emits a
+  cleared `Guacamole.Mouse.State` via `client.sendMouseState(s, true)`.
+  This closes the long-running *"phantom text selection extends
+  across the SSH terminal as I move my cursor toward the browser
+  tab strip"* bug. Root cause: when the user clicks inside the
+  Guacamole canvas and the matching `mouseup` lands outside the
+  document (browser chrome, devtools window, popped-out Strata
+  window, another tab during a drag), the page never receives the
+  `mouseup` and guacd's terminal stays in *"left button held"*
+  state; the next `mousemove` is then interpreted as a
+  drag-extend-selection. The fix sends an explicit
+  buttons-released state on the two events that actually catch
+  every cursor-leaves-canvas case (`mouseleave` for in-tab leaves,
+  `blur` for tab/window switches that don't produce a `mouseleave`).
+  The release is a no-op when no buttons are held, so it costs
+  zero round-trips during normal interaction.
+
+### Fixed
+
+- **Recording playback `Tunnel error` after seeking or changing
+  speed.** The recording-playback URL builder in
+  [`frontend/src/components/HistoricalPlayer.tsx`](frontend/src/components/HistoricalPlayer.tsx)
+  prepended `&seek=…` and `&speed=…` to a base URL that did not
+  yet contain a `?`, producing a malformed path like
+  `…/stream&seek=3114&speed=2` that the WebSocket upgrader on the
+  backend correctly rejected as an unknown route. The frontend
+  rendered this as the red *"Tunnel error"* badge over the player
+  the moment the user clicked any seek button (`30S`, `1M`, `3M`,
+  `5M` in either direction) or any speed button (`2x`, `4x`, `8x`).
+  Fixed by collecting the parameters into a list and prepending
+  `?` when the base URL has no existing query string, `&` when it
+  does, before splitting on `?` for the
+  `tunnel.connect(tunnelQuery)` call. The split semantics are
+  preserved so the parameters still travel as Guacamole
+  connect-protocol args (which is what the backend route already
+  reads them as) rather than as URL query string.
+- **Phantom text selection in SSH terminals when the cursor leaves
+  the Guacamole canvas mid-drag.** See the *Added* section above.
+  Symptom: clicking inside the SSH terminal then moving the mouse
+  toward the browser tab strip (or any other element outside the
+  canvas, including a popped-out devtools window) without
+  physically releasing the mouse button caused guacd's terminal
+  to keep building a text selection across whatever the cursor
+  passed over. Affected SSH only because guacd's terminal is the
+  only protocol path that uses left-mouse-drag for region
+  selection; RDP / VNC / web kiosks were never affected.
+- **Missing 256-colour ANSI rendering and broken `nano` /
+  `less` alt-screen restore on SSH.** See the *Added* section
+  above. Symptom: closing `nano` left the file contents on the
+  terminal viewport instead of restoring the previous prompt;
+  `vim`'s syntax highlighting and `ls --color` rendered in the
+  reduced 16-colour palette; bold colours often rendered as the
+  same colour as plain text.
+- **`docker compose build guacd` failing with `error: patch does
+  not apply` when a patch hunk's surrounding context has drifted
+  by even a single whitespace line.** [`guacd/Dockerfile`](guacd/Dockerfile)
+  previously applied each patch with `git apply` only — which is
+  strict about hunk context. The patch step now installs `patch`
+  via `apk add --no-cache patch` and falls back to
+  `patch -p1 -F3 < "$p"` when `git apply` fails, allowing up to
+  three lines of fuzz on each hunk. This makes the image build
+  resilient to upstream Apache `guacamole-server` whitespace
+  refactors that don't actually conflict with our patches; we
+  still pin the upstream commit (`2980cf0`) for reproducibility.
+- **Stray diagnostic patch file.** Removed the temporary
+  `guacd/patches/005-alt-screen-trace.patch` that was added during
+  the SSH alt-screen diagnostics earlier in v1.3.0 development.
+  It was always intended to be a build-time trace patch (it
+  printed extra `guac_terminal` debug to stderr) and should not
+  have been left in the repository for v1.3.0. The fix that
+  superseded it (the SSH defaults above) lives entirely in
+  `tunnel.rs`, so removing the patch causes no behaviour change.
+
+### Validation
+
+- `cargo fmt --check` clean.
+- `cargo clippy --all-targets -- -D warnings` clean.
+- `cargo test -p strata-backend tunnel::tests::full_param_map` (and
+  the surrounding tunnel allowlist tests) pass with the new SSH
+  defaults and the expanded `is_allowed_guacd_param` keys.
+- `npm test -- --run` clean; the existing `HistoricalPlayer` seek /
+  speed tests continue to pass with the corrected URL builder
+  (no test asserted on the malformed format).
+- Manual: opening an SSH session through the production deployment
+  now shows colourised `ls`, working `nano` alt-screen restore,
+  and ≥1000 lines of scrollback on `Shift-PageUp`. Clicking the
+  terminal then moving the cursor to the browser tab strip without
+  releasing no longer extends a phantom selection. Clicking any
+  seek or speed button on a recording playback page no longer
+  shows *"Tunnel error"* — the player reconnects with the new
+  `seek` / `speed` Guacamole args and resumes playback.
+
+### Upgrade notes
+
+- **Mandatory image rebuild.** All fixes live in the
+  backend Rust binary, the frontend bundle, and the guacd
+  Dockerfile patch step — all three are baked into their
+  respective images. Run `docker compose up -d --build` (or pull
+  freshly published CI tags). A `docker compose pull` of an old
+  tag is *not* enough.
+- **No database migrations.** v1.3.1 is schema-stable relative to
+  v1.3.0 and v1.2.0.
+- **No `/api/*` contract changes.** The recording-playback
+  WebSocket endpoint (`GET /api/{user,admin}/recordings/{id}/stream`)
+  documented in [`docs/api-reference.md`](docs/api-reference.md)
+  has always accepted `seek` and `speed` as proper query
+  parameters; only the frontend URL builder was wrong.
+- **Operator action — none required.** The new SSH defaults apply
+  automatically to every existing SSH connection on first reconnect
+  after the upgrade. Connections that explicitly set
+  `terminal-type` / `color-scheme` / `scrollback` / etc. via the
+  per-connection `extras` map keep their override (the defaults
+  only fill in keys the admin has not specified).
+
 ## [1.3.0] — 2026-04-30
 
 ### Web-kiosk lifecycle correctness, Chromium trust-store fix, production-resilience hardening, and protocol-aware Quick Share

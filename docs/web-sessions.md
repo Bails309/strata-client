@@ -92,6 +92,21 @@ Key properties:
 - **Kiosk mode** — `--kiosk`, `--no-first-run`, no address bar.
   Fullscreen the kiosk; users cannot navigate away from the
   operator-supplied target.
+- **Sandbox + infobar suppression (v1.3.0)** — the kiosk runs as root
+  inside the backend container, so the spawner has always had to pass
+  `--no-sandbox`. As of v1.3.0 the argv builder also adds `--test-type`
+  whenever it adds `--no-sandbox`. `--test-type` does **not** disable
+  the sandbox; it suppresses the yellow *"You are using an unsupported
+  command-line flag: --no-sandbox. Stability and security will
+  suffer."* infobar (which otherwise occupies ~28 px across the top of
+  every kiosk tab) and a handful of other end-user prompts that have
+  no meaning inside a single-tab kiosk: default-browser prompt,
+  session-restore prompt, certificate-error interstitial test mode.
+  Rendering, network stack, mojo IPC, JIT, and origin isolation are
+  unchanged. Two unit tests in
+  [`backend/src/services/web_session.rs`](../backend/src/services/web_session.rs)
+  pin the pairing: `--test-type` only appears when `--no-sandbox`
+  does, and never on its own.
 - **Domain allow-list** — Chromium `--host-rules="MAP * ~NOTFOUND, MAP
   <allowed> <allowed>"` drops every host the operator did not approve.
 - **Egress allow-list** — the backend resolves the requested host and
@@ -167,8 +182,18 @@ instead of pasted into every connection. Workflow:
    `certutil -A -d sql:<dir> -n <label> -t "C,," -i <pem>`. Chromium
    reads from that NSS DB and trusts the supplied roots — no
    `--ignore-certificate-errors` flag is used.
+
+   **Important (v1.3.0):** Chromium on Linux resolves the NSS trust-
+   store path relative to `$HOME` (always `$HOME/.pki/nssdb`), **not**
+   relative to `--user-data-dir`. The kiosk spawner therefore explicitly
+   sets `HOME=<user_data_dir>` on the Chromium child `Command` so NSS
+   resolves to the same directory the backend just populated. Without
+   this override (the v1.2.0 behaviour), Chromium would consult the
+   strata user's actual home directory's NSS DB — which never had the
+   imported cert — and every internally-signed site would trip
+   `NET::ERR_CERT_AUTHORITY_INVALID` despite a successful `certutil -A`.
 4. The NSS DB lives inside the per-session profile directory, so it
-   is destroyed with the kiosk on session end.
+   is destroyed with the kiosk on session end (see "Lifecycle" below).
 
 Limits and contracts:
 
@@ -224,7 +249,44 @@ the existing hash-chained pipeline:
 `web.session.start`) the resolved IP / port the Chromium ultimately
 contacted, so operators can correlate against the egress allow-list.
 
----
+`web.session.end` includes a `reason` string. Common values:
+
+- `"tunnel_disconnect"` (v1.3.0+) — written by
+  [`backend/src/routes/tunnel.rs`](../backend/src/routes/tunnel.rs)
+  when the WebSocket proxy loop returns. This is the path taken when
+  the user closes the browser tab, kills the network, or when the
+  proxy hits a fatal IO error. The eviction call drops the registry's
+  `Arc<WebSessionHandle>` and triggers `kill_on_drop(true)` SIGKILL of
+  the Chromium and Xvnc children, releasing the X-display slot
+  (`100..=199`), the CDP port (`9222..=9321`), and the per-session
+  profile tempdir (with its NSS DB). Reopening the same connection
+  after this event spawns a fresh kiosk rather than reusing a stale
+  handle.
+- Other values are emitted by the spawner / health-check paths
+  (`"chromium_exit"`, `"xvnc_exit"`, `"idle_timeout"`, etc.).
+
+## Lifecycle (kiosk teardown)
+
+The kiosk is held alive by an `Arc<WebSessionHandle>` stored in
+`WebRuntimeRegistry`'s in-memory map. Three things drop that Arc and
+let the handle's `Drop` impl run (which SIGKILLs both children,
+releases the display + CDP slot, and removes the profile tempdir):
+
+1. **Tunnel disconnect (v1.3.0+).** The route handler calls
+   `web_runtime.evict(connection_id, user_id)` after `tunnel::proxy`
+   returns. This is the dominant path; closing the browser tab is the
+   normal user-visible trigger. Writes
+   `web.session.end / reason: "tunnel_disconnect"`.
+2. **Idle reaper.** The background reaper task evicts handles whose
+   last activity is older than the idle threshold.
+3. **Process death.** If Chromium or Xvnc exits unexpectedly, the
+   spawner's wait task evicts the handle.
+
+Before v1.3.0, only paths 2 and 3 ran in production — path 1 existed
+in the registry's API but was never wired up — so closing a browser
+tab without first hitting *Disconnect* on the Session Bar leaked the
+kiosk until the idle reaper caught up, and the next reopen of the
+same connection returned the stale (closed-tab) handle.
 
 ## Operator pitfalls
 

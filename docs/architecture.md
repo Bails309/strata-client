@@ -88,7 +88,7 @@ The central orchestrator. Responsibilities:
 - **Password management** — privileged account password checkout and rotation for AD-managed service accounts; configurable password generation policy, LDAP `unicodePwd` reset, Vault-sealed credential storage, approval workflows with explicit account-to-role scoping (each approval role is mapped to specific managed AD accounts), dedicated "Search Base OUs" for user discovery (allowing separate scoping from device discovery), **scheduled future-dated checkouts** (requests between now + 30 s and now + 14 days sit idle with no credential material until the scheduled moment, at which point the existing 60-second expiration worker activates them), **emergency approval bypass (break-glass)** per AD sync config — gated by `pm_allow_emergency_bypass`, requires ≥ 10-character justification, **hard-capped at 30 minutes** server-side, writes a dedicated `checkout.emergency_bypass` audit event, surfaces an ⚡ Emergency badge across Credentials and Approvals views, background workers for checkout expiration and zero-knowledge auto-rotation, requester username resolution for approver visibility, and decided-by tracking with self-approval detection
 - **Connection health checks** — background TCP probing of every connection's hostname:port every 2 minutes; results (online/offline/unknown) persisted and exposed via API for dashboard status indicators
 - **DNS configuration** — admin-configurable DNS servers and search domains written to a shared Docker volume as `resolv.conf`; guacd containers apply this on startup for internal hostname resolution; Docker's embedded DNS is preserved as fallback
-- **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each
+- **Quick Share (file store)** — session-scoped temporary file CDN; files uploaded via multipart POST are stored on disk, each keyed by a random unguessable token. Download endpoint is unauthenticated (the token is the capability). Files are automatically cleaned up when the tunnel disconnects. Limits: 20 files per session, 500 MB each. The frontend Quick Share panel is **protocol-aware (v1.3.0+)**: SSH / Telnet sessions render the copy-snippet as `curl -fLOJ '<url>'` (paste-into-shell friendly); RDP / VNC / web kiosks render the bare HTTPS URL. A "Copy as" `Select` dropdown lets the operator override per-session: `URL`, `curl`, `wget --content-disposition`, or `Invoke-WebRequest -Uri … -OutFile … (Windows)`
 - **Audit** — SHA-256 hash-chained append-only log
 
 ### 3. Frontend SPA
@@ -103,7 +103,7 @@ The central orchestrator. Responsibilities:
 | Ports | 80 (HTTP), 443 (HTTPS when certs mounted) |
 
 The frontend nginx container serves as the primary gateway for all external traffic. It handles:
-- **Reverse proxying** — routes `/api/*` to the Rust backend (including WebSocket upgrades for tunnel connections)
+- **Reverse proxying** — routes `/api/*` to the Rust backend (including WebSocket upgrades for tunnel connections). The shared `common.fragment` declares `resolver 127.0.0.11 valid=10s ipv6=off;` (Docker's embedded DNS) and uses a `set $backend_upstream "backend:8080";` variable as the `proxy_pass` target so the upstream is re-resolved per request rather than cached at process start. **(v1.3.0+)** This avoids the historical `[emerg] host not found in upstream "backend"` boot failure when the backend container was briefly unreachable during `docker compose up -d --build`; nginx now stays up and returns `502 Bad Gateway` for the duration of any backend outage, recovering automatically when the upstream comes back
 - **SSL termination** — when TLS certificates are mounted at `/etc/nginx/ssl/`, nginx serves HTTPS on port 443 with Mozilla Intermediate cipher configuration, HSTS, and automatic HTTP→HTTPS redirection
 - **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`, and `Permissions-Policy` on every response
 - **Compression** — gzip for text, CSS, JS, JSON, and SVG assets
@@ -234,6 +234,23 @@ The actual architecture decouples the sink from the select loop:
   the case where the sink is wedged.
 
 Additional tunnel details:
+
+- **Web-protocol kiosk eviction (v1.3.0+).** When `protocol == "web"`,
+  the tunnel route in [`backend/src/routes/tunnel.rs`](../backend/src/routes/tunnel.rs)
+  captures an `Arc<WebRuntimeRegistry>` and the requesting `user_id`
+  before the WebSocket upgrade. After `tunnel::proxy` returns
+  (success or error), the route calls
+  `web_runtime.evict(connection_id, user_id)` to drop the registry's
+  reference to the kiosk's `Arc<WebSessionHandle>`. If no other tab is
+  holding the same handle, refcount-zero `Drop` SIGKILLs the Chromium
+  and Xvnc children (`kill_on_drop(true)`), releases the X-display
+  slot (`100..=199`) and CDP port (`9222..=9321`), and removes the
+  per-session profile tempdir (with its NSS DB inside). A
+  `web.session.end` audit row with `reason: "tunnel_disconnect"` is
+  written so the lifecycle event is visible. Before v1.3.0 only the
+  idle reaper and process-death paths ran in production, so closing a
+  browser tab without first hitting *Disconnect* leaked the kiosk
+  until the reaper caught up.
 
 - Guacamole instructions are delimited by `;` and can be split across
   TCP reads. The proxy maintains a `pending: Vec<u8>` that is drained

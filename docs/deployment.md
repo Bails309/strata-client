@@ -534,6 +534,68 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v1.2.0 → v1.3.0 (mandatory image rebuild — backend *and* frontend)
+
+v1.3.0 is a focused production-hardening release. It fixes four
+bugs surfaced on the in-house deployment (see
+[CHANGELOG](../CHANGELOG.md) for the full causal chain on each):
+
+1. Backend container crash-loop with exit code 141 and empty logs
+   (`find … | head -n1` racing under `pipefail` in
+   [`backend/entrypoint.sh`](../backend/entrypoint.sh)).
+2. Frontend nginx dying on boot with `[emerg] host not found in
+   upstream "backend"` if the backend was even briefly unreachable
+   during `docker compose up -d --build`. Fixed via a runtime
+   `resolver 127.0.0.11` declaration in `frontend/common.fragment`
+   and a variable-target `proxy_pass`.
+3. `NET::ERR_CERT_AUTHORITY_INVALID` for sites signed by an
+   uploaded Trusted CA. Fixed by pointing `HOME` at the per-session
+   `--user-data-dir` so Chromium's NSS-based cert verifier resolves
+   to the directory the backend just populated.
+4. Web kiosk handle leaking past browser-tab close. Fixed by adding
+   `web_runtime.evict()` in the WebSocket-tunnel route after the
+   proxy loop returns.
+
+Plus a Quick Share UX upgrade: protocol-aware download snippets
+(`curl` for SSH/Telnet, bare URL for kiosks, `wget` and PowerShell
+overrides) rendered through the shared `Select` dropdown.
+
+All four backend fixes live in either `entrypoint.sh` or the Rust
+binary — both baked into the backend image. The nginx resolver fix
+lives in the frontend image. **Both must be rebuilt:**
+
+```bash
+cd strata-client
+git pull
+docker compose pull               # refresh base images
+docker compose build --pull       # rebuild backend + frontend
+docker compose up -d
+```
+
+A `docker compose pull` of an unchanged registry tag is **not**
+sufficient.
+
+No database migrations. No `/api/*` contract changes. No
+configuration-file changes required. Existing Trusted CA bundles
+uploaded under v1.2.0 *start working* on the first kiosk spawn
+under v1.3.0 — no re-upload needed.
+
+Verify post-upgrade:
+
+```bash
+# 1. Backend stays Up (healthy), no longer Restarting (141)
+docker compose ps backend
+
+# 2. nginx survives a backend bounce without manual restart
+docker compose restart backend
+sleep 15
+docker compose logs --tail=20 frontend | grep -v "host not found"
+# Expected: no "host not found in upstream" emerg lines
+
+# 3. New audit event emits when a kiosk tab closes
+docker compose logs backend | grep web.session.end | grep tunnel_disconnect
+```
+
 #### v1.1.0 → v1.2.0 (mandatory image rebuild)
 
 v1.2.0 introduces reusable Trusted CA bundles for the `web`

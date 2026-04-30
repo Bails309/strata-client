@@ -978,17 +978,26 @@ operator-facing documentation.
 - **Domain restriction.** Chromium's `--host-rules` rewrites every
   non-allowed host to `~NOTFOUND`. This is in addition to the egress
   CIDR allow-list, not a replacement for it.
-- **Trusted CA bundles (v1.2.0).** Operators can attach a reusable
-  PEM bundle to a `web` connection via the **Trusted Certificate
-  Authority** dropdown in the connection editor. At spawn time the
-  backend writes the PEM into a per-session NSS database under
-  `<user-data-dir>/.pki/nssdb` via `certutil -N --empty-password` +
-  `certutil -A -d sql:<dir> -n <label> -t "C,," -i <pem>` (provided
-  by the `libnss3-tools` apt package, baked into the backend image).
-  Trust grants do not survive the tab close — the NSS DB lives
-  inside the ephemeral profile dir and is destroyed with it. The
-  PEM holds certificate chains (signatures over public keys), so it
-  is treated as **public material** and is *not* envelope-encrypted
+- **Trusted CA bundles (v1.2.0; v1.3.0 trust-store fix).** Operators
+  can attach a reusable PEM bundle to a `web` connection via the
+  **Trusted Certificate Authority** dropdown in the connection editor.
+  At spawn time the backend writes the PEM into a per-session NSS
+  database under `<user-data-dir>/.pki/nssdb` via
+  `certutil -N --empty-password` + `certutil -A -d sql:<dir> -n <label>
+  -t "C,," -i <pem>` (provided by the `libnss3-tools` apt package,
+  baked into the backend image). **As of v1.3.0** the kiosk spawner
+  also sets `HOME=<user_data_dir>` on the Chromium child process
+  because Chromium on Linux resolves the NSS trust-store path relative
+  to `$HOME` (always `$HOME/.pki/nssdb`), **not** relative to
+  `--user-data-dir`. Without this override (the v1.2.0 behaviour),
+  Chromium consulted the strata user's actual home — which never
+  contained the imported root — and every internally-signed site
+  tripped `NET::ERR_CERT_AUTHORITY_INVALID` despite a successful
+  `certutil -A`. Trust grants do not survive the tab close — the NSS
+  DB lives inside the ephemeral profile dir and is destroyed with it
+  by the eviction-on-disconnect path (see "Kiosk lifecycle" below).
+  The PEM holds certificate chains (signatures over public keys), so
+  it is treated as **public material** and is *not* envelope-encrypted
   via Vault — read access to the PEM column requires
   `can_manage_system`. The dropdown for non-admin users
   (`GET /api/user/trusted-cas`) returns only `{id, name, subject}`
@@ -998,6 +1007,33 @@ operator-facing documentation.
   references the bundle via `extra->>'trusted_ca_id'`. CRUD events
   emit `trusted_ca.created`, `trusted_ca.updated`, and
   `trusted_ca.deleted` audit rows.
+- **Sandbox semantics — `--no-sandbox` + `--test-type` (v1.3.0).**
+  The kiosk runs as root inside the backend container, so the
+  spawner has always had to pass `--no-sandbox`; v1.3.0 also passes
+  `--test-type` to suppress the resulting *"You are using an
+  unsupported command-line flag…"* yellow infobar (and a handful of
+  other end-user prompts that have no meaning inside a single-tab
+  kiosk). **`--test-type` does not disable the sandbox.** Rendering,
+  network stack, mojo IPC, JIT, and origin isolation are unchanged.
+  The flag is paired exclusively with `--no-sandbox` in the argv
+  builder; two unit tests pin the pairing so a future refactor can't
+  silently emit `--test-type` on its own. The kiosk's threat model
+  (single-tab, X-display-isolated per session, ephemeral profile,
+  egress allow-list, NSS trust limited to operator-uploaded roots)
+  is unaffected.
+- **Kiosk lifecycle — eviction-on-disconnect (v1.3.0).** The
+  WebSocket-tunnel route now calls `web_runtime.evict()` after the
+  proxy loop returns, dropping the registry's `Arc<WebSessionHandle>`.
+  Refcount-zero `Drop` SIGKILLs both child processes, releases the
+  X-display slot and CDP port, and removes the per-session profile
+  tempdir (with its NSS DB inside). This closes a resource-exhaustion
+  vector that existed in v1.2.0 — without eviction, an attacker
+  controlling a browser session could open and rapidly close kiosks
+  to pin display slots `:100..:199` and CDP ports `9222..9321`,
+  eventually triggering `WebRuntimeError::DisplayExhausted` for
+  legitimate users. It also guarantees that NSS trust grants made for
+  one session cannot leak into the next session; closing the tab
+  destroys the per-session NSS DB along with the rest of the profile.
 
 ### VDI Desktop Containers (`vdi` protocol)
 

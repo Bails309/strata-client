@@ -820,6 +820,7 @@ export default function SessionBar() {
       {quickShareOpen && activeSession && (
         <QuickShare
           connectionId={activeSession.connectionId}
+          protocol={activeSession.protocol}
           onClose={() => setQuickShareOpen(false)}
           sidebarWidth={220}
           sessionBarCollapsed={sessionBarCollapsed}

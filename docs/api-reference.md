@@ -1570,7 +1570,7 @@ required, but the response intentionally omits the PEM bytes.
 | `checkout.emergency_bypass` | User invoked break-glass approval bypass; checkout activated immediately without approver review (requires `pm_allow_emergency_bypass`) |
 | `rotation.completed` | Automatic service account password rotation completed |
 | `web.session.start` | Chromium kiosk has been spawned, Xvnc is reachable, and guacd is about to attach. `details`: `{ connection_id, display, cdp_port }`. Added in v0.30.0 |
-| `web.session.end` | Web Session closed for any reason. `details`: `{ connection_id, display, reason }`. Added in v0.30.0 |
+| `web.session.end` | Web Session closed for any reason. `details`: `{ connection_id, display, reason }`. Added in v0.30.0. **(v1.3.0+)** The WebSocket-tunnel route now writes this with `reason: "tunnel_disconnect"` after the proxy loop returns, so closing a browser tab is now visibly audited as a session-end event. |
 | `web.autofill.write` | Login Data SQLite was provisioned for the session. `details`: `{ connection_id, credential_id }`. Added in v0.30.0 |
 | `vdi.container.ensure` | `DockerVdiDriver::ensure_container()` succeeded (spawn or reuse). `details`: `{ connection_id, container_name, image }`. Added in v0.30.0 |
 | `vdi.container.destroy` | Reaper destroyed a VDI container. `details`: `{ connection_id, container_name, reason }` where `reason` is one of `Logout`, `IdleTimeout`, or `Other`. Added in v0.30.0 |

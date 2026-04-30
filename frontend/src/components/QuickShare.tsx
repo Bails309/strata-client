@@ -5,12 +5,85 @@ import {
   deleteQuickShareFile,
   QuickShareFile,
 } from "../api";
+import Select from "./Select";
 
 interface Props {
   connectionId: string;
+  /**
+   * Wire protocol of the active session — used to pick a sensible
+   * default "copy" format. SSH / Telnet sessions get a `curl`
+   * one-liner because the remote side is a shell; RDP / VNC / web
+   * sessions get a plain URL because the user typically pastes it
+   * into a graphical browser inside the kiosk.
+   */
+  protocol?: string;
   onClose: () => void;
   sidebarWidth: number;
   sessionBarCollapsed: boolean;
+}
+
+/**
+ * Snippet format the copy button + readonly input render.
+ *
+ * - `url`        — bare HTTPS URL. Best for graphical browsers (RDP, VNC, web).
+ * - `curl`       — `curl -fLOJ '<url>'` one-liner. Best for SSH / Telnet shells
+ *                  on Linux/macOS hosts. `-J` honours the `Content-Disposition`
+ *                  filename the backend already sends, so the saved file keeps
+ *                  its original name instead of being saved as the token.
+ * - `wget`       — `wget --content-disposition '<url>'` one-liner. Same idea
+ *                  as curl but for hosts where `wget` is the default.
+ * - `powershell` — `Invoke-WebRequest -Uri '<url>' -OutFile '<filename>'`.
+ *                  Best for Windows shells reached over SSH (OpenSSH on
+ *                  Windows Server) where neither `curl.exe` nor `wget`
+ *                  may be on PATH for the logged-in account.
+ */
+type SnippetFormat = "url" | "curl" | "wget" | "powershell";
+
+function defaultFormatFor(protocol: string | undefined): SnippetFormat {
+  // Normalise so callers passing "SSH" / "Ssh" / undefined all work.
+  switch ((protocol ?? "").toLowerCase()) {
+    case "ssh":
+    case "telnet":
+      return "curl";
+    default:
+      return "url";
+  }
+}
+
+/**
+ * Build the snippet text the user will paste into the remote session.
+ *
+ * `filename` is shell-quoted by Chrome's clipboard verbatim, so we
+ * single-quote any field that originated outside our control. The
+ * URL itself is composed from `window.location.origin` (browser-
+ * controlled) and the backend-issued opaque token, both of which are
+ * already URL-safe — but we still wrap them in single quotes so an
+ * exotic origin (e.g. one with `&` in a query string from a future
+ * change) cannot break out of the command.
+ */
+function snippetFor(
+  format: SnippetFormat,
+  url: string,
+  filename: string
+): string {
+  // Escape any single quote in the filename so it survives single-
+  // quoted shell interpolation: `O'Brien.pdf` -> `O'\''Brien.pdf`.
+  const safeFilename = filename.replace(/'/g, "'\\''");
+  switch (format) {
+    case "url":
+      return url;
+    case "curl":
+      // -f: fail loudly on HTTP errors instead of writing the error body.
+      // -L: follow redirects (the SPA may redirect /api/files/* in future).
+      // -O: write to a file rather than stdout.
+      // -J: honour Content-Disposition for the filename.
+      return `curl -fLOJ '${url}'`;
+    case "wget":
+      // --content-disposition: same intent as curl -J.
+      return `wget --content-disposition '${url}'`;
+    case "powershell":
+      return `Invoke-WebRequest -Uri '${url}' -OutFile '${safeFilename}'`;
+  }
 }
 
 function formatSize(bytes: number): string {
@@ -22,6 +95,7 @@ function formatSize(bytes: number): string {
 
 export default function QuickShare({
   connectionId,
+  protocol,
   onClose,
   sidebarWidth,
   sessionBarCollapsed,
@@ -31,7 +105,18 @@ export default function QuickShare({
   const [error, setError] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Default format picked from the connection protocol but operator-
+  // overridable via the dropdown — e.g. an SSH user on Windows might
+  // want the PowerShell variant instead of curl.
+  const [format, setFormat] = useState<SnippetFormat>(() => defaultFormatFor(protocol));
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // If the active session changes (different protocol) reset the
+  // format to the new protocol's default. The user's per-session
+  // override is intentionally not persisted across sessions.
+  useEffect(() => {
+    setFormat(defaultFormatFor(protocol));
+  }, [protocol]);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -75,13 +160,24 @@ export default function QuickShare({
     }
   }, []);
 
-  const copyUrl = useCallback((file: QuickShareFile) => {
-    const url = `${window.location.origin}${file.download_url}`;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopiedToken(file.token);
-      setTimeout(() => setCopiedToken(null), 2000);
-    });
-  }, []);
+  const buildSnippet = useCallback(
+    (file: QuickShareFile) => {
+      const url = `${window.location.origin}${file.download_url}`;
+      return snippetFor(format, url, file.filename);
+    },
+    [format]
+  );
+
+  const copyUrl = useCallback(
+    (file: QuickShareFile) => {
+      const text = buildSnippet(file);
+      navigator.clipboard.writeText(text).then(() => {
+        setCopiedToken(file.token);
+        setTimeout(() => setCopiedToken(null), 2000);
+      });
+    },
+    [buildSnippet]
+  );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -201,6 +297,26 @@ export default function QuickShare({
         </p>
       </div>
 
+      {/* Snippet format picker. Only meaningful when there are files
+          to copy, but always rendering it keeps the layout stable. */}
+      <div className="px-4 py-2 border-b border-white/5 flex items-center gap-3">
+        <span className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary shrink-0">
+          Copy as
+        </span>
+        <div className="flex-1">
+          <Select
+            value={format}
+            onChange={(v) => setFormat(v as SnippetFormat)}
+            options={[
+              { value: "url", label: "URL" },
+              { value: "curl", label: "curl (Linux / macOS)" },
+              { value: "wget", label: "wget (Linux)" },
+              { value: "powershell", label: "PowerShell (Windows)" },
+            ]}
+          />
+        </div>
+      </div>
+
       {/* File list */}
       <div className="flex-1 overflow-auto p-4">
         {files.length === 0 ? (
@@ -290,7 +406,7 @@ export default function QuickShare({
                   <input
                     type="text"
                     readOnly
-                    value={`${window.location.origin}${file.download_url}`}
+                    value={buildSnippet(file)}
                     className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 text-[0.6rem] font-mono text-txt-secondary"
                     onClick={(e) => {
                       (e.target as HTMLInputElement).select();

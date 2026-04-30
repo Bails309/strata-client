@@ -5,6 +5,230 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-04-30
+
+### Web-kiosk lifecycle correctness, Chromium trust-store fix, production-resilience hardening, and protocol-aware Quick Share
+
+A focused follow-up to the v1.2.0 Trusted-CA work. Three production
+incidents on the in-house deployment surfaced four orthogonal bugs
+that all combined to make Trusted CAs *appear* not to work even when
+they were configured correctly: (1) the kiosk's NSS database was
+materialised at `<user-data-dir>/.pki/nssdb` but Chromium reads NSS
+from `$HOME/.pki/nssdb`, so the imported roots were silently ignored
+and every site signed by an internal CA tripped
+`NET::ERR_CERT_AUTHORITY_INVALID` despite a successful `certutil -A`;
+(2) the kiosk handle was never evicted from the in-memory registry on
+WebSocket disconnect, so closing the browser tab left Chromium + Xvnc
+running and the *next* reopen returned the stale handle (= a closed
+tab) instead of spawning a fresh kiosk; (3) Chromium's "You are using
+an unsupported command-line flag: --no-sandbox" yellow infobar was
+permanently stuck across the top of every kiosk; (4) on the
+production host the backend was crash-looping with exit code 141 and
+zero log output because `find … | head -n1` in the container
+entrypoint raced with `pipefail`, killing the script before
+`gosu strata strata-backend` ever ran. Stack-level fixes were applied
+to the backend entrypoint, the nginx upstream resolution, the kiosk
+spawn pipeline, the kiosk teardown path, and Quick Share gets a small
+quality-of-life upgrade — generated download snippets are now picked
+per-protocol so SSH/Telnet sessions get a `curl -fLOJ '<url>'`
+one-liner ready to paste into the remote shell instead of the bare
+URL that only made sense for a browser-based kiosk.
+
+### Added
+
+- **Protocol-aware Quick Share snippets.** The Quick Share panel now
+  takes the active session's protocol into account when generating
+  the "copy this to the remote session" snippet:
+  - `ssh` / `telnet` sessions default to a `curl -fLOJ '<url>'` one-
+    liner — `-f` fails fast on HTTP errors (no garbage body written
+    to disk), `-L` follows redirects, `-O` writes to a file, `-J`
+    honours the `Content-Disposition` filename header the backend
+    already sends so the saved file keeps its original name instead
+    of becoming the opaque token.
+  - `rdp` / `vnc` / `web` (and any other protocol) keep the bare
+    HTTPS URL because the user pastes it into a graphical browser
+    inside the kiosk.
+  - A new "Copy as" dropdown (rendered with the shared `Select`
+    component to match the rest of the modern UI) lets the operator
+    override per-session: `URL`, `curl (Linux / macOS)`,
+    `wget --content-disposition (Linux)`, or
+    `Invoke-WebRequest -Uri … -OutFile … (Windows)` for OpenSSH-on-
+    Windows targets where neither `curl.exe` nor `wget` may be on
+    `PATH` for the logged-in user.
+  - All snippet variants single-quote the URL so an exotic origin
+    character (e.g. an `&` in a future query string) cannot break out
+    of the command. Filenames embedded in the PowerShell variant are
+    apostrophe-escaped (`O'Brien.pdf` → `O'\''Brien.pdf` semantics).
+  - The `protocol` prop is optional, so existing test fixtures that
+    instantiate `<QuickShare …/>` without it continue to render with
+    the safe `URL` default.
+- **Kiosk eviction on tunnel disconnect.** The web-protocol branch of
+  [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs) now
+  captures an `Arc<WebRuntimeRegistry>` before the WebSocket upgrade
+  and, after `tunnel::proxy` returns (whether `Ok` or `Err`), calls
+  `web_runtime.evict(connection_id, user_id)`. Eviction drops the
+  registry's `Arc<WebSessionHandle>`; if no other tab is holding the
+  same handle the refcount hits zero and `WebSessionHandle::Drop`
+  runs, SIGKILL-ing both the Chromium and Xvnc children via
+  `kill_on_drop(true)`, releasing the allocated display slot
+  (`100..=199`) and CDP port (`9222..=9321`), and removing the
+  per-session profile tempdir (with its embedded NSS DB). A
+  matching `web.session.end` audit event with
+  `reason: "tunnel_disconnect"` is written so admins can see in the
+  audit log exactly when each kiosk was torn down.
+- **Chromium "unsupported flag" infobar suppression.** The argv
+  builder in
+  [`backend/src/services/web_session.rs`](backend/src/services/web_session.rs)
+  now adds `--test-type` whenever it adds `--no-sandbox` (i.e. only
+  when running as root, which is the default in the container). This
+  suppresses the yellow *"You are using an unsupported command-line
+  flag: --no-sandbox. Stability and security will suffer."* banner
+  that Chromium otherwise paints across the top of every kiosk tab.
+  `--test-type` does **not** disable the sandbox — it only suppresses
+  the warning chrome and a handful of other end-user prompts (default-
+  browser, session-restore) that have no meaning inside a single-tab
+  kiosk. Two new unit tests pin the pairing: `--test-type` only
+  appears when `--no-sandbox` does, and never on its own.
+- **Resilient nginx upstream resolver.** The nginx fragment served
+  inside the frontend container (`frontend/common.fragment`) now
+  declares `resolver 127.0.0.11 valid=10s ipv6=off;` (Docker's
+  embedded DNS) and uses a `set $backend_upstream "backend:8080";`
+  variable as the `proxy_pass` target. The variable forces nginx to
+  re-resolve the upstream at request time instead of caching the
+  result from process startup. Previously, if the `backend` container
+  was even briefly unreachable when nginx booted (the typical case
+  during `docker compose up -d --build` while the backend image was
+  still building), nginx would die with the legendary
+  `[emerg] host not found in upstream "backend"` and stay dead until
+  manually restarted. Now nginx returns `502 Bad Gateway` for the
+  duration of any backend outage and recovers automatically when the
+  upstream comes back — no more crash-loop, no more stuck Login
+  spinner after a backend redeploy.
+
+### Changed
+
+- **`spawn_chromium()` now sets `HOME` to the per-session user-data-
+  dir.** [`backend/src/services/web_runtime.rs`](backend/src/services/web_runtime.rs)
+  sets `HOME=<user_data_dir>` in the `Command` env block alongside
+  `DISPLAY`. Chromium's NSS-based cert verifier on Linux resolves the
+  trust-store path relative to `$HOME` (always
+  `$HOME/.pki/nssdb`) — *not* relative to `--user-data-dir`. The
+  `--user-data-dir` flag controls Chromium's own profile (cookies,
+  cache, prefs); it has no effect on NSS. Without this override the
+  backend correctly created the NSS DB at
+  `<user_data_dir>/.pki/nssdb` and ran `certutil -A`, but Chromium
+  was looking at the strata user's actual home (`/home/strata/.pki/
+  nssdb` or wherever) which never had the imported cert. Pointing
+  `HOME` at the user-data-dir aligns NSS's resolution with where the
+  bundle is materialised. Fixes the symptom from v1.2.0 where uploading
+  and selecting a Trusted CA still produced
+  `NET::ERR_CERT_AUTHORITY_INVALID` for sites signed by that CA.
+- **Quick Share panel UI.** A new "Copy as" row sits between the
+  upload area and the file list, rendered with the shared `Select`
+  component (portal-based, styled to match the rest of the SPA's
+  chrome) instead of the previous OS-native `<select>`. The format
+  selection resets to the protocol-driven default whenever the
+  active session's protocol changes; the per-session override is
+  intentionally not persisted across sessions.
+
+### Fixed
+
+- **Backend container crash loop on long-lived hosts (exit code
+  141).** [`backend/entrypoint.sh`](backend/entrypoint.sh) reads the
+  guacd-recordings volume's gid via
+  `find "$RECORDINGS_DIR" -maxdepth 1 -type f -printf '%g\n' | head -n1`.
+  With the script-wide `set -euo pipefail`, this pipeline races as
+  soon as the recordings volume contains more than a handful of files:
+  `head -n1` closes its stdin after the first line, `find` keeps
+  writing and is killed with `SIGPIPE`, exit code `141` (`128 + 13`)
+  propagates through `pipefail`, `set -e` aborts the script, and the
+  container exits before `gosu strata strata-backend` ever runs.
+  Symptom on production was a backend container in a permanent
+  `Restarting (141)` state with empty `docker compose logs`. Wrapped
+  *just that one pipeline* with `set +o pipefail` / `set -o pipefail`
+  so the (harmless) SIGPIPE on `find` no longer kills the script,
+  while preserving strict-mode safety everywhere else in the
+  entrypoint.
+- **Stuck "Locating authentication service…" spinner on the Login
+  page.** This was a downstream symptom of the nginx crash-loop bug:
+  the SPA boots, calls `getStatus()` which proxies through nginx to
+  the backend, the request fails because nginx is dead, and the
+  catch block silently swallows the error so the spinner spins
+  forever. Now that the resolver fix keeps nginx alive, `getStatus()`
+  recovers within ~10 s of a backend restart on the next page load
+  with a 502 → 200 transition. (A future release may add an
+  in-component retry-with-backoff and a "couldn't reach server"
+  fallback button.)
+- **Web kiosk reuses stale state after browser-tab close.** Closing
+  the browser tab without first hitting *Disconnect* on the Session
+  Bar used to leave the Chromium + Xvnc pair running; the next time
+  the user opened the same connection, `WebRuntimeRegistry::ensure()`
+  hit the fast-path and returned the abandoned handle (often a closed
+  blank tab). Eviction-on-disconnect closes both the symptom (next
+  reopen is fresh) and the underlying resource leak (display slot,
+  CDP port, profile tempdir, and child processes are released
+  immediately).
+- **`NET::ERR_CERT_AUTHORITY_INVALID` for sites signed by an uploaded
+  Trusted CA.** See "Changed → `spawn_chromium()` HOME" above for the
+  full causal chain.
+- **Yellow `--no-sandbox` warning bar overlapping the kiosk content.**
+  See "Added → Chromium infobar suppression" above. The bar consumed
+  the top ~28 px of every kiosk tab, occluding navigation chrome on
+  sites with sticky headers.
+
+### Security
+
+- **`--test-type` is *not* a sandbox-disable flag.** It is paired
+  exclusively with the existing `--no-sandbox` (which we already had
+  to set because the kiosk runs as root inside the container) and
+  only suppresses chrome-level UI infobars and end-user prompts.
+  Rendering, network stack, mojo IPC, JIT, and origin isolation
+  are unchanged. The kiosk's threat model (single-tab, X-display-
+  isolated per session, ephemeral profile, egress allow-list, NSS
+  trust limited to operator-uploaded roots) is unaffected.
+- **Eviction-on-disconnect closes a resource-exhaustion vector.**
+  Without eviction, an attacker controlling a browser session could
+  open and rapidly close kiosks to pin display slots `:100..:199`
+  and CDP ports `9222..=9321`, eventually triggering
+  `WebRuntimeError::DisplayExhausted` for legitimate users. Eviction
+  releases both allocators on every disconnect, capping per-user
+  resource pressure at the count of *concurrently open* tabs.
+- **Backend entrypoint hardening.** The `pipefail` fix is defence-in-
+  depth against a `find` invocation that exits non-zero — no security
+  property changed, but the failure is now diagnosable instead of an
+  empty-log mystery.
+
+### Validation
+
+- `cargo fmt --check` clean.
+- `cargo clippy --all-targets -- -D warnings` clean (existing
+  `#[allow(dead_code)]` on the unused `materialise_into_nss_db`
+  pool wrapper is preserved).
+- `cargo test -p strata-backend` passes; two new tests on
+  `chromium_command_args` lock in the `--test-type` pairing.
+- `npm test -- --run` clean.
+- `docker-compose up -d --build` succeeds on the in-house
+  production host with the new entrypoint; backend reaches `Up
+  (healthy)` instead of `Restarting (141)`; nginx logs no longer
+  contain `host not found in upstream`.
+
+### Upgrade notes
+
+- **Mandatory image rebuild.** The fixes live in the backend
+  `entrypoint.sh`, the backend Rust binary, and the frontend nginx
+  config — all three are baked into their respective images. Run
+  `docker compose up -d --build` (or pull a newly published tag
+  from CI). A `docker compose pull` of an old tag is *not* enough.
+- **No database migrations.** v1.3.0 is schema-stable relative to
+  v1.2.0.
+- **No `/api/*` contract changes.** All existing endpoints behave
+  identically; the new `web.session.end` audit event continues to
+  use the existing format (now with `reason: "tunnel_disconnect"`
+  populated for the new code path).
+- **Operator action — none required.** Existing Trusted CA bundles
+  uploaded under v1.2.0 will *start working* on the first kiosk
+  spawn under v1.3.0; no re-upload is needed.
+
 ## [1.2.0] — 2026-04-29
 
 ### Reusable Trusted CA bundles for Web Sessions, tenant-aware checkout-email rendering, and SMTP / NVR UX polish

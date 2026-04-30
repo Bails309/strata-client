@@ -25,6 +25,48 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.3.0",
+    subtitle:
+      "Web-kiosk lifecycle correctness, Chromium trust-store fix, production-resilience hardening, and protocol-aware Quick Share",
+    sections: [
+      {
+        title: "Trusted CAs that you uploaded under v1.2.0 actually work now",
+        description:
+          "v1.2.0 shipped the Trusted CA admin surface and faithfully created a per-session NSS database under <user-data-dir>/.pki/nssdb at kiosk launch — but Chromium on Linux reads NSS exclusively from $HOME/.pki/nssdb and ignores --user-data-dir for trust-store resolution, so every internally-signed site still tripped NET::ERR_CERT_AUTHORITY_INVALID despite a successful certutil -A. The kiosk spawner now explicitly sets HOME=<user_data_dir> on the Chromium child process so NSS resolves to exactly the directory the backend just populated. No re-upload needed: existing v1.2.0 bundles start working on the first kiosk spawn after the upgrade.",
+      },
+      {
+        title: "Closing a web kiosk's browser tab actually closes the kiosk",
+        description:
+          "The web-protocol branch of the tunnel route used to spawn Chromium + Xvnc, hand the WebSocket pair to the proxy loop, and then forget about them — but the in-memory WebRuntimeRegistry kept holding the Arc<WebSessionHandle>, so closing the browser tab without first hitting Disconnect left both child processes (and the allocated X display, CDP port, and profile tempdir) running. Reopening the same connection then returned the stale handle (= a closed blank tab) instead of a fresh kiosk. The route now calls web_runtime.evict() after the proxy loop returns, dropping the registry's Arc; refcount-zero teardown SIGKILLs both children, releases the display + CDP slot, and removes the per-session tempdir (with its NSS DB inside). A web.session.end audit row is written with reason: \"tunnel_disconnect\" so the lifecycle is visible in the audit log.",
+      },
+      {
+        title: "Quick Share knows your protocol",
+        description:
+          "When the active session is SSH or Telnet, Quick Share's copy button now hands you a curl -fLOJ '<url>' one-liner you can paste straight into the remote shell — -L follows redirects, -O writes to a file, -J keeps the original Content-Disposition filename, and -f fails fast on HTTP errors so you never end up with a 404 body silently saved as the file. RDP / VNC / web kiosks still get the bare URL because the user pastes it into a graphical browser. A new Copy as dropdown — rendered with the shared Select component to match the rest of the UI — lets you override per-session: URL, curl (Linux/macOS), wget --content-disposition (Linux), or Invoke-WebRequest -Uri … -OutFile … (Windows / OpenSSH-on-Windows). Every variant single-quotes the URL so an exotic origin character cannot break the shell command.",
+      },
+      {
+        title: "No more yellow “unsupported flag” bar across every kiosk",
+        description:
+          "The Chromium kiosk runs as root inside the backend container, so we have always had to pass --no-sandbox; that in turn caused Chromium to paint a permanent ~28 px yellow bar across the top of every tab reading You are using an unsupported command-line flag: --no-sandbox. Stability and security will suffer. The argv builder now adds --test-type whenever it adds --no-sandbox, suppressing the bar (and a handful of other end-user prompts that have no meaning inside a single-tab kiosk: default-browser, session-restore). Critically, --test-type does NOT disable the sandbox; rendering, network stack, mojo IPC, JIT, and origin isolation are unchanged. Two new unit tests pin the pairing.",
+      },
+      {
+        title: "Backend no longer crash-loops with exit 141 and empty logs",
+        description:
+          "On hosts with non-trivial recording history the backend container was crash-looping with exit code 141 and zero log output. Root cause: backend/entrypoint.sh reads the recordings volume's gid via find … | head -n1 under set -euo pipefail; head closes its stdin after the first line, find is killed with SIGPIPE (= 128 + 13 = 141), pipefail propagates that exit code, set -e aborts the script, and the container dies before gosu strata strata-backend ever runs. Wrapped just that one pipeline with set +o pipefail / set -o pipefail so the harmless SIGPIPE on find no longer kills startup, while preserving strict-mode safety everywhere else.",
+      },
+      {
+        title: "nginx survives a backend restart without a manual kick",
+        description:
+          "The frontend nginx container used to die on boot with [emerg] host not found in upstream \"backend\" if the backend was even briefly unreachable when nginx came up — the typical case during docker compose up -d --build while the backend image was still finishing its build. The shared upstream fragment now declares resolver 127.0.0.11 valid=10s ipv6=off; (Docker's embedded DNS) and uses a set $backend_upstream variable as the proxy_pass target, forcing per-request resolution. Nginx now stays up and returns 502 Bad Gateway for the duration of any backend outage, recovering automatically when the upstream comes back. Side benefit: the stuck Login spinner that this bug caused is gone.",
+      },
+      {
+        title: "Drop-in upgrade — rebuild required",
+        description:
+          "All four backend fixes (entrypoint pipefail, HOME=user_data_dir, --test-type, eviction-on-disconnect) live in either the entrypoint script or the Rust binary, both baked into the backend image. The nginx resolver fix is baked into the frontend image. Run docker compose up -d --build (or pull a freshly published CI tag); a docker compose pull of an old tag is not enough. No database migrations. No /api/* contract changes. Existing Trusted CA bundles uploaded under v1.2.0 start working on first kiosk spawn under v1.3.0.",
+      },
+    ],
+  },
+  {
     version: "1.2.0",
     subtitle:
       "Reusable Trusted CA bundles for Web Sessions, tenant-aware checkout-email rendering, and SMTP / NVR UX polish",

@@ -61,11 +61,7 @@ function defaultFormatFor(protocol: string | undefined): SnippetFormat {
  * exotic origin (e.g. one with `&` in a query string from a future
  * change) cannot break out of the command.
  */
-function snippetFor(
-  format: SnippetFormat,
-  url: string,
-  filename: string
-): string {
+function snippetFor(format: SnippetFormat, url: string, filename: string): string {
   // Escape any single quote in the filename so it survives single-
   // quoted shell interpolation: `O'Brien.pdf` -> `O'\''Brien.pdf`.
   const safeFilename = filename.replace(/'/g, "'\\''");

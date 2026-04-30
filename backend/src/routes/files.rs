@@ -378,13 +378,22 @@ pub async fn delete_file(
         s.file_store.clone()
     };
 
-    // Verify ownership.
+    // Verify ownership. Admins (any administrative permission) are
+    // allowed to delete any file — this mirrors the list endpoint,
+    // which already returns every file in the session for admins.
     let meta = file_store
         .get(&token)
         .await
         .ok_or_else(|| AppError::NotFound("File not found".into()))?;
 
-    if meta.user_id != user.id {
+    if meta.user_id != user.id && !user.has_any_admin_permission() {
+        tracing::warn!(
+            requester = %user.username,
+            requester_id = %user.id,
+            owner_id = %meta.user_id,
+            token = %token,
+            "Quick Share delete refused — caller is not the file owner and has no admin permission"
+        );
         return Err(AppError::Forbidden);
     }
 

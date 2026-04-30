@@ -825,13 +825,21 @@ async fn handle_guac_handshake(
         ctx.registry.unregister(&ctx.session_id).await;
         tracing::info!("NVR session {} unregistered", ctx.session_id);
 
-        // Clean up any quick-share files associated with this session
-        let cleaned = ctx.file_store.cleanup_session(&ctx.session_id).await;
+        // Clean up any quick-share files associated with this session.
+        // The frontend uploads keyed by `connection_id` (see
+        // `routes/files::upload` and the `session_id` form field passed
+        // by `QuickShare.tsx`), so the cleanup MUST use the same key —
+        // not the recording-side `nvr_session_id` which is
+        // `"{connection_id}-{timestamp_ms}"`. Cleaning by the recording
+        // session id silently no-ops and leaks the per-session files
+        // on disk + in the in-memory store.
+        let file_session_key = ctx.connection_id.to_string();
+        let cleaned = ctx.file_store.cleanup_session(&file_session_key).await;
         if cleaned > 0 {
             tracing::info!(
                 "Cleaned up {} quick-share file(s) for session {}",
                 cleaned,
-                ctx.session_id
+                file_session_key
             );
         }
 

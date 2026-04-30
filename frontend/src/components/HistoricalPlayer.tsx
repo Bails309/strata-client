@@ -61,8 +61,12 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
       recordingEndedRef.current = false;
 
       let url = (streamUrlBuilder || buildRecordingStreamUrl)(recording.id);
-      if (seekMs > 0) url += `&seek=${seekMs}`;
-      if (playbackSpeed !== 1) url += `&speed=${playbackSpeed}`;
+      const params: string[] = [];
+      if (seekMs > 0) params.push(`seek=${seekMs}`);
+      if (playbackSpeed !== 1) params.push(`speed=${playbackSpeed}`);
+      if (params.length > 0) {
+        url += (url.includes("?") ? "&" : "?") + params.join("&");
+      }
       const qIdx = url.indexOf("?");
       const tunnelBase = qIdx >= 0 ? url.substring(0, qIdx) : url;
       const tunnelQuery = qIdx >= 0 ? url.substring(qIdx + 1) : "";

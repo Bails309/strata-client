@@ -781,24 +781,6 @@ pub async fn ws_tunnel(
         )
     });
 
-    let handshake = HandshakeParams {
-        protocol: wire_protocol,
-        hostname: final_hostname,
-        port: final_safe_port,
-        username: final_username,
-        password: final_password,
-        domain,
-        security,
-        ignore_cert,
-        recording_path,
-        recording_name: recording_name.clone(),
-        create_recording_path: true,
-        width: effective_width,
-        height: effective_height,
-        dpi: effective_dpi,
-        extra,
-    };
-
     // Audit log the tunnel connection
     let user_id = user.id;
     crate::services::audit::log(
@@ -844,8 +826,9 @@ pub async fn ws_tunnel(
     // hides INSERT failures (FK violation, pool exhaustion) entirely — we
     // would happily record bytes to disk for a session with no DB row,
     // producing an orphaned file the cleanup task never sees. Await it
-    // here; the round-trip cost is trivial next to the guacd handshake
-    // that's already in flight.
+    // here, *before* the handshake is built, so that on INSERT failure we
+    // can clear `recording_name` and the handshake never asks guacd to
+    // open a recording file we can't finalize.
     if let Some(ref rn) = recording_name {
         if let Err(e) = recordings::insert_start(
             &db.pool,
@@ -864,12 +847,30 @@ pub async fn ws_tunnel(
                  aborting recording for this session to avoid orphaned files",
                 nvr_session_id
             );
-            // Drop the recording_name so the writer below doesn't open a
-            // file we can never finalize. The session itself proceeds
-            // unrecorded — better than silently losing audit data.
+            // Disable recording for this session. The session itself
+            // proceeds unrecorded — better than silently losing audit data
+            // by writing a recording file that has no DB row to point at.
             recording_name = None;
         }
     }
+
+    let handshake = HandshakeParams {
+        protocol: wire_protocol,
+        hostname: final_hostname,
+        port: final_safe_port,
+        username: final_username,
+        password: final_password,
+        domain,
+        security,
+        ignore_cert,
+        recording_path,
+        recording_name: recording_name.clone(),
+        create_recording_path: true,
+        width: effective_width,
+        height: effective_height,
+        dpi: effective_dpi,
+        extra,
+    };
 
     // Fetch timezone for the Guacamole handshake
     let display_timezone = settings::get(&db.pool, "display_timezone")

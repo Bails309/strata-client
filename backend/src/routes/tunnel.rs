@@ -168,6 +168,7 @@ pub async fn create_tunnel_ticket(
 // interpolated into `tracing::error!("… {e}")` macros inside `async move`
 // closures; see alerts #81, #74. The variables are used; suppress the lint.
 #[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
 pub async fn ws_tunnel(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,

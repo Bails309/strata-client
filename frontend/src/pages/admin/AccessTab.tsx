@@ -26,7 +26,14 @@ import {
   updateRoleMappings,
   updateUser,
 } from "../../api";
-import { RdpSections, SshSections, VncSections, VdiSections, WebSections, KubernetesSections } from "./connectionForm";
+import {
+  RdpSections,
+  SshSections,
+  VncSections,
+  VdiSections,
+  WebSections,
+  KubernetesSections,
+} from "./connectionForm";
 import { PROTOCOLS, protocolDescriptor } from "./protocolFields";
 
 export default function AccessTab({
@@ -1031,11 +1038,7 @@ export default function AccessTab({
                         setFormCore((f) => ({
                           ...f,
                           hostname: u.hostname,
-                          port: u.port
-                            ? parseInt(u.port, 10)
-                            : u.protocol === "http:"
-                              ? 80
-                              : 443,
+                          port: u.port ? parseInt(u.port, 10) : u.protocol === "http:" ? 80 : 443,
                         }));
                         setEx("use-ssl", u.protocol === "https:" ? "" : "false");
                       } catch {
@@ -1570,15 +1573,9 @@ function KubeconfigImporter({
           </div>
           <p className="text-[0.7rem] text-txt-tertiary mb-1">
             This key is shown <strong>once</strong>. Paste it into the password slot of the
-            credential profile you assign to this connection. Strata never persists it on this
-            page.
+            credential profile you assign to this connection. Strata never persists it on this page.
           </p>
-          <textarea
-            value={keyPem}
-            readOnly
-            rows={3}
-            className="font-mono text-[0.75rem] w-full"
-          />
+          <textarea value={keyPem} readOnly rows={3} className="font-mono text-[0.75rem] w-full" />
         </div>
       )}
     </div>

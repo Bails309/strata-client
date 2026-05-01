@@ -154,8 +154,10 @@ pub fn parse_kubeconfig(
     let raw: RawKubeconfig = serde_yaml::from_str(yaml)
         .map_err(|e| AppError::Validation(format!("invalid kubeconfig YAML: {e}")))?;
 
-    let mut out = ParsedKubeconfig::default();
-    out.current_context = raw.current_context.clone();
+    let mut out = ParsedKubeconfig {
+        current_context: raw.current_context.clone(),
+        ..Default::default()
+    };
 
     // Resolve which context to use.
     let ctx_name: Option<&str> = context_override.or(raw.current_context.as_deref());

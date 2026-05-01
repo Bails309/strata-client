@@ -2052,7 +2052,7 @@ export function KubernetesSections({
           </div>
         </FieldGrid>
         <p className="text-xs text-txt-tertiary mt-2">
-          The client <em>private key</em> is stored separately in this connection's credential
+          The client <em>private key</em> is stored separately in this connection&apos;s credential
           profile (encrypted via Vault Transit) and is never written to the connections table.
         </p>
       </Section>

@@ -25,6 +25,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.3.2",
+    subtitle:
+      "guacd FreeRDP 3.25 ABI fix, RDP resize ghost-region cleanup, idle-tunnel watchdog, and logout WebSocket teardown",
+    sections: [
+      {
+        title: "guacd image builds again on Alpine edge (FreeRDP 3.25)",
+        description:
+          "FreeRDP 3.25 deleted the legacy Authenticate callback field from struct rdp_freerdp in favour of the new AuthenticateEx callback (which adds an rdp_auth_reason reason argument), so the moment Alpine edge bumped freerdp-dev from 3.24.2-r0 to 3.25.0-r0 the custom guacd image stopped compiling with 'struct rdp_freerdp has no member named Authenticate; did you mean AuthenticateEx?'. New patch 006-freerdp325-authenticate-ex.patch adds an explicit #include <freerdp/version.h> in rdp.c and uses FREERDP_VERSION_MAJOR / FREERDP_VERSION_MINOR to select the new five-argument AuthenticateEx signature on FreeRDP >= 3.25 while keeping the four-argument Authenticate signature on 3.24 and earlier. The added reason parameter is intentionally discarded because the existing implementation already requests whichever credentials are missing, regardless of why FreeRDP raised the callback. The Dockerfile gained two grep -q assertions immediately after the patch loop that fail the build with a clear error message if the version include or the AuthenticateEx assignment is missing — these would have caught the silent semantic regression of the first patch attempt in seconds rather than minutes. A new guacd/patches/.gitattributes pins *.patch to text eol=lf so contributors with core.autocrlf=true on Windows cannot accidentally introduce CRLF that misaligns hunk context.",
+      },
+      {
+        title: "Black ghost regions after RDP desktop resize are gone",
+        description:
+          "When a Windows RDP server changed resolution mid-session (resolution change inside a VM, GFX channel renegotiation, monitor reconfiguration), the Strata canvas would render a solid-black margin along the edge of the new desktop area until the user moved a window across the affected region to force a repaint. Patch 005-refresh-rect-on-resize.patch on the custom guacd now marks the entire layer dirty after gdi_resize and asks the RDP server to re-send pixels for the full new desktop area via context->update->RefreshRect, with bounds-checks against UINT16_MAX so a pathological resize cannot produce a malformed PDU. Two new structured debug log lines ([strata] guac_rdp_gdi_desktop_resize: resizing ... and [strata] post-resize RefreshRect ... -> ok|FAILED) make the path observable at GUAC_LOG_DEBUG.",
+      },
+      {
+        title: "Lost-tab tunnels close themselves now",
+        description:
+          "If the operator's browser tab was killed without a graceful close — OS task-killer, network drop, kernel OOM, hostile client, alt-tab into a process that took focus and never gave it back — the WebSocket tunnel kept proxying frames into a recording for as long as the OS held the underlying TCP socket open. The recording grew, the session_registry row stayed live, and the live-sessions admin page lied about who was actually connected. backend/src/routes/tunnel.rs ws_tunnel now decodes the access token's exp claim once at upgrade time and runs a 30-second tick loop that asks token_revocation::is_revoked(token) and compares now() to exp; either condition aborts the proxy loop, the recording flushes, and session_registry decrements within at most one tick. Polling cadence was chosen so an aggressive 1-minute access-token TTL still detects revocation in <= 30 s while a normal 20-minute TTL costs at most 40 ticks per session — negligible next to the WebSocket I/O.",
+      },
+      {
+        title: "Clicking Log out closes your tunnels immediately",
+        description:
+          "Manual logout (and idle-timeout logout) used to flip React auth state without first closing any open Guacamole tunnels, so the backend kept proxying frames into a logged-out user's recording until the tab was eventually closed by the browser. SessionManager.tsx now exposes a module-level closeAllSessionsExternal() handler that App.tsx's handleLogout calls before clearing user state — the helper iterates every active session and runs the same cleanup path used by the per-session disconnect button (cleanupPopout, cleanupMultiMonitor, _cleanupPaste, keyboard reset, client.disconnect()), all wrapped in best-effort try / catch so a single failure cannot block the rest of the logout. handleLogout then issues a fire-and-forget apiLogout() to invalidate the refresh token and clear the auth cookies. The backend now sees clean WebSocket closes the moment the user clicks Log out, and the live-sessions list updates immediately rather than after the next watchdog tick.",
+      },
+      {
+        title: "Drop-in upgrade — rebuild required",
+        description:
+          "All four fixes live in either the Rust backend binary, the React bundle, or the custom guacd image. Run docker compose up -d --build (or pull a freshly published CI tag); a docker compose pull of an old tag will leave you on the broken guacd image. No database migrations. No /api/* contract changes. No config.toml schema changes. Existing in-flight tunnels that were already connected before the upgrade get the watchdog the next time the user reconnects (the watchdog is wired in ws_tunnel, which only runs at upgrade time). FreeRDP 3.24 still works — the patch's #if guard means contributors on Debian 13 / Trixie (which still ships freerdp-3.24) build identically to before.",
+      },
+    ],
+  },
+  {
     version: "1.3.1",
     subtitle:
       "SSH terminal fidelity, phantom-selection mouse hygiene, recording-playback URL fix, and guacd patch resilience",

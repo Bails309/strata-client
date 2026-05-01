@@ -5,6 +5,217 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] — 2026-05-01
+
+### guacd FreeRDP 3.25 callback ABI fix, RDP resize artefact correction, idle-tunnel watchdog, and logout WebSocket cleanup
+
+A focused patch release that closes four production-affecting
+issues that surfaced after v1.3.1 went out:
+
+1. The custom `guacd` image stopped building on Alpine edge once
+   `freerdp-dev` rolled from `3.24.2-r0` to `3.25.0-r0`, because
+   FreeRDP 3.25 deleted the legacy `Authenticate` callback field
+   from `struct rdp_freerdp` in favour of the new `AuthenticateEx`
+   callback (which adds an `rdp_auth_reason reason` parameter).
+2. RDP sessions exhibited a black "ghost region" along the edge of
+   the visible canvas after a server-driven desktop resize (e.g.
+   resolution change inside a Windows VM, GFX channel renegotiation),
+   because the new GDI buffer was allocated but never marked dirty
+   or refreshed.
+3. The backend WebSocket tunnel kept the recording stream and
+   `session_registry` row alive indefinitely if the access token
+   was revoked or expired without the frontend explicitly closing
+   the tunnel — the typical case when the operator force-quits
+   the browser, switches networks mid-session, or the tab is
+   killed by the OS.
+4. Manual logout (and idle-timeout logout) flipped React auth
+   state without first closing the open Guacamole tunnels, so the
+   backend kept proxying frames into a logged-out user's
+   recording until the tab was eventually closed.
+
+None of the changes touch the database schema, the documented
+`/api/*` contract, or the on-disk `config.toml` shape. **Drop-in
+upgrade from v1.3.1** — rebuild the backend, frontend, and `guacd`
+images so the new bits actually run; a `docker compose pull` of an
+old tag is not enough.
+
+### Added
+
+- **Patch `006-freerdp325-authenticate-ex.patch` for `guacd`.**
+  [`guacd/patches/006-freerdp325-authenticate-ex.patch`](guacd/patches/006-freerdp325-authenticate-ex.patch)
+  adds a unified-diff against `src/protocols/rdp/rdp.c` (pinned at
+  upstream `apache/guacamole-server` commit `2980cf0`, release
+  1.6.1) that:
+  - Adds an explicit `#include <freerdp/version.h>` near the top
+    of `rdp.c` so the `FREERDP_VERSION_MAJOR` /
+    `FREERDP_VERSION_MINOR` preprocessor macros are visible at
+    every conditional that follows. (Without this, the macros are
+    *not* transitively defined inside `rdp.c` despite
+    `<freerdp/freerdp.h>` being included — a fact that wasted an
+    embarrassing amount of debugging time.)
+  - Wraps the `static BOOL rdp_freerdp_authenticate(...)` function
+    signature in
+    `#if defined(FREERDP_VERSION_MAJOR) && (FREERDP_VERSION_MAJOR > 3 || (FREERDP_VERSION_MAJOR == 3 && FREERDP_VERSION_MINOR >= 25))` /
+    `#else` / `#endif` so the FreeRDP 3.25+ build gets the new
+    five-argument signature
+    `BOOL (freerdp* instance, char** username, char** password, char** domain, rdp_auth_reason reason)`
+    while FreeRDP 3.24 and earlier keep the four-argument
+    signature. The added `reason` parameter is intentionally
+    discarded with `(void) reason;` because the existing
+    implementation already requests whichever credentials are
+    missing, regardless of the reason FreeRDP raised the
+    callback.
+  - Wraps the
+    `rdp_inst->Authenticate = rdp_freerdp_authenticate;` callback
+    assignment in the same `#if` / `#else` / `#endif` so FreeRDP
+    3.25+ gets `rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;`
+    while older versions keep the legacy field name.
+- **Defence-in-depth grep verification in `guacd/Dockerfile`.**
+  Immediately after the patch loop, the Dockerfile now runs two
+  `grep -q` assertions that fail the build with a clear error
+  message if the post-patch source tree does *not* contain
+  `#include <freerdp/version.h>` and `rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;`.
+  The first iteration of the patch applied silently but selected
+  the `#else` (legacy) branch at every conditional because
+  `FREERDP_VERSION_MAJOR` was undefined at that point in the
+  translation unit; the assertions catch that exact failure mode
+  immediately rather than letting the build run on for several
+  minutes before the linker complains.
+- **`guacd/patches/.gitattributes` pinning `*.patch` to
+  `text eol=lf`.** Patch files are byte-sensitive — even a single
+  CRLF-converted hunk can cause `git apply` and `patch -p1` to
+  misalign context lines. Locking the patches directory to LF
+  removes the failure mode for contributors with
+  `core.autocrlf=true` on Windows.
+- **`guacd/patches/005-refresh-rect-on-resize.patch`** (re-added
+  cleanly, after a brief revert during v1.3.1's terminal
+  investigation). Forces `guacd`'s GDI desktop-resize path to
+  mark the entire layer dirty and to ask the RDP server to
+  re-send pixels for the full new desktop area, eliminating the
+  "ghost" black border that appeared along the edge of an RDP
+  session after a server-driven resolution change. The patch
+  inserts a `RECTANGLE_16` covering the whole new desktop and
+  invokes `context->update->RefreshRect(context, 1, &area)` once
+  the new GDI buffer has been allocated; structured debug logs
+  (`[strata] guac_rdp_gdi_desktop_resize: resizing %dx%d` and
+  `[strata] post-resize RefreshRect %ux%u -> %s`) make the path
+  visible at `GUAC_LOG_DEBUG`. Bounds-checked against `UINT16_MAX`
+  so a pathological resize never produces a malformed PDU.
+- **WebSocket-tunnel auth watchdog.** A new poll loop inside
+  [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)
+  `ws_tunnel` decodes the access token's `exp` claim once at
+  upgrade time and, every 30 seconds while the proxy loop is
+  alive, asks `services::token_revocation::is_revoked(token)` and
+  compares `now()` to `exp`. If either condition fires, the
+  watchdog logs at `INFO` and aborts the proxy loop so the
+  recording flushes and `session_registry` decrements. Closes
+  the long tail of "ghost recording grows for hours after the
+  user's tab is killed by the OS" reports. Polling cadence
+  (30 s) was chosen so that an aggressive 1-minute access-token
+  TTL still detects revocation within ≤ 30 s, while a normal
+  20-minute TTL costs at most 40 ticks per session — negligible
+  next to the WebSocket I/O itself.
+- **`closeAllSessionsExternal()` module-level handler in
+  [`frontend/src/components/SessionManager.tsx`](frontend/src/components/SessionManager.tsx).**
+  The provider now registers its own `closeAllSessions` callback
+  via `setCloseAllSessionsHandler` on mount and unregisters on
+  unmount; non-React code (specifically `App.tsx`'s
+  `handleLogout`, which lives outside the provider tree) can call
+  `closeAllSessionsExternal()` to tear down every active tunnel
+  before flipping React auth state. The teardown calls
+  `cleanupPopout`, `cleanupMultiMonitor`, the per-session
+  `_cleanupPaste` cleanup, resets the keyboard handlers, and
+  finally calls `client.disconnect()` on each session inside a
+  best-effort `try / catch` so a single failure cannot block the
+  rest of the logout flow.
+
+### Fixed
+
+- **`docker compose --profile local-db build guacd` now succeeds
+  on Alpine edge.** The previous `guacd` image stopped building
+  with:
+
+  ```text
+  src/protocols/rdp/rdp.c:565:15: error:
+    'freerdp' {aka 'struct rdp_freerdp'} has no member named
+    'Authenticate'; did you mean 'AuthenticateEx'?
+  ```
+
+  the moment Alpine edge bumped `freerdp-dev` from `3.24.2-r0` to
+  `3.25.0-r0`. Patch 006 (above) routes the build through
+  `AuthenticateEx` on FreeRDP ≥ 3.25 while keeping the legacy
+  `Authenticate` field on 3.24-and-earlier so contributors still
+  on `freerdp-dev=3.24.2-r0` are not regressed. The pinned
+  upstream `apache/guacamole-server` commit (`2980cf0`) is
+  unchanged.
+- **Black "ghost regions" after RDP desktop resize.** Patch 005
+  (above) adds a post-`gdi_resize` repaint kick so the full new
+  desktop area is marked dirty and a `RefreshRect` is sent to the
+  RDP server, eliminating the visible solid-black margin that
+  used to appear along the edges of an RDP session after a
+  server-driven resolution change.
+- **Stale recording rows / `session_registry` rows after lost
+  tabs.** When the operator's browser tab was killed without a
+  graceful close (OS task-killer, network drop, kernel OOM,
+  hostile client), the WebSocket tunnel kept proxying frames
+  into a recording until the OS eventually closed the underlying
+  TCP socket — minutes later, sometimes hours. The new auth
+  watchdog (above) now detects access-token expiry / revocation
+  in ≤ 30 s and tears the tunnel down cleanly, so the recording
+  is flushed and `session_registry` accurately reflects the live
+  set of sessions.
+- **Logout left tunnels streaming until the tab closed.**
+  `App.tsx`'s `handleLogout` now calls `closeAllSessionsExternal()`
+  *before* flipping React auth state and then issues a
+  fire-and-forget `apiLogout()` to invalidate the refresh token
+  and clear the auth cookies. Idle-timeout logout takes the same
+  path. The backend now sees clean WebSocket closes the moment
+  the user clicks **Log out** (or hits the idle deadline), and
+  the live-sessions list updates immediately rather than after
+  the next 30 s watchdog tick.
+- **Clippy `too_many_arguments` warning on `ws_tunnel`.** The
+  `ws_tunnel` axum handler reached eight extractor arguments
+  after the `OriginalUri` and watchdog work; a targeted
+  `#[allow(clippy::too_many_arguments)]` keeps the handler
+  signature readable without splitting the extractor chain into
+  a wrapper struct that would be only used in one place.
+- **Cosmetic: JWT `exp` claim decode is now a small typed block.**
+  The watchdog's `exp` decode lives in a self-contained `decode::<ExpClaim>`
+  with `Validation::new(Algorithm::HS256)`, an issuer check
+  (`strata-local`), and a `set_required_spec_claims(&["exp"])`,
+  rather than a flat one-liner — non-local OIDC tokens cleanly
+  fall through to `None` and the watchdog gracefully degrades to
+  revocation-only checks for them.
+
+### Removed
+
+- **`guacd/patches/006-freerdp325-authenticate-ex.awk`.** Earlier
+  iterations of the FreeRDP 3.25 fix experimented with an
+  `awk`-based shim and a `sed` shim before settling on a real
+  unified-diff `.patch` consistent with siblings 001–005. The
+  intermediate `.awk` script has been deleted; the canonical fix
+  is patch 006 above.
+
+### Operator notes
+
+- **Rebuild required.** All four fixes live in either the Rust
+  backend binary, the React bundle, or the custom `guacd` image.
+  `docker compose up -d --build` (or pull a freshly published CI
+  tag) — a `docker compose pull` of an old tag will leave you on
+  the broken `guacd` image.
+- **No database migrations.** Schema is unchanged from v1.3.1.
+- **No `/api/*` contract changes.** No new routes, no new query
+  parameters, no new response fields. The auth-watchdog poll is
+  entirely server-side.
+- **No `config.toml` schema changes.**
+- **Existing in-flight tunnels** that were already connected
+  before the upgrade get the watchdog the next time the user
+  reconnects (the watchdog is wired in `ws_tunnel`, which only
+  runs at upgrade time).
+- **FreeRDP 3.24 still works.** The `#if` guard on patch 006 means
+  contributors on Debian 13 / Trixie (which still ships
+  `freerdp-3.24`) build identically to before.
+
 ## [1.3.1] — 2026-04-30
 
 ### SSH terminal fidelity, phantom-selection mouse hygiene, recording-playback URL fix, and guacd patch resilience

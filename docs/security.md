@@ -58,6 +58,25 @@ Authentication uses a **dual-token architecture** aligned with OWASP session tim
 
 **Per-user session tracking:** Each login records an entry in the `active_sessions` table with the token's JTI (UUID), user ID, IP address, user agent, and expiry time. This provides visibility into how many active sessions a user has.
 
+### WebSocket-tunnel auth watchdog (v1.3.2)
+
+A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is *revoked* or *expires* during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.
+
+`backend/src/routes/tunnel.rs` `ws_tunnel` mitigates this with an in-band auth watchdog:
+
+1. The access token used to authenticate the upgrade is captured (Bearer header → `access_token` cookie → query string, matching `require_auth`'s priority order) and stored as `watchdog_token`.
+2. The token's `exp` claim is decoded once at upgrade time using a fully-validated `Validation::new(Algorithm::HS256)` with `iss=strata-local` and `set_required_spec_claims(&["exp"])`. Non-local OIDC tokens (which use a different signing key) fall through to `None` and the watchdog gracefully degrades to revocation-only checks.
+3. A 30-second `tokio::time::interval` tick loop runs alongside `tunnel::proxy(...)`. On every tick the watchdog:
+   - calls `services::token_revocation::is_revoked(token)` (O(1) lookup against an in-memory `RwLock<HashSet>`),
+   - compares `chrono::Utc::now().timestamp() as u64` to the cached `exp`.
+4. Either condition logs at `INFO` and aborts the proxy loop, so the recording stream flushes, the `session_registry` row decrements, and the live-sessions admin page accurately reflects the live set.
+
+The 30 s cadence detects revocation in ≤ 30 s even on an aggressive 1-minute access-token TTL while costing at most 40 ticks per session on a normal 20-minute TTL — negligible next to the WebSocket I/O. Polling is a deliberate choice over a notification channel because both the revocation lookup and the `exp` comparison are cheap, in-process operations; per-tunnel subscribers would add complexity for no measurable benefit.
+
+### Logout closes tunnels immediately (v1.3.2)
+
+Manual logout (and idle-timeout logout) used to flip React auth state without first closing any open Guacamole tunnels, so the backend kept proxying frames into a logged-out user's recording until the browser tab closed itself. As a defence-in-depth complement to the auth watchdog above, `App.tsx`'s `handleLogout` now calls a module-level `closeAllSessionsExternal()` helper (exported from `frontend/src/components/SessionManager.tsx`) **before** clearing user state. The helper iterates every active session and runs the same teardown the per-session disconnect button uses (`cleanupPopout`, `cleanupMultiMonitor`, `_cleanupPaste`, keyboard reset, `client.disconnect()`), each step wrapped in a best-effort `try / catch` so a single failure cannot block the rest of the logout. `handleLogout` then issues a fire-and-forget `apiLogout()` to invalidate the refresh token and clear the auth cookies. The result: backend sees clean WebSocket closes the moment the user clicks **Log out** (or hits the idle deadline), rather than after the next 30 s watchdog tick.
+
 ### Authentication Method Enforcement
 
 Administrators can toggle `local_auth_enabled` and `sso_enabled` independently.

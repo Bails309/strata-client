@@ -136,14 +136,19 @@ fn decode_b64_pem(b64: &str) -> Result<String, AppError> {
 /// Parse a pasted kubeconfig YAML body. The selected context defaults
 /// to the kubeconfig's `current-context` field; callers may override
 /// by passing `Some(ctx_name)`.
-pub fn parse_kubeconfig(yaml: &str, context_override: Option<&str>) -> Result<ParsedKubeconfig, AppError> {
+pub fn parse_kubeconfig(
+    yaml: &str,
+    context_override: Option<&str>,
+) -> Result<ParsedKubeconfig, AppError> {
     if yaml.trim().is_empty() {
         return Err(AppError::Validation("kubeconfig body is empty".into()));
     }
     if yaml.len() > 1024 * 1024 {
         // Hard cap — a real kubeconfig is typically <16 KB. Anything
         // approaching a megabyte is a misuse or an attack.
-        return Err(AppError::Validation("kubeconfig body too large (>1 MiB)".into()));
+        return Err(AppError::Validation(
+            "kubeconfig body too large (>1 MiB)".into(),
+        ));
     }
 
     let raw: RawKubeconfig = serde_yaml::from_str(yaml)
@@ -158,13 +163,19 @@ pub fn parse_kubeconfig(yaml: &str, context_override: Option<&str>) -> Result<Pa
 
     let (cluster_name, user_name) = if let Some(ctx) = ctx {
         out.namespace = ctx.context.namespace.clone();
-        (Some(ctx.context.cluster.as_str()), Some(ctx.context.user.as_str()))
+        (
+            Some(ctx.context.cluster.as_str()),
+            Some(ctx.context.user.as_str()),
+        )
     } else if raw.contexts.len() == 1 {
         // Fall back to the only context if `current-context` is absent
         // — common in cluster-specific kubeconfigs handed out by IdPs.
         let ctx = &raw.contexts[0];
         out.namespace = ctx.context.namespace.clone();
-        (Some(ctx.context.cluster.as_str()), Some(ctx.context.user.as_str()))
+        (
+            Some(ctx.context.cluster.as_str()),
+            Some(ctx.context.user.as_str()),
+        )
     } else {
         out.warnings.push(
             "no current-context set and multiple contexts present — please select a context manually".into(),
@@ -178,7 +189,9 @@ pub fn parse_kubeconfig(yaml: &str, context_override: Option<&str>) -> Result<Pa
             if let Some(ref b64) = cluster.cluster.ca_data {
                 match decode_b64_pem(b64) {
                     Ok(pem) => out.ca_cert_pem = Some(pem),
-                    Err(e) => out.warnings.push(format!("could not decode cluster CA: {e}")),
+                    Err(e) => out
+                        .warnings
+                        .push(format!("could not decode cluster CA: {e}")),
                 }
             }
         }
@@ -189,13 +202,17 @@ pub fn parse_kubeconfig(yaml: &str, context_override: Option<&str>) -> Result<Pa
             if let Some(ref b64) = user.user.client_cert_data {
                 match decode_b64_pem(b64) {
                     Ok(pem) => out.client_cert_pem = Some(pem),
-                    Err(e) => out.warnings.push(format!("could not decode client cert: {e}")),
+                    Err(e) => out
+                        .warnings
+                        .push(format!("could not decode client cert: {e}")),
                 }
             }
             if let Some(ref b64) = user.user.client_key_data {
                 match decode_b64_pem(b64) {
                     Ok(pem) => out.client_key_pem = Some(pem),
-                    Err(e) => out.warnings.push(format!("could not decode client key: {e}")),
+                    Err(e) => out
+                        .warnings
+                        .push(format!("could not decode client key: {e}")),
                 }
             }
             if user.user.exec.is_some() {

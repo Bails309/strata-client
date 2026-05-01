@@ -3696,10 +3696,8 @@ pub async fn parse_kubeconfig(
     Json(body): Json<ParseKubeconfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
-    let parsed = crate::services::kubernetes::parse_kubeconfig(
-        &body.kubeconfig,
-        body.context.as_deref(),
-    )?;
+    let parsed =
+        crate::services::kubernetes::parse_kubeconfig(&body.kubeconfig, body.context.as_deref())?;
     Ok(Json(serde_json::to_value(parsed).unwrap_or_default()))
 }
 

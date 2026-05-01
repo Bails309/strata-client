@@ -248,7 +248,8 @@ impl HandshakeParams {
             m.entry("font-name".into())
                 .or_insert_with(|| "monospace".into());
             m.entry("font-size".into()).or_insert_with(|| "12".into());
-            m.entry("scrollback".into()).or_insert_with(|| "1000".into());
+            m.entry("scrollback".into())
+                .or_insert_with(|| "1000".into());
             m.entry("backspace".into()).or_insert_with(|| "127".into());
             m.entry("namespace".into())
                 .or_insert_with(|| "default".into());
@@ -1550,7 +1551,10 @@ mod tests {
             "-----BEGIN CERTIFICATE-----\nXYZ\n-----END CERTIFICATE-----".into(),
         );
         // Sensitive params must NOT slip through `extra`.
-        extra.insert("client-cert".into(), "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----".into());
+        extra.insert(
+            "client-cert".into(),
+            "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----".into(),
+        );
         extra.insert("client-key".into(), "evil-private-key".into());
 
         let hp = HandshakeParams {

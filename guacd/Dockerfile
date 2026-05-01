@@ -43,21 +43,6 @@ RUN apk add --no-cache patch && cd /src && \
         (git apply "$p" 2>/dev/null || patch -p1 -F3 < "$p") || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
     done
 
-# FreeRDP 3.25 (Alpine edge) removed the legacy `Authenticate` callback field
-# from `struct rdp_freerdp` in favour of `AuthenticateEx`, which carries an
-# extra `rdp_auth_reason reason` parameter. guacamole-server 1.6.1 still uses
-# the old API, so we patch it in place. The substitution is unambiguous (it
-# anchors on full unique lines) and is a compile-time no-op on FreeRDP < 3.25
-# because the preprocessor selects the original code path.
-RUN set -e; cd /src/src/protocols/rdp && \
-    grep -q 'rdp_inst->Authenticate = rdp_freerdp_authenticate;' rdp.c && \
-    grep -q '^static BOOL rdp_freerdp_authenticate(freerdp\* instance, char\*\* username,$' rdp.c && \
-    awk -f /tmp/patches/006-freerdp325-authenticate-ex.awk rdp.c > rdp.c.new && \
-    mv rdp.c.new rdp.c && \
-    grep -q 'rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;' rdp.c && \
-    grep -q 'rdp_auth_reason reason' rdp.c && \
-    echo "FreeRDP 3.25 AuthenticateEx shim applied OK"
-
 WORKDIR /src
 
 RUN autoreconf -fi && \

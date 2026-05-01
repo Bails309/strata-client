@@ -11,21 +11,28 @@ guacamole-server 1.6.1 (commit 2980cf0) on Alpine edge, whose
     'freerdp' {aka 'struct rdp_freerdp'} has no member named
     'Authenticate'; did you mean 'AuthenticateEx'?
 
-This patch uses the FreeRDP version macros defined in
-<freerdp/version.h> (transitively included via <freerdp/freerdp.h>) to
-select the correct callback and signature at compile time, keeping
-compatibility with FreeRDP 3.24 while restoring the build on 3.25+.
+This patch explicitly includes <freerdp/version.h> in rdp.c and uses
+the FREERDP_VERSION_MAJOR / FREERDP_VERSION_MINOR macros to select the
+correct callback and signature at compile time, keeping compatibility
+with FreeRDP 3.24 while restoring the build on 3.25+.
 
 The added `rdp_auth_reason` parameter is intentionally ignored: the
 existing implementation already requests whichever credentials are
 missing, regardless of the reason FreeRDP raised the callback.
 ---
- src/protocols/rdp/rdp.c | 14 ++++++++++++++
- 1 file changed, 14 insertions(+)
-
+ src/protocols/rdp/rdp.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
 --- a/src/protocols/rdp/rdp.c
 +++ b/src/protocols/rdp/rdp.c
-@@ -261,8 +261,14 @@
+@@ -52,6 +52,7 @@
+ #endif
+ 
+ #include <freerdp/addin.h>
++#include <freerdp/version.h>
+ #include <freerdp/channels/channels.h>
+ #include <freerdp/client/channels.h>
+ #include <freerdp/freerdp.h>
+@@ -261,8 +262,14 @@
   * @return
   *     Always TRUE.
   */
@@ -40,7 +47,7 @@ missing, regardless of the reason FreeRDP raised the callback.
  
      rdpContext* context = GUAC_RDP_CONTEXT(instance);
      guac_client* client = ((rdp_freerdp_context*) context)->client;
-@@ -551,7 +557,13 @@
+@@ -551,7 +558,13 @@
          rdp_inst->LoadChannels = rdp_freerdp_load_channels;
      #endif
      rdp_inst->PreConnect = rdp_freerdp_pre_connect;

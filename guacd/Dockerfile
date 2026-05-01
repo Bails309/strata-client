@@ -41,7 +41,10 @@ RUN apk add --no-cache patch && cd /src && \
     for p in /tmp/patches/*.patch; do \
         echo "Applying $(basename $p)..." && \
         (git apply "$p" 2>/dev/null || patch -p1 -F3 < "$p") || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
-    done
+    done && \
+    # Defence-in-depth: verify the FreeRDP 3.25 AuthenticateEx patch landed semantically.
+    grep -q '#include <freerdp/version.h>' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not add freerdp/version.h include" && exit 1; } && \
+    grep -q 'rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not introduce AuthenticateEx assignment" && exit 1; }
 
 WORKDIR /src
 

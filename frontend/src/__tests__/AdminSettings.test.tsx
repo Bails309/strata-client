@@ -73,6 +73,7 @@ vi.mock("../api", () => ({
   getCheckoutRequests: vi.fn().mockResolvedValue([]),
   getVdiImages: vi.fn().mockResolvedValue({ images: [] }),
   getTrustedCasForPicker: vi.fn().mockResolvedValue([]),
+  parseKubeconfig: vi.fn(),
 }));
 
 vi.mock("../contexts/SettingsContext", () => ({
@@ -140,6 +141,7 @@ import {
   createApprovalRole,
   deleteApprovalRole,
   getCheckoutRequests,
+  parseKubeconfig,
 } from "../api";
 
 const healthOk = {
@@ -2418,6 +2420,97 @@ describe("ConnectionForm protocol sections", () => {
     // port — the operator never sets a hostname/port for a VDI conn.
     expect(screen.queryByPlaceholderText("10.0.0.10")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("EXAMPLE.COM")).not.toBeInTheDocument();
+  });
+
+  it("shows Kubernetes protocol sections when protocol changed to Kubernetes Pod", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText("Kubernetes Pod"));
+    // Pod Target is defaultOpen and Pod Name is required.
+    expect(screen.getByText(/Pod Name/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("my-pod-abc123")).toBeInTheDocument();
+    // K8s-only collapsed sections
+    expect(screen.getByRole("button", { name: /[▸▾]\s*TLS/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /[▸▾]\s*Display/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /[▸▾]\s*Clipboard/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /[▸▾]\s*Screen Recording/ })).toBeInTheDocument();
+    // Hostname/port still required (K8s API server endpoint)
+    expect(screen.getByPlaceholderText("10.0.0.10")).toBeInTheDocument();
+  });
+
+  it("expands Kubernetes TLS section and shows certificate textareas", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText("Kubernetes Pod"));
+    await user.click(screen.getByRole("button", { name: /▸ TLS/ }));
+    expect(screen.getByText(/Cluster CA Certificate/)).toBeInTheDocument();
+    expect(screen.getByText(/Client Certificate/)).toBeInTheDocument();
+    expect(screen.getByText(/Use SSL\/TLS/)).toBeInTheDocument();
+    expect(screen.getByText(/Ignore certificate errors/)).toBeInTheDocument();
+  });
+
+  it("expands Kubernetes Clipboard section to show disable copy/paste", async () => {
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText("Kubernetes Pod"));
+    await user.click(screen.getByRole("button", { name: /▸ Clipboard/ }));
+    expect(screen.getByText(/Disable copy/)).toBeInTheDocument();
+    expect(screen.getByText(/Disable paste/)).toBeInTheDocument();
+  });
+
+  it("calls parseKubeconfig and fills cluster fields when Parse and fill form is clicked", async () => {
+    vi.mocked(parseKubeconfig).mockResolvedValue({
+      server: "https://k8s.example.com:6443",
+      namespace: "production",
+      ca_cert_pem: "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----",
+      client_cert_pem: "-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----",
+      client_key_pem: "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----",
+      current_context: "prod",
+      warnings: [],
+    });
+    const user = userEvent.setup();
+    renderAdmin();
+    await user.click(screen.getByText("Access"));
+    await screen.findByText("Server A");
+    await user.click(screen.getByText("+ Add Connection"));
+    const protocolTrigger = screen
+      .getAllByText("RDP")
+      .find((el) => el.closest('[aria-haspopup="listbox"]'))!;
+    await user.click(protocolTrigger);
+    await user.click(screen.getByText("Kubernetes Pod"));
+    const ta = screen.getByPlaceholderText(/apiVersion: v1/);
+    await user.type(ta, "apiVersion: v1");
+    await user.click(screen.getByRole("button", { name: /Parse and fill form/ }));
+    await waitFor(() => {
+      expect(parseKubeconfig).toHaveBeenCalled();
+    });
+    // Hostname auto-filled from parsed kubeconfig
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText("10.0.0.10") as HTMLInputElement).value).toBe(
+        "k8s.example.com"
+      );
+    });
   });
 
   it("calls createConnection on form submit", async () => {

@@ -32,6 +32,7 @@ vi.mock("../components/Layout", () => ({
 }));
 vi.mock("../components/SessionManager", () => ({
   SessionManagerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  closeAllSessionsExternal: () => {},
 }));
 vi.mock("../components/SessionBar", () => ({ default: () => null }));
 vi.mock("../components/CommandPaletteProvider", () => ({

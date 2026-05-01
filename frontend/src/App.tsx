@@ -14,12 +14,12 @@ import Sessions from "./pages/Sessions";
 import Approvals from "./pages/Approvals";
 import Layout from "./components/Layout";
 import Profile from "./pages/Profile";
-import { SessionManagerProvider } from "./components/SessionManager";
+import { SessionManagerProvider, closeAllSessionsExternal } from "./components/SessionManager";
 import SessionBar from "./components/SessionBar";
 import WhatsNewModal from "./components/WhatsNewModal";
 import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
 import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
-import { checkAuthStatus, MeResponse } from "./api";
+import { checkAuthStatus, logout as apiLogout, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { UserPreferencesProvider } from "./components/UserPreferencesProvider";
 import CommandPaletteProvider from "./components/CommandPaletteProvider";
@@ -62,6 +62,16 @@ export default function App() {
   }
 
   function handleLogout() {
+    // Tear down every live tunnel BEFORE flipping auth state so the
+    // backend sees clean WebSocket closes and the live-sessions list
+    // updates immediately. The provider stays mounted across the
+    // logout, so without this its in-memory sessions would keep
+    // streaming until the browser tab closes.
+    closeAllSessionsExternal();
+    // Best-effort backend logout — invalidates the refresh token and
+    // clears the auth cookies. Fire-and-forget; we don't block the UI
+    // on it (cookies are SameSite=Strict + short-lived).
+    void apiLogout();
     setAuthenticated(false);
     setUser(null);
     navigate("/login");

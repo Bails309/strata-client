@@ -1,4 +1,4 @@
-use axum::extract::{ConnectInfo, Extension, Path, Query, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Extension, OriginalUri, Path, Query, State, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -175,8 +175,42 @@ pub async fn ws_tunnel(
     Path(connection_id): Path<Uuid>,
     Query(query): Query<TunnelQuery>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    OriginalUri(original_uri): OriginalUri,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
+    // Capture the access token used to authenticate this upgrade so the
+    // tunnel watchdog (below) can react to logout/revocation/expiry while
+    // the long-lived WebSocket is open. The middleware has already
+    // validated this token; we just need a copy. Match the same priority
+    // order as `require_auth` to stay consistent.
+    let watchdog_token: Option<String> = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or_else(|| crate::services::middleware::extract_cookie_value(&headers, "access_token"))
+        .or_else(|| {
+            crate::services::middleware::extract_token_from_query(
+                original_uri.query().unwrap_or_default(),
+            )
+        });
+
+    // Decode the JWT `exp` claim once at upgrade time so the watchdog can
+    // close the tunnel as soon as the access token's lifetime ends without
+    // having to decode the full token on every tick. Non-local (e.g. OIDC)
+    // tokens fall through to `None` and the watchdog only checks revocation.
+    let watchdog_exp: Option<u64> = watchdog_token.as_deref().and_then(|tok| {
+        use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+        #[derive(serde::Deserialize)]
+        struct ExpClaim { exp: u64 }
+        let secret = crate::config::JWT_SECRET.get().cloned().unwrap_or_default();
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&["strata-local"]);
+        validation.set_required_spec_claims(&["exp"]);
+        decode::<ExpClaim>(tok, &DecodingKey::from_secret(secret.as_bytes()), &validation)
+            .ok()
+            .map(|d| d.claims.exp)
+    });
     // ── Per-user tunnel rate limiting ──
     {
         let mut map = TUNNEL_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
@@ -910,16 +944,76 @@ pub async fn ws_tunnel(
                 db_pool: audit_pool.clone(),
                 file_store,
             };
-            if let Err(e) = tunnel::proxy(
+            // ── Auth watchdog ─────────────────────────────────────
+            // Defence-in-depth: even if the frontend never tells us the
+            // user logged out (browser killed, network died, hostile
+            // client), close the tunnel as soon as the access token is
+            // revoked or its `exp` claim has elapsed. Without this the
+            // session_registry entry — and the recording write — would
+            // continue indefinitely. Polled every 30s.
+            let watchdog_token_inner = watchdog_token.clone();
+            let watchdog = async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+                tick.tick().await; // discard immediate first tick
+                loop {
+                    tick.tick().await;
+                    if let Some(ref t) = watchdog_token_inner {
+                        if crate::services::token_revocation::is_revoked(t) {
+                            tracing::info!(
+                                "Tunnel watchdog: access token revoked, closing tunnel for user {}",
+                                user_id
+                            );
+                            return "revoked";
+                        }
+                    }
+                    if let Some(exp) = watchdog_exp {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        if now >= exp {
+                            tracing::info!(
+                                "Tunnel watchdog: access token expired, closing tunnel for user {}",
+                                user_id
+                            );
+                            return "expired";
+                        }
+                    }
+                }
+            };
+
+            let proxy_fut = tunnel::proxy(
                 socket,
                 &guacd_host,
                 guacd_port,
                 handshake,
                 Some(nvr),
                 display_timezone,
-            )
-            .await
-            {
+            );
+
+            let proxy_result = tokio::select! {
+                r = proxy_fut => r,
+                reason = watchdog => {
+                    // The unselected `proxy_fut` is dropped by `select!`
+                    // when this arm wins; that drops the WebSocket
+                    // (owned by the future) → guacd TCP connection
+                    // closes → session_registry entry is removed and
+                    // the recording is finalized via normal teardown.
+                    let _ = crate::services::audit::log(
+                        &audit_pool,
+                        Some(user_id),
+                        "tunnel.watchdog_closed",
+                        &serde_json::json!({
+                            "connection_id": connection_id.to_string(),
+                            "reason": reason,
+                        }),
+                    )
+                    .await;
+                    Ok(())
+                }
+            };
+
+            if let Err(e) = proxy_result {
                 tracing::error!("Tunnel error: {e}");
                 // Audit log the tunnel failure
                 let _ = crate::services::audit::log(

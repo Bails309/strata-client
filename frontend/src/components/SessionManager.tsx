@@ -77,6 +77,21 @@ interface CreateSessionOpts {
 
 const SessionManagerContext = createContext<SessionManagerValue | null>(null);
 
+// ── Module-level handler registry ──────────────────────────────────
+// `App.tsx`'s handleLogout lives outside SessionManagerProvider but needs to
+// tear down active sessions when the user logs out (manual or idle timeout).
+// The provider registers `closeAllSessions` here on mount; non-React code
+// can invoke it via `closeAllSessionsExternal()`.
+let _closeAllSessionsHandler: (() => void) | null = null;
+
+function setCloseAllSessionsHandler(handler: (() => void) | null): void {
+  _closeAllSessionsHandler = handler;
+}
+
+export function closeAllSessionsExternal(): void {
+  _closeAllSessionsHandler?.();
+}
+
 export function useSessionManager() {
   const ctx = useContext(SessionManagerContext);
   if (!ctx) throw new Error("useSessionManager must be used within SessionManagerProvider");
@@ -454,6 +469,37 @@ export function SessionManagerProvider({
     },
     [cleanupPopout, cleanupMultiMonitor]
   );
+
+  // Tear down every active session. Used by the logout flow (manual + idle
+  // timeout) so backend tunnels close and the live-sessions list updates.
+  const closeAllSessions = useCallback(() => {
+    const all = sessionsRef.current;
+    for (const session of all) {
+      try {
+        cleanupPopout(session);
+        cleanupMultiMonitor(session);
+        session._cleanupPaste?.();
+        session.keyboard.onkeydown = null;
+        session.keyboard.onkeyup = null;
+        session.keyboard.reset();
+        session.client.disconnect();
+      } catch {
+        /* best-effort */
+      }
+    }
+    setSessions([]);
+    setTiledSessionIds([]);
+    setFocusedSessionIds([]);
+    setActiveSessionId(null);
+  }, [cleanupPopout, cleanupMultiMonitor]);
+
+  // Expose closeAllSessions to non-React code (e.g. the logout flow in
+  // App.tsx, which lives outside this provider). The registry is mounted on
+  // first provider mount and cleared on unmount.
+  useEffect(() => {
+    setCloseAllSessionsHandler(closeAllSessions);
+    return () => setCloseAllSessionsHandler(null);
+  }, [closeAllSessions]);
 
   // Warn before closing the browser tab when sessions are active
   useEffect(() => {

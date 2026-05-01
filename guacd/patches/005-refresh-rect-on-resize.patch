@@ -1,0 +1,44 @@
+diff --git a/src/protocols/rdp/gdi.c b/src/protocols/rdp/gdi.c
+index 68fe36e7..af59b4b9 100644
+--- a/src/protocols/rdp/gdi.c
++++ b/src/protocols/rdp/gdi.c
+@@ -173,6 +173,9 @@ BOOL guac_rdp_gdi_desktop_resize(rdpContext* context) {
+     guac_display_layer* default_layer = guac_display_default_layer(rdp_client->display);
+     guac_display_layer_raw_context* current_context = guac_display_layer_open_raw(default_layer);
+ 
++    guac_client_log(client, GUAC_LOG_DEBUG,
++            "[strata] guac_rdp_gdi_desktop_resize: resizing %dx%d",
++            width, height);
+     /* Resize FreeRDP's GDI buffer */
+     BOOL retval = gdi_resize(context->gdi, width, height);
+     GUAC_ASSERT(gdi->primary_buffer != NULL);
+@@ -188,6 +191,29 @@ BOOL guac_rdp_gdi_desktop_resize(rdpContext* context) {
+     guac_client_log(client, GUAC_LOG_DEBUG, "Server resized display to %ix%i",
+             gdi->width, gdi->height);
+ 
++    /* Mark the entire layer dirty so the client receives a full repaint
++     * of the resized layer. Without this, regions of the guac display
++     * layer the server does not subsequently retransmit remain at
++     * whatever they were before the resize (often zero -> solid black).
++     */
++    guac_rect_init(&current_context->dirty, 0, 0, gdi->width, gdi->height);
++
++    /* Force the server to re-send pixels for the entire new desktop area. */
++    if (context->update != NULL && context->update->RefreshRect != NULL
++            && gdi->width > 0 && gdi->height > 0
++            && gdi->width <= UINT16_MAX && gdi->height <= UINT16_MAX) {
++        RECTANGLE_16 area;
++        area.left = 0;
++        area.top = 0;
++        area.right = (UINT16) gdi->width;
++        area.bottom = (UINT16) gdi->height;
++        BOOL __strata_ok = context->update->RefreshRect(context, 1, &area);
++        guac_client_log(client, GUAC_LOG_DEBUG,
++                "[strata] post-resize RefreshRect %ux%u -> %s",
++                (unsigned) gdi->width, (unsigned) gdi->height,
++                __strata_ok ? "ok" : "FAILED");
++    }
++
+     guac_display_layer_close_raw(default_layer, current_context);
+ 
+     return retval;

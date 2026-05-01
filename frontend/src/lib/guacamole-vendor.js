@@ -13465,9 +13465,29 @@ Guacamole.H264Decoder = function H264Decoder(display) {
      * avoiding shared mutable state between concurrent decodes.
      *
      * @private
-     * @type {Object.<number, {layer: Guacamole.Display.VisibleLayer, x: number, y: number}>}
+     * @type {Object.<number, {layer: Guacamole.Display.VisibleLayer, x: number, y: number, w: number, h: number}>}
      */
     var pendingPositions = {};
+
+    /**
+     * Last frame dimensions seen by ensureDecoder, used to detect resolution
+     * changes and reconfigure the decoder. Without this the decoder stays
+     * pinned to the initial codec profile/level and frames at a higher
+     * resolution silently fail to render the new regions, leaving them
+     * black on the canvas.
+     *
+     * @private
+     */
+    var lastWidth = 0;
+    var lastHeight = 0;
+
+    /**
+     * Whether the next chunk submitted must be a keyframe (e.g. just after
+     * a reconfigure). Delta frames before the first keyframe will be dropped.
+     *
+     * @private
+     */
+    var requireKeyframe = false;
 
     /**
      * Callbacks waiting for all pending decodes to complete (used by
@@ -13535,6 +13555,28 @@ Guacamole.H264Decoder = function H264Decoder(display) {
      */
     function ensureDecoder(width, height) {
 
+        // Detect resolution change: when the desktop is resized via
+        // display-update the server emits a fresh IDR at the new size, but
+        // the existing VideoDecoder was configured for the old level/profile.
+        // We must reset+reconfigure or the new regions will not render and
+        // appear as a black/ghosted strip outside the original viewport.
+        if (decoder && configured
+                && (width !== lastWidth || height !== lastHeight)) {
+            console.info('[strata] H.264 resolution change '
+                    + lastWidth + 'x' + lastHeight + ' -> '
+                    + width + 'x' + height + ', reconfiguring decoder');
+            try {
+                decoder.reset();
+            } catch (e) {
+                // Ignore: a fresh configure() below will recover.
+            }
+            configured = false;
+            timestamp = 0;
+            pendingDecodes = 0;
+            pendingPositions = {};
+            requireKeyframe = true;
+        }
+
         if (decoder && configured)
             return;
 
@@ -13543,41 +13585,65 @@ Guacamole.H264Decoder = function H264Decoder(display) {
             return;
         }
 
-        decoder = new VideoDecoder({
-            output: function(frame) {
-                self.framesDecoded++;
-                try {
-                    var pos = pendingPositions[frame.timestamp];
-                    delete pendingPositions[frame.timestamp];
-                    if (pos && pos.layer) {
-                        var canvas = pos.layer.getCanvas();
-                        var ctx = canvas.getContext('2d');
-                        ctx.drawImage(frame, pos.x, pos.y);
+        if (!decoder) {
+            decoder = new VideoDecoder({
+                output: function(frame) {
+                    self.framesDecoded++;
+                    try {
+                        var pos = pendingPositions[frame.timestamp];
+                        delete pendingPositions[frame.timestamp];
+                        if (pos && pos.layer) {
+                            var canvas = pos.layer.getCanvas();
+                            var ctx = canvas.getContext('2d');
+                            // Draw using the dimensions reported by guacd
+                            // (cmd->width/height) rather than the frame's
+                            // own codedWidth/codedHeight, which can differ
+                            // from the requested region after a level
+                            // mismatch and leave uncovered pixels.
+                            var dw = pos.w || frame.displayWidth || frame.codedWidth;
+                            var dh = pos.h || frame.displayHeight || frame.codedHeight;
+                            ctx.drawImage(frame,
+                                    0, 0, frame.codedWidth, frame.codedHeight,
+                                    pos.x, pos.y, dw, dh);
+                        }
+                    } finally {
+                        // CRITICAL: always close VideoFrame to release GPU memory
+                        frame.close();
+                        pendingDecodes--;
+                        resolveIfIdle();
                     }
-                } finally {
-                    // CRITICAL: always close VideoFrame to release GPU memory
-                    frame.close();
+                },
+                error: function(e) {
+                    self.framesDropped++;
                     pendingDecodes--;
                     resolveIfIdle();
+                    // Force a keyframe-driven recovery on the next decode().
+                    configured = false;
+                    requireKeyframe = true;
+                    console.error('[strata] H.264 decode error '
+                            + '(framesDecoded=' + self.framesDecoded
+                            + ', framesDropped=' + self.framesDropped
+                            + ', last=' + lastWidth + 'x' + lastHeight
+                            + '): ' + e.message);
                 }
-            },
-            error: function(e) {
-                self.framesDropped++;
-                pendingDecodes--;
-                resolveIfIdle();
-                console.error('[rustguac] H.264 decode error:', e.message);
-            }
-        });
+            });
+        }
 
-        // Configure for H.264 Constrained Baseline
-        // Let the decoder auto-detect level from the SPS NAL in the stream
+        // Configure with a level high enough for any reasonable desktop
+        // resolution. Baseline 5.1 covers up to 4096x2304, which is well
+        // above the 8192x8192 max enforced by the disp channel itself and
+        // avoids the silent clipping we saw with avc1.42001f (level 3.1,
+        // 1280x720) when the desktop was resized above 720p.
         decoder.configure({
-            codec: 'avc1.42001f', // Baseline profile, level 3.1
+            codec: 'avc1.42E033',
             optimizeForLatency: true
         });
 
         configured = true;
-        console.log('[rustguac] H.264 WebCodecs decoder initialised (' + width + 'x' + height + ')');
+        lastWidth = width;
+        lastHeight = height;
+        console.log('[strata] H.264 WebCodecs decoder initialised ('
+                + width + 'x' + height + ', codec avc1.42E033)');
     }
 
     /**
@@ -13599,6 +13665,17 @@ Guacamole.H264Decoder = function H264Decoder(display) {
         if (!decoder || decoder.state === 'closed')
             return;
 
+        // After a reconfigure or decode error we must wait for the next
+        // keyframe before submitting any deltas, otherwise the decoder
+        // will throw and the new resolution never gets drawn.
+        if (requireKeyframe) {
+            if (!isKeyFrame) {
+                self.framesDropped++;
+                return;
+            }
+            requireKeyframe = false;
+        }
+
         // Track peak queue depth for diagnostics
         if (decoder.decodeQueueSize > self.peakQueueDepth)
             self.peakQueueDepth = decoder.decodeQueueSize;
@@ -13610,15 +13687,17 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 data: nalData
             });
 
-            // Store per-frame position before submitting to decoder
-            pendingPositions[timestamp] = {layer: layer, x: x, y: y};
+            // Store per-frame position+size before submitting to decoder
+            pendingPositions[timestamp] = {
+                layer: layer, x: x, y: y, w: width, h: height
+            };
             pendingDecodes++;
             timestamp += 33333; // ~30fps in microseconds
 
             decoder.decode(chunk);
         } catch (e) {
             self.framesDropped++;
-            console.error('[rustguac] H.264 chunk error:', e.message);
+            console.error('[strata] H.264 chunk error:', e.message);
         }
     };
 
@@ -13673,7 +13752,8 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 decoder.reset();
                 configured = false;
                 timestamp = 0;
-                console.log('[rustguac] H.264 decoder reset');
+                requireKeyframe = true;
+                console.log('[strata] H.264 decoder reset');
             } catch (e) {
                 // Decoder may be in error state
             }

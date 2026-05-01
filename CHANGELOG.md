@@ -5,6 +5,118 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-05-01
+
+### Kubernetes pod console as a first-class protocol
+
+v1.4.0 adds the `kubernetes` connection protocol — `kubectl attach`
+and `kubectl exec` rendered as a terminal in the browser, end-to-end
+through Strata's existing tunnel, recording, audit and credential
+pipelines. There is no new sidecar process; Apache Guacamole already
+ships a `libguac-client-kubernetes.so` driver that talks the K8s API
+spdy/websocket sub-protocol directly, and our custom `guacd` image
+already builds it (gated by a Dockerfile guard so a missing `.so`
+fails the build instead of silently dropping the protocol at
+runtime). The five phases were scoped, implemented and shipped
+together rather than across point releases:
+
+1. **Image guard** — `guacd/Dockerfile` now `test -f`s
+   `libguac-client-{rdp,ssh,vnc,kubernetes}.so` after `make install`,
+   exiting non-zero if any are missing.
+2. **Backend wiring** —
+   `backend/src/tunnel.rs` `full_param_map()` gets a
+   `protocol == "kubernetes"` branch with terminal defaults
+   (`xterm-256color`, gray-on-black, monospace 12pt, 1000-line
+   scrollback, `namespace=default`); `is_allowed_guacd_param()`
+   adds `namespace`, `pod`, `container`, `exec-command`, `use-ssl`,
+   `ca-cert`, `client-cert` to the override whitelist. **`client-key`
+   is deliberately NOT whitelisted** — the private half of mTLS
+   creds must flow through the Vault-encrypted credential-profile
+   path, never through connection extras.
+3. **Database schema** — `backend/migrations/060_kubernetes_protocol.sql`
+   widens the `connections.protocol` and `ad_sync_configs.protocol`
+   `CHECK` constraints to include `'kubernetes'`.
+4. **Frontend admin UI** — `frontend/src/pages/admin/protocolFields.ts`
+   gains a `"kubernetes"` entry; new `KubernetesSections` component
+   in `connectionForm.tsx` renders Pod / Namespace / Container /
+   Exec command / TLS toggles / CA + client cert paste areas / the
+   shared terminal display fields. Wired into `AccessTab`. New
+   protocol icon (Kubernetes-style heptagon wheel) added to
+   `CommandPalette`, `Dashboard` and `ActiveSessions`.
+5. **Kubeconfig importer** — `POST /api/admin/kubernetes/parse-kubeconfig`
+   takes a pasted `~/.kube/config`, extracts cluster server URL,
+   namespace, CA cert and client cert, and returns the client
+   private key to the caller exactly once. The connection editor
+   wires this into an "Import kubeconfig" textarea above the
+   Kubernetes form sections; the private key surfaces in a
+   "copy now" panel and is wiped from DOM state once the form is
+   filled. The backend never persists the private key on this
+   path — operators are expected to immediately paste it into a
+   credential profile.
+
+### Credential routing for `kubernetes`
+
+Tunnel-creation in `routes/tunnel.rs` now special-cases
+`wire_protocol == "kubernetes"`: the decrypted credential profile's
+password slot is repurposed as the `client-key` PEM body, moved
+into the `extra` map, and the username/password slots are cleared.
+This keeps the `client-key` parameter inside the same trust
+boundary as Vault Transit and prevents stray protocol arguments
+from being emitted.
+
+### RBAC
+
+`POST /api/admin/kubernetes/parse-kubeconfig` is gated by
+`check_system_permission` (system admin only) and is exercised by
+the `e2e/tests/rbac.spec.ts` no-auth/wrong-role assertions.
+
+### Security
+
+- Cluster CA cert and client cert are public PEM material and live
+  in `connections.extra` (`ca-cert`, `client-cert`). The matching
+  client private key lives only in a Vault-encrypted credential
+  profile and is remapped into the guacd `client-key` parameter at
+  handshake time.
+- The kubeconfig parser deliberately **does not** follow file-path
+  references for cert material (`certificate-authority: /path/...`)
+  — the backend has no business reading random admin-controlled
+  file paths. Only embedded `*-data` base64 blobs are decoded.
+- A 1 MiB hard cap on kubeconfig body size prevents YAML-bomb
+  abuse of the importer endpoint.
+
+### Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — new "Kubernetes
+  Pod Console" entry under *Extended protocols*.
+- [`docs/security.md`](docs/security.md) — Kubernetes client-key
+  handling note in the credential-resolution section.
+- [`docs/api-reference.md`](docs/api-reference.md) — `kubernetes`
+  added to protocol enums; new section documenting
+  `POST /api/admin/kubernetes/parse-kubeconfig`.
+
+### Tests
+
+- `backend/src/tunnel.rs` — `full_param_map_kubernetes_defaults`
+  and `full_param_map_kubernetes_extras_passthrough` assert the
+  protocol branch, default param injection, extras whitelist
+  (with `client-key` blocked) and clipboard application.
+- `backend/src/services/kubernetes.rs` — five unit tests covering
+  full-kubeconfig parsing, single-context fallback, exec-plugin
+  warnings, bearer-token warnings, oversized-body rejection and
+  empty-body rejection.
+- `e2e/tests/rbac.spec.ts` — `parse-kubeconfig` added to both the
+  no-auth and wrong-role POST matrices.
+
+### Deferred
+
+- **Live pod listing.** A live `POST /api/admin/kubernetes/list-pods`
+  endpoint backed by the `kube` Rust crate (≈80 transitive deps)
+  would let the form populate a pod-picker dropdown instead of
+  asking the operator to type the pod name. Deferred to a later
+  release because the dependency surface is significant and the
+  same UX can be achieved out-of-band by `kubectl get pods`. Tracked
+  in the roadmap.
+
 ## [1.3.2] — 2026-05-01
 
 ### guacd FreeRDP 3.25 callback ABI fix, RDP resize artefact correction, idle-tunnel watchdog, and logout WebSocket cleanup

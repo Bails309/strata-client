@@ -177,6 +177,10 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/admin/metrics", get(admin::get_metrics))
         .route(
+            "/api/admin/kubernetes/parse-kubeconfig",
+            post(admin::parse_kubeconfig),
+        )
+        .route(
             "/api/admin/ad-sync-configs",
             get(admin::list_ad_sync_configs),
         )

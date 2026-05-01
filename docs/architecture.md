@@ -849,7 +849,7 @@ Step-by-step procedures for on-call engineers live under
 ## Extended protocols
 
 In addition to the classic RDP / SSH / VNC connections, Strata
-supports two driver-backed connection types where the backend
+supports three driver-backed connection types where the backend
 supervises a workload on the user's behalf:
 
 - **Web Sessions** (`web` protocol) — ephemeral kiosk Chromium inside
@@ -857,8 +857,23 @@ supervises a workload on the user's behalf:
 - **VDI Desktop Containers** (`vdi` protocol) — Strata-managed
   Docker container running xrdp, tunnelled as RDP. See
   [`vdi.md`](vdi.md).
+- **Kubernetes Pod Console** (`kubernetes` protocol, v1.4.0) —
+  `kubectl attach` / `kubectl exec` into a named pod, rendered as a
+  terminal via Guacamole's built-in `kubernetes` client. The custom
+  guacd image already builds `libguac-client-kubernetes.so` (gated by a
+  Dockerfile guard that fails the build if the .so is missing — see
+  `guacd/Dockerfile`). Connection extras carry `pod`, `namespace`,
+  `container`, `exec-command`, `use-ssl`, `ca-cert` and `client-cert`;
+  the matching `client-key` private bytes live exclusively in a
+  Vault-encrypted credential profile and are remapped from the
+  profile's password slot into the guacd `client-key` parameter at
+  handshake time (see `routes/tunnel.rs`). Operators import their
+  `~/.kube/config` via `POST /api/admin/kubernetes/parse-kubeconfig`,
+  which extracts the cluster server URL, namespace, CA cert and
+  client cert into the form and shows the private key once for the
+  operator to paste into a credential profile.
 
-Both extensions land their per-connection configuration in
+All three extensions land their per-connection configuration in
 `connections.extra` (JSONB) and inherit the existing recording, audit,
 and credential-mapping pipelines unchanged.
 

@@ -126,6 +126,30 @@ function ProtocolIcon({ protocol }: { protocol: string }) {
       </svg>
     );
   }
+  if (p === "kubernetes") {
+    // Stylised Kubernetes wheel — heptagon + radial spokes (v1.4.0).
+    return (
+      <svg
+        width="24"
+        height="24"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <polygon points="12,2 20,7 20,17 12,22 4,17 4,7" />
+        <circle cx="12" cy="12" r="3" />
+        <line x1="12" y1="2" x2="12" y2="9" />
+        <line x1="20" y1="7" x2="14.5" y2="10.5" />
+        <line x1="20" y1="17" x2="14.5" y2="13.5" />
+        <line x1="12" y1="22" x2="12" y2="15" />
+        <line x1="4" y1="17" x2="9.5" y2="13.5" />
+        <line x1="4" y1="7" x2="9.5" y2="10.5" />
+      </svg>
+    );
+  }
   return (
     <svg
       width="24"

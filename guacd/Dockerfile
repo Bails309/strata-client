@@ -58,7 +58,15 @@ RUN autoreconf -fi && \
         --with-webp \
         --with-websockets && \
     make -j"$(nproc)" && \
-    make DESTDIR=/build install
+    make DESTDIR=/build install && \
+    # Defence-in-depth: every protocol Strata exposes must end up as a built
+    # libguac-client-*.so. Catch silent regressions where a missing -dev
+    # package on the build host causes configure to skip a protocol without
+    # failing the build (e.g. libwebsockets-dev → kubernetes).
+    for proto in rdp ssh vnc kubernetes; do \
+        test -f /build/usr/local/lib/libguac-client-$proto.so \
+            || { echo "ERROR: libguac-client-$proto.so was not built" && exit 1; }; \
+    done
 
 # ── Runtime stage ─────────────────────────────────────────────────────
 FROM alpine:3.23

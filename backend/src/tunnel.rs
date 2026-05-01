@@ -235,6 +235,25 @@ impl HandshakeParams {
                 .or_insert_with(|| "false".into());
         }
 
+        // Kubernetes pod console (`kubectl attach` / `exec`-style) — terminal
+        // defaults mirror the SSH branch above so TUI apps render correctly
+        // inside a pod's stdin/stdout. The `pod`, `namespace`, `container`,
+        // and `exec-command` connection params are pulled from `extra` and
+        // pass through `is_allowed_guacd_param` below.
+        if self.protocol == "kubernetes" {
+            m.entry("terminal-type".into())
+                .or_insert_with(|| "xterm-256color".into());
+            m.entry("color-scheme".into())
+                .or_insert_with(|| "gray-black".into());
+            m.entry("font-name".into())
+                .or_insert_with(|| "monospace".into());
+            m.entry("font-size".into()).or_insert_with(|| "12".into());
+            m.entry("scrollback".into()).or_insert_with(|| "1000".into());
+            m.entry("backspace".into()).or_insert_with(|| "127".into());
+            m.entry("namespace".into())
+                .or_insert_with(|| "default".into());
+        }
+
         // Clipboard — enable for all protocols
         m.entry("disable-copy".into())
             .or_insert_with(|| "false".into());
@@ -315,6 +334,20 @@ fn is_allowed_guacd_param(name: &str) -> bool {
             | "recording-exclude-output"
             | "recording-exclude-mouse"
             | "recording-exclude-touch"
+            // Kubernetes protocol parameters. `client-key` is intentionally
+            // NOT in this whitelist — it is the private half of the client
+            // certificate keypair and must flow through the credential-profile
+            // path (Vault Transit envelope encryption), never via the
+            // connection's free-form `extra` JSONB column. `client-cert` and
+            // `ca-cert` are PEM-encoded X.509 certificates (public material)
+            // and are safe to surface as ordinary connection settings.
+            | "namespace"
+            | "pod"
+            | "container"
+            | "exec-command"
+            | "use-ssl"
+            | "ca-cert"
+            | "client-cert"
     )
 }
 
@@ -1466,6 +1499,93 @@ mod tests {
     }
 
     #[test]
+    fn full_param_map_kubernetes_defaults() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("pod".into(), "my-pod".into());
+        let hp = HandshakeParams {
+            protocol: "kubernetes".into(),
+            hostname: "k8s.example.com".into(),
+            port: 8080,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 1024,
+            height: 768,
+            dpi: 96,
+            extra,
+        };
+        let m = hp.full_param_map();
+        // Terminal defaults applied
+        assert_eq!(m["terminal-type"], "xterm-256color");
+        assert_eq!(m["color-scheme"], "gray-black");
+        assert_eq!(m["font-name"], "monospace");
+        // Default namespace
+        assert_eq!(m["namespace"], "default");
+        // Pod from extras came through whitelist
+        assert_eq!(m["pod"], "my-pod");
+        // Must NOT pull in RDP/SSH-specific params
+        assert!(!m.contains_key("enable-drive"));
+        assert!(!m.contains_key("disable-gfx"));
+        assert!(!m.contains_key("enable-sftp"));
+        // Clipboard still applied
+        assert_eq!(m["disable-copy"], "false");
+        assert_eq!(m["disable-paste"], "false");
+    }
+
+    #[test]
+    fn full_param_map_kubernetes_extras_passthrough() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("pod".into(), "p".into());
+        extra.insert("namespace".into(), "kube-system".into());
+        extra.insert("container".into(), "api".into());
+        extra.insert("exec-command".into(), "/bin/bash".into());
+        extra.insert("use-ssl".into(), "true".into());
+        extra.insert(
+            "ca-cert".into(),
+            "-----BEGIN CERTIFICATE-----\nXYZ\n-----END CERTIFICATE-----".into(),
+        );
+        // Sensitive params must NOT slip through `extra`.
+        extra.insert("client-cert".into(), "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----".into());
+        extra.insert("client-key".into(), "evil-private-key".into());
+
+        let hp = HandshakeParams {
+            protocol: "kubernetes".into(),
+            hostname: "k8s".into(),
+            port: 6443,
+            username: None,
+            password: None,
+            domain: None,
+            security: None,
+            ignore_cert: false,
+            recording_path: None,
+            recording_name: None,
+            create_recording_path: false,
+            width: 1024,
+            height: 768,
+            dpi: 96,
+            extra,
+        };
+        let m = hp.full_param_map();
+        assert_eq!(m["pod"], "p");
+        assert_eq!(m["namespace"], "kube-system"); // extra wins over default
+        assert_eq!(m["container"], "api");
+        assert_eq!(m["exec-command"], "/bin/bash");
+        assert_eq!(m["use-ssl"], "true");
+        assert!(m["ca-cert"].contains("BEGIN CERTIFICATE"));
+        // client-cert is public material and is allowed via extras.
+        assert!(m["client-cert"].contains("BEGIN CERTIFICATE"));
+        // client-key is private and must NEVER flow through extras —
+        // it has to come from the credential-profile path, applied at the
+        // route layer in `routes/tunnel.rs`.
+        assert!(!m.contains_key("client-key"));
+    }
+
+    #[test]
     fn full_param_map_extra_blocked_params_ignored() {
         let mut extra = std::collections::HashMap::new();
         extra.insert("password".into(), "evil".into());
@@ -1673,7 +1793,7 @@ mod tests {
 
     #[test]
     fn full_param_map_clipboard_for_all_protocols() {
-        for proto in &["rdp", "ssh", "vnc", "telnet"] {
+        for proto in &["rdp", "ssh", "vnc", "telnet", "kubernetes"] {
             let hp = HandshakeParams {
                 protocol: proto.to_string(),
                 hostname: "h".into(),

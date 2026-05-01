@@ -482,7 +482,7 @@ Create a new connection.
 | Field | Type | Required | Default |
 |---|---|---|---|
 | `name` | string | Yes | — |
-| `protocol` | `"rdp"` \| `"ssh"` \| `"vnc"` | Yes | — |
+| `protocol` | `"rdp"` \| `"ssh"` \| `"vnc"` \| `"web"` \| `"vdi"` \| `"kubernetes"` | Yes | — |
 | `hostname` | string | Yes | — |
 | `port` | integer | No | 3389 |
 | `domain` | string | No | null |
@@ -688,7 +688,53 @@ Aggregate metrics across all active tunnel sessions.
 | `active_sessions` | integer | Total number of active tunnel sessions |
 | `total_bytes_from_guacd` | integer | Cumulative bytes received from guacd across all sessions |
 | `total_bytes_to_guacd` | integer | Cumulative bytes sent to guacd across all sessions |
-| `sessions_by_protocol` | object | Session count grouped by protocol (rdp, ssh, vnc) |
+| `sessions_by_protocol` | object | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
+
+---
+
+### Kubernetes
+
+#### `POST /api/admin/kubernetes/parse-kubeconfig`
+
+Parses a pasted kubeconfig YAML and extracts the fields needed by the
+connection editor for the `kubernetes` protocol. The endpoint is
+**stateless** — it does not persist anything; in particular it
+returns the user's client private key to the caller exactly once
+and the caller is expected to immediately stash it in a credential
+profile (see [security.md](security.md)).
+
+**Request body**
+```json
+{
+  "kubeconfig": "apiVersion: v1\nkind: Config\n...",
+  "context": "prod-east"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kubeconfig` | string | Yes | YAML body of the kubeconfig (1 MiB max) |
+| `context`    | string | No  | Override `current-context`. If absent, falls back to `current-context`, then to the only context if exactly one is present |
+
+**Response** `200 OK`
+```json
+{
+  "server": "https://10.0.0.1:6443",
+  "namespace": "my-ns",
+  "ca_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "client_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "client_key_pem": "-----BEGIN PRIVATE KEY-----\n...",
+  "current_context": "prod-east",
+  "warnings": []
+}
+```
+
+Every field is optional because real-world kubeconfigs are
+heterogeneous — exec-plugin and bearer-token auth result in
+warnings rather than errors, and file-path references for cert
+material (`certificate-authority: /path/to/ca.crt`) are deliberately
+**not** followed (the backend has no business reading random admin-
+controlled file paths).
 
 ---
 
@@ -1013,7 +1059,7 @@ Pre-connect information for a specific connection. Used by the session client to
 
 | Field | Type | Description |
 |---|---|---|
-| `protocol` | string | `rdp`, `vnc`, or `ssh` |
+| `protocol` | string | `rdp`, `vnc`, `ssh`, `web`, `vdi`, or `kubernetes` |
 | `has_credentials` | boolean | `true` if a non-expired vault credential profile is mapped to this user + connection |
 | `ignore_cert` | boolean | Whether the connection's RDP certificate validation is disabled |
 | `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |

@@ -16,7 +16,7 @@
 //     filling in a hostname that has no wire-level effect, which has
 //     been a recurring source of confusion (see git log around v0.30.0).
 
-export type ProtocolKey = "rdp" | "ssh" | "vnc" | "web" | "vdi";
+export type ProtocolKey = "rdp" | "ssh" | "vnc" | "web" | "vdi" | "kubernetes";
 
 export interface ProtocolDescriptor {
   /** Wire value stored in `connections.protocol`. */
@@ -79,6 +79,18 @@ export const PROTOCOLS: ProtocolDescriptor[] = [
     defaultPort: 3389,
     showHostname: false,
     showPort: false,
+    showDomain: false,
+  },
+  // Kubernetes pod console (`kubectl attach`/`exec` rendered through guacd's
+  // kubernetes protocol). Hostname is the K8s API server, port is the API
+  // port (typically 6443 for kubeadm clusters, 8080 for unsecured local
+  // dev). Domain has no meaning here.
+  {
+    value: "kubernetes",
+    label: "Kubernetes Pod",
+    defaultPort: 6443,
+    showHostname: true,
+    showPort: true,
     showDomain: false,
   },
 ];

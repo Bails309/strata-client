@@ -92,6 +92,8 @@ export default function ActiveSessions() {
         return <span className="badge badge-success uppercase">web</span>;
       case "vdi":
         return <span className="badge badge-accent uppercase">vdi</span>;
+      case "kubernetes":
+        return <span className="badge badge-primary uppercase">k8s</span>;
       default:
         return <span className="badge uppercase">{proto}</span>;
     }

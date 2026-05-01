@@ -1,3 +1,76 @@
+# What's New in v1.4.0
+
+> **Minor release.** Apache Guacamole's `kubernetes` protocol
+> arrives in Strata as a first-class connection type alongside
+> `rdp` / `ssh` / `vnc` / `web` / `vdi`. `kubectl attach` and
+> `kubectl exec` now render as a terminal in the browser, with
+> the same recording, audit, credential-profile and tunnel
+> infrastructure as every other Strata session. Includes a
+> kubeconfig importer that breaks a pasted `~/.kube/config`
+> into the right form fields and shows the client private key
+> exactly once for the operator to stash in a credential
+> profile. **Backwards compatible with v1.3.x** — one new
+> migration (`060_kubernetes_protocol.sql`, widens the
+> `connections.protocol` `CHECK`); no breaking `/api/*` or
+> `config.toml` changes.
+
+---
+
+## 🚢 Kubernetes pod console
+
+Add a new connection, pick **Kubernetes Pod** as the protocol,
+fill in the API server hostname/port, paste your kubeconfig into
+the **Import kubeconfig** textarea above the form sections, and
+click *Parse and fill form*. Strata extracts the cluster server,
+namespace, CA cert and client cert into the right fields; the
+client *private key* surfaces in a "copy now" panel that goes
+away as soon as you stash it into a credential profile (it's
+never persisted on this path).
+
+The protocol surfaces in:
+
+- **Admin → Access** form (new `KubernetesSections` block).
+- **Command palette** session list (Kubernetes-style heptagon
+  wheel icon).
+- **Dashboard** connection cards (same icon, larger).
+- **Active Sessions** badge (`k8s` chip).
+- **Audit logs** and **session recordings** — automatic, both
+  are protocol-agnostic.
+
+### What ships in 1.4.0
+
+- `guacd/Dockerfile` build guard that fails the image build if
+  `libguac-client-kubernetes.so` is missing after `make install`.
+- `backend/src/tunnel.rs` `kubernetes` branch in `full_param_map()`
+  with terminal defaults; whitelist additions for `namespace`,
+  `pod`, `container`, `exec-command`, `use-ssl`, `ca-cert` and
+  `client-cert` extras (note: `client-key` is *not* whitelisted —
+  the private half flows through the Vault-encrypted credential-
+  profile path, never connection extras).
+- `backend/src/routes/tunnel.rs` credential remap that takes the
+  decrypted profile password slot, drops it into the `extra` map
+  as `client-key`, and clears username/password.
+- Migration `060_kubernetes_protocol.sql`.
+- `backend/src/services/kubernetes.rs` kubeconfig YAML parser
+  (with five unit tests).
+- New admin endpoint `POST /api/admin/kubernetes/parse-kubeconfig`,
+  gated by `check_system_permission` and exercised by the
+  `e2e/tests/rbac.spec.ts` no-auth/wrong-role matrices.
+- Frontend additions: `protocolFields.ts` registry entry,
+  `KubernetesSections` form component, `KubeconfigImporter`
+  importer panel, protocol icons in CommandPalette / Dashboard /
+  ActiveSessions, `parseKubeconfig` API client.
+
+### Deferred to a later release
+
+A live `POST /api/admin/kubernetes/list-pods` endpoint that talks
+directly to the K8s API and feeds a pod-picker dropdown would be
+nice but pulls in the `kube` Rust crate's ≈80-deep transitive
+dependency tree. Operators can use `kubectl get pods` out-of-band
+to find the pod name today.
+
+---
+
 # What's New in v1.3.2
 
 > **Patch release on top of v1.3.1.** Four orthogonal fixes that

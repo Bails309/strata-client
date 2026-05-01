@@ -1,6 +1,6 @@
 [package]
 name = "strata-backend"
-version = "1.3.2"
+version = "1.4.0"
 edition = "2021"
 description = "Strata Client – Rust backend proxy and API for Apache Guacamole"
 license = "Apache-2.0"
@@ -147,6 +147,16 @@ bollard = "0.18"
 # a transparent downgrade. Bump alongside sqlx when sqlx adopts a
 # newer libsqlite3-sys.
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Kubernetes Pod Console (v1.4.0). `serde_yaml` is used solely by
+# `services::kubernetes` to parse pasted kubeconfig YAML on the
+# admin "Import kubeconfig" workflow — we extract the cluster server
+# URL, CA cert, client cert and client key and split them into the
+# right slots (extras + credential profile) so the operator doesn't
+# have to copy-paste five separate fields. The crate is unmaintained
+# upstream but the parser is rock-solid; if the YAML ecosystem
+# settles on a successor we'll migrate then.
+serde_yaml = "0.9"
 
 [profile.release]
 lto = true

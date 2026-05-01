@@ -25,6 +25,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.4.0",
+    subtitle:
+      "Kubernetes pod console as a first-class protocol — kubectl attach / exec rendered as a terminal, with kubeconfig importer",
+    sections: [
+      {
+        title: "Apache Guacamole's kubernetes protocol arrives in Strata",
+        description:
+          "Pick Kubernetes Pod as the protocol on a new connection and Strata will tunnel kubectl attach / kubectl exec to the named pod through guacd's libguac-client-kubernetes.so driver, rendered as a terminal in the browser. The custom guacd image already builds the .so (libwebsockets-dev was already in the build deps), and the Dockerfile now hard-fails the image build if any of libguac-client-{rdp,ssh,vnc,kubernetes}.so is missing after make install rather than silently dropping the protocol at runtime. Backend tunnel.rs gets a kubernetes branch with terminal defaults (xterm-256color, gray-on-black, 1000-line scrollback, default namespace) and an extended is_allowed_guacd_param whitelist for namespace, pod, container, exec-command, use-ssl, ca-cert and client-cert. The protocol uses the same recording, audit, credential-profile and tunnel infrastructure as every other Strata session — no new sidecar, no parallel storage path.",
+      },
+      {
+        title: "client-key never lands in the connections table",
+        description:
+          "mTLS to the K8s API needs both a client cert and the matching private key. Strata splits them deliberately: the cert is public PEM and lives in connections.extra (client-cert), but the private key lives only in a Vault-encrypted credential profile. routes/tunnel.rs special-cases wire_protocol == kubernetes and remaps the decrypted profile password slot into the guacd client-key parameter at handshake time, then clears username/password to avoid stray protocol arguments. The is_allowed_guacd_param whitelist deliberately excludes client-key, so a malicious admin cannot smuggle a private key in via connection extras either. The new POST /api/admin/kubernetes/parse-kubeconfig endpoint returns the extracted private key to the caller exactly once and does not persist it.",
+      },
+      {
+        title: "Import kubeconfig — paste once, fields fill themselves",
+        description:
+          "The connection editor sprouts an Import kubeconfig textarea above the Kubernetes form sections. Paste your ~/.kube/config, click Parse and fill form, and the backend extracts the cluster server URL (split into hostname/port), the namespace, the cluster CA cert and the client cert into the right form fields. The client private key surfaces in a copy now panel with an amber border; copy it into the credential profile you'll assign to this connection and the panel goes away. The parser refuses to follow file-path references for cert material (certificate-authority: /path/to/ca.crt) — only embedded *-data base64 blobs are decoded — because the backend has no business reading random admin-controlled file paths. A 1 MiB body cap prevents YAML-bomb abuse.",
+      },
+      {
+        title: "New protocol icons across the UI",
+        description:
+          "CommandPalette, Dashboard and ActiveSessions get a stylised Kubernetes wheel (heptagon + radial spokes) for the new protocol. ActiveSessions surfaces it as a k8s primary-coloured chip in the protocol column. The connection editor's protocol dropdown gains a Kubernetes Pod entry with default port 6443 (kubeadm-style); operators connecting to clusters on 8080 or 443 will need to override the port the same way they would for any other protocol.",
+      },
+      {
+        title: "Migration 060, no API breaks",
+        description:
+          "One new migration: 060_kubernetes_protocol.sql widens the connections.protocol and ad_sync_configs.protocol CHECK constraints to include 'kubernetes'. No /api/* contract changes for existing protocols, no config.toml schema changes. Backwards compatible with v1.3.x — drop-in upgrade after rebuilding the backend, frontend, and guacd images. Live pod listing (POST /api/admin/kubernetes/list-pods backed by the kube Rust crate's ~80-deep transitive dep tree) is deferred to a later release; use kubectl get pods out-of-band today.",
+      },
+    ],
+  },
+  {
     version: "1.3.2",
     subtitle:
       "guacd FreeRDP 3.25 ABI fix, RDP resize ghost-region cleanup, idle-tunnel watchdog, and logout WebSocket teardown",

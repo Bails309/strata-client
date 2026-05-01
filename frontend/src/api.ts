@@ -572,6 +572,28 @@ export const testPmTargetFilter = (data: Partial<AdSyncConfig>) =>
     sample?: { dn: string; name: string; description?: string }[];
   }>("/admin/ad-sync-configs/test-filter", { method: "POST", body: JSON.stringify(data) });
 
+// ── Kubernetes (v1.4.0) ────────────────────────────────────────────
+//
+// The backend extracts cluster server, namespace, CA cert, client
+// cert and client key from a pasted kubeconfig YAML. The private
+// key is returned exactly once — the caller must immediately stash
+// it in a credential profile (we never persist it on this path).
+export interface ParsedKubeconfig {
+  server?: string;
+  namespace?: string;
+  ca_cert_pem?: string;
+  client_cert_pem?: string;
+  client_key_pem?: string;
+  current_context?: string;
+  warnings: string[];
+}
+
+export const parseKubeconfig = (kubeconfig: string, context?: string) =>
+  request<ParsedKubeconfig>("/admin/kubernetes/parse-kubeconfig", {
+    method: "POST",
+    body: JSON.stringify({ kubeconfig, context }),
+  });
+
 export const getAdSyncRuns = (configId: string) =>
   request<AdSyncRun[]>(`/admin/ad-sync-configs/${configId}/runs`);
 

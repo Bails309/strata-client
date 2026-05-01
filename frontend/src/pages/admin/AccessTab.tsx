@@ -18,6 +18,7 @@ import {
   getRoleMappings,
   getRoles,
   getUsers,
+  parseKubeconfig,
   restoreUser,
   updateConnection,
   updateConnectionFolder as _updateConnectionFolder,
@@ -25,7 +26,7 @@ import {
   updateRoleMappings,
   updateUser,
 } from "../../api";
-import { RdpSections, SshSections, VncSections, VdiSections, WebSections } from "./connectionForm";
+import { RdpSections, SshSections, VncSections, VdiSections, WebSections, KubernetesSections } from "./connectionForm";
 import { PROTOCOLS, protocolDescriptor } from "./protocolFields";
 
 export default function AccessTab({
@@ -1017,6 +1018,38 @@ export default function AccessTab({
             {formCore.protocol === "vnc" && <VncSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "web" && <WebSections ex={ex} setEx={setEx} />}
             {formCore.protocol === "vdi" && <VdiSections ex={ex} setEx={setEx} />}
+            {formCore.protocol === "kubernetes" && (
+              <>
+                <KubeconfigImporter
+                  onParsed={(p) => {
+                    // Server URL → hostname + port. Strip the scheme;
+                    // the connection editor stores hostname and port
+                    // separately and `use-ssl` lives in extras.
+                    if (p.server) {
+                      try {
+                        const u = new URL(p.server);
+                        setFormCore((f) => ({
+                          ...f,
+                          hostname: u.hostname,
+                          port: u.port
+                            ? parseInt(u.port, 10)
+                            : u.protocol === "http:"
+                              ? 80
+                              : 443,
+                        }));
+                        setEx("use-ssl", u.protocol === "https:" ? "" : "false");
+                      } catch {
+                        // Not a parseable URL — leave hostname/port alone, let the operator fix it.
+                      }
+                    }
+                    if (p.namespace) setEx("namespace", p.namespace);
+                    if (p.ca_cert_pem) setEx("ca-cert", p.ca_cert_pem);
+                    if (p.client_cert_pem) setEx("client-cert", p.client_cert_pem);
+                  }}
+                />
+                <KubernetesSections ex={ex} setEx={setEx} />
+              </>
+            )}
           </div>
           <div className="flex gap-2 mt-4">
             <button className="btn-primary" onClick={handleSave}>
@@ -1431,6 +1464,123 @@ export default function AccessTab({
         onConfirm={() => confirmModal?.onConfirm()}
         onCancel={() => setConfirmModal(null)}
       />
+    </div>
+  );
+}
+
+// ── Kubeconfig importer (v1.4.0) ───────────────────────────────────
+//
+// Compact textarea + parse button rendered above the Kubernetes
+// protocol sections. The backend extracts cluster server, namespace,
+// CA cert and client cert into the form; the client *private key*
+// is shown to the operator exactly once with a copy-to-clipboard
+// affordance. The operator is expected to immediately paste it into
+// a credential profile (Vault-encrypted) — we deliberately never
+// auto-create the profile from this endpoint because the credential-
+// profile UX has its own auditing and naming requirements that don't
+// fit a one-shot import.
+function KubeconfigImporter({
+  onParsed,
+}: {
+  onParsed: (p: import("../../api").ParsedKubeconfig) => void;
+}) {
+  const [yaml, setYaml] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [keyPem, setKeyPem] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleParse = async () => {
+    setBusy(true);
+    setError(null);
+    setWarnings([]);
+    setKeyPem(null);
+    setCopied(false);
+    try {
+      const parsed = await parseKubeconfig(yaml);
+      onParsed(parsed);
+      setWarnings(parsed.warnings ?? []);
+      setKeyPem(parsed.client_key_pem ?? null);
+      // Wipe the YAML once parsed — there's no reason to keep it
+      // sitting in DOM state after the fields have been broken out.
+      setYaml("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mb-4 rounded border border-border-default p-3 bg-bg-secondary">
+      <div className="flex items-center justify-between mb-2">
+        <h5 className="text-xs font-bold uppercase tracking-widest text-txt-tertiary">
+          Import kubeconfig
+        </h5>
+        <span className="text-[0.7rem] text-txt-tertiary">
+          Paste your <code>~/.kube/config</code> to auto-fill cluster fields.
+        </span>
+      </div>
+      <textarea
+        value={yaml}
+        onChange={(e) => setYaml(e.target.value)}
+        rows={4}
+        className="font-mono text-[0.75rem] w-full"
+        placeholder="apiVersion: v1&#10;kind: Config&#10;…"
+      />
+      <div className="flex items-center gap-2 mt-2">
+        <button
+          type="button"
+          className="btn-secondary text-sm"
+          onClick={handleParse}
+          disabled={busy || !yaml.trim()}
+        >
+          {busy ? "Parsing…" : "Parse and fill form"}
+        </button>
+        {error && <span className="text-xs text-red-500">{error}</span>}
+      </div>
+      {warnings.length > 0 && (
+        <ul className="mt-2 text-xs text-amber-500 list-disc pl-4">
+          {warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      )}
+      {keyPem && (
+        <div className="mt-3 rounded border border-amber-500/40 bg-amber-500/10 p-2">
+          <div className="flex items-center justify-between mb-1">
+            <strong className="text-xs uppercase text-amber-400">
+              Client private key — copy now
+            </strong>
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(keyPem);
+                  setCopied(true);
+                } catch {
+                  /* ignore clipboard errors */
+                }
+              }}
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <p className="text-[0.7rem] text-txt-tertiary mb-1">
+            This key is shown <strong>once</strong>. Paste it into the password slot of the
+            credential profile you assign to this connection. Strata never persists it on this
+            page.
+          </p>
+          <textarea
+            value={keyPem}
+            readOnly
+            rows={3}
+            className="font-mono text-[0.75rem] w-full"
+          />
+        </div>
+      )}
     </div>
   );
 }

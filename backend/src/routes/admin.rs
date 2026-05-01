@@ -3669,6 +3669,40 @@ pub async fn list_trusted_cas_for_picker(
     Ok(Json(slim))
 }
 
+// ── Kubernetes: parse pasted kubeconfig ────────────────────────────────
+//
+// Helper endpoint for the connection-editor "Import kubeconfig"
+// button. The operator pastes a kubeconfig YAML; we extract the
+// pieces the form needs and hand them back broken out by slot. The
+// private key is returned to the caller exactly once — the frontend
+// is then responsible for creating (or asking the operator to
+// create) a credential profile to hold it. We never persist the
+// private half from this endpoint; doing so would smear it across
+// the connections table where extras live.
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ParseKubeconfigRequest {
+    pub kubeconfig: String,
+    /// Optional explicit context name. If omitted we use the
+    /// kubeconfig's `current-context`, falling back to the only
+    /// context present.
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+pub async fn parse_kubeconfig(
+    State(_state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<ParseKubeconfigRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let parsed = crate::services::kubernetes::parse_kubeconfig(
+        &body.kubeconfig,
+        body.context.as_deref(),
+    )?;
+    Ok(Json(serde_json::to_value(parsed).unwrap_or_default()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

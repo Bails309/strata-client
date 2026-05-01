@@ -1914,3 +1914,297 @@ export function VdiSections({
     </>
   );
 }
+
+// ── Kubernetes Parameter Sections ──────────────────────────────────
+//
+// Renders the connection-form fields for the `kubernetes` protocol
+// (guacd's pod-console client — `kubectl attach` / `kubectl exec`
+// over the K8s API, projected through Guacamole's terminal protocol).
+//
+// Field layout intentionally mirrors SshSections so operators get a
+// familiar terminal section. Authentication is split:
+//   - **Bearer token / static credentials** are handled at the
+//     connection level via Credential Profiles (the profile's
+//     password slot carries either a bearer token *or* the PEM
+//     `client-key` body — see `routes/tunnel.rs` for the remap).
+//   - **Public PEM material** (CA cert, client cert) lives here
+//     because it is non-sensitive and benefits from being editable
+//     alongside the rest of the connection.
+//
+// We deliberately do NOT expose `client-key` as a form field — it
+// must flow through the Vault-encrypted profile path so the private
+// half is never written to the connections table.
+export function KubernetesSections({
+  ex,
+  setEx,
+}: {
+  ex: (k: string) => string;
+  setEx: (k: string, v: string) => void;
+}) {
+  return (
+    <>
+      <Section title="Pod Target" defaultOpen>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The name of the pod to attach or exec into. Required.">
+              Pod Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              value={ex("pod")}
+              onChange={(e) => setEx("pod", e.target.value)}
+              placeholder="my-pod-abc123"
+              title="The name of the pod to attach or exec into. Required."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The Kubernetes namespace containing the pod. Defaults to 'default'.">
+              Namespace
+            </label>
+            <input
+              value={ex("namespace")}
+              onChange={(e) => setEx("namespace", e.target.value)}
+              placeholder="default"
+              title="The Kubernetes namespace containing the pod. Defaults to 'default'."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The container within the pod to attach to. Required only if the pod has more than one container.">
+              Container
+            </label>
+            <input
+              value={ex("container")}
+              onChange={(e) => setEx("container", e.target.value)}
+              placeholder="(default container)"
+              title="The container within the pod to attach to. Required only if the pod has more than one container."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="If set, runs `kubectl exec` with this command instead of `kubectl attach`. Leave blank to attach to the container's existing console.">
+              Exec Command
+            </label>
+            <input
+              value={ex("exec-command")}
+              onChange={(e) => setEx("exec-command", e.target.value)}
+              placeholder="(blank = attach)"
+              title="If set, runs `kubectl exec` with this command instead of `kubectl attach`. Leave blank to attach to the container's existing console."
+            />
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="TLS">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Connect to the API server using HTTPS. Almost always required — only disable for unsecured local dev clusters."
+            >
+              <input
+                type="checkbox"
+                checked={ex("use-ssl") !== "false"}
+                onChange={(e) => setEx("use-ssl", e.target.checked ? "" : "false")}
+                className="checkbox"
+              />
+              Use SSL/TLS
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Skip verification of the API server's TLS certificate. Insecure — prefer pasting the cluster CA below."
+            >
+              <input
+                type="checkbox"
+                checked={ex("ignore-cert") === "true"}
+                onChange={(e) => setEx("ignore-cert", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Ignore certificate errors
+            </label>
+          </div>
+          <div className="form-group !mb-0 col-span-full">
+            <label title="PEM-encoded CA certificate the API server's certificate chains to. Paste the contents of your kubeconfig's certificate-authority-data (base64-decoded) or the cluster CA file.">
+              Cluster CA Certificate (PEM)
+            </label>
+            <textarea
+              value={ex("ca-cert")}
+              onChange={(e) => setEx("ca-cert", e.target.value)}
+              rows={3}
+              className="font-mono text-[0.8rem]"
+              placeholder="-----BEGIN CERTIFICATE-----"
+              title="PEM-encoded CA certificate the API server's certificate chains to."
+            />
+          </div>
+          <div className="form-group !mb-0 col-span-full">
+            <label title="PEM-encoded client certificate for mTLS authentication. Paired with the client-key stored in the connection's credential profile.">
+              Client Certificate (PEM)
+            </label>
+            <textarea
+              value={ex("client-cert")}
+              onChange={(e) => setEx("client-cert", e.target.value)}
+              rows={3}
+              className="font-mono text-[0.8rem]"
+              placeholder="-----BEGIN CERTIFICATE-----"
+              title="PEM-encoded client certificate. The matching private key is stored in the credential profile."
+            />
+          </div>
+        </FieldGrid>
+        <p className="text-xs text-txt-tertiary mt-2">
+          The client <em>private key</em> is stored separately in this connection's credential
+          profile (encrypted via Vault Transit) and is never written to the connections table.
+        </p>
+      </Section>
+
+      <Section title="Display">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label title="The color scheme to use for the terminal display.">Color Scheme</label>
+            <Select
+              value={ex("color-scheme")}
+              onChange={(v) => setEx("color-scheme", v)}
+              placeholder="Gray on black (default)"
+              options={[
+                { value: "", label: "Gray on black (default)" },
+                { value: "green-black", label: "Green on black" },
+                { value: "white-black", label: "White on black" },
+                { value: "black-white", label: "Black on white" },
+              ]}
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The name of the font to use in the terminal. Must be available on the guacd server.">
+              Font Name
+            </label>
+            <input
+              value={ex("font-name")}
+              onChange={(e) => setEx("font-name", e.target.value)}
+              placeholder="monospace"
+              title="The name of the font to use in the terminal. Must be available on the guacd server."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The size of the font to use in the terminal, in points.">Font Size</label>
+            <input
+              type="number"
+              value={ex("font-size")}
+              onChange={(e) => setEx("font-size", e.target.value)}
+              placeholder="12"
+              title="The size of the font to use in the terminal, in points."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The maximum number of lines of terminal scrollback. Defaults to 1000.">
+              Scrollback (lines)
+            </label>
+            <input
+              type="number"
+              value={ex("scrollback")}
+              onChange={(e) => setEx("scrollback", e.target.value)}
+              placeholder="1000"
+              title="The maximum number of lines of terminal scrollback. Defaults to 1000."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color.">
+              Terminal Type
+            </label>
+            <input
+              value={ex("terminal-type")}
+              onChange={(e) => setEx("terminal-type", e.target.value)}
+              placeholder="xterm-256color"
+              title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label title="ASCII code sent when the Backspace key is pressed. 127 = Delete (default), 8 = Backspace. Change only if Backspace produces ^? or ^H instead of erasing.">
+              Backspace Key Code
+            </label>
+            <input
+              type="number"
+              value={ex("backspace")}
+              onChange={(e) => setEx("backspace", e.target.value)}
+              placeholder="127"
+              title="ASCII code sent when the Backspace key is pressed. 127 = Delete (default), 8 = Backspace."
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Prevents any user input from being sent to the pod. The session is view-only."
+            >
+              <input
+                type="checkbox"
+                checked={ex("read-only") === "true"}
+                onChange={(e) => setEx("read-only", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Read-only
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Clipboard">
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="If checked, text copied inside the pod terminal will not be exposed to the browser clipboard."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-copy") === "true"}
+                onChange={(e) => setEx("disable-copy", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable copy (pod → browser)
+            </label>
+          </div>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="If checked, text copied at the browser cannot be pasted into the pod terminal."
+            >
+              <input
+                type="checkbox"
+                checked={ex("disable-paste") === "true"}
+                onChange={(e) => setEx("disable-paste", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Disable paste (browser → pod)
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+
+      <Section title="Screen Recording">
+        <p className="text-xs text-txt-tertiary mb-3">
+          Recording path and filename are managed automatically by the system. Use the Recordings
+          tab to enable/disable recording globally.
+        </p>
+        <FieldGrid>
+          <div className="form-group !mb-0">
+            <label>&nbsp;</label>
+            <label
+              className="flex items-center gap-2"
+              title="Include user key events in the recording. Can be interpreted with the guaclog utility."
+            >
+              <input
+                type="checkbox"
+                checked={ex("recording-include-keys") === "true"}
+                onChange={(e) => setEx("recording-include-keys", e.target.checked ? "true" : "")}
+                className="checkbox"
+              />
+              Include key events
+            </label>
+          </div>
+        </FieldGrid>
+      </Section>
+    </>
+  );
+}

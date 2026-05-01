@@ -154,6 +154,8 @@ const NOAUTH_POST_ROUTES: Array<{ url: string; body: unknown }> = [
   { url: '/api/user/favorites', body: {} },
   { url: '/api/user/tags', body: {} },
   { url: '/api/user/checkouts', body: {} },
+  // v1.4.0 — Kubernetes pod console kubeconfig importer.
+  { url: '/api/admin/kubernetes/parse-kubeconfig', body: { kubeconfig: '' } },
 ];
 
 test.describe('RBAC — no auth (401)', () => {
@@ -205,6 +207,8 @@ const ADMIN_ONLY_POST: Array<{ url: string; body: unknown }> = [
   { url: '/api/admin/sessions/kill', body: { ids: [] } },
   { url: '/api/admin/notifications/test-send', body: { to: 'x@x.x' } },
   { url: '/api/admin/pm/test-rotation', body: {} },
+  // v1.4.0 — Kubernetes pod console kubeconfig importer.
+  { url: '/api/admin/kubernetes/parse-kubeconfig', body: { kubeconfig: 'apiVersion: v1\nkind: Config\n' } },
 ];
 
 test.describe('RBAC — wrong role (403) for non-admin Bearer', () => {

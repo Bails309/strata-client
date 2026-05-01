@@ -589,6 +589,26 @@ pub async fn ws_tunnel(
         _ => protocol.clone(),
     };
 
+    // ── Kubernetes: vault password slot carries the PEM-encoded client
+    // private key. guacd's `kubernetes` protocol has no password arg —
+    // it uses `client-cert` + `client-key` for SSL client auth — so we
+    // move the resolved secret into `extra["client-key"]` and clear the
+    // password so it isn't forwarded as a stray protocol arg. The
+    // public `client-cert` and `ca-cert` already flow through `extra`
+    // via the connection editor (both are PEM-encoded X.509 certs and
+    // are public material; only the private key needs Vault Transit
+    // envelope encryption). See `tunnel.rs::is_allowed_guacd_param`.
+    let (final_username, final_password) = if wire_protocol == "kubernetes" {
+        if let Some(key_pem) = final_password {
+            extra.insert("client-key".into(), key_pem);
+        }
+        // Username is meaningless for the kubernetes protocol; drop it
+        // so guacd doesn't see a phantom arg.
+        (None, None)
+    } else {
+        (final_username, final_password)
+    };
+
     // ── rustguac parity Phase 3: ensure VDI container is running ──
     // For `vdi` connections, ask the driver to spawn (or reuse) the
     // per-(connection,user) container. We override hostname/port with

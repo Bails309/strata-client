@@ -202,14 +202,20 @@ pub async fn ws_tunnel(
     let watchdog_exp: Option<u64> = watchdog_token.as_deref().and_then(|tok| {
         use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
         #[derive(serde::Deserialize)]
-        struct ExpClaim { exp: u64 }
+        struct ExpClaim {
+            exp: u64,
+        }
         let secret = crate::config::JWT_SECRET.get().cloned().unwrap_or_default();
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_issuer(&["strata-local"]);
         validation.set_required_spec_claims(&["exp"]);
-        decode::<ExpClaim>(tok, &DecodingKey::from_secret(secret.as_bytes()), &validation)
-            .ok()
-            .map(|d| d.claims.exp)
+        decode::<ExpClaim>(
+            tok,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &validation,
+        )
+        .ok()
+        .map(|d| d.claims.exp)
     });
     // ── Per-user tunnel rate limiting ──
     {

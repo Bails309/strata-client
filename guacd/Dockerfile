@@ -52,7 +52,7 @@ RUN apk add --no-cache patch && cd /src && \
 RUN set -e; cd /src/src/protocols/rdp && \
     grep -q 'rdp_inst->Authenticate = rdp_freerdp_authenticate;' rdp.c && \
     grep -q '^static BOOL rdp_freerdp_authenticate(freerdp\* instance, char\*\* username,$' rdp.c && \
-    awk -f /tmp/patches/freerdp325-authenticate-ex.awk rdp.c > rdp.c.new && \
+    awk -f /tmp/patches/006-freerdp325-authenticate-ex.awk rdp.c > rdp.c.new && \
     mv rdp.c.new rdp.c && \
     grep -q 'rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;' rdp.c && \
     grep -q 'rdp_auth_reason reason' rdp.c && \

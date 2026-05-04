@@ -46,7 +46,7 @@ aes-gcm = "0.10"
 # salt. RustCrypto split-crate ecosystem; small self-contained deps.
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 sha1 = "0.10"
 rand = "0.10"
 base64 = "0.22"

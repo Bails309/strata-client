@@ -47,7 +47,7 @@ aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-sha1 = "0.10"
+sha1 = "0.11"
 rand = "0.10"
 base64 = "0.22"
 sha2 = "0.11"

@@ -418,8 +418,8 @@ pub fn build_tls_config_with_ca(pem: &str) -> anyhow::Result<std::sync::Arc<rust
 
     // Parse and add custom CA cert(s) from PEM
     let mut reader = std::io::BufReader::new(pem.as_bytes());
-    // rustls-pemfile 2.x certs() returns an iterator of Result<CertificateDer>
-    let certs = rustls_pemfile::certs(&mut reader);
+    // rustls-pki-types 1.x PemObject impl yields Result<CertificateDer>
+    let certs = rustls_pki_types::CertificateDer::pem_reader_iter(&mut reader);
 
     let mut added = 0;
     for cert in certs {

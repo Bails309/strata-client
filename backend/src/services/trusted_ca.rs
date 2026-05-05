@@ -81,11 +81,12 @@ fn parse_and_validate(pem: &str) -> Result<(String, ParsedMetadata), AppError> {
         return Err(AppError::Validation("CA bundle is empty".into()));
     }
 
-    // rustls-pemfile only yields blocks whose label matches CERTIFICATE.
+    // rustls-pki-types' PemObject yields blocks whose label is CERTIFICATE.
     let mut reader = std::io::Cursor::new(normalised.as_bytes());
-    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<_, _>>()
-        .map_err(|e| AppError::Validation(format!("PEM parse error: {e}")))?;
+    let certs: Vec<rustls_pki_types::CertificateDer<'static>> =
+        rustls_pki_types::CertificateDer::pem_reader_iter(&mut reader)
+            .collect::<Result<_, _>>()
+            .map_err(|e| AppError::Validation(format!("PEM parse error: {e}")))?;
     if certs.is_empty() {
         return Err(AppError::Validation(
             "No CERTIFICATE blocks found in PEM bundle".into(),
@@ -352,9 +353,10 @@ pub async fn import_pem_into_nss_db(
         .await;
 
     let mut reader = std::io::Cursor::new(pem.as_bytes());
-    let blocks: Vec<_> = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("PEM re-parse: {e}"))?;
+    let blocks: Vec<rustls_pki_types::CertificateDer<'static>> =
+        rustls_pki_types::CertificateDer::pem_reader_iter(&mut reader)
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("PEM re-parse: {e}"))?;
 
     for (idx, der) in blocks.into_iter().enumerate() {
         let tmp = user_data_dir.join(format!("strata-ca-{idx}.der"));

@@ -35,7 +35,12 @@ sqlx = { version = "0.8.1", features = [
 ] }
 
 # Auth / JWT / OIDC
-jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
+# `aws_lc_rs` backend uses AWS-LC (FIPS-validatable) instead of the
+# pure-Rust `rsa` crate, which carries the unfixable Marvin Attack
+# timing side-channel (RUSTSEC-2023-0071). Same RS256/RS384/RS512 +
+# ES256/ES384 + EdDSA + HS* algorithm support as the rust_crypto
+# backend.
+jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 
 # Cryptography (envelope encryption)
@@ -68,7 +73,9 @@ bytes = "1"
 # LDAP (Active Directory sync)
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-rustls-pemfile = "2"
+# rustls-pki-types provides the `pem` module + `PemObject` trait that
+# replaces the unmaintained rustls-pemfile crate (RUSTSEC-2025-0134).
+rustls-pki-types = { version = "1", features = ["std"] }
 rustls-native-certs = "0.8"
 # x509-parser — used by `services::trusted_ca` to validate uploaded
 # CA bundles and pre-extract subject / expiry / fingerprint metadata

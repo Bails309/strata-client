@@ -21,7 +21,7 @@
 # whitelist (newline- or comma-separated, exact match — no glob/digest
 # substitution).
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:cdb5fd928fced577cfecf12c8966e830fcdf42ee481fb0b91904eeddc2fe5eff
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \

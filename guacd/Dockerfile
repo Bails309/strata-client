@@ -7,7 +7,17 @@
 # Patches from sol1/rustguac fix FreeRDP 3 API compatibility and add
 # Kerberos NLA support.
 #
-# Pinned to guacamole-server commit 2980cf0 (known-good with these patches).
+# Pinned to guacamole-server commit 4163ead (head of staging/1.6.1 as of
+# May 3, 2026). This branch natively supports FreeRDP 3.25 AuthenticateEx
+# (GUACAMOLE-2273, upstream commit 7696572) via autoconf detection, so our
+# local patch 006 is no longer required. Other notable fixes since 2980cf0:
+# GUACAMOLE-2268 (VNC UTF-8 clipboard), GUACAMOLE-2271 (VNC
+# FinishedFrameBufferUpdate), GUACAMOLE-2255 (RDP uninitialized var),
+# GUACAMOLE-2264 (FreeRDP CMAKE_BUILD_TYPE=Release), GUACAMOLE-2259 (cursor
+# sync skip), GUACAMOLE-2213 (OSC handling), GUACAMOLE-2241 (display plan
+# infinite loop), GUACAMOLE-2221 (RDP busy-loop on transport failure),
+# GUACAMOLE-2238 (EINTR retry), GUACAMOLE-2182 (config.h segfaults),
+# GUACAMOLE-2035 (Dockerfile health check start period).
 # ──────────────────────────────────────────────────────────────────────
 
 # ── Builder stage ─────────────────────────────────────────────────────
@@ -33,7 +43,7 @@ RUN apk add --no-cache \
 
 # Clone guacamole-server pinned to known-good commit (compatible with patches)
 RUN git clone https://github.com/apache/guacamole-server.git /src && \
-    cd /src && git checkout 2980cf0
+    cd /src && git checkout 4163ead8be54baa35ef5f7ad8897a57497649112
 
 # Apply FreeRDP 3 compatibility + Kerberos NLA patches (from sol1/rustguac)
 COPY patches/ /tmp/patches/
@@ -41,10 +51,7 @@ RUN apk add --no-cache patch && cd /src && \
     for p in /tmp/patches/*.patch; do \
         echo "Applying $(basename $p)..." && \
         (git apply "$p" 2>/dev/null || patch -p1 -F3 < "$p") || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
-    done && \
-    # Defence-in-depth: verify the FreeRDP 3.25 AuthenticateEx patch landed semantically.
-    grep -q '#include <freerdp/version.h>' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not add freerdp/version.h include" && exit 1; } && \
-    grep -q 'rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not introduce AuthenticateEx assignment" && exit 1; }
+    done
 
 WORKDIR /src
 

@@ -43,7 +43,12 @@ export default function RecordingsTab({
       </div>
       <div className="form-group">
         <label htmlFor="rec-retention-days">Retention (days)</label>
-        <input id="rec-retention-days" type="number" value={days} onChange={(e) => setDays(e.target.value)} />
+        <input
+          id="rec-retention-days"
+          type="number"
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+        />
       </div>
       <div className="form-group">
         <label htmlFor="rec-storage-backend">Storage Backend</label>

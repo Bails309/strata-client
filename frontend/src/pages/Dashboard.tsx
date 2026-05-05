@@ -835,7 +835,10 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-2">
-          <label htmlFor="dashboard-type-filter" className="!mb-0 text-xs uppercase text-txt-tertiary font-semibold tracking-wide">
+          <label
+            htmlFor="dashboard-type-filter"
+            className="!mb-0 text-xs uppercase text-txt-tertiary font-semibold tracking-wide"
+          >
             Type
           </label>
           <div className="min-w-[140px]">
@@ -1207,7 +1210,13 @@ export default function Dashboard() {
           />
           <div
             className="card"
-            style={{ maxWidth: 440, width: "100%", maxHeight: "80vh", overflow: "auto", position: "relative" }}
+            style={{
+              maxWidth: 440,
+              width: "100%",
+              maxHeight: "80vh",
+              overflow: "auto",
+              position: "relative",
+            }}
           >
             <h3 style={{ marginBottom: 4 }}>Enter Credentials</h3>
             <p className="text-[0.8125rem] text-txt-secondary" style={{ marginBottom: 16 }}>

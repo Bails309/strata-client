@@ -425,7 +425,9 @@ export default function AccessTab({
                                   await deleteRole(r.id);
                                   getRoles().then(onRolesChanged);
                                 } catch (err) {
-                                  alert(err instanceof Error ? err.message : "Failed to delete role");
+                                  alert(
+                                    err instanceof Error ? err.message : "Failed to delete role"
+                                  );
                                 } finally {
                                   setConfirmModal(null);
                                 }
@@ -1118,7 +1120,9 @@ export default function AccessTab({
                                 await deleteConnectionFolder(f.id);
                                 onFoldersChanged(folders.filter((x) => x.id !== f.id));
                               } catch (err) {
-                                alert(err instanceof Error ? err.message : "Failed to delete folder");
+                                alert(
+                                  err instanceof Error ? err.message : "Failed to delete folder"
+                                );
                               } finally {
                                 setConfirmModal(null);
                               }
@@ -1280,7 +1284,9 @@ export default function AccessTab({
                                 const all = await getUsers();
                                 onUsersChanged(all);
                               } catch (err) {
-                                alert(err instanceof Error ? err.message : "Failed to restore user");
+                                alert(
+                                  err instanceof Error ? err.message : "Failed to restore user"
+                                );
                               }
                             }}
                           >
@@ -1300,7 +1306,9 @@ export default function AccessTab({
                                     await deleteUser(u.id);
                                     onUsersChanged(users.filter((x) => x.id !== u.id));
                                   } catch (err) {
-                                    alert(err instanceof Error ? err.message : "Failed to delete user");
+                                    alert(
+                                      err instanceof Error ? err.message : "Failed to delete user"
+                                    );
                                   } finally {
                                     setConfirmModal(null);
                                   }

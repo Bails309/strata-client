@@ -96,7 +96,9 @@ export default function RequestCheckoutForm(props: RequestCheckoutFormProps) {
       <h2 className="text-lg font-semibold mb-4">Request Password Checkout</h2>
 
       <div className="mb-4">
-        <label htmlFor="req-managed-account" className="block text-sm font-medium mb-1">Managed Account</label>
+        <label htmlFor="req-managed-account" className="block text-sm font-medium mb-1">
+          Managed Account
+        </label>
         <Select
           id="req-managed-account"
           value={selectedDn}

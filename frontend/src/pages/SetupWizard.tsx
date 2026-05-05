@@ -55,7 +55,9 @@ export default function SetupWizard({ onComplete }: Props) {
         )}
 
         <div className="form-group">
-          <span id="setup-vault-mode-label" className="text-sm font-medium mb-2 block">Vault Mode</span>
+          <span id="setup-vault-mode-label" className="text-sm font-medium mb-2 block">
+            Vault Mode
+          </span>
           <div className="grid gap-2" role="radiogroup" aria-labelledby="setup-vault-mode-label">
             {[
               {
@@ -128,7 +130,12 @@ export default function SetupWizard({ onComplete }: Props) {
         {vaultMode !== "skip" && (
           <div className="form-group">
             <label htmlFor="setup-vault-transit-key">Transit Key Name</label>
-            <input id="setup-vault-transit-key" type="text" value={vaultKey} onChange={(e) => setVaultKey(e.target.value)} />
+            <input
+              id="setup-vault-transit-key"
+              type="text"
+              value={vaultKey}
+              onChange={(e) => setVaultKey(e.target.value)}
+            />
           </div>
         )}
 

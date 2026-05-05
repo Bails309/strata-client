@@ -105,7 +105,10 @@ export default function NetworkTab({
             hostname-based authentication (including Kerberos/NLA).
           </p>
           <div className="form-group">
-            <label className="flex items-center gap-3 cursor-pointer group" aria-label="Enable Custom DNS">
+            <label
+              className="flex items-center gap-3 cursor-pointer group"
+              aria-label="Enable Custom DNS"
+            >
               <input
                 type="checkbox"
                 checked={dnsEnabled}
@@ -133,7 +136,9 @@ export default function NetworkTab({
               DNS Servers
             </h4>
             <div className="form-group">
-              <label htmlFor="dns-server-addresses" className="form-label">DNS Server Addresses</label>
+              <label htmlFor="dns-server-addresses" className="form-label">
+                DNS Server Addresses
+              </label>
               <input
                 id="dns-server-addresses"
                 className="input"
@@ -152,7 +157,9 @@ export default function NetworkTab({
             </div>
 
             <div className="form-group mt-6">
-              <label htmlFor="dns-search-domains" className="form-label">Search Domains</label>
+              <label htmlFor="dns-search-domains" className="form-label">
+                Search Domains
+              </label>
               <input
                 id="dns-search-domains"
                 className="input"

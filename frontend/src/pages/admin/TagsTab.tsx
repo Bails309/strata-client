@@ -157,7 +157,9 @@ export default function TagsTab({
           />
         </div>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <span id="tag-new-color-label" className="form-label">Color</span>
+          <span id="tag-new-color-label" className="form-label">
+            Color
+          </span>
           <div className="flex gap-1" role="group" aria-labelledby="tag-new-color-label">
             {ADMIN_TAG_COLORS.map((c) => (
               <button

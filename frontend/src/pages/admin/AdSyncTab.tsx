@@ -505,7 +505,10 @@ export default function AdSyncTab({
               </div>
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 mb-4">
                 <div className="form-group !mb-0">
-                  <label htmlFor="ad-cd-keyboard" title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted.">
+                  <label
+                    htmlFor="ad-cd-keyboard"
+                    title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted."
+                  >
                     Keyboard Layout
                   </label>
                   <Select
@@ -522,7 +525,10 @@ export default function AdSyncTab({
                   />
                 </div>
                 <div className="form-group !mb-0">
-                  <label htmlFor="ad-cd-timezone" title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">
+                  <label
+                    htmlFor="ad-cd-timezone"
+                    title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York)."
+                  >
                     Timezone
                   </label>
                   <Select

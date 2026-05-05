@@ -1078,8 +1078,8 @@ export default function SessionClient() {
       // Last session ended — show overlay.
       setError("The remote session has ended. You may have logged out of the server.");
     }
-  // reconnectLoading is read at runtime only; including it would re-run the cleanup spuriously
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // reconnectLoading is read at runtime only; including it would re-run the cleanup spuriously
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     sessions,
     connectionId,
@@ -1411,7 +1411,10 @@ export default function SessionClient() {
                           </div>
                         )}
                         <div className="form-group !mb-3">
-                          <label htmlFor="renew-duration" className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">
+                          <label
+                            htmlFor="renew-duration"
+                            className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5"
+                          >
                             Checkout Duration
                           </label>
                           <Select
@@ -1428,7 +1431,10 @@ export default function SessionClient() {
                           />
                         </div>
                         <div className="form-group !mb-3">
-                          <label htmlFor="renew-justification" className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">
+                          <label
+                            htmlFor="renew-justification"
+                            className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5"
+                          >
                             Justification / Comment
                           </label>
                           <textarea
@@ -1445,7 +1451,9 @@ export default function SessionClient() {
                     ) : (
                       <>
                         <div className="form-group !mb-2">
-                          <label htmlFor="renew-username" className="text-xs">Username</label>
+                          <label htmlFor="renew-username" className="text-xs">
+                            Username
+                          </label>
                           <input
                             id="renew-username"
                             type="text"
@@ -1459,7 +1467,9 @@ export default function SessionClient() {
                           />
                         </div>
                         <div className="form-group !mb-2">
-                          <label htmlFor="renew-password" className="text-xs">Password</label>
+                          <label htmlFor="renew-password" className="text-xs">
+                            Password
+                          </label>
                           <input
                             id="renew-password"
                             type="password"

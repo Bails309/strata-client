@@ -71,7 +71,9 @@ export default function VaultTab({
       )}
 
       <div className="form-group">
-        <span id="vault-mode-label" className="text-sm font-medium mb-2 block">Vault Mode</span>
+        <span id="vault-mode-label" className="text-sm font-medium mb-2 block">
+          Vault Mode
+        </span>
         <div className="flex gap-2" role="group" aria-labelledby="vault-mode-label">
           <button
             className={`btn flex-1 ${mode === "local" ? "!bg-accent/10 !border-accent !text-accent" : ""}`}
@@ -121,7 +123,11 @@ export default function VaultTab({
 
       <div className="form-group">
         <label htmlFor="vault-transit-key">Transit Key Name</label>
-        <input id="vault-transit-key" value={transitKey} onChange={(e) => setTransitKey(e.target.value)} />
+        <input
+          id="vault-transit-key"
+          value={transitKey}
+          onChange={(e) => setTransitKey(e.target.value)}
+        />
       </div>
 
       <button className="btn-primary" onClick={handleSave} disabled={saving}>

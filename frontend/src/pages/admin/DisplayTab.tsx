@@ -46,7 +46,9 @@ export default function DisplayTab({
       <div className="grid grid-cols-2 gap-8">
         <div className="space-y-6">
           <div className="form-group">
-            <label htmlFor="display-timezone" className="block text-sm font-medium mb-2">Display Timezone</label>
+            <label htmlFor="display-timezone" className="block text-sm font-medium mb-2">
+              Display Timezone
+            </label>
             <p className="text-xs text-txt-secondary mb-3">
               All timestamps in logs and sessions will be converted to this timezone.
             </p>
@@ -59,7 +61,9 @@ export default function DisplayTab({
           </div>
 
           <div className="form-group">
-            <label htmlFor="display-date-format" className="block text-sm font-medium mb-2">Date Format</label>
+            <label htmlFor="display-date-format" className="block text-sm font-medium mb-2">
+              Date Format
+            </label>
             <Select
               id="display-date-format"
               value={dateFormat}
@@ -74,7 +78,9 @@ export default function DisplayTab({
           </div>
 
           <div className="form-group">
-            <label htmlFor="display-time-format" className="block text-sm font-medium mb-2">Time Format</label>
+            <label htmlFor="display-time-format" className="block text-sm font-medium mb-2">
+              Time Format
+            </label>
             <Select
               id="display-time-format"
               value={timeFormat}

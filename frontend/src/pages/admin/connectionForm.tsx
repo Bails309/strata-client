@@ -54,7 +54,10 @@ export function RdpSections({
     <>
       <Section title="Authentication" defaultOpen>
         <FieldGrid>
-          <Field label="Security Mode" title="The security mode to use for the RDP connection. 'Any' allows the server to choose. 'NLA' uses Network Level Authentication. 'TLS' uses TLS encryption. 'RDP' uses standard RDP encryption. 'VMConnect' uses Hyper-V's enhanced session mode.">
+          <Field
+            label="Security Mode"
+            title="The security mode to use for the RDP connection. 'Any' allows the server to choose. 'NLA' uses Network Level Authentication. 'TLS' uses TLS encryption. 'RDP' uses standard RDP encryption. 'VMConnect' uses Hyper-V's enhanced session mode."
+          >
             <Select
               value={ex("security") || "any"}
               onChange={(v) => setEx("security", v)}
@@ -69,7 +72,9 @@ export function RdpSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2 mt-1"
               title="Ignore the certificate returned by the server, even if it cannot be validated. Useful when connecting to servers with self-signed certificates."
@@ -88,7 +93,10 @@ export function RdpSections({
 
       <Section title="Remote Desktop Gateway">
         <FieldGrid>
-          <Field label="Gateway Hostname" title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through.">
+          <Field
+            label="Gateway Hostname"
+            title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
+          >
             <input
               value={ex("gateway-hostname")}
               onChange={(e) => setEx("gateway-hostname", e.target.value)}
@@ -96,7 +104,10 @@ export function RdpSections({
               title="The hostname of the Remote Desktop Gateway to tunnel the RDP connection through."
             />
           </Field>
-          <Field label="Gateway Port" title="The port of the Remote Desktop Gateway. By default, this is 443.">
+          <Field
+            label="Gateway Port"
+            title="The port of the Remote Desktop Gateway. By default, this is 443."
+          >
             <input
               type="number"
               value={ex("gateway-port")}
@@ -105,21 +116,30 @@ export function RdpSections({
               title="The port of the Remote Desktop Gateway. By default, this is 443."
             />
           </Field>
-          <Field label="Gateway Domain" title="The domain to use when authenticating with the Remote Desktop Gateway.">
+          <Field
+            label="Gateway Domain"
+            title="The domain to use when authenticating with the Remote Desktop Gateway."
+          >
             <input
               value={ex("gateway-domain")}
               onChange={(e) => setEx("gateway-domain", e.target.value)}
               title="The domain to use when authenticating with the Remote Desktop Gateway."
             />
           </Field>
-          <Field label="Gateway Username" title="The username to use when authenticating with the Remote Desktop Gateway.">
+          <Field
+            label="Gateway Username"
+            title="The username to use when authenticating with the Remote Desktop Gateway."
+          >
             <input
               value={ex("gateway-username")}
               onChange={(e) => setEx("gateway-username", e.target.value)}
               title="The username to use when authenticating with the Remote Desktop Gateway."
             />
           </Field>
-          <Field label="Gateway Password" title="The password to use when authenticating with the Remote Desktop Gateway.">
+          <Field
+            label="Gateway Password"
+            title="The password to use when authenticating with the Remote Desktop Gateway."
+          >
             <input
               type="password"
               value={ex("gateway-password")}
@@ -132,7 +152,10 @@ export function RdpSections({
 
       <Section title="Basic Settings">
         <FieldGrid>
-          <Field label="Keyboard Layout" title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted.">
+          <Field
+            label="Keyboard Layout"
+            title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted."
+          >
             <Select
               value={ex("server-layout")}
               onChange={(v) => setEx("server-layout", v)}
@@ -140,7 +163,10 @@ export function RdpSections({
               options={RDP_KEYBOARD_LAYOUTS}
             />
           </Field>
-          <Field label="Timezone" title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">
+          <Field
+            label="Timezone"
+            title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York)."
+          >
             <Select
               value={ex("timezone")}
               onChange={(v) => setEx("timezone", v)}
@@ -151,7 +177,10 @@ export function RdpSections({
               ]}
             />
           </Field>
-          <Field label="Client Name" title="The name of the client to present to the RDP server. Typically not required.">
+          <Field
+            label="Client Name"
+            title="The name of the client to present to the RDP server. Typically not required."
+          >
             <input
               value={ex("client-name")}
               onChange={(e) => setEx("client-name", e.target.value)}
@@ -159,7 +188,10 @@ export function RdpSections({
               title="The name of the client to present to the RDP server. Typically not required."
             />
           </Field>
-          <Field label="Initial Program" title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions.">
+          <Field
+            label="Initial Program"
+            title="The full path to the program to run immediately upon connecting. Not needed for normal desktop sessions."
+          >
             <input
               value={ex("initial-program")}
               onChange={(e) => setEx("initial-program", e.target.value)}
@@ -167,7 +199,9 @@ export function RdpSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Connect to the administrator console (Session 0) of the RDP server. This is the physical console session."
@@ -182,7 +216,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enable multi-touch support, allowing touch events from the client to be forwarded to the remote desktop."
@@ -201,7 +237,10 @@ export function RdpSections({
 
       <Section title="Display">
         <FieldGrid>
-          <Field label="Color Depth" title="The color depth to request from the RDP server, in bits per pixel. The default of 32-bit is REQUIRED for H.264 GFX negotiation; lower values silently disable AVC444 and force the RemoteFX codec.">
+          <Field
+            label="Color Depth"
+            title="The color depth to request from the RDP server, in bits per pixel. The default of 32-bit is REQUIRED for H.264 GFX negotiation; lower values silently disable AVC444 and force the RemoteFX codec."
+          >
             <Select
               value={ex("color-depth")}
               onChange={(v) => setEx("color-depth", v)}
@@ -215,7 +254,10 @@ export function RdpSections({
               ]}
             />
           </Field>
-          <Field label="Resize Method" title="The method to use to update the RDP session when the browser window is resized. 'Display Update' sends a display update command. 'Reconnect' disconnects and reconnects with the new resolution.">
+          <Field
+            label="Resize Method"
+            title="The method to use to update the RDP session when the browser window is resized. 'Display Update' sends a display update command. 'Reconnect' disconnects and reconnects with the new resolution."
+          >
             <Select
               value={ex("resize-method") || "display-update"}
               onChange={(v) => setEx("resize-method", v)}
@@ -226,7 +268,9 @@ export function RdpSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Forces lossless image compression for all graphical updates. Increases quality but uses more bandwidth."
@@ -241,7 +285,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Prevents any user input from being sent to the remote desktop. The session is view-only."
@@ -256,7 +302,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0 col-span-2">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className={`flex items-center gap-2 ${ex("disable-gfx") !== "false" ? "opacity-50" : ""}`}
               title="H.264 GFX passthrough sends raw H.264 NAL units to the browser's WebCodecs VideoDecoder, dramatically reducing bandwidth on modern RDP hosts. Off by default because it requires the Windows host to actually support H.264 — either a GPU is present, or AVC444 has been enabled in the registry (run docs/Configure-RdpAvc444.ps1 on the host). Enabling this on a host without H.264 capability causes RDPGFX to negotiate a codec it can't deliver, producing persistent ghost tiles. Requires the graphics pipeline (GFX) to be enabled."
@@ -299,7 +347,10 @@ export function RdpSections({
 
       <Section title="Clipboard">
         <FieldGrid>
-          <Field label="Normalize Clipboard" title="Controls how line endings in clipboard content are normalized. 'Preserve' keeps original line endings, 'Unix' converts to LF, 'Windows' converts to CRLF.">
+          <Field
+            label="Normalize Clipboard"
+            title="Controls how line endings in clipboard content are normalized. 'Preserve' keeps original line endings, 'Unix' converts to LF, 'Windows' converts to CRLF."
+          >
             <Select
               value={ex("normalize-clipboard")}
               onChange={(v) => setEx("normalize-clipboard", v)}
@@ -314,7 +365,9 @@ export function RdpSections({
           </Field>
           <div className="form-group !mb-0" />
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Prevents text from being copied from the remote desktop to the local clipboard."
@@ -329,7 +382,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Prevents text from being pasted from the local clipboard to the remote desktop."
@@ -349,7 +404,9 @@ export function RdpSections({
       <Section title="Device Redirection">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables audio playback from the remote desktop. Audio is enabled by default."
@@ -364,7 +421,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables audio input (microphone) support, allowing the user's local microphone to be used within the remote desktop session."
@@ -379,7 +438,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables printer redirection. PDF documents sent to the redirected printer will be available for download via the Guacamole menu."
@@ -393,7 +454,10 @@ export function RdpSections({
               Enable printing
             </label>
           </div>
-          <Field label="Printer Name" title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop.">
+          <Field
+            label="Printer Name"
+            title="The name of the redirected printer device. This will be the name of the printer as it appears on the remote desktop."
+          >
             <input
               value={ex("printer-name")}
               onChange={(e) => setEx("printer-name", e.target.value)}
@@ -405,7 +469,9 @@ export function RdpSections({
         <hr className="border-0 border-t border-border my-3" />
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables file transfer over a virtual drive. Files can be transferred to/from the remote desktop using the Guacamole menu."
@@ -419,7 +485,10 @@ export function RdpSections({
               Enable drive / file transfer
             </label>
           </div>
-          <Field label="Drive Name" title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop.">
+          <Field
+            label="Drive Name"
+            title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
+          >
             <input
               value={ex("drive-name")}
               onChange={(e) => setEx("drive-name", e.target.value)}
@@ -427,7 +496,10 @@ export function RdpSections({
               title="The name of the filesystem used for transferred files. This is the name the virtual drive will have within the remote desktop."
             />
           </Field>
-          <Field label="Drive Path" title="The directory on the guacd server in which transferred files should be stored.">
+          <Field
+            label="Drive Path"
+            title="The directory on the guacd server in which transferred files should be stored."
+          >
             <input
               value={ex("drive-path")}
               onChange={(e) => setEx("drive-path", e.target.value)}
@@ -436,7 +508,9 @@ export function RdpSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Automatically creates the drive path directory if it does not already exist on the guacd server."
@@ -451,7 +525,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables file downloads from the remote desktop to the local browser."
@@ -466,7 +542,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables file uploads from the local browser to the remote desktop."
@@ -486,7 +564,9 @@ export function RdpSections({
       <Section title="Performance">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables rendering of the desktop wallpaper. By default wallpaper is disabled to reduce bandwidth usage."
@@ -501,7 +581,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables use of theming of windows and controls. By default theming within RDP sessions is disabled."
@@ -516,7 +598,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Renders text with smooth edges (ClearType). By default text is rendered with rough edges to reduce bandwidth."
@@ -531,7 +615,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Displays window contents as windows are moved. By default only the window border is drawn while dragging."
@@ -546,7 +632,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Allows graphical effects such as transparent windows and shadows (Aero). Disabled by default."
@@ -563,7 +651,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Allows menu open and close animations. Disabled by default."
@@ -578,7 +668,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables RDP's built-in bitmap caching. Usually only needed to work around bugs in specific RDP server implementations."
@@ -593,7 +685,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables caching of off-screen regions. RDP normally caches regions not currently visible to accelerate retrieval when they come into view."
@@ -608,7 +702,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables caching of frequently used symbols and fonts (glyphs). Usually only needed to work around bugs in specific RDP implementations."
@@ -623,7 +719,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables the Graphics Pipeline Extension (RDPGFX) — the modern surface-based rendering path used for RemoteFX progressive codec and H.264 passthrough. Off by default; the legacy bitmap pipeline is used instead, which is the safest choice for hosts without GPU/AVC444 support. Turn on for modern Windows Server hosts to get smoother rendering and (with H.264 also enabled) much lower bandwidth."
@@ -650,7 +748,10 @@ export function RdpSections({
 
       <Section title="RemoteApp">
         <FieldGrid>
-          <Field label="Program" title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server.">
+          <Field
+            label="Program"
+            title="The name of the RemoteApp to launch. Use '||' prefix for publishing (e.g. '||notepad'). The application must be registered as a RemoteApp on the server."
+          >
             <input
               value={ex("remote-app")}
               onChange={(e) => setEx("remote-app", e.target.value)}
@@ -678,14 +779,20 @@ export function RdpSections({
 
       <Section title="Load Balancing / Preconnection">
         <FieldGrid>
-          <Field label="Load Balance Info" title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm.">
+          <Field
+            label="Load Balance Info"
+            title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
+          >
             <input
               value={ex("load-balance-info")}
               onChange={(e) => setEx("load-balance-info", e.target.value)}
               title="The load balancing info or token to send to the RDP server. Used when connecting to a load-balanced RDS farm."
             />
           </Field>
-          <Field label="Preconnection ID" title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs.">
+          <Field
+            label="Preconnection ID"
+            title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
+          >
             <input
               type="number"
               value={ex("preconnection-id")}
@@ -693,7 +800,10 @@ export function RdpSections({
               title="The numeric ID of the RDP source. Used with Hyper-V and other systems that support preconnection PDUs."
             />
           </Field>
-          <Field label="Preconnection BLOB" title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs.">
+          <Field
+            label="Preconnection BLOB"
+            title="A text value identifying the RDP source to connect to. Used with Hyper-V or other systems supporting preconnection PDUs."
+          >
             <input
               value={ex("preconnection-blob")}
               onChange={(e) => setEx("preconnection-blob", e.target.value)}
@@ -710,7 +820,9 @@ export function RdpSections({
         </p>
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Exclude graphical output from the recording, producing a recording that contains only user input events."
@@ -725,7 +837,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Exclude user mouse events from the recording, producing a recording without a visible mouse cursor."
@@ -740,7 +854,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Exclude user touch events from the recording."
@@ -755,7 +871,9 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed."
@@ -775,7 +893,9 @@ export function RdpSections({
       <Section title="SFTP">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables SFTP-based file transfer. Files can be transferred to/from the RDP server using the Guacamole menu."
@@ -790,7 +910,10 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0" />
-          <Field label="SFTP Hostname" title="The hostname of the SSH/SFTP server to use for file transfer. If omitted, the RDP server hostname is used.">
+          <Field
+            label="SFTP Hostname"
+            title="The hostname of the SSH/SFTP server to use for file transfer. If omitted, the RDP server hostname is used."
+          >
             <input
               value={ex("sftp-hostname")}
               onChange={(e) => setEx("sftp-hostname", e.target.value)}
@@ -807,14 +930,20 @@ export function RdpSections({
               title="The port of the SSH/SFTP server. Defaults to 22."
             />
           </Field>
-          <Field label="SFTP Username" title="The username to authenticate as when connecting to the SFTP server.">
+          <Field
+            label="SFTP Username"
+            title="The username to authenticate as when connecting to the SFTP server."
+          >
             <input
               value={ex("sftp-username")}
               onChange={(e) => setEx("sftp-username", e.target.value)}
               title="The username to authenticate as when connecting to the SFTP server."
             />
           </Field>
-          <Field label="SFTP Password" title="The password to use when authenticating with the SFTP server.">
+          <Field
+            label="SFTP Password"
+            title="The password to use when authenticating with the SFTP server."
+          >
             <input
               type="password"
               value={ex("sftp-password")}
@@ -822,7 +951,10 @@ export function RdpSections({
               title="The password to use when authenticating with the SFTP server."
             />
           </Field>
-          <Field label="SFTP Private Key" title="The entire contents of the SSH private key to use when authenticating with the SFTP server, in OpenSSH format.">
+          <Field
+            label="SFTP Private Key"
+            title="The entire contents of the SSH private key to use when authenticating with the SFTP server, in OpenSSH format."
+          >
             <textarea
               value={ex("sftp-private-key")}
               onChange={(e) => setEx("sftp-private-key", e.target.value)}
@@ -831,7 +963,10 @@ export function RdpSections({
               title="The entire contents of the SSH private key to use when authenticating with the SFTP server, in OpenSSH format."
             />
           </Field>
-          <Field label="SFTP Passphrase" title="The passphrase to use to decrypt the SSH private key, if it is encrypted.">
+          <Field
+            label="SFTP Passphrase"
+            title="The passphrase to use to decrypt the SSH private key, if it is encrypted."
+          >
             <input
               type="password"
               value={ex("sftp-passphrase")}
@@ -839,14 +974,20 @@ export function RdpSections({
               title="The passphrase to use to decrypt the SSH private key, if it is encrypted."
             />
           </Field>
-          <Field label="Default Upload Directory" title="The default location for file uploads. If not specified, the user's home directory will be used.">
+          <Field
+            label="Default Upload Directory"
+            title="The default location for file uploads. If not specified, the user's home directory will be used."
+          >
             <input
               value={ex("sftp-directory")}
               onChange={(e) => setEx("sftp-directory", e.target.value)}
               title="The default location for file uploads. If not specified, the user's home directory will be used."
             />
           </Field>
-          <Field label="SFTP Root Directory" title="The directory to expose to connected users via SFTP. If omitted, '/' will be used by default.">
+          <Field
+            label="SFTP Root Directory"
+            title="The directory to expose to connected users via SFTP. If omitted, '/' will be used by default."
+          >
             <input
               value={ex("sftp-root-directory")}
               onChange={(e) => setEx("sftp-root-directory", e.target.value)}
@@ -860,7 +1001,9 @@ export function RdpSections({
       <Section title="Wake-on-LAN">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Send a Wake-on-LAN (WoL) magic packet to the remote host before attempting to connect. Useful for waking machines that are powered off."
@@ -875,7 +1018,10 @@ export function RdpSections({
             </label>
           </div>
           <div className="form-group !mb-0" />
-          <Field label="MAC Address" title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF.">
+          <Field
+            label="MAC Address"
+            title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF."
+          >
             <input
               value={ex("wol-mac-addr")}
               onChange={(e) => setEx("wol-mac-addr", e.target.value)}
@@ -883,7 +1029,10 @@ export function RdpSections({
               title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF."
             />
           </Field>
-          <Field label="Broadcast Address" title="The broadcast address to which the WoL magic packet should be sent. Defaults to 255.255.255.255 (local broadcast).">
+          <Field
+            label="Broadcast Address"
+            title="The broadcast address to which the WoL magic packet should be sent. Defaults to 255.255.255.255 (local broadcast)."
+          >
             <input
               value={ex("wol-broadcast-addr")}
               onChange={(e) => setEx("wol-broadcast-addr", e.target.value)}
@@ -891,7 +1040,10 @@ export function RdpSections({
               title="The broadcast address to which the WoL magic packet should be sent. Defaults to 255.255.255.255 (local broadcast)."
             />
           </Field>
-          <Field label="UDP Port" title="The UDP port to use when sending the WoL magic packet. Defaults to 9.">
+          <Field
+            label="UDP Port"
+            title="The UDP port to use when sending the WoL magic packet. Defaults to 9."
+          >
             <input
               type="number"
               value={ex("wol-udp-port")}
@@ -900,7 +1052,10 @@ export function RdpSections({
               title="The UDP port to use when sending the WoL magic packet. Defaults to 9."
             />
           </Field>
-          <Field label="Wait Time (seconds)" title="The number of seconds to wait after sending the WoL magic packet before attempting the connection.">
+          <Field
+            label="Wait Time (seconds)"
+            title="The number of seconds to wait after sending the WoL magic packet before attempting the connection."
+          >
             <input
               type="number"
               value={ex("wol-wait-time")}
@@ -914,7 +1069,10 @@ export function RdpSections({
 
       <Section title="Kerberos / NLA">
         <FieldGrid>
-          <Field label="Auth Package" title="The authentication package to use for Network Level Authentication (NLA).">
+          <Field
+            label="Auth Package"
+            title="The authentication package to use for Network Level Authentication (NLA)."
+          >
             <Select
               value={ex("auth-pkg")}
               onChange={(v) => setEx("auth-pkg", v)}
@@ -928,7 +1086,10 @@ export function RdpSections({
           </Field>
           {ex("auth-pkg") === "kerberos" && (
             <>
-              <Field label="KDC URL" title="The URL of the Kerberos Key Distribution Center (KDC) to use for obtaining Kerberos tickets. Only needed if not using the global Kerberos realm configuration.">
+              <Field
+                label="KDC URL"
+                title="The URL of the Kerberos Key Distribution Center (KDC) to use for obtaining Kerberos tickets. Only needed if not using the global Kerberos realm configuration."
+              >
                 <input
                   value={ex("kdc-url")}
                   onChange={(e) => setEx("kdc-url", e.target.value)}
@@ -936,7 +1097,10 @@ export function RdpSections({
                   title="The URL of the Kerberos Key Distribution Center (KDC). Leave blank to use the KDC from the matching Kerberos realm."
                 />
               </Field>
-              <Field label="Kerberos Cache Path" title="The file path for the Kerberos credential cache. The cache stores obtained tickets for reuse.">
+              <Field
+                label="Kerberos Cache Path"
+                title="The file path for the Kerberos credential cache. The cache stores obtained tickets for reuse."
+              >
                 <input
                   value={ex("kerberos-cache")}
                   onChange={(e) => setEx("kerberos-cache", e.target.value)}
@@ -975,7 +1139,10 @@ export function SshSections({
     <>
       <Section title="Authentication" defaultOpen>
         <FieldGrid>
-          <Field label="Private Key" title="The entire contents of the SSH private key to use for public key authentication. Must be in OpenSSH format.">
+          <Field
+            label="Private Key"
+            title="The entire contents of the SSH private key to use for public key authentication. Must be in OpenSSH format."
+          >
             <textarea
               value={ex("private-key")}
               onChange={(e) => setEx("private-key", e.target.value)}
@@ -984,7 +1151,10 @@ export function SshSections({
               title="The entire contents of the SSH private key to use for public key authentication. Must be in OpenSSH format."
             />
           </Field>
-          <Field label="Passphrase" title="The passphrase to use to decrypt the SSH private key, if it is encrypted.">
+          <Field
+            label="Passphrase"
+            title="The passphrase to use to decrypt the SSH private key, if it is encrypted."
+          >
             <input
               type="password"
               value={ex("passphrase")}
@@ -992,7 +1162,10 @@ export function SshSections({
               title="The passphrase to use to decrypt the SSH private key, if it is encrypted."
             />
           </Field>
-          <Field label="Host Key" title="The known public key of the SSH server, in OpenSSH format. If provided, the server's identity will be verified against this key.">
+          <Field
+            label="Host Key"
+            title="The known public key of the SSH server, in OpenSSH format. If provided, the server's identity will be verified against this key."
+          >
             <input
               value={ex("host-key")}
               onChange={(e) => setEx("host-key", e.target.value)}
@@ -1018,7 +1191,10 @@ export function SshSections({
               ]}
             />
           </Field>
-          <Field label="Font Name" title="The name of the font to use in the terminal. This must be a font available on the guacd server.">
+          <Field
+            label="Font Name"
+            title="The name of the font to use in the terminal. This must be a font available on the guacd server."
+          >
             <input
               value={ex("font-name")}
               onChange={(e) => setEx("font-name", e.target.value)}
@@ -1035,7 +1211,10 @@ export function SshSections({
               title="The size of the font to use in the terminal, in points."
             />
           </Field>
-          <Field label="Scrollback (lines)" title="The maximum number of lines of terminal scrollback to allow. Each line requires additional memory. Defaults to 1000.">
+          <Field
+            label="Scrollback (lines)"
+            title="The maximum number of lines of terminal scrollback to allow. Each line requires additional memory. Defaults to 1000."
+          >
             <input
               type="number"
               value={ex("scrollback")}
@@ -1045,7 +1224,9 @@ export function SshSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Prevents any user input from being sent to the SSH server. The session is view-only."
@@ -1064,7 +1245,10 @@ export function SshSections({
 
       <Section title="Terminal Behavior">
         <FieldGrid>
-          <Field label="Command" title="The command to execute on the remote server upon connecting, instead of the default shell.">
+          <Field
+            label="Command"
+            title="The command to execute on the remote server upon connecting, instead of the default shell."
+          >
             <input
               value={ex("command")}
               onChange={(e) => setEx("command", e.target.value)}
@@ -1072,7 +1256,10 @@ export function SshSections({
               title="The command to execute on the remote server upon connecting, instead of the default shell."
             />
           </Field>
-          <Field label="Locale" title="The locale to use for the SSH session (e.g. en_US.UTF-8). Controls character encoding.">
+          <Field
+            label="Locale"
+            title="The locale to use for the SSH session (e.g. en_US.UTF-8). Controls character encoding."
+          >
             <input
               value={ex("locale")}
               onChange={(e) => setEx("locale", e.target.value)}
@@ -1080,7 +1267,10 @@ export function SshSections({
               title="The locale to use for the SSH session (e.g. en_US.UTF-8). Controls character encoding."
             />
           </Field>
-          <Field label="Timezone" title="The timezone to pass to the SSH server via the TZ environment variable, in IANA format (e.g. America/New_York).">
+          <Field
+            label="Timezone"
+            title="The timezone to pass to the SSH server via the TZ environment variable, in IANA format (e.g. America/New_York)."
+          >
             <Select
               value={ex("timezone")}
               onChange={(v) => setEx("timezone", v)}
@@ -1091,7 +1281,10 @@ export function SshSections({
               ]}
             />
           </Field>
-          <Field label="Terminal Type" title="The terminal emulator type string to send to the SSH server (e.g. xterm-256color, vt100). This determines which escape sequences are supported.">
+          <Field
+            label="Terminal Type"
+            title="The terminal emulator type string to send to the SSH server (e.g. xterm-256color, vt100). This determines which escape sequences are supported."
+          >
             <input
               value={ex("terminal-type")}
               onChange={(e) => setEx("terminal-type", e.target.value)}
@@ -1099,7 +1292,10 @@ export function SshSections({
               title="The terminal emulator type string to send to the SSH server (e.g. xterm-256color, vt100). This determines which escape sequences are supported."
             />
           </Field>
-          <Field label="Server Alive Interval" title="The interval in seconds at which to send keepalive packets to the SSH server. Set to 0 to disable. Useful for preventing idle timeouts.">
+          <Field
+            label="Server Alive Interval"
+            title="The interval in seconds at which to send keepalive packets to the SSH server. Set to 0 to disable. Useful for preventing idle timeouts."
+          >
             <input
               type="number"
               value={ex("server-alive-interval")}
@@ -1114,7 +1310,9 @@ export function SshSections({
       <Section title="SFTP">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Enables SFTP file transfer within the SSH connection. Files can be transferred using the Guacamole menu."
@@ -1128,7 +1326,10 @@ export function SshSections({
               Enable SFTP
             </label>
           </div>
-          <Field label="SFTP Root Directory" title="The root directory to expose to connected users via SFTP. If omitted, '/' will be used.">
+          <Field
+            label="SFTP Root Directory"
+            title="The root directory to expose to connected users via SFTP. If omitted, '/' will be used."
+          >
             <input
               value={ex("sftp-root-directory")}
               onChange={(e) => setEx("sftp-root-directory", e.target.value)}
@@ -1137,7 +1338,9 @@ export function SshSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables file downloads from the remote server to the local browser."
@@ -1152,7 +1355,9 @@ export function SshSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Disables file uploads from the local browser to the remote server."
@@ -1176,7 +1381,9 @@ export function SshSections({
         </p>
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed."
@@ -1196,7 +1403,9 @@ export function SshSections({
       <Section title="Wake-on-LAN">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Send a Wake-on-LAN (WoL) magic packet to the remote host before attempting to connect."
@@ -1210,7 +1419,10 @@ export function SshSections({
               Send WoL packet
             </label>
           </div>
-          <Field label="MAC Address" title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF.">
+          <Field
+            label="MAC Address"
+            title="The MAC address of the remote host to wake, in the format AA:BB:CC:DD:EE:FF."
+          >
             <input
               value={ex("wol-mac-addr")}
               onChange={(e) => setEx("wol-mac-addr", e.target.value)}
@@ -1288,7 +1500,9 @@ export function VncSections({
             />
           </Field>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
               title="Prevents any user input from being sent to the VNC server. The session is view-only."
@@ -1303,7 +1517,9 @@ export function VncSections({
             </label>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
               title="Swap the red and blue color components in the received image data. May be needed for certain VNC servers that report colors incorrectly."
@@ -1323,7 +1539,9 @@ export function VncSections({
       <Section title="Clipboard">
         <FieldGrid>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
               title="Prevents text from being copied from the remote desktop to the local clipboard."
@@ -1338,7 +1556,9 @@ export function VncSections({
             </label>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
               title="Prevents text from being pasted from the local clipboard to the remote desktop."
@@ -1362,7 +1582,9 @@ export function VncSections({
         </p>
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Exclude graphical output from the recording, producing a recording that contains only user input events."
@@ -1377,7 +1599,9 @@ export function VncSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Exclude user mouse events from the recording, producing a recording without a visible mouse cursor."
@@ -1392,7 +1616,9 @@ export function VncSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Exclude user touch events from the recording."
@@ -1407,7 +1633,9 @@ export function VncSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Include user key events in the recording. Can be interpreted with the guaclog utility to produce a human-readable log of keys pressed."
@@ -1485,7 +1713,11 @@ export function WebSections({
     <>
       <Section title="Target URL" defaultOpen>
         <FieldGrid>
-          <Field label="Initial URL" title="The URL the kiosk Chromium instance navigates to when the session starts. Must include the scheme (https://...). Subject to the allowed-domains and server-side egress allow-list (system_settings.web_allowed_networks)." className="form-group !mb-0 col-span-2">
+          <Field
+            label="Initial URL"
+            title="The URL the kiosk Chromium instance navigates to when the session starts. Must include the scheme (https://...). Subject to the allowed-domains and server-side egress allow-list (system_settings.web_allowed_networks)."
+            className="form-group !mb-0 col-span-2"
+          >
             <input
               value={ex("url")}
               onChange={(e) => setEx("url", e.target.value)}
@@ -1527,7 +1759,10 @@ export function WebSections({
           rows compact and auditable.
         </p>
         <FieldGrid>
-          <Field label="Login Script" title="Identifier of a registered login script. Leave blank for no automation.">
+          <Field
+            label="Login Script"
+            title="Identifier of a registered login script. Leave blank for no automation."
+          >
             <input
               value={ex("login_script")}
               onChange={(e) => setEx("login_script", e.target.value)}
@@ -1634,7 +1869,11 @@ export function VdiSections({
     <>
       <Section title="Container Image" defaultOpen>
         <FieldGrid>
-          <Field label="Image" title="The Docker image used to spawn the desktop container. The list is restricted to images whitelisted by the operator under Admin → System Settings." className="form-group !mb-0 col-span-2">
+          <Field
+            label="Image"
+            title="The Docker image used to spawn the desktop container. The list is restricted to images whitelisted by the operator under Admin → System Settings."
+            className="form-group !mb-0 col-span-2"
+          >
             <Select
               value={ex("image")}
               onChange={(v) => setEx("image", v)}
@@ -1653,7 +1892,10 @@ export function VdiSections({
 
       <Section title="Resource Limits">
         <FieldGrid>
-          <Field label="CPU Limit (cores)" title="Maximum CPU cores the container can use (Docker --cpus). Leave blank for unbounded.">
+          <Field
+            label="CPU Limit (cores)"
+            title="Maximum CPU cores the container can use (Docker --cpus). Leave blank for unbounded."
+          >
             <input
               type="number"
               step="0.1"
@@ -1663,7 +1905,10 @@ export function VdiSections({
               placeholder="2.0"
             />
           </Field>
-          <Field label="Memory Limit (MB)" title="Maximum memory the container can use, in megabytes (Docker --memory). Leave blank for unbounded.">
+          <Field
+            label="Memory Limit (MB)"
+            title="Maximum memory the container can use, in megabytes (Docker --memory). Leave blank for unbounded."
+          >
             <input
               type="number"
               min="0"
@@ -1677,7 +1922,10 @@ export function VdiSections({
 
       <Section title="Lifecycle">
         <FieldGrid>
-          <Field label="Idle Timeout (minutes)" title="Minutes of inactivity after which the reaper destroys the container. Defaults to 30 when blank.">
+          <Field
+            label="Idle Timeout (minutes)"
+            title="Minutes of inactivity after which the reaper destroys the container. Defaults to 30 when blank."
+          >
             <input
               type="number"
               min="1"
@@ -1687,7 +1935,9 @@ export function VdiSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2 mt-1"
               title="Preserve the user's home directory between sessions on a bind mount. Disabled by default — every session starts from a fresh container."
@@ -1790,7 +2040,11 @@ export function KubernetesSections({
       <Section title="Pod Target" defaultOpen>
         <FieldGrid>
           <Field
-            label={<>Pod Name <span className="text-red-500">*</span></>}
+            label={
+              <>
+                Pod Name <span className="text-red-500">*</span>
+              </>
+            }
             title="The name of the pod to attach or exec into. Required."
           >
             <input
@@ -1800,7 +2054,10 @@ export function KubernetesSections({
               title="The name of the pod to attach or exec into. Required."
             />
           </Field>
-          <Field label="Namespace" title="The Kubernetes namespace containing the pod. Defaults to 'default'.">
+          <Field
+            label="Namespace"
+            title="The Kubernetes namespace containing the pod. Defaults to 'default'."
+          >
             <input
               value={ex("namespace")}
               onChange={(e) => setEx("namespace", e.target.value)}
@@ -1808,7 +2065,10 @@ export function KubernetesSections({
               title="The Kubernetes namespace containing the pod. Defaults to 'default'."
             />
           </Field>
-          <Field label="Container" title="The container within the pod to attach to. Required only if the pod has more than one container.">
+          <Field
+            label="Container"
+            title="The container within the pod to attach to. Required only if the pod has more than one container."
+          >
             <input
               value={ex("container")}
               onChange={(e) => setEx("container", e.target.value)}
@@ -1816,7 +2076,10 @@ export function KubernetesSections({
               title="The container within the pod to attach to. Required only if the pod has more than one container."
             />
           </Field>
-          <Field label="Exec Command" title="If set, runs `kubectl exec` with this command instead of `kubectl attach`. Leave blank to attach to the container's existing console.">
+          <Field
+            label="Exec Command"
+            title="If set, runs `kubectl exec` with this command instead of `kubectl attach`. Leave blank to attach to the container's existing console."
+          >
             <input
               value={ex("exec-command")}
               onChange={(e) => setEx("exec-command", e.target.value)}
@@ -1830,7 +2093,9 @@ export function KubernetesSections({
       <Section title="TLS">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Connect to the API server using HTTPS. Almost always required — only disable for unsecured local dev clusters."
@@ -1845,7 +2110,9 @@ export function KubernetesSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Skip verification of the API server's TLS certificate. Insecure — prefer pasting the cluster CA below."
@@ -1859,7 +2126,11 @@ export function KubernetesSections({
               Ignore certificate errors
             </label>
           </div>
-          <Field label="Cluster CA Certificate (PEM)" title="PEM-encoded CA certificate the API server's certificate chains to. Paste the contents of your kubeconfig's certificate-authority-data (base64-decoded) or the cluster CA file." className="form-group !mb-0 col-span-full">
+          <Field
+            label="Cluster CA Certificate (PEM)"
+            title="PEM-encoded CA certificate the API server's certificate chains to. Paste the contents of your kubeconfig's certificate-authority-data (base64-decoded) or the cluster CA file."
+            className="form-group !mb-0 col-span-full"
+          >
             <textarea
               value={ex("ca-cert")}
               onChange={(e) => setEx("ca-cert", e.target.value)}
@@ -1869,7 +2140,11 @@ export function KubernetesSections({
               title="PEM-encoded CA certificate the API server's certificate chains to."
             />
           </Field>
-          <Field label="Client Certificate (PEM)" title="PEM-encoded client certificate for mTLS authentication. Paired with the client-key stored in the connection's credential profile." className="form-group !mb-0 col-span-full">
+          <Field
+            label="Client Certificate (PEM)"
+            title="PEM-encoded client certificate for mTLS authentication. Paired with the client-key stored in the connection's credential profile."
+            className="form-group !mb-0 col-span-full"
+          >
             <textarea
               value={ex("client-cert")}
               onChange={(e) => setEx("client-cert", e.target.value)}
@@ -1901,7 +2176,10 @@ export function KubernetesSections({
               ]}
             />
           </Field>
-          <Field label="Font Name" title="The name of the font to use in the terminal. Must be available on the guacd server.">
+          <Field
+            label="Font Name"
+            title="The name of the font to use in the terminal. Must be available on the guacd server."
+          >
             <input
               value={ex("font-name")}
               onChange={(e) => setEx("font-name", e.target.value)}
@@ -1918,7 +2196,10 @@ export function KubernetesSections({
               title="The size of the font to use in the terminal, in points."
             />
           </Field>
-          <Field label="Scrollback (lines)" title="The maximum number of lines of terminal scrollback. Defaults to 1000.">
+          <Field
+            label="Scrollback (lines)"
+            title="The maximum number of lines of terminal scrollback. Defaults to 1000."
+          >
             <input
               type="number"
               value={ex("scrollback")}
@@ -1927,7 +2208,10 @@ export function KubernetesSections({
               title="The maximum number of lines of terminal scrollback. Defaults to 1000."
             />
           </Field>
-          <Field label="Terminal Type" title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color.">
+          <Field
+            label="Terminal Type"
+            title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
+          >
             <input
               value={ex("terminal-type")}
               onChange={(e) => setEx("terminal-type", e.target.value)}
@@ -1935,7 +2219,10 @@ export function KubernetesSections({
               title="The terminal emulator type string passed to the pod via the TERM environment variable. Defaults to xterm-256color."
             />
           </Field>
-          <Field label="Backspace Key Code" title="ASCII code sent when the Backspace key is pressed. 127 = Delete (default), 8 = Backspace. Change only if Backspace produces ^? or ^H instead of erasing.">
+          <Field
+            label="Backspace Key Code"
+            title="ASCII code sent when the Backspace key is pressed. 127 = Delete (default), 8 = Backspace. Change only if Backspace produces ^? or ^H instead of erasing."
+          >
             <input
               type="number"
               value={ex("backspace")}
@@ -1945,7 +2232,9 @@ export function KubernetesSections({
             />
           </Field>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Prevents any user input from being sent to the pod. The session is view-only."
@@ -1965,7 +2254,9 @@ export function KubernetesSections({
       <Section title="Clipboard">
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="If checked, text copied inside the pod terminal will not be exposed to the browser clipboard."
@@ -1980,7 +2271,9 @@ export function KubernetesSections({
             </label>
           </div>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="If checked, text copied at the browser cannot be pasted into the pod terminal."
@@ -2004,7 +2297,9 @@ export function KubernetesSections({
         </p>
         <FieldGrid>
           <div className="form-group !mb-0">
-            <span className="block" aria-hidden="true">&nbsp;</span>
+            <span className="block" aria-hidden="true">
+              &nbsp;
+            </span>
             <label
               className="flex items-center gap-2"
               title="Include user key events in the recording. Can be interpreted with the guaclog utility."

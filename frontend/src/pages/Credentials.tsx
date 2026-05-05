@@ -1066,7 +1066,10 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 paddingTop: profileMappings.length > 0 ? "1rem" : 0,
                               }}
                             >
-                              <label htmlFor="add-mapping-connections" className="text-xs font-medium text-txt-secondary mb-1 block">
+                              <label
+                                htmlFor="add-mapping-connections"
+                                className="text-xs font-medium text-txt-secondary mb-1 block"
+                              >
                                 Connections
                               </label>
                               <div className="relative">

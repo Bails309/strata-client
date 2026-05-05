@@ -69,7 +69,9 @@ export default function ConfirmModal({
               </svg>
             </div>
           )}
-          <h3 id="confirm-modal-title" className="text-lg font-bold !mb-0">{title}</h3>
+          <h3 id="confirm-modal-title" className="text-lg font-bold !mb-0">
+            {title}
+          </h3>
         </div>
 
         <p className="text-sm text-txt-secondary mb-6 leading-relaxed">{message}</p>

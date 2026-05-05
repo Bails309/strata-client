@@ -131,13 +131,7 @@ impl<T: Send + 'static> ResumeRegistry<T> {
         let expiry_ms = now_ms + self.inner.window.as_millis() as i64;
         let (rt, wire) = resume_token::seal(expiry_ms, &self.inner.key);
         let mut g = self.inner.map.lock().expect("resume map mutex poisoned");
-        g.insert(
-            rt.token_id,
-            Entry {
-                payload,
-                expiry_ms,
-            },
-        );
+        g.insert(rt.token_id, Entry { payload, expiry_ms });
         wire
     }
 

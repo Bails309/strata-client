@@ -131,7 +131,11 @@ pub async fn reconnect_links(
         );
         nudged += 1;
     }
-    tracing::info!(actor = "admin", count = nudged, "DMZ links nudged to reconnect");
+    tracing::info!(
+        actor = "admin",
+        count = nudged,
+        "DMZ links nudged to reconnect"
+    );
     Ok(Json(ReconnectResponse { nudged }))
 }
 

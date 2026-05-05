@@ -41,9 +41,7 @@ use std::sync::OnceLock;
 use axum::{extract::Request, middleware::Next, response::Response};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use chrono::Utc;
-use strata_protocol::edge_header::{
-    self, EDGE_HEADERS_CANONICAL, EDGE_HEADER_MAC,
-};
+use strata_protocol::edge_header::{self, EDGE_HEADERS_CANONICAL, EDGE_HEADER_MAC};
 use zeroize::Zeroizing;
 
 /// Verified, attacker-resistant edge metadata. Attached to the request

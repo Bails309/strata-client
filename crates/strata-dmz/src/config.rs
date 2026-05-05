@@ -78,6 +78,15 @@ pub const DEFAULT_PUBLIC_RATE_BURST: u32 = 64;
 /// Default in-flight cap.
 pub const DEFAULT_PUBLIC_MAX_INFLIGHT: usize = 4096;
 
+/// Default operator listener — loopback so a misconfigured firewall
+/// never exposes it. Operators are expected to override this on
+/// machines with multiple management interfaces.
+pub const DEFAULT_OPERATOR_BIND: &str = "127.0.0.1:9444";
+
+/// Minimum acceptable operator-token length. 32 chars is enough for
+/// 128-bit entropy in a hex / base32 token.
+pub const MIN_OPERATOR_TOKEN_LEN: usize = 32;
+
 /// Errors produced while parsing the environment into a [`DmzConfig`].
 ///
 /// Every variant carries the offending env var name so the operator
@@ -158,6 +167,17 @@ pub struct DmzConfig {
     /// trust. Empty means "ignore XFF entirely; use the socket peer."
     pub trust_forwarded_from: Vec<String>,
 
+    /// Bind address for the operator status listener. This is a
+    /// **separate** socket from the public listener and is intended
+    /// to be reachable only from the management network. Defaults to
+    /// `127.0.0.1:9444` so a misconfigured firewall doesn't expose it.
+    pub operator_bind: SocketAddr,
+    /// Bearer token operators must present on the operator listener.
+    /// Compared with constant-time equality. Empty = the operator
+    /// listener refuses to start (we don't allow an unauthenticated
+    /// operator surface).
+    pub operator_token: Zeroizing<Vec<u8>>,
+
     /// Whether dev mode is active. Disables several production-only
     /// checks; MUST be false in production.
     pub dev_mode: bool,
@@ -188,6 +208,8 @@ impl std::fmt::Debug for DmzConfig {
             .field("public_rate_burst", &self.public_rate_burst)
             .field("public_max_inflight", &self.public_max_inflight)
             .field("trust_forwarded_from", &self.trust_forwarded_from)
+            .field("operator_bind", &self.operator_bind)
+            .field("operator_token", &"<redacted>")
             .field("dev_mode", &self.dev_mode)
             .finish()
     }
@@ -279,6 +301,19 @@ impl DmzConfig {
             })
             .unwrap_or_default();
 
+        let operator_bind = parse_socket_addr("STRATA_DMZ_OPERATOR_BIND", DEFAULT_OPERATOR_BIND)?;
+        let operator_token_raw = std::env::var("STRATA_DMZ_OPERATOR_TOKEN")
+            .map_err(|_| ConfigError::Missing("STRATA_DMZ_OPERATOR_TOKEN"))?;
+        if operator_token_raw.len() < MIN_OPERATOR_TOKEN_LEN {
+            return Err(ConfigError::Malformed {
+                var: "STRATA_DMZ_OPERATOR_TOKEN",
+                reason: format!(
+                    "must be at least {MIN_OPERATOR_TOKEN_LEN} bytes"
+                ),
+            });
+        }
+        let operator_token = Zeroizing::new(operator_token_raw.into_bytes());
+
         // Scrub secrets from the environment so later code (and the
         // /proc/<pid>/environ dump if anyone reads it) can't observe
         // them.
@@ -288,6 +323,7 @@ impl DmzConfig {
         unsafe {
             std::env::remove_var("STRATA_DMZ_LINK_PSKS");
             std::env::remove_var("STRATA_DMZ_EDGE_HMAC_KEY");
+            std::env::remove_var("STRATA_DMZ_OPERATOR_TOKEN");
         }
 
         Ok(DmzConfig {
@@ -306,6 +342,8 @@ impl DmzConfig {
             public_rate_burst,
             public_max_inflight,
             trust_forwarded_from,
+            operator_bind,
+            operator_token,
             dev_mode,
         })
     }
@@ -460,6 +498,8 @@ mod tests {
             "STRATA_DMZ_PUBLIC_RATE_BURST",
             "STRATA_DMZ_PUBLIC_MAX_INFLIGHT",
             "STRATA_DMZ_TRUST_FORWARDED_FROM",
+            "STRATA_DMZ_OPERATOR_BIND",
+            "STRATA_DMZ_OPERATOR_TOKEN",
         ];
         // SAFETY: tests are serialised by ENV_LOCK and tests do not
         // spawn threads that read env vars.
@@ -495,6 +535,10 @@ mod tests {
             );
             std::env::set_var("STRATA_DMZ_EDGE_HMAC_KEY", b64_key(32));
             std::env::set_var("STRATA_DMZ_CLUSTER_ID", "production");
+            std::env::set_var(
+                "STRATA_DMZ_OPERATOR_TOKEN",
+                "a-32-char-or-longer-operator-token!!",
+            );
             std::env::set_var("STRATA_DMZ_DEV", "1");
         }
     }
@@ -517,6 +561,7 @@ mod tests {
         // Secrets must be scrubbed from environment after parsing.
         assert!(std::env::var("STRATA_DMZ_LINK_PSKS").is_err());
         assert!(std::env::var("STRATA_DMZ_EDGE_HMAC_KEY").is_err());
+        assert!(std::env::var("STRATA_DMZ_OPERATOR_TOKEN").is_err());
 
         cleanup_env();
     }
@@ -532,6 +577,44 @@ mod tests {
         let err = DmzConfig::from_env().unwrap_err();
         assert!(
             matches!(err, ConfigError::Missing("STRATA_DMZ_CLUSTER_ID")),
+            "got: {err:?}",
+        );
+        cleanup_env();
+    }
+
+    #[test]
+    fn missing_operator_token_is_rejected() {
+        let _g = ENV_LOCK.lock().unwrap();
+        cleanup_env();
+        set_minimum_valid_env();
+        unsafe {
+            std::env::remove_var("STRATA_DMZ_OPERATOR_TOKEN");
+        }
+        let err = DmzConfig::from_env().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Missing("STRATA_DMZ_OPERATOR_TOKEN")),
+            "got: {err:?}",
+        );
+        cleanup_env();
+    }
+
+    #[test]
+    fn short_operator_token_is_rejected() {
+        let _g = ENV_LOCK.lock().unwrap();
+        cleanup_env();
+        set_minimum_valid_env();
+        unsafe {
+            std::env::set_var("STRATA_DMZ_OPERATOR_TOKEN", "too-short");
+        }
+        let err = DmzConfig::from_env().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::Malformed {
+                    var: "STRATA_DMZ_OPERATOR_TOKEN",
+                    ..
+                }
+            ),
             "got: {err:?}",
         );
         cleanup_env();

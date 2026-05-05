@@ -5,10 +5,9 @@
 //! request through a persistent **inbound** mTLS link to the internal
 //! `strata-backend` node. It holds NO Strata business secrets.
 //!
-//! Phase 2e scope: link server + reverse-proxy adapter + edge-header
-//! HMAC signer + abuse-mitigation tower stack (per-IP rate limit,
-//! global concurrency cap, request timeout, body limit) live. Public
-//! TLS termination lands in Phase 3.
+//! Phase 3a scope: link server + reverse-proxy adapter + edge-header
+//! HMAC signer + abuse-mitigation tower stack + operator status
+//! listener live. Public TLS termination lands in Phase 3b.
 
 // Crate-wide we deny unsafe; the only exception is the boot-time env
 // scrubber in `config`, which is a single `unsafe` block guarded by
@@ -28,6 +27,7 @@ mod config;
 mod edge_signer;
 mod limits;
 mod link_server;
+mod operator;
 mod proxy;
 
 use config::DmzConfig;
@@ -109,6 +109,31 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Phase 3a — spin up the operator status listener on a SEPARATE
+    // socket from the public surface. Bound to loopback by default;
+    // operators override `STRATA_DMZ_OPERATOR_BIND` to expose it on a
+    // management interface. The token is in `cfg.operator_token`,
+    // already length-validated.
+    let operator_state = operator::OperatorState::new(
+        registry.clone(),
+        cfg.operator_token.clone(),
+        cfg.cluster_id.clone(),
+        cfg.node_id.clone(),
+    );
+    let operator_app = operator::router(operator_state);
+    let operator_bind = cfg.operator_bind;
+    let operator_listener = tokio::net::TcpListener::bind(operator_bind).await?;
+    info!(bind = %operator_bind, "DMZ operator listener up");
+    let operator_shutdown = shutdown.clone();
+    let operator_handle = tokio::spawn(async move {
+        let res = axum::serve(operator_listener, operator_app)
+            .with_graceful_shutdown(async move { operator_shutdown.cancelled().await })
+            .await;
+        if let Err(e) = res {
+            tracing::error!(error = %e, "DMZ operator listener exited with error");
+        }
+    });
+
     // Phase 2c — public surface forwards every non-health request
     // through the reverse-proxy adapter, which picks a session from
     // `registry` per request. Phase 2d wires the real HMAC edge-header
@@ -162,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
             limits::rate_limit_middleware,
         ));
 
-    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2e: link server + reverse-proxy + edge-header signer + abuse mitigation live)");
+    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 3a: link server + reverse-proxy + edge-header signer + abuse mitigation + operator listener live)");
 
     let listener = tokio::net::TcpListener::bind(cfg.public_bind).await?;
     let serve_result = axum::serve(
@@ -179,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         .await;
 
     let _ = link_handle.await;
+    let _ = operator_handle.await;
     serve_result?;
     Ok(())
 }

@@ -326,19 +326,24 @@ async fn main() -> anyhow::Result<()> {
         services::session_cleanup::spawn_vdi_reaper(state.clone(), shutdown.clone()),
     ];
 
+    let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
+    let app = routes::build_router(state.clone());
+
     // ── Spawn DMZ link supervisors (Phase 1d) ──
     // Only when STRATA_DMZ_ENDPOINTS is set; otherwise this is a no-op
     // and the node behaves as a standalone deployment.
     if let (Some(link_cfg), Some(registry)) = (dmz_link_cfg, dmz_link_registry.clone()) {
         let connector =
             std::sync::Arc::new(services::dmz_link::TlsLinkConnector::from_config(&link_cfg)?);
-        // Phase 1f: link is up end-to-end (mTLS + auth handshake + h2
-        // multiplexer), but inbound DMZ-pushed requests are not yet
-        // routed into the axum router — that lands in Phase 1g. Until
-        // then the link advertises 503 to anything the DMZ tries to
-        // forward, which fails closed loudly rather than silently.
-        let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> =
-            std::sync::Arc::new(services::dmz_link::RejectHandler);
+        // Phase 1g: dispatch inbound DMZ-pushed requests through the
+        // same axum router that serves the public listener. The router
+        // already has `verify_edge_headers` middleware mounted, so the
+        // signed `x-strata-edge-*` bundle the DMZ injected is honoured
+        // exactly as on a direct connection — no separate code path to
+        // keep in sync.
+        let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> = std::sync::Arc::new(
+            services::dmz_link::RouterHandler::new(app.clone()),
+        );
         tracing::info!(
             cluster_id = %link_cfg.cluster_id,
             node_id = %link_cfg.node_id,
@@ -353,9 +358,6 @@ async fn main() -> anyhow::Result<()> {
             shutdown.clone(),
         ));
     }
-
-    let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
-    let app = routes::build_router(state.clone());
 
     tracing::info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;

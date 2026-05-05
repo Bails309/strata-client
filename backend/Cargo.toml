@@ -25,6 +25,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "fs", "request-id"]
 h2 = "0.4"
 http = "1"
 http-body = "1"
+http-body-util = "0.1"
 
 # Serialisation
 serde = { version = "1", features = ["derive"] }

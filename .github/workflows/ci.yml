@@ -135,27 +135,39 @@ jobs:
       - name: Cache Cargo registry & build
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
+          # Workspace target lives at repo root since the DMZ refactor.
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            backend/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('backend/Cargo.lock', 'backend/Cargo.toml') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'backend/Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Check formatting
-        run: cargo fmt -- --check
+        # Scoped to the strata-backend package so this job stays focused on
+        # the existing backend; DMZ/protocol crates have their own coverage
+        # in dmz-deps.yml.
+        run: cargo fmt -p strata-backend -- --check
 
       - name: Clippy lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy -p strata-backend --all-targets -- -D warnings
 
       - name: Run unit tests
-        run: cargo test -- --test-threads=1
+        run: cargo test -p strata-backend -- --test-threads=1
+
+      - name: Run strata-protocol unit tests
+        # Pure-rust crate, runs fast and shares the cargo cache; doing
+        # this in the same job keeps DMZ protocol coverage on the
+        # critical-path PR check rather than relying on the
+        # dmz-deps.yml workflow which only builds, never tests.
+        working-directory: .
+        run: cargo test -p strata-protocol
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
 
       - name: Generate backend coverage report
-        run: cargo tarpaulin --skip-clean --out xml --out html --output-dir coverage/ --exclude-files src/main.rs --fail-under 19 -- --test-threads=1
+        run: cargo tarpaulin -p strata-backend --skip-clean --out xml --out html --output-dir coverage/ --exclude-files src/main.rs --fail-under 19 -- --test-threads=1
 
       - name: Upload backend coverage
         if: always()

@@ -282,6 +282,11 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/recordings/{filename}", get(user::get_recording))
         .route("/api/admin/roadmap/{item_id}", put(roadmap::set_status))
+        .route("/api/admin/dmz-links", get(admin::dmz::list_links))
+        .route(
+            "/api/admin/dmz-links/reconnect",
+            post(admin::dmz::reconnect_links),
+        )
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         // CSRF runs first on the request path (outermost layer). It inspects
@@ -420,6 +425,12 @@ pub fn build_router(state: SharedState) -> Router {
         // span picks the id up as a field.
         .layer(middleware::from_fn(
             crate::services::request_id::inject_request_id,
+        ))
+        // DMZ — verify or strip `x-strata-edge-*` headers. No-op for
+        // standalone deployments (env var not set). Runs after request-id
+        // injection so debug logs are correlated.
+        .layer(middleware::from_fn(
+            crate::services::edge_header::verify_edge_headers,
         ))
         .layer(
             TraceLayer::new_for_http().make_span_with(
@@ -573,6 +584,7 @@ mod tests {
                 )),
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
+            dmz_link_registry: None,
             started_at: std::time::Instant::now(),
         }));
         std::env::remove_var("STRATA_ALLOWED_ORIGINS");

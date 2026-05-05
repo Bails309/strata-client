@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "strata-dmz.fullname" . }}
+  labels: {{- include "strata-dmz.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "strata-dmz.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "strata-dmz.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: strata-dmz
+          image: {{ include "strata-dmz.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: public
+              containerPort: 8443
+              protocol: TCP
+            - name: link
+              containerPort: 8444
+              protocol: TCP
+            - name: operator
+              containerPort: 9444
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.config.rustLog | quote }}
+            - name: STRATA_DMZ_PUBLIC_BIND
+              value: {{ .Values.config.publicBind | quote }}
+            - name: STRATA_DMZ_PUBLIC_TLS_CERT
+              value: /tls/public/tls.crt
+            - name: STRATA_DMZ_PUBLIC_TLS_KEY
+              value: /tls/public/tls.key
+            - name: STRATA_DMZ_LINK_BIND
+              value: {{ .Values.config.linkBind | quote }}
+            - name: STRATA_DMZ_LINK_TLS_CERT
+              value: /tls/link/server.crt
+            - name: STRATA_DMZ_LINK_TLS_KEY
+              value: /tls/link/server.key
+            - name: STRATA_DMZ_LINK_TLS_CA
+              value: /tls/link/ca.crt
+            - name: STRATA_DMZ_OPERATOR_BIND
+              value: {{ .Values.config.operatorBind | quote }}
+            - name: STRATA_DMZ_NODE_ID
+              value: {{ .Values.config.nodeId | quote }}
+            - name: STRATA_DMZ_CLUSTER_ID
+              value: {{ .Values.config.clusterId | quote }}
+            {{- if .Values.config.trustForwardedFrom }}
+            - name: STRATA_DMZ_TRUST_FORWARDED_FROM
+              value: {{ join "," .Values.config.trustForwardedFrom | quote }}
+            {{- end }}
+            - name: STRATA_DMZ_OPERATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strata-dmz.secretName" . }}
+                  key: operatorToken
+            - name: STRATA_DMZ_LINK_PSKS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strata-dmz.secretName" . }}
+                  key: linkPsks
+            - name: STRATA_DMZ_EDGE_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "strata-dmz.secretName" . }}
+                  key: edgeHmacKey
+          volumeMounts:
+            - name: public-tls
+              mountPath: /tls/public
+              readOnly: true
+            - name: link-tls
+              mountPath: /tls/link
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe: {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe: {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: public-tls
+          secret:
+            secretName: {{ .Values.publicTls.existingSecret }}
+        - name: link-tls
+          secret:
+            secretName: {{ .Values.linkTls.existingSecret }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

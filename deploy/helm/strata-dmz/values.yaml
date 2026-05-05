@@ -1,0 +1,164 @@
+# Default values for strata-dmz.
+#
+# Three secrets are REQUIRED. Provide them via:
+#   secrets.existingSecret    -- name of a pre-existing Secret with
+#                                keys: operatorToken, linkPsks, edgeHmacKey
+#   OR set secrets.create=true and inline them under secrets.values.
+
+image:
+  repository: ghcr.io/bails309/strata-dmz
+  tag: ""              # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2        # >= 2 for HA. Each replica accepts independent links.
+
+# Public TLS material. Reference an existing Secret of type
+# kubernetes.io/tls with keys tls.crt + tls.key.
+publicTls:
+  existingSecret: strata-dmz-public-tls
+
+# Link mTLS material. Reference an existing opaque Secret with keys:
+#   server.crt, server.key, ca.crt
+linkTls:
+  existingSecret: strata-dmz-link-tls
+
+# Three application secrets. Either reference an existing Secret or
+# create one inline (NOT recommended for production -- prefer
+# external-secrets / sealed-secrets / vault-injector).
+secrets:
+  existingSecret: strata-dmz-secrets
+  create: false
+  values:
+    operatorToken: ""    # openssl rand -hex 32
+    linkPsks: ""         # current:HEX[,previous:HEX]
+    edgeHmacKey: ""      # openssl rand -hex 32
+
+config:
+  nodeId: dmz-1
+  clusterId: strata-cluster
+  publicBind: "0.0.0.0:8443"
+  linkBind: "0.0.0.0:8444"
+  operatorBind: "0.0.0.0:9444"
+  rustLog: "info,strata_dmz=info"
+  trustForwardedFrom: []   # list of upstream-proxy CIDRs allowed to set XFF
+
+# Public ingress (browsers connect here).
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+  hosts:
+    - host: strata.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: strata-dmz-public-tls
+      hosts:
+        - strata.example.com
+
+# The link service (8444) is exposed cluster-internal only. The
+# operator service (9444) is exposed loopback-only via a localhost
+# port-forward by default.
+service:
+  type: ClusterIP
+  publicPort: 8443
+  linkPort: 8444
+  operatorPort: 9444
+
+# NetworkPolicy: limit who can talk to the DMZ pod beyond the public
+# ingress controller. Operators MUST customise selectors here.
+networkPolicy:
+  enabled: true
+  # Pod selector identifying the internal backend pods that are
+  # allowed to dial the link port (8444). Empty {} = ALL pods, which
+  # defeats the topology -- override this in production.
+  internalBackendSelector:
+    matchLabels:
+      app.kubernetes.io/name: strata-backend
+  # Pod selector identifying the ingress controller that fronts the
+  # public port. Empty {} = match nothing.
+  ingressControllerSelector:
+    matchLabels:
+      app.kubernetes.io/name: ingress-nginx
+  ingressControllerNamespace: ingress-nginx
+  # Operator API namespace selector.
+  operatorClientSelector:
+    matchLabels:
+      strata.io/dmz-operator: "true"
+
+# Resource requests/limits per replica. The DMZ is small -- distroless
+# binary, no JIT, no large heaps. 256Mi covers 1k concurrent WS at p95.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+
+# Pod-level security context. The image already runs as uid 65532
+# (distroless nonroot) but we declare it explicitly for admission
+# controllers (PodSecurity admission, Kyverno).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+      - ALL
+
+# Liveness probe -- the binary's --healthcheck flag binds to
+# operatorBind and exits 0 if /status responds. Avoids exposing the
+# operator port externally.
+livenessProbe:
+  httpGet:
+    path: /status
+    port: operator
+  initialDelaySeconds: 5
+  periodSeconds: 15
+
+readinessProbe:
+  httpGet:
+    path: /status
+    port: operator
+  initialDelaySeconds: 2
+  periodSeconds: 5
+
+# PodDisruptionBudget keeps at least one replica during voluntary
+# disruptions (node drain, cluster autoscale).
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Pod anti-affinity -- spread replicas across nodes.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: strata-dmz
+
+nodeSelector: {}
+tolerations: []
+
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}

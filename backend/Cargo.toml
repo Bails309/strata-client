@@ -18,6 +18,14 @@ axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
 axum-extra = { version = "0.12", features = ["typed-header"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "request-id"] }
+# h2 — used by services::dmz_link::h2_serve to multiplex DMZ-pushed
+# requests onto a single authenticated link stream. We pin the same
+# major as hyper's transitive dep would expose so we never end up with
+# two h2 versions in the tree.
+h2 = "0.4"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
 
 # Serialisation
 serde = { version = "1", features = ["derive"] }
@@ -77,6 +85,9 @@ bytes = "1"
 # LDAP (Active Directory sync)
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# tokio-rustls — async wrapper around rustls used by the DMZ link
+# client to dial the DMZ server with mTLS (services::dmz_link::tls).
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 # rustls-pki-types provides the `pem` module + `PemObject` trait that
 # replaces the unmaintained rustls-pemfile crate (RUSTSEC-2025-0134).
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -118,6 +129,11 @@ lettre = { version = "0.11", default-features = false, features = [
 mrml = { version = "6", default-features = false, features = ["parse", "render"] }
 tera = { version = "1", default-features = false }
 async-trait = "0.1"
+
+# DMZ link wire protocol (handshake, edge-header HMAC, resume tokens).
+# Phase 1a wires the edge-header verifier; the link client and resume
+# map use the rest in subsequent phases.
+strata-protocol = { path = "../crates/strata-protocol" }
 
 # Web Browser Sessions (shipped in v0.30.0).
 # `ipnet`  — CIDR parsing for the `web_allowed_networks` egress allow-list.

@@ -39,6 +39,11 @@ pub struct AppState {
     /// boot when `STRATA_VDI_ENABLED=true` and `/var/run/docker.sock`
     /// is mounted (the `vdi` compose profile).
     pub vdi_driver: Arc<dyn VdiDriver>,
+    /// DMZ link registry — `Some` only when `STRATA_DMZ_ENDPOINTS` is
+    /// set at boot. Background supervisors publish state transitions
+    /// here so admin / readiness endpoints can observe link health
+    /// without coupling to the supervisor's internals.
+    pub dmz_link_registry: Option<crate::services::dmz_link::LinkRegistry>,
     pub started_at: Instant,
 }
 
@@ -94,6 +99,7 @@ mod tests {
                 Arc::new(WebDisplayAllocator::new()),
             )),
             vdi_driver: Arc::new(NoopVdiDriver),
+            dmz_link_registry: None,
             started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);

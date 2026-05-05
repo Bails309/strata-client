@@ -17,6 +17,7 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{audit, kerberos, settings};
 
+pub mod dmz;
 pub mod recordings;
 
 // ── Rate limiter: admin password reset (W3-7) ──────────────────────────
@@ -4133,6 +4134,7 @@ mod tests {
                 )),
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
+            dmz_link_registry: None,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -4162,6 +4164,7 @@ mod tests {
                 )),
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
+            dmz_link_registry: None,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

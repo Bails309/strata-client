@@ -33,6 +33,7 @@ import AccessTab from "./admin/AccessTab";
 import NotificationsTab from "./admin/NotificationsTab";
 import TrustedCAsTab from "./admin/TrustedCAsTab";
 import VdiTab from "./admin/VdiTab";
+import DmzLinksTab from "./admin/DmzLinksTab";
 
 type Tab =
   | "health"
@@ -50,6 +51,7 @@ type Tab =
   | "sessions"
   | "vdi"
   | "trusted-cas"
+  | "dmz-links"
   | "security";
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
@@ -123,6 +125,7 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
             "sessions",
             "vdi",
             "trusted-cas",
+            "dmz-links",
             "security",
           ] as Tab[]
         )
@@ -162,13 +165,18 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
                           ? "VDI"
                           : t === "trusted-cas"
                             ? "Trusted CAs"
-                            : t.charAt(0).toUpperCase() + t.slice(1)}
+                            : t === "dmz-links"
+                              ? "DMZ Links"
+                              : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
       </div>
 
       {/* ── Health ── */}
       {tab === "health" && <HealthTab onNavigateVault={() => setTab("vault")} />}
+
+      {/* ── DMZ Links ── */}
+      {tab === "dmz-links" && <DmzLinksTab />}
 
       {/* ── Display ── */}
       {tab === "display" && (

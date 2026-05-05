@@ -1,0 +1,32 @@
+[package]
+name = "strata-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Shared wire-protocol types for the Strata DMZ link (handshake, edge-header HMAC, resume tokens)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+bytes = { workspace = true }
+
+# Async I/O for the framed-message codec used during the link handshake.
+# Only `io-util` is enabled — this crate must NOT pull in tokio's net /
+# process / signal / fs subsystems (those belong to the DMZ binary).
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "rt", "time", "sync", "io-std"] }

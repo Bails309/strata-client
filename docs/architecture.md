@@ -830,6 +830,97 @@ strata-client/
 └── README.md
 ```
 
+## DMZ split topology (optional)
+
+Strata Client supports an optional split-host deployment where a
+public-facing **DMZ node** terminates TLS and serves the SPA, while
+all business logic, secrets, and database access remain on a private
+**internal node** that the public network cannot reach. This is
+intended for deployments where the internal Strata host must not
+have any inbound listener exposed to the Internet (regulatory zoning,
+defence-in-depth, or hosting-provider policy).
+
+```
+       Internet ─▶ ┌──────────────────────────┐
+                   │  DMZ NODE  (strata-dmz)  │
+                   │  • TLS 1.3 termination   │
+                   │  • SPA static serving    │
+                   │  • OIDC redirect handler │
+                   │  • Rate limiting         │
+                   │  • mTLS *server* (link)  │  ← inbound only
+                   └────────────┬─────────────┘
+                       (link)   │  outbound from internal
+                                ▼
+                   ┌──────────────────────────┐
+                   │ INTERNAL NODE (strata-   │
+                   │  backend)                │
+                   │  • Axum + RBAC + Vault   │
+                   │  • Postgres + guacd      │
+                   │  • Outbound link client  │  ← initiates the dial
+                   └──────────────────────────┘
+```
+
+The link is the only channel between the two halves and reverses the
+usual client-server polarity: the **internal node dials out** to the
+DMZ node and holds a long-lived authenticated tunnel open. The DMZ
+node multiplexes inbound HTTP/WebSocket requests onto that tunnel.
+This means the firewall between the DMZ network and the internal
+network can deny **all** inbound traffic to the internal host — the
+internal half only ever makes outbound TCP connections to the DMZ
+host's link port.
+
+### Trust posture
+
+- **No business secrets on the DMZ host.** It holds two key
+  materials: a public TLS cert (browser-facing) and a per-link PSK
+  used to authenticate the internal node when it dials in. It holds
+  **no** Vault tokens, no DB credentials, no AD bind passwords, no
+  user JWT signing keys. Compromise of the DMZ host yields only the
+  ability to drop traffic, not to read or forge it (sessions remain
+  bound to the internal node's JWT signing key).
+- **Wire protocol** (`strata-link/1.0`): length-prefixed JSON
+  handshake (see `crates/strata-protocol/src/handshake.rs`) followed
+  by HTTP/2 (h2 0.4) inside the same mTLS connection, ALPN
+  `h2,http/1.1`. Custom framing is intentionally minimal — every
+  user request is one HTTP/2 stream, WebSockets ride RFC 8441
+  Extended CONNECT, and per-stream flow control comes for free.
+- **Edge attribution**: the DMZ node stamps a signed bundle of
+  request metadata (`x-strata-edge-*` headers — client IP, TLS
+  version/cipher/JA3, user-agent, request ID, link ID, timestamp)
+  with an HMAC-SHA-256 over the canonical concatenation, keyed by a
+  shared `STRATA_DMZ_EDGE_HMAC_KEY`. The internal node verifies the
+  HMAC, rejects skew > 60 s, and **strips any `x-strata-edge-*`
+  headers that arrive without a valid MAC** so a compromised DMZ
+  cannot forge a different client IP into the audit log.
+- **Egress posture**: the DMZ pod has no egress permission to the
+  internal network in either the compose overlay or the Helm
+  NetworkPolicy. The only outbound it makes is DNS to kube-dns. Even
+  a fully RCE'd DMZ node cannot reach the database, Vault, or AD.
+
+### Authoritative references
+
+| Topic | Location |
+|---|---|
+| Decision + alternatives | [adr/ADR-0009-dmz-deployment-mode.md](adr/ADR-0009-dmz-deployment-mode.md) |
+| Implementation plan (canonical) | [dmz-implementation-plan.md](dmz-implementation-plan.md) |
+| Threat model (STRIDE per component) | [threat-model.md](threat-model.md) §6 |
+| Operator deployment guide | [deployment.md](deployment.md#dmz-split-topology-optional) |
+| On-call runbook | [runbooks/dmz-incident.md](runbooks/dmz-incident.md) |
+| Grafana dashboard | [grafana/strata-dmz-dashboard.json](grafana/strata-dmz-dashboard.json) |
+| Compose overlay | [`docker-compose.dmz.yml`](../docker-compose.dmz.yml) |
+| Helm chart | [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/) |
+| Wire protocol crate | [`crates/strata-protocol/`](../crates/strata-protocol/) |
+| DMZ binary crate | [`crates/strata-dmz/`](../crates/strata-dmz/) |
+
+### Naming
+
+Throughout this codebase the public-facing node is consistently
+referred to as the **DMZ node** (`strata-dmz` crate, binary, image,
+and Helm chart). The token "edge" is reserved for the
+`x-strata-edge-*` request-attribution header bundle stamped by the
+DMZ on every forwarded request — it is not a synonym for the node
+itself.
+
 ## Architecture Decision Records
 
 Design decisions whose rationale outlives any single commit live as
@@ -845,6 +936,7 @@ numbered ADRs under [adr/](adr/):
 | [ADR-0006](adr/ADR-0006-vault-transit-envelope.md) | Vault Transit envelope (`vault:<base64>`), rotate + rewrap path |
 | [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts |
 | [ADR-0008](adr/ADR-0008-notification-pipeline.md) | Transactional-email subsystem: MJML/mrml renderer, Vault-sealed SMTP password, opt-out semantics, retry worker |
+| [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md) | DMZ deployment mode: public-facing dumb-proxy, reverse-tunnel link, signed edge headers |
 
 ## Operational Runbooks
 
@@ -859,6 +951,7 @@ Step-by-step procedures for on-call engineers live under
 | [vault-operations.md](runbooks/vault-operations.md) | Vault unseal, Transit key rotate + rewrap, Shamir rekey |
 | [database-operations.md](runbooks/database-operations.md) | Replica promotion, migration rollback, panic-boot recovery |
 | [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config |
+| [dmz-incident.md](runbooks/dmz-incident.md) | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise |
 
 ## Extended protocols
 

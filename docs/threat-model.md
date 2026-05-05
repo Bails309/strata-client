@@ -207,3 +207,104 @@
 - Multi-tenant isolation beyond per-row RBAC.
 - Continuous behavioural anomaly detection.
 - Customer-facing bug bounty (disclosure policy still required — W5-*).
+
+---
+
+## 6. DMZ deployment mode (split-topology)
+
+> Applies only when `strata-dmz` is deployed in front of the backend
+> per [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md). Single-binary
+> deployments inherit §1–§5 unchanged.
+
+### 6.1 Updated decomposition
+
+```
+[ Browser ] ──TLS──▶ [ DMZ NODE (strata-dmz) ] ◀──mTLS link── [ Backend (Rust/Axum) ]
+                              │  (no business secrets)               │
+                              │                                       ▼
+                              ▼                              [ Vault, PG, AD, guacd, … ]
+                       (terminates TLS, signs edge headers,
+                        proxies over h2-in-mTLS reverse tunnel)
+```
+
+### 6.2 New trust zones
+
+| Zone | Components | Trusted by |
+|------|------------|------------|
+| **Public-edge** | strata-dmz | Backend (only via the signed edge bundle) |
+| **Link** | The mTLS h2 tunnel | Both peers (mutual auth) |
+
+The DMZ node is **less trusted than the existing nginx tier** in §1
+because it is now a Rust binary in our own build path. Specifically:
+
+- It holds three secrets that live nowhere else (link PSK, edge HMAC
+  key, operator token) but **none** of the §1.3 critical assets
+  (Vault root, JWT signing key, DB credential, AD bind, Kerberos
+  keytab, OIDC client secret, recording-storage credential).
+- Compromise of the DMZ node forfeits the public surface but does
+  **not** yield direct access to the data zone.
+
+### 6.3 STRIDE — strata-dmz
+
+| | Threat | Mitigation |
+|---|---|---|
+| **S** | Public client forges `x-strata-edge-*` headers to spoof a different IP / UA / link-id to the backend. | Signer strips ALL incoming `x-strata-edge-*` before signing (proxy.rs test `forged_edge_headers_from_public_are_overwritten`). MAC bound to the canonical 8-field bundle. |
+| **S** | Attacker presents stolen client cert + PSK to dial a fake link. | Two-factor: mTLS client cert AND length-prefixed JSON challenge-response under a PSK. PSK rotation supported via `current` / `previous` mapping. |
+| **S** | Attacker spoofs operator API by guessing the bearer token. | `subtle::ConstantTimeEq`, length-checked. Token min 32 bytes. Token shares no material with link PSK or edge HMAC key. |
+| **T** | Public client tampers with `X-Forwarded-For` to forge upstream IP attribution. | XFF honoured ONLY when peer IP is in `STRATA_DMZ_TRUST_FORWARDED_FROM`. Untrusted peer → falls back to socket peer or `0.0.0.0` (proxy.rs test `xff_from_untrusted_peer_is_ignored`). |
+| **T** | Replay of a captured signed bundle. | Two layers: (a) proxy boundary mints a fresh bundle per request (test `each_request_gets_a_fresh_signed_bundle`), (b) internal verifier rejects timestamps outside ±60 s (`MAX_TIMESTAMP_SKEW_MS`). |
+| **R** | Backend can't tell DMZ-injected errors from upstream errors when triaging. | Every proxy-injected response carries `x-strata-link: dmz-proxy`. |
+| **R** | Operator action on DMZ leaves no internal audit trail. | DMZ logs every operator-API call; operator-driven `disconnect` immediately reflects in the internal admin UI's link state machine, which writes `audit_logs` rows on transitions. |
+| **I** | Attacker reads memory of the DMZ binary to lift the link PSK / edge HMAC / operator token. | All three live in `Zeroizing<Vec<u8>>`. Env scrubbed post-parse. `#![deny(unsafe_code)]` on the crate. Distroless image — no shell to spawn, no `/proc/<pid>/mem` reader to attach. |
+| **I** | DMZ logs leak request bodies or tokens. | DMZ logs at `info` level by default; structured logger redacts `authorization` header values; bodies never logged. |
+| **I** | Side-channel timing on the operator-token compare. | Constant-time compare with subtle. Length checked first, but length acts as an oracle only on the bound `>= 32` byte rule, which is public. |
+| **D** | Public client floods the DMZ with requests. | 4-layer tower stack: per-IP rate limit → global concurrency cap → request timeout → body limit. Drops bad actors at L1 with `429`. |
+| **D** | Public client opens many slow connections. | `tower_http::timeout::TimeoutLayer` on read; rustls handshake timeout; `MAX_PROXY_BODY_BYTES = 8 MiB` on both directions. |
+| **D** | Public client requests gigantic responses to amplify upstream cost. | Symmetric body cap on response (8 MiB); the proxy short-circuits with `502` on cap hit and emits a metrics counter the alerting tier can page on. |
+| **D** | Compromised DMZ floods backend with bogus requests. | Internal-side admin API can `POST /api/admin/dmz-links/reconnect` to drop every link; if a single DMZ peer is hostile its mTLS cert can be removed from the trust list and the link refused. |
+| **E** | DMZ binary RCE → pivot to backend. | DMZ container is read-only rootfs, distroless (no shell), uid 65532, all caps dropped, no-new-privileges, dmz-link network is the ONLY route to the backend port — and it requires mTLS + PSK + correct cluster_id. RCE on the DMZ host yields the public surface and the three DMZ-local secrets, but not anything in the data zone. |
+| **E** | DMZ → internal "confused deputy": DMZ marks an attacker request as having a privileged client-IP. | Internal-side `require_auth` is unchanged; the edge bundle can claim any client-IP, but it cannot fabricate a session cookie, JWT, or OIDC claim. Worst case the audit log records a wrong source IP, which §6.5 calls out as a known residual. |
+| **E** | Operator-token holder pivots to backend. | Operator API only exposes link list / status / disconnect. It cannot mutate connection records, users, or roles. |
+
+### 6.4 STRIDE — link tunnel (`strata-link/1.0`)
+
+| | Threat | Mitigation |
+|---|---|---|
+| **S** | MITM presents a forged DMZ server cert to the internal node. | mTLS with operator-pinned CA; `STRATA_LINK_TLS_CA` is the only trusted issuer. Internal node refuses `WebPKI` defaults. |
+| **S** | MITM presents a forged internal client cert to the DMZ. | Same model in reverse — DMZ pins a client-CA via `STRATA_DMZ_LINK_TLS_CA` and refuses anything else. |
+| **T** | Frame injection in the JSON handshake. | Length-prefixed framing (`MAX_FRAME_PAYLOAD = 64 KiB`); fuzz target `frame_decoder` confirms oversized lengths are rejected without allocation. JSON parser fuzz targets cover all four message shapes. |
+| **T** | Header smuggling via h2 inside the tunnel. | h2 0.4 with hop-by-hop strip per RFC 7230 §6.1 on every forward; pseudo-headers regenerated by the proxy, not copied through. |
+| **R** | Either side denies sending a frame. | DMZ logs every accepted handshake with cluster_id + node_id + software_version; internal logs every successful dial. |
+| **I** | Passive observer on the path reads request bodies. | TLS 1.3 inside mTLS; PFS via X25519 + AEAD. |
+| **I** | DMZ binary leaks the link PSK to the public surface (e.g. via an error page). | PSK only used during handshake, never logged at any level; `Zeroizing` ensures heap copies are wiped on drop. |
+| **D** | Internal node never reconnects after a DMZ flap. | Backoff supervisor with bounded jitter (max 30 s) + admin-UI **Force reconnect** that resets the state machine. Chaos test `link-flap.sh` asserts <45 s recovery. |
+| **D** | A single hostile DMZ holds the link open forever, starving the internal connection budget. | Internal-side max-link-per-cluster cap; admin API drops sessions on demand. |
+| **E** | Compromised internal binary uses the link to attack the DMZ in reverse. | The link is request/response only over h2 streams initiated by the DMZ; the internal side cannot push unsolicited streams. |
+
+### 6.5 Residual risks accepted
+
+- **Edge bundle records the DMZ's view of client IP / UA, not a
+  cryptographic proof from the browser.** A compromised DMZ host can
+  attribute requests to arbitrary IPs in the audit log during the
+  compromise window. Mitigation: the audit pipeline also records the
+  TCP peer IP captured by the DMZ before signing, so investigators
+  can cross-check after the fact.
+- **The link PSK and edge HMAC key are symmetric.** Either secret in
+  attacker hands lets them mint valid handshakes (PSK) or forge edge
+  bundles (HMAC) until the secret is rotated. Mitigation: §5 of the
+  DMZ runbook (multi-key staging with `current` / `previous` for the
+  PSK, additive trust list for the HMAC) makes rotation a zero-downtime
+  operation.
+- **Public TLS termination on the DMZ means the DMZ sees plaintext.**
+  Unavoidable for this topology; the alternative (terminate TLS on the
+  backend, tunnel TCP through the DMZ) defeats the body-cap, rate-limit,
+  and edge-signing controls.
+
+### 6.6 Tracked work
+
+| ID | Item | Linked threat | Status |
+|----|------|---------------|--------|
+| W6-1 | mTLS cert hot-reload without container restart | 6.6 (cert rotation friction) | Resolved (Phase 6b, backend side) — `services::dmz_link::TlsLinkConnector` keeps its rustls `ClientConfig` behind an `RwLock<Arc<...>>` and exposes `reload()` plus a 60-second mtime poller (`spawn_mtime_watcher`) so cert-manager's PEM-file rewrite is picked up without a backend restart. New TLS handshakes use the rotated material; in-flight sessions are unaffected. **Residual:** DMZ-side hot-reload (link-server `TlsAcceptor` and public-TLS `ServerConfig` in `crates/strata-dmz`) is currently still rotated by pod redeploy; a stakater/Reloader annotation or an analogous mtime watcher is the planned follow-on. |
+| W6-2 | Per-public-IP body-cap tuning via env | 6.3 D (body-cap tuning) | Resolved (Phase 6c) — `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP` accepts a comma-separated `cidr=bytes` list (longest-prefix wins, K/M/G suffixes accepted, IPv4 and IPv6). The new `body_caps::body_cap_middleware` (`crates/strata-dmz/src/body_caps.rs`) replaces the static `RequestBodyLimitLayer`: it resolves the effective cap from the public-listener `ConnectInfo<SocketAddr>` peer, fast-fails on `Content-Length`, and falls back to `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` when no rule matches. Operators can now grant trusted partner CIDRs a larger headroom or shrink the cap for known-noisy networks without a code change. **Residual:** chunked requests that omit `Content-Length` are not stream-capped at the per-IP layer; the global per-route handler limits still apply. |
+| W6-3 | Ed25519 / asymmetric link auth (replace shared PSK) | 6.5 (symmetric PSK) | Backlog — rationale recorded in [ADR-0010 §"W6-3 (Ed25519 asymmetric link auth) — Backlog"](adr/ADR-0010-dmz-phase6-hardening.md). Symmetric PSK rotation via `STRATA_DMZ_LINK_PSKS` covers operational rotation; the asymmetric variant becomes worthwhile only if a deployment requires DMZ-host-less-trusted-than-internal semantics, which the current threat model does not assert. |
+| W6-4 | Audit log: cross-check TCP-peer IP vs signed client_ip | 6.5 (DMZ-attributed IP) | Resolved (Phase 6a) — every audit row written within a request scope is enriched with `details._edge` containing the verified `client_ip`, `tls_version`, `tls_cipher`, `tls_ja3`, `user_agent`, `request_id`, and `link_id`. Operators correlate the recorded `link_id` against their known-DMZ-nodes allowlist offline; a forged-DMZ scenario shows up as a `link_id` not present in the allowlist. |

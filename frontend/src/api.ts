@@ -1355,6 +1355,28 @@ export interface MetricsSummary {
 
 export const getMetrics = () => request<MetricsSummary>("/admin/metrics");
 
+// ── DMZ links ───────────────────────────────────────────────────────
+
+export interface DmzLinkRow {
+  endpoint: string;
+  state: string;
+  ready: boolean;
+  last_error: string | null;
+  since_unix_secs: number;
+  connects: number;
+  failures: number;
+}
+
+export interface DmzLinksResponse {
+  configured: boolean;
+  links: DmzLinkRow[];
+}
+
+export const getDmzLinks = () => request<DmzLinksResponse>("/admin/dmz-links");
+
+export const reconnectDmzLinks = () =>
+  request<{ nudged: number }>("/admin/dmz-links/reconnect", { method: "POST" });
+
 // ── Session Statistics ──────────────────────────────────────────────
 
 export interface TopConnection {

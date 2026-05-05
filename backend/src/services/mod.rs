@@ -10,6 +10,8 @@ pub mod circuit_breaker;
 pub mod connections;
 pub mod credential_profiles;
 pub mod display;
+pub mod dmz_link;
+pub mod edge_header;
 pub mod email;
 pub mod favorites;
 pub mod file_store;

@@ -1,0 +1,114 @@
+# docker-compose.dmz.yml — DMZ split-topology overlay.
+#
+# Adds a strata-dmz service in front of the existing backend. The
+# backend stops listening on the public port; instead, it dials out
+# to the DMZ over the strata-link/1.0 mTLS tunnel. Public traffic
+# (browser → :443) terminates on the DMZ container; the DMZ proxies
+# requests back over the tunnel.
+#
+# Use:
+#   docker compose -f docker-compose.yml -f docker-compose.dmz.yml up -d --build
+#
+# Prerequisites:
+#   1. Generate mTLS material once:  ./scripts/dmz/gen-test-certs.sh
+#      The script writes ./certs/dmz/{ca,server,client}.{crt,key} and
+#      ./certs/dmz/public.{crt,key}.
+#   2. Populate .env.dmz with the link PSK, edge HMAC key, operator
+#      token. See scripts/dmz/sample.env.dmz for a template.
+#
+# This overlay is for development and integration testing. Production
+# deployments should run the DMZ on a separate host with its own
+# firewall posture; running both in the same docker network defeats
+# the purpose of the topology.
+
+services:
+  strata-dmz:
+    build:
+      context: .
+      dockerfile: crates/strata-dmz/Dockerfile
+    image: strata/dmz:latest
+    restart: unless-stopped
+    networks:
+      - dmz-public
+      - dmz-link
+    ports:
+      # Public surface — the only port reachable from the internet
+      # in a real deployment. Maps to the host so e2e tests can hit
+      # https://localhost:8443 directly.
+      - "${DMZ_PUBLIC_PORT:-8443}:8443"
+      # Link listener — internal node dials in here. In production
+      # this port should be reachable ONLY from the internal network
+      # (firewall: allow internal → dmz:8444; deny everything else).
+      - "${DMZ_LINK_PORT:-8444}:8444"
+      # Operator surface — bound to loopback inside the container by
+      # default. Map to host loopback for local debugging.
+      - "127.0.0.1:${DMZ_OPERATOR_PORT:-9444}:9444"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65532:65532"
+    volumes:
+      - ./certs/dmz:/certs:ro
+    environment:
+      - RUST_LOG=${DMZ_RUST_LOG:-info,strata_dmz=debug}
+      - STRATA_DMZ_PUBLIC_BIND=0.0.0.0:8443
+      - STRATA_DMZ_PUBLIC_TLS_CERT=/certs/public.crt
+      - STRATA_DMZ_PUBLIC_TLS_KEY=/certs/public.key
+      - STRATA_DMZ_LINK_BIND=0.0.0.0:8444
+      - STRATA_DMZ_LINK_TLS_CERT=/certs/server.crt
+      - STRATA_DMZ_LINK_TLS_KEY=/certs/server.key
+      - STRATA_DMZ_LINK_TLS_CA=/certs/ca.crt
+      - STRATA_DMZ_OPERATOR_BIND=0.0.0.0:9444
+      - STRATA_DMZ_OPERATOR_TOKEN=${STRATA_DMZ_OPERATOR_TOKEN:?STRATA_DMZ_OPERATOR_TOKEN required (>=32 bytes)}
+      - STRATA_DMZ_LINK_PSKS=${STRATA_DMZ_LINK_PSKS:?STRATA_DMZ_LINK_PSKS required, format current:HEX[,previous:HEX]}
+      - STRATA_DMZ_EDGE_HMAC_KEY=${STRATA_DMZ_EDGE_HMAC_KEY:?STRATA_DMZ_EDGE_HMAC_KEY required (>=32 bytes)}
+      - STRATA_DMZ_NODE_ID=${STRATA_DMZ_NODE_ID:-dmz-1}
+      - STRATA_DMZ_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-test}
+      # No business secrets here — by design and CI-enforced.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/strata-dmz", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+
+  # Backend, in DMZ mode. Drops its public listener and instead
+  # dials out to the DMZ link port. The existing service definition
+  # in docker-compose.yml is extended via the env additions below.
+  backend:
+    networks:
+      - dmz-link
+    environment:
+      # Tell the backend to stop binding the public port and dial out.
+      - STRATA_DMZ_MODE=link-client
+      - STRATA_LINK_ENDPOINTS=strata-dmz:8444
+      - STRATA_LINK_TLS_CA=/certs/ca.crt
+      - STRATA_LINK_TLS_CLIENT_CERT=/certs/client.crt
+      - STRATA_LINK_TLS_CLIENT_KEY=/certs/client.key
+      - STRATA_LINK_PSK=${STRATA_DMZ_LINK_PSK_CURRENT:?required}
+      - STRATA_LINK_EDGE_HMAC_KEYS=${STRATA_DMZ_EDGE_HMAC_KEY:?required}
+      - STRATA_LINK_NODE_ID=${STRATA_LINK_NODE_ID:-internal-1}
+      - STRATA_LINK_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-test}
+    volumes:
+      - ./certs/dmz:/certs:ro
+
+networks:
+  # Public-facing — only the DMZ touches it. In production this is
+  # the public internet (or a CDN edge); here it's just a host port
+  # mapping.
+  dmz-public:
+    driver: bridge
+  # DMZ ↔ internal — the link tunnel rides this. In production this
+  # would be a tightly-firewalled VLAN with a single allow rule
+  # (internal → dmz:8444/tcp).
+  dmz-link:
+    driver: bridge
+    internal: false

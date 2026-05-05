@@ -263,6 +263,18 @@ async fn main() -> anyhow::Result<()> {
     let web_displays =
         std::sync::Arc::new(crate::services::web_session::WebDisplayAllocator::new());
 
+    // ── DMZ link configuration (Phase 1d) ──
+    //
+    // `STRATA_DMZ_ENDPOINTS` opts a node into DMZ-paired mode; when
+    // unset, the supervisor is never spawned and behaviour is
+    // unchanged from standalone deployments. When set, all three TLS
+    // path env vars are required — misconfiguration aborts boot rather
+    // than silently shipping a node that cannot dial the DMZ.
+    let dmz_link_cfg = services::dmz_link::LinkConfig::from_env()?;
+    let dmz_link_registry = dmz_link_cfg
+        .as_ref()
+        .map(|_| services::dmz_link::LinkRegistry::new());
+
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
         phase: BootPhase::Running,
@@ -279,6 +291,7 @@ async fn main() -> anyhow::Result<()> {
             web_displays,
         )),
         vdi_driver,
+        dmz_link_registry: dmz_link_registry.clone(),
         started_at: std::time::Instant::now(),
     }));
 
@@ -289,7 +302,7 @@ async fn main() -> anyhow::Result<()> {
     // Cancellation is cooperative: the shared worker harness listens on the
     // token and unwinds cleanly when it fires.
     let shutdown = tokio_util::sync::CancellationToken::new();
-    let worker_handles: Vec<tokio::task::JoinHandle<()>> = vec![
+    let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = vec![
         // ── Spawn recording sync background task ──
         services::recordings::spawn_sync_task(state.clone(), shutdown.clone()),
         // ── Spawn AD sync scheduler ──
@@ -315,6 +328,45 @@ async fn main() -> anyhow::Result<()> {
 
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
+
+    // ── Spawn DMZ link supervisors (Phase 1d) ──
+    // Only when STRATA_DMZ_ENDPOINTS is set; otherwise this is a no-op
+    // and the node behaves as a standalone deployment.
+    if let (Some(link_cfg), Some(registry)) = (dmz_link_cfg, dmz_link_registry.clone()) {
+        let connector =
+            std::sync::Arc::new(services::dmz_link::TlsLinkConnector::from_config(&link_cfg)?);
+        // W6-1 — auto-reload mTLS material when cert-manager (or an
+        // operator's rotation script) rewrites the PEM files on disk.
+        // Poll interval is intentionally coarse (60s) so this is
+        // operationally invisible during steady state but quick enough
+        // that a fresh cert is in use within ~1 link reconnect cycle.
+        worker_handles.push(connector.clone().spawn_mtime_watcher(
+            std::time::Duration::from_secs(60),
+            shutdown.clone(),
+        ));
+        // Phase 1g: dispatch inbound DMZ-pushed requests through the
+        // same axum router that serves the public listener. The router
+        // already has `verify_edge_headers` middleware mounted, so the
+        // signed `x-strata-edge-*` bundle the DMZ injected is honoured
+        // exactly as on a direct connection — no separate code path to
+        // keep in sync.
+        let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> = std::sync::Arc::new(
+            services::dmz_link::RouterHandler::new(app.clone()),
+        );
+        tracing::info!(
+            cluster_id = %link_cfg.cluster_id,
+            node_id = %link_cfg.node_id,
+            endpoints = link_cfg.endpoints.len(),
+            "spawning DMZ link supervisors",
+        );
+        worker_handles.push(services::dmz_link::spawn_link_supervisors(
+            std::sync::Arc::new(link_cfg),
+            connector,
+            handler,
+            registry,
+            shutdown.clone(),
+        ));
+    }
 
     tracing::info!("Listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;

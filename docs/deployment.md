@@ -935,6 +935,516 @@ For the bundled Vault, HA is not applicable — it runs as a single-node file-st
 
 ---
 
+## DMZ split topology (optional)
+
+> Reference: [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md), [DMZ implementation plan](dmz-implementation-plan.md), [DMZ incident runbook](runbooks/dmz-incident.md).
+
+For deployments that require the public-facing surface to be a
+separate, minimally-trusted host (no Vault, no DB, no AD, no
+Kerberos), Strata supports a split deployment with two binaries:
+`strata-dmz` (public) and `strata-backend` (internal). The internal
+node dials out to the DMZ over an mTLS-wrapped HTTP/2 tunnel; no
+inbound rule from the public network to the internal network is
+required.
+
+### Topology
+
+```
+Internet ──► strata-dmz (public host) ──mTLS h2 link── strata-backend (internal host)
+                  │                                         │
+                  │                                         ▼
+                  ▼                            Vault, PostgreSQL, AD, guacd
+       (terminates TLS,
+        signs edge headers,
+        rate-limits + body-caps,
+        no business secrets)
+```
+
+The polarity is reversed from a normal proxy: **the internal node
+dials out** to the DMZ on port 8444 and holds a long-lived authenticated
+tunnel open. The DMZ multiplexes inbound HTTP/WebSocket requests onto
+that tunnel. Consequence: the firewall between DMZ and internal can
+deny **all** inbound traffic to the internal host. A full RCE on the
+DMZ yields no path to Vault, the database, or AD.
+
+### Prerequisites
+
+- Two hosts (or two K8s namespaces) on different network segments,
+  with a one-way firewall path that permits **only** `internal-host →
+  dmz-host:8444/tcp`. Everything else from `dmz-host` toward the
+  internal network MUST be denied.
+- DNS: a public hostname pointing at `dmz-host` (e.g. `strata.example.com`)
+  and a name the internal host can resolve to `dmz-host` over the link
+  network (can be the same name or a private one).
+- A publicly-trusted TLS certificate for the public hostname.
+- An operator-controlled CA for the link mTLS — distinct from the
+  public CA so a public CA compromise cannot mint link client certs.
+- `openssl` and `docker` on the DMZ host; `kubectl` + `helm` 3.x for
+  the Kubernetes path.
+
+### The three shared secrets
+
+The DMZ and internal halves are bound together by three independent
+secrets — generate each on a trusted machine, then distribute:
+
+```bash
+openssl rand -hex 32  # → STRATA_DMZ_OPERATOR_TOKEN     (DMZ only)
+openssl rand -hex 32  # → STRATA_DMZ_LINK_PSKS current  (BOTH halves)
+openssl rand -hex 32  # → STRATA_DMZ_EDGE_HMAC_KEY      (BOTH halves)
+```
+
+| Secret | Purpose | Lives on |
+|---|---|---|
+| `STRATA_DMZ_OPERATOR_TOKEN` | Bearer for the management API on `127.0.0.1:9444` (status, link kick) | DMZ only |
+| `STRATA_DMZ_LINK_PSKS` (`current:HEX[,previous:HEX]`) | Internal proves identity to DMZ. The `previous:` slot exists for rotation. | DMZ |
+| `STRATA_LINK_PSK` | Same hex as DMZ's `current:` value | Internal |
+| `STRATA_DMZ_EDGE_HMAC_KEY` | DMZ signs `x-strata-edge-*` request-attribution headers | DMZ |
+| `STRATA_LINK_EDGE_HMAC_KEYS` | Internal verifies them; comma-separated multi-key list during rotation | Internal |
+
+Generate each independently — never derive one from another and never
+store all three in the same file.
+
+---
+
+## Walkthrough A — Docker Compose (single-host DMZ)
+
+This walkthrough takes you from a clean checkout to a live two-host
+deployment. Use it for evaluation, single-host production, or as a
+reference when adapting to your config-management system.
+
+### A.1  On `dmz-host` — issue mTLS material
+
+For evaluation, the repo ships a test-cert generator:
+
+```bash
+git clone <repo-url> strata-client
+cd strata-client
+./scripts/dmz/gen-test-certs.sh        # writes ./certs/{ca,server,client,public}.{crt,key}
+```
+
+For **production**, replace those files with material from your
+operator-controlled CA. The link server cert MUST have a SAN matching
+the DNS name the internal host will dial; the link client cert MUST
+have `extendedKeyUsage = clientAuth`. The public cert (`public.crt`/
+`public.key`) MUST chain to a CA browsers already trust.
+
+```
+./certs/
+├── ca.crt           # link-CA root (operator-issued, PRIVATE)
+├── server.crt       # link server cert (presented by DMZ to internal)
+├── server.key
+├── client.crt       # link client cert (presented by internal to DMZ)
+├── client.key
+├── public.crt       # public TLS cert (browser-facing)
+└── public.key
+```
+
+### A.2  On `dmz-host` — populate `.env.dmz`
+
+```bash
+cp scripts/dmz/sample.env.dmz .env.dmz
+```
+
+Edit `.env.dmz` and replace each `REPLACE_ME_*` placeholder with the
+hex value from the corresponding `openssl rand -hex 32` invocation
+above. The full file at minimum must contain:
+
+```env
+STRATA_DMZ_OPERATOR_TOKEN=<hex>
+STRATA_DMZ_LINK_PSKS=current:<hex>
+STRATA_DMZ_LINK_PSK_CURRENT=<same hex>
+STRATA_DMZ_EDGE_HMAC_KEY=<hex>
+STRATA_DMZ_CLUSTER_ID=strata-cluster-prod
+STRATA_DMZ_NODE_ID=dmz-1
+DMZ_PUBLIC_PORT=8443
+DMZ_LINK_PORT=8444
+DMZ_OPERATOR_PORT=9444
+```
+
+Lock down the file: `chmod 600 .env.dmz`.
+
+### A.3  On `dmz-host` — bring up the DMZ stack
+
+```bash
+docker compose --env-file .env.dmz \
+    -f docker-compose.yml \
+    -f docker-compose.dmz.yml \
+    up -d --build strata-dmz
+
+docker compose ps strata-dmz
+docker compose logs -f strata-dmz   # confirm "public listener up", "link listener up"
+```
+
+The DMZ container exposes three ports:
+
+| Port  | Purpose | Reachability |
+|-------|---------|--------------|
+| 8443  | Public HTTPS | Internet (or CDN edge) |
+| 8444  | Link listener (the internal node dials in here) | **Internal network only** |
+| 9444  | Operator API (status, links, disconnect) | **Loopback or management VLAN only** |
+
+Sanity-check that the link listener answers and the operator API
+demands a token:
+
+```bash
+openssl s_client -connect dmz-host:8444 -showcerts </dev/null 2>/dev/null | head -3
+curl -ks https://127.0.0.1:9444/status                                      # → 401
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"    # → 200, links_up:0
+```
+
+### A.4  On `internal-host` — distribute the link material
+
+Copy from `dmz-host` to `internal-host` over a secure channel:
+
+```
+ca.crt          # link-CA root (the same file used by DMZ)
+client.crt      # link client cert
+client.key      # link client key
+```
+
+The link **PSK** and **edge HMAC key** travel out-of-band (e.g. via
+your secret manager). They are NEVER copied via the same channel as
+the certs.
+
+### A.5  On `internal-host` — extend the backend env
+
+Append to the existing backend `.env`:
+
+```env
+STRATA_DMZ_MODE=link-client
+STRATA_LINK_ENDPOINTS=dmz-host.example.com:8444
+STRATA_LINK_TLS_CA=/certs/ca.crt
+STRATA_LINK_TLS_CLIENT_CERT=/certs/client.crt
+STRATA_LINK_TLS_CLIENT_KEY=/certs/client.key
+STRATA_LINK_PSK=<same hex as DMZ's current:HEX>
+STRATA_LINK_EDGE_HMAC_KEYS=<same hex as STRATA_DMZ_EDGE_HMAC_KEY>
+STRATA_LINK_NODE_ID=internal-1
+STRATA_LINK_CLUSTER_ID=strata-cluster-prod
+```
+
+Restart the backend:
+
+```bash
+docker compose up -d backend
+docker compose logs -f backend | grep -i "link\|dmz"
+# expect: "DMZ link authenticated", "h2 serve ready"
+```
+
+### A.6  Verify end-to-end
+
+On `dmz-host`:
+
+```bash
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq
+# → {"links_up": 1, "links_total": 1, "node_id": "dmz-1", ...}
+```
+
+From an external machine:
+
+```bash
+curl https://strata.example.com/api/health
+# → 200 OK, served via the link tunnel
+```
+
+For a fully scripted dry-run on a single host, the repo ships:
+
+```bash
+./scripts/dmz/e2e-roundtrip.sh
+```
+
+which generates ephemeral certs, brings the stack up, polls
+`links_up` until it reaches 1, asserts the public path responds 200,
+and confirms the management API rejects unauthenticated requests.
+
+---
+
+## Walkthrough B — Kubernetes (Helm chart)
+
+This walkthrough provisions the DMZ side of the split using the
+reference chart at [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/).
+The internal `strata-backend` release uses the existing chart
+unchanged plus the `STRATA_LINK_*` env vars from §A.5.
+
+### B.1  Pre-flight
+
+```bash
+kubectl create namespace strata-dmz
+kubectl create namespace strata-internal     # only if not already present
+
+helm version          # 3.x required
+kubectl get nodes     # confirm cluster reachable
+```
+
+If you intend to use a Prometheus-Operator `ServiceMonitor`, confirm
+the CRD is installed:
+
+```bash
+kubectl get crd servicemonitors.monitoring.coreos.com
+```
+
+### B.2  Load the three shared secrets into Kubernetes
+
+For evaluation, an inline `Secret`. For production prefer
+[external-secrets](https://external-secrets.io/),
+[sealed-secrets](https://github.com/bitnami-labs/sealed-secrets),
+or a `vault-injector` annotation flow.
+
+```bash
+kubectl -n strata-dmz create secret generic strata-dmz-secrets \
+    --from-literal=operatorToken="$(openssl rand -hex 32)" \
+    --from-literal=linkPsks="current:$(openssl rand -hex 32)" \
+    --from-literal=edgeHmacKey="$(openssl rand -hex 32)"
+```
+
+Capture the values for the internal release:
+
+```bash
+PSK=$(kubectl -n strata-dmz get secret strata-dmz-secrets \
+        -o jsonpath='{.data.linkPsks}' | base64 -d | sed 's/^current://')
+HMAC=$(kubectl -n strata-dmz get secret strata-dmz-secrets \
+        -o jsonpath='{.data.edgeHmacKey}' | base64 -d)
+
+kubectl -n strata-internal create secret generic strata-link-secrets \
+    --from-literal=psk="$PSK" \
+    --from-literal=edgeHmacKeys="$HMAC"
+```
+
+### B.3  Load the link mTLS material
+
+Issue `server.crt`/`server.key`/`ca.crt` from your operator CA (SAN =
+the in-cluster Service DNS or the external link DNS — whichever the
+internal-cluster client will use).
+
+```bash
+kubectl -n strata-dmz create secret generic strata-dmz-link-tls \
+    --from-file=server.crt --from-file=server.key --from-file=ca.crt
+```
+
+The internal release needs the matching client material:
+
+```bash
+kubectl -n strata-internal create secret generic strata-link-mtls \
+    --from-file=ca.crt --from-file=client.crt --from-file=client.key
+```
+
+### B.4  Load the public TLS certificate
+
+Cert-manager (recommended):
+
+```yaml
+# cert-manager-issued; the chart picks up the resulting Secret by name
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: strata-dmz-public-tls
+  namespace: strata-dmz
+spec:
+  secretName: strata-dmz-public-tls
+  dnsNames: [strata.example.com]
+  issuerRef: { name: letsencrypt-prod, kind: ClusterIssuer }
+```
+
+Or a manual TLS Secret:
+
+```bash
+kubectl -n strata-dmz create secret tls strata-dmz-public-tls \
+    --cert=public.crt --key=public.key
+```
+
+### B.5  Tune `values.yaml` for your cluster
+
+Two settings you almost always need to override:
+
+```yaml
+# values-prod.yaml
+config:
+  nodeId: dmz-1
+  clusterId: strata-cluster-prod
+  # If your ingress controller sits in front and you trust its XFF:
+  trustForwardedFrom:
+    - 10.0.0.0/8
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+  hosts:
+    - host: strata.example.com
+      paths: [{ path: /, pathType: Prefix }]
+  tls:
+    - hosts: [strata.example.com]
+      secretName: strata-dmz-public-tls
+
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+  ingressControllerSelector:
+    matchLabels:
+      app.kubernetes.io/name: ingress-nginx
+  internalBackendSelector:
+    matchLabels:
+      # MUST match the labels on your strata-backend pods.
+      app.kubernetes.io/name: strata-backend
+      app.kubernetes.io/instance: strata
+  operatorClientSelector:
+    matchLabels:
+      strata.io/dmz-operator: "true"
+```
+
+> **Critical:** the default `internalBackendSelector` will not match
+> if your backend release prefixes pod labels. Run `kubectl get pods
+> -n strata-internal --show-labels` and copy the labels verbatim — if
+> the NetworkPolicy doesn't match, the internal node cannot dial the
+> link.
+
+### B.6  Install the chart
+
+```bash
+helm install strata-dmz ./deploy/helm/strata-dmz \
+    -n strata-dmz \
+    -f values-prod.yaml \
+    --set image.tag=1.4.1
+```
+
+Watch the rollout:
+
+```bash
+kubectl -n strata-dmz rollout status deploy/strata-dmz
+kubectl -n strata-dmz logs -l app.kubernetes.io/name=strata-dmz -f
+```
+
+Confirm the operator API is locked down:
+
+```bash
+kubectl -n strata-dmz port-forward svc/strata-dmz-operator 9444:9444 &
+TOKEN=$(kubectl -n strata-dmz get secret strata-dmz-secrets \
+            -o jsonpath='{.data.operatorToken}' | base64 -d)
+curl -ks https://127.0.0.1:9444/status                                       # → 401
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"     # → 200, links_up:0
+```
+
+### B.7  Wire the internal release to the DMZ
+
+In your existing `strata-backend` Helm release, add to its values:
+
+```yaml
+extraEnv:
+  - name: STRATA_DMZ_MODE
+    value: link-client
+  - name: STRATA_LINK_ENDPOINTS
+    value: strata-dmz.strata-dmz.svc.cluster.local:8444   # if same cluster
+    # …or the externally-resolvable DMZ DNS if cross-cluster
+  - name: STRATA_LINK_TLS_CA
+    value: /link/ca.crt
+  - name: STRATA_LINK_TLS_CLIENT_CERT
+    value: /link/client.crt
+  - name: STRATA_LINK_TLS_CLIENT_KEY
+    value: /link/client.key
+  - name: STRATA_LINK_PSK
+    valueFrom:
+      secretKeyRef: { name: strata-link-secrets, key: psk }
+  - name: STRATA_LINK_EDGE_HMAC_KEYS
+    valueFrom:
+      secretKeyRef: { name: strata-link-secrets, key: edgeHmacKeys }
+  - name: STRATA_LINK_NODE_ID
+    value: internal-1
+  - name: STRATA_LINK_CLUSTER_ID
+    value: strata-cluster-prod
+
+extraVolumes:
+  - name: link-mtls
+    secret: { secretName: strata-link-mtls }
+extraVolumeMounts:
+  - { name: link-mtls, mountPath: /link, readOnly: true }
+```
+
+Apply the upgrade:
+
+```bash
+helm upgrade strata strata-backend -n strata-internal -f values-internal.yaml
+kubectl -n strata-internal rollout status deploy/strata
+kubectl -n strata-internal logs -l app.kubernetes.io/name=strata-backend -f \
+    | grep -i "link\|dmz"
+# expect: "DMZ link authenticated", per-endpoint "h2 serve ready"
+```
+
+### B.8  Verify end-to-end
+
+```bash
+# Re-fetch /status — links_up should now be 1 (or N for HA).
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq
+
+# Public health-check via the ingress.
+curl https://strata.example.com/api/health   # → 200 OK
+```
+
+Import the dashboard at
+[`docs/grafana/strata-dmz-dashboard.json`](grafana/strata-dmz-dashboard.json)
+into Grafana to track `strata_dmz_links_up`, request rate, p95
+latency, and reconnect counts.
+
+### B.9  Upgrades & rollbacks
+
+The DMZ is stateless and replicated; `helm upgrade` performs a rolling
+restart honouring the `PodDisruptionBudget` (default `minAvailable: 1`).
+Open links migrate to surviving replicas within the supervisor backoff
+window (≤ 30 s with default settings). To roll back:
+
+```bash
+helm history strata-dmz -n strata-dmz
+helm rollback strata-dmz <REV> -n strata-dmz
+```
+
+### B.10  Uninstall
+
+```bash
+helm uninstall strata-dmz -n strata-dmz
+# Secrets are intentionally NOT removed by uninstall:
+kubectl -n strata-dmz delete secret strata-dmz-secrets strata-dmz-link-tls strata-dmz-public-tls
+```
+
+---
+
+## Firewall posture
+
+The DMZ split is only as strong as the firewall rules that enforce it.
+Recommended:
+
+| Source | Destination | Port | Action |
+|--------|-------------|------|--------|
+| Internet | `dmz-host:443` (proxied to 8443) | 443/tcp | ALLOW |
+| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW |
+| `dmz-host` | anywhere on the internal network | * | **DENY** |
+| Internet | `dmz-host:8444` | 8444/tcp | **DENY** |
+| Internet | `dmz-host:9444` | 9444/tcp | **DENY** |
+
+The `dmz-host → internal *` deny rule is the heart of the design — it
+is what makes a full RCE on the DMZ unable to reach Vault / DB / AD.
+
+## Production checklist
+
+- [ ] Three secrets generated independently with `openssl rand -hex 32`
+      (operator token, link PSK, edge HMAC key) — none reused, none
+      stored in the same file.
+- [ ] mTLS material issued by your operator-controlled CA (not the
+      test-cert script). Server cert SAN includes the DMZ DNS name;
+      client cert has `extendedKeyUsage=clientAuth`.
+- [ ] Public TLS cert is issued by a publicly-trusted CA (Let's
+      Encrypt, your enterprise CA — whatever browsers will trust).
+- [ ] Firewall rules above are in place AND tested with `nc -vz` from
+      the wrong source.
+- [ ] Operator API (`9444`) bound to loopback or a private management
+      VLAN — never to a public interface.
+- [ ] Grafana dashboard imported from
+      [`docs/grafana/strata-dmz-dashboard.json`](grafana/strata-dmz-dashboard.json)
+      and pointed at your Prometheus.
+- [ ] Runbook reviewed by on-call:
+      [`docs/runbooks/dmz-incident.md`](runbooks/dmz-incident.md).
+- [ ] Cert expiry monitored (see the certificate-rotation runbook).
+
+---
+
 ## Backup & Restore
 
 ### Database

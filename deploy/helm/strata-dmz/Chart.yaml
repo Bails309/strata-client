@@ -1,0 +1,20 @@
+apiVersion: v2
+name: strata-dmz
+description: |
+  Public-facing DMZ proxy for Strata Client. Distroless, read-only
+  rootfs, no business secrets. Accepts public HTTPS traffic and
+  forwards to an internal strata-backend over an mTLS h2 reverse
+  tunnel that the backend dials out.
+
+  See ../../../docs/adr/ADR-0009-dmz-deployment-mode.md for the
+  architecture and ../../../docs/runbooks/dmz-incident.md for ops.
+type: application
+version: 0.1.0
+appVersion: "1.4.1"
+keywords:
+  - strata
+  - dmz
+  - reverse-proxy
+maintainers:
+  - name: Strata Client contributors
+    url: https://github.com/Bails309/strata-client

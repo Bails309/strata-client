@@ -136,7 +136,7 @@ impl LinkConfig {
 mod tests {
     use super::*;
 
-    fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + '_ {
+    fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'static {
         let map: HashMap<String, String> = pairs
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
@@ -144,7 +144,9 @@ mod tests {
         move |k| map.get(k).cloned()
     }
 
-    fn prefixed(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Vec<(String, String)> + '_ {
+    fn prefixed<'a>(
+        pairs: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Vec<(String, String)> + 'a {
         move |prefix| {
             pairs
                 .iter()

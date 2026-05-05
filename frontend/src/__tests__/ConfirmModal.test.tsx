@@ -142,4 +142,31 @@ describe("ConfirmModal", () => {
     // onCancel fires from backdrop click, not from inner card click
     // If propagation is stopped, only the backdrop handler would fire it
   });
+
+  it("calls onCancel when Escape key is pressed", () => {
+    const fn = vi.fn();
+    render(
+      <ConfirmModal isOpen={true} title="T" message="M" onConfirm={onConfirm} onCancel={fn} />
+    );
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(fn).toHaveBeenCalled();
+  });
+
+  it("does not call onCancel for non-Escape keys", () => {
+    const fn = vi.fn();
+    render(
+      <ConfirmModal isOpen={true} title="T" message="M" onConfirm={onConfirm} onCancel={fn} />
+    );
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("does not bind Escape listener when not open", () => {
+    const fn = vi.fn();
+    render(
+      <ConfirmModal isOpen={false} title="T" message="M" onConfirm={onConfirm} onCancel={fn} />
+    );
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(fn).not.toHaveBeenCalled();
+  });
 });

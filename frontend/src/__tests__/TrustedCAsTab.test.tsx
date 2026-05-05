@@ -93,4 +93,48 @@ describe("TrustedCAsTab", () => {
     expect(deleteTrustedCa).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
+
+  it("surfaces API error when create fails", async () => {
+    (createTrustedCa as any).mockRejectedValue(new Error("create failed"));
+    render(<TrustedCAsTab onSave={vi.fn()} />);
+    await screen.findByText("Corp Root");
+    fireEvent.change(screen.getByPlaceholderText("Internal Corp Root CA"), {
+      target: { value: "X" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/BEGIN CERTIFICATE/), {
+      target: { value: "Y" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add Trusted CA/ }));
+    await screen.findByText("create failed");
+  });
+
+  it("surfaces API error when delete fails", async () => {
+    (deleteTrustedCa as any).mockRejectedValue(new Error("delete failed"));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<TrustedCAsTab onSave={vi.fn()} />);
+    await screen.findByText("Corp Root");
+    fireEvent.click(screen.getByRole("button", { name: /Delete/ }));
+    await screen.findByText("delete failed");
+    confirmSpy.mockRestore();
+  });
+
+  it("populates name and PEM from uploaded file", async () => {
+    render(<TrustedCAsTab onSave={vi.fn()} />);
+    await screen.findByText("Corp Root");
+    const file = new File(["pem-data"], "internal-ca.pem", {
+      type: "application/x-pem-file",
+    });
+    const fileInput = document.getElementById("trusted-ca-file") as HTMLInputElement;
+    await waitFor(() => expect(fileInput).not.toBeNull());
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fireEvent.change(fileInput);
+    await waitFor(() =>
+      expect(
+        (screen.getByPlaceholderText("Internal Corp Root CA") as HTMLInputElement).value
+      ).toBe("internal-ca")
+    );
+    expect((screen.getByPlaceholderText(/BEGIN CERTIFICATE/) as HTMLTextAreaElement).value).toBe(
+      "pem-data"
+    );
+  });
 });

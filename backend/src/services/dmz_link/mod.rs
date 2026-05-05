@@ -21,6 +21,7 @@ mod config;
 mod connector;
 mod h2_serve;
 mod registry;
+mod resume;
 mod router_adapter;
 mod supervisor;
 mod tls;
@@ -31,6 +32,7 @@ pub use h2_serve::{
     serve_h2, RejectHandler, RequestHandler, MAX_CONCURRENT_STREAMS, MAX_REQUEST_BODY_BYTES,
 };
 pub use registry::{LinkRegistry, LinkState, LinkStatus};
+pub use resume::{spawn_sweeper, ResumeError, ResumeRegistry};
 pub use router_adapter::{RouterHandler, MAX_RESPONSE_BODY_BYTES};
 pub use supervisor::spawn_link_supervisors;
 pub use tls::TlsLinkConnector;

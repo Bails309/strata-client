@@ -60,6 +60,33 @@ pub async fn log(
     action_type: &str,
     details: &serde_json::Value,
 ) -> anyhow::Result<()> {
+    // Merge the verified DMZ edge attribution into `details._edge` if a
+    // request-scoped context is active. This is the single integration
+    // point for W6-4 (audit cross-check): every audit call site benefits
+    // without per-route plumbing, and standalone deployments (no edge
+    // headers configured) get the unmodified payload.
+    let owned_details;
+    let details = match crate::services::edge_header::current_edge_context() {
+        Some(edge) if details.is_object() => {
+            let mut map = details.as_object().cloned().unwrap_or_default();
+            map.insert(
+                "_edge".to_string(),
+                serde_json::json!({
+                    "client_ip": edge.client_ip,
+                    "tls_version": edge.tls_version,
+                    "tls_cipher": edge.tls_cipher,
+                    "tls_ja3": edge.tls_ja3,
+                    "user_agent": edge.user_agent,
+                    "request_id": edge.request_id,
+                    "link_id": edge.link_id,
+                }),
+            );
+            owned_details = serde_json::Value::Object(map);
+            &owned_details
+        }
+        _ => details,
+    };
+
     let mut tx = pool.begin().await?;
 
     // Advisory lock serialises all audit inserts (key chosen to avoid collisions)

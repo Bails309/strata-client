@@ -73,6 +73,26 @@ pub struct TrustedEdgeContext {
 /// restarts, the old keys do not linger in freed heap pages.
 static KEYS: OnceLock<Vec<Zeroizing<Vec<u8>>>> = OnceLock::new();
 
+tokio::task_local! {
+    /// Per-request task-local copy of the verified edge attribution.
+    /// Populated by [`verify_edge_headers`] when MAC + timestamp checks
+    /// pass; read by the audit pipeline ([`crate::services::audit::log`])
+    /// to enrich every audit row written within the request scope with
+    /// the DMZ-signed forensics bundle. Closes W6-4 by recording the
+    /// signed `client_ip` alongside the TCP-peer IP for offline
+    /// correlation against the operator's known-DMZ-nodes allowlist.
+    pub static CURRENT_EDGE: TrustedEdgeContext;
+}
+
+/// Read the current request's verified edge context, if any.
+///
+/// Returns `None` outside of a request scope or in standalone
+/// deployments (no edge headers configured) — the audit pipeline
+/// silently falls back to recording the local socket peer.
+pub fn current_edge_context() -> Option<TrustedEdgeContext> {
+    CURRENT_EDGE.try_with(|c| c.clone()).ok()
+}
+
 /// Parse `STRATA_DMZ_EDGE_HMAC_KEYS` into a list of raw key bytes.
 /// Empty / unset env var → empty list (verification disabled).
 fn load_keys() -> Vec<Zeroizing<Vec<u8>>> {
@@ -93,6 +113,10 @@ fn keys() -> &'static [Zeroizing<Vec<u8>>] {
 }
 
 /// True when edge-header verification is enabled at startup.
+///
+/// Used by `/healthz` to surface DMZ-mode posture and by the operator
+/// admin status endpoint so the UI can render "DMZ-attributed" badges
+/// next to audit rows that carry an `_edge` enrichment block.
 pub fn is_enabled() -> bool {
     !keys().is_empty()
 }
@@ -194,7 +218,8 @@ pub async fn verify_edge_headers(mut req: Request, next: Next) -> Response {
     }
 
     // MAC + timestamp ok — attach context for the audit pipeline.
-    if let Some(ctx) = build_context(&signed) {
+    let ctx_for_scope = build_context(&signed);
+    if let Some(ctx) = ctx_for_scope.clone() {
         tracing::debug!(
             client_ip = %ctx.client_ip,
             link_id = ?ctx.link_id,
@@ -207,7 +232,14 @@ pub async fn verify_edge_headers(mut req: Request, next: Next) -> Response {
     // `TrustedEdgeContext` extension, not re-read the headers, so a
     // future routing layer cannot accidentally surface unverified data.
     strip_edge_headers(&mut req);
-    next.run(req).await
+
+    // Scope the verified context into a task-local for the lifetime of
+    // this request. `audit::log` reads it without per-call-site plumbing
+    // (W6-4 closes by enriching every audit row written downstream).
+    match ctx_for_scope {
+        Some(ctx) => CURRENT_EDGE.scope(ctx, next.run(req)).await,
+        None => next.run(req).await,
+    }
 }
 
 #[cfg(test)]

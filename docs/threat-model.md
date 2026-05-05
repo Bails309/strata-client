@@ -307,4 +307,4 @@ because it is now a Rust binary in our own build path. Specifically:
 | W6-1 | mTLS cert hot-reload without container restart | 6.6 (cert rotation friction) | Open |
 | W6-2 | Per-public-IP body-cap tuning via env | 6.3 D (body-cap tuning) | Open |
 | W6-3 | Ed25519 / asymmetric link auth (replace shared PSK) | 6.5 (symmetric PSK) | Backlog |
-| W6-4 | Audit log: cross-check TCP-peer IP vs signed client_ip | 6.5 (DMZ-attributed IP) | Open |
+| W6-4 | Audit log: cross-check TCP-peer IP vs signed client_ip | 6.5 (DMZ-attributed IP) | Resolved (Phase 6a) — every audit row written within a request scope is enriched with `details._edge` containing the verified `client_ip`, `tls_version`, `tls_cipher`, `tls_ja3`, `user_agent`, `request_id`, and `link_id`. Operators correlate the recorded `link_id` against their known-DMZ-nodes allowlist offline; a forged-DMZ scenario shows up as a `link_id` not present in the allowlist. |

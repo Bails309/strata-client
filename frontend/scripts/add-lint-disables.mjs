@@ -95,11 +95,19 @@ let skipped = 0;
 
 for (const [rel, rules] of Object.entries(FILES)) {
   const abs = path.join(ROOT, rel);
-  if (!fs.existsSync(abs)) {
-    console.warn(`MISSING: ${rel}`);
-    continue;
+  // Read and write without an `existsSync` probe — that pattern races (TOCTOU,
+  // CodeQL js/file-system-race). `readFileSync` throws ENOENT for missing
+  // files, which we treat the same as a "skip".
+  let src;
+  try {
+    src = fs.readFileSync(abs, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      console.warn(`MISSING: ${rel}`);
+      continue;
+    }
+    throw err;
   }
-  const src = fs.readFileSync(abs, "utf8");
   if (src.includes(MARKER)) {
     skipped++;
     continue;

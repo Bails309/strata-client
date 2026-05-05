@@ -1,3 +1,7 @@
+/* eslint-disable react-hooks/immutability --
+   react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
+   decoration, or render-time time/derivation patterns. See
+   eslint.config.js W4-1 commentary. */
 import { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";

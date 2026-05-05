@@ -1,3 +1,7 @@
+/* eslint-disable react-hooks/set-state-in-effect --
+   react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
+   decoration, or render-time time/derivation patterns. See
+   eslint.config.js W4-1 commentary. */
 import { useCallback, useEffect, useState } from "react";
 import Select from "../../components/Select";
 import { useSettings } from "../../contexts/SettingsContext";

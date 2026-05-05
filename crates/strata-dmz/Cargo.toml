@@ -38,6 +38,14 @@ serde_json = { workspace = true }
 # TLS
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+
+# HTTP/2 link transport
+h2 = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
@@ -54,6 +62,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 zeroize = { workspace = true }
 hostname = "0.4"
+rand = { workspace = true }
 
 # IDs
 uuid = { workspace = true }

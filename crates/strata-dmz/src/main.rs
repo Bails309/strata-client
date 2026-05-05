@@ -20,6 +20,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod config;
+mod link_server;
 
 use config::DmzConfig;
 
@@ -50,28 +51,96 @@ async fn main() -> anyhow::Result<()> {
         "strata-dmz config loaded",
     );
 
-    // Phase 2a: the public listener is still a stub. The real public
-    // surface (TLS, abuse-mitigation, reverse-proxy adapter) and the
-    // link server land in 2b–2e. Bind on the configured address so
-    // operators can verify config at least reaches the listener.
+    // Phase 2b — install rustls 0.23 with the ring crypto provider
+    // exactly once. Both the public listener (when implemented) and
+    // the link server share this provider.
+    if rustls::crypto::ring::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::warn!("rustls default crypto provider was already installed");
+    }
+
+    // Pick the active PSK id: the first inserted entry is by
+    // convention "the active key". The DmzConfig HashMap doesn't
+    // preserve insertion order, so until we add an explicit field
+    // the operator should set STRATA_DMZ_LINK_PSKS with `current:...`
+    // as the first entry and we enforce that at parse time in 2c.
+    // For now use any key — every accepted internal node MACs under
+    // the id we send back.
+    let active_psk_id = cfg
+        .link_psks
+        .keys()
+        .next()
+        .cloned()
+        .expect("DmzConfig::from_env guarantees ≥1 PSK");
+
+    // Build the link-server TLS acceptor (mTLS, h2 ALPN-only).
+    let acceptor = link_server::build_acceptor(
+        &cfg.link_tls.cert_pem,
+        &cfg.link_tls.key_pem,
+        &cfg.link_ca_bundle_pem,
+    )?;
+
+    let registry = link_server::LinkSessionRegistry::new();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+
+    let link_cfg = link_server::LinkServerConfig {
+        cluster_id: cfg.cluster_id.clone(),
+        active_psk_id,
+        psks: cfg.link_psks.clone(),
+        listen_addr: cfg.link_bind,
+    };
+    let registry_for_link = registry.clone();
+    let shutdown_for_link = shutdown.clone();
+    let link_handle = tokio::spawn(async move {
+        if let Err(e) =
+            link_server::serve_link(link_cfg, acceptor, registry_for_link, shutdown_for_link).await
+        {
+            tracing::error!(error = %e, "DMZ link server exited with error");
+        }
+    });
+
+    // Phase 2c will replace this stub with the real public surface
+    // (TLS termination + abuse mitigation + reverse-proxy adapter).
+    let registry_for_readyz = registry.clone();
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz));
+        .route(
+            "/readyz",
+            get(move || {
+                let r = registry_for_readyz.clone();
+                async move {
+                    if r.any_up() {
+                        (axum::http::StatusCode::OK, "ok")
+                    } else {
+                        (
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            "no internal links up",
+                        )
+                    }
+                }
+            }),
+        );
 
-    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2a stub listener)");
+    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2b: link server live; public stub)");
 
     let listener = tokio::net::TcpListener::bind(cfg.public_bind).await?;
-    axum::serve(listener, app).await?;
+    let serve_result = axum::serve(listener, app)
+        .with_graceful_shutdown({
+            let s = shutdown.clone();
+            async move {
+                tokio::signal::ctrl_c().await.ok();
+                s.cancel();
+            }
+        })
+        .await;
+
+    let _ = link_handle.await;
+    serve_result?;
     Ok(())
 }
 
 async fn healthz() -> &'static str {
     "ok"
-}
-
-async fn readyz() -> (axum::http::StatusCode, &'static str) {
-    // Phase 2b will gate this on "at least one internal link is up".
-    // Until then, the stub is always ready to ack — there is nothing
-    // to be unready for.
-    (axum::http::StatusCode::OK, "ok")
 }

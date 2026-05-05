@@ -48,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libkrb5-dev \
         ca-certificates \
         build-essential \
+        cmake \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -770,7 +770,7 @@ mod tests {
         spec.env.remove("VDI_USERNAME");
         spec.env.remove("VDI_PASSWORD");
         let cfg = build_for(&spec, Uuid::new_v4(), Uuid::new_v4(), "custom-net");
-        let endpoints = cfg.networking_config.unwrap().endpoints_config;
+        let endpoints = cfg.networking_config.unwrap().endpoints_config.unwrap();
         assert!(endpoints.contains_key("custom-net"));
     }
 
@@ -813,6 +813,10 @@ mod tests {
         spec.env.remove("VDI_USERNAME");
         spec.env.remove("VDI_PASSWORD");
         let cfg = build_for(&spec, Uuid::new_v4(), Uuid::new_v4(), "guac-internal");
-        assert!(cfg.exposed_ports.unwrap().contains_key("3389/tcp"));
+        assert!(cfg
+            .exposed_ports
+            .unwrap()
+            .iter()
+            .any(|p| p == "3389/tcp"));
     }
 }

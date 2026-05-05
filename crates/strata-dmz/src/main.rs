@@ -5,9 +5,9 @@
 //! request through a persistent **inbound** mTLS link to the internal
 //! `strata-backend` node. It holds NO Strata business secrets.
 //!
-//! Phase 2c scope: link server + reverse-proxy adapter live. Public
-//! TLS, abuse-mitigation tower layers, and the edge-header signer
-//! land in 2d–2e.
+//! Phase 2d scope: link server + reverse-proxy adapter + edge-header
+//! HMAC signer live. Public TLS termination and abuse-mitigation
+//! tower layers land in 2e.
 
 // Crate-wide we deny unsafe; the only exception is the boot-time env
 // scrubber in `config`, which is a single `unsafe` block guarded by
@@ -21,6 +21,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod config;
+mod edge_signer;
 mod link_server;
 mod proxy;
 
@@ -105,12 +106,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Phase 2c — public surface forwards every non-health request
     // through the reverse-proxy adapter, which picks a session from
-    // `registry` per request. Phase 2d will swap NoopEdgeSigner for
-    // the real HMAC signer; Phase 2e adds rate-limit / body-cap
-    // / concurrency tower layers.
+    // `registry` per request. Phase 2d wires the real HMAC edge-header
+    // signer; Phase 2e adds rate-limit / body-cap / concurrency tower
+    // layers.
+    let edge_signer = edge_signer::HmacEdgeSigner::from_config(
+        cfg.edge_hmac_key.clone(),
+        cfg.node_id.clone(),
+        &cfg.trust_forwarded_from,
+    );
     let proxy_state = proxy::ProxyState::new(
         registry.clone(),
-        Arc::new(proxy::NoopEdgeSigner) as Arc<dyn proxy::EdgeSigner>,
+        Arc::new(edge_signer) as Arc<dyn proxy::EdgeSigner>,
     );
     let registry_for_readyz = registry.clone();
     let app = Router::new()
@@ -134,10 +140,13 @@ async fn main() -> anyhow::Result<()> {
         .fallback(proxy::proxy_handler)
         .with_state(proxy_state);
 
-    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2c: link server + reverse-proxy adapter live)");
+    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2d: link server + reverse-proxy adapter + edge-header signer live)");
 
     let listener = tokio::net::TcpListener::bind(cfg.public_bind).await?;
-    let serve_result = axum::serve(listener, app)
+    let serve_result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
         .with_graceful_shutdown({
             let s = shutdown.clone();
             async move {

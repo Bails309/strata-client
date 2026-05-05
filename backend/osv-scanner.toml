@@ -1,0 +1,32 @@
+# OSV-Scanner configuration for the Rust backend.
+#
+# This file lives next to Cargo.lock so that osv-scanner (and the OpenSSF
+# Scorecard `Vulnerabilities` check, which uses osv-scanner under the hood)
+# applies these rules when scanning the Rust dependency graph.
+#
+# Reference: https://google.github.io/osv-scanner/configuration/
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = """
+Marvin Attack timing side-channel in the pure-Rust `rsa` crate (unfixable
+upstream as of 2026). The `rsa` crate appears in Cargo.lock as a
+resolution-graph artifact only and is NEVER compiled into the strata-backend
+binary:
+
+  1. `jsonwebtoken` is built with the `aws_lc_rs` feature, which uses the
+     AWS-LC native crypto backend (RustCrypto-free) for RSA signature
+     verification.
+
+  2. `sqlx` is configured with `default-features = false` and only the
+     `postgres` backend; `sqlx-mysql` (which depends on `rsa` for MySQL
+     `caching_sha2_password` auth) is excluded from the build graph.
+
+`cargo tree` does not list `rsa` in the actual compiled dependency graph.
+The `[[package]] name = "rsa"` entry in Cargo.lock exists because Cargo
+locks resolved versions for all reachable optional/feature-gated crates
+across the workspace, even those not selected for compilation.
+
+This is a documented false positive and will be removed if/when sqlx
+drops `rsa` from its umbrella crate manifest.
+"""

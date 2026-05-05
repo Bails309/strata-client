@@ -39,7 +39,8 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "The new strata-dmz crate (crates/strata-dmz) is a deliberately small Axum binary that owns the public TLS listener (default 0.0.0.0:8443), a separate link-server listener for inbound mTLS from internal nodes (default 0.0.0.0:9443), the SPA static-serving path, the slow-loris / rate-limit / inflight-cap guards and the x-strata-edge-* HMAC header signer. It does NOT link in any Postgres, Vault, JWT-signing, OIDC-client-secret or recording-storage code. The zero-secret-overlap matrix in docs/architecture.md is CI-enforced: a Cargo deny rule rejects any DMZ-side dependency on the internal-only secret-handling crates. Single-node operators are not affected — when STRATA_DMZ_ENDPOINTS is unset the internal node continues serving public traffic directly with no link supervisor spawned.",
       },
       {
-        title: "HTTP/2-over-mTLS reverse tunnel — every existing feature works through the DMZ on day one",
+        title:
+          "HTTP/2-over-mTLS reverse tunnel — every existing feature works through the DMZ on day one",
         description:
           "The internal node dials OUT to the DMZ over TLS 1.3 + mTLS using operator-supplied certs and a private CA bundle (the system trust store is NOT consulted on the link path). On top of TLS the wire format is HTTP/2: each user request becomes one HTTP/2 stream on the persistent link, WebSockets are carried as RFC 8441 Extended CONNECT streams (the same mechanism browsers use for WebSocket-over-HTTP/2), and per-stream WINDOW_UPDATE flow control gives back-pressure for free. No custom codec to fuzz; we lean on h2 and hyper. The internal node's existing axum::Router handles the request unmodified — every existing feature works through the DMZ on day one because the tunnel carries arbitrary HTTP requests rather than custom message types.",
       },
@@ -51,7 +52,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
       {
         title: "Admin → DMZ Links tab",
         description:
-          "A new Admin → DMZ Links page (frontend/src/pages/admin/DmzLinksTab.tsx) surfaces every supervisor's state (up / connecting / authenticating / initializing / backoff / stopped), connect counter, failure counter, last error and uptime. A Force reconnect button calls POST /api/admin/dmz-links/reconnect to drop and redial every link — used during scheduled DMZ restarts and as the first button in the incident-response runbook. The page auto-refreshes every 15 seconds. The configured-but-empty case (\"no DMZ endpoints configured\") and the disabled case (\"DMZ mode is not enabled\") render distinct empty-state cards so the operator can tell at a glance whether they're looking at a misconfiguration or a green-field single-node host.",
+          'A new Admin → DMZ Links page (frontend/src/pages/admin/DmzLinksTab.tsx) surfaces every supervisor\'s state (up / connecting / authenticating / initializing / backoff / stopped), connect counter, failure counter, last error and uptime. A Force reconnect button calls POST /api/admin/dmz-links/reconnect to drop and redial every link — used during scheduled DMZ restarts and as the first button in the incident-response runbook. The page auto-refreshes every 15 seconds. The configured-but-empty case ("no DMZ endpoints configured") and the disabled case ("DMZ mode is not enabled") render distinct empty-state cards so the operator can tell at a glance whether they\'re looking at a misconfiguration or a green-field single-node host.',
       },
       {
         title: "Operator-grade documentation, two new admin endpoints, drop-in upgrade",

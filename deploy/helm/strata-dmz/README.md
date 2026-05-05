@@ -5,7 +5,14 @@ Public-facing DMZ proxy for Strata Client. See
 architecture and [the deployment guide §DMZ](../../../docs/deployment.md#dmz-split-topology-optional)
 for the operator-facing summary.
 
-## Install
+> **Looking for an end-to-end walkthrough?** See
+> [Walkthrough B in the deployment guide](../../../docs/deployment.md#walkthrough-b--kubernetes-helm-chart)
+> — it covers namespace prep, all three required Secrets (app + link
+> mTLS + public TLS), values tuning, install, wiring the internal
+> backend release, verification, and rollback. The notes below are a
+> chart-level reference; the walkthrough is the canonical install path.
+
+## Quick install
 
 ```bash
 # 1. Generate the three application secrets and load them into a

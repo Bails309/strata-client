@@ -421,9 +421,8 @@ mod tests {
             wait_state(&reg, "test://dmz", LinkState::Up, 1000),
         )
         .await;
-        match bumped_to_up {
-            Ok(true) => panic!("link reached Up despite stalled h2 handshake"),
-            _ => {}
+        if let Ok(true) = bumped_to_up {
+            panic!("link reached Up despite stalled h2 handshake");
         }
         assert!(!reg.any_up());
 

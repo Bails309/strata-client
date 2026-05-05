@@ -292,7 +292,7 @@ mod tests {
         let map = extract_edge_headers(&req);
         assert_eq!(map.get("x-strata-edge-client-ip").unwrap(), "1.2.3.4");
         assert_eq!(map.get("x-strata-edge-link-id").unwrap(), "dmz-1");
-        assert!(map.get("authorization").is_none());
+        assert!(!map.contains_key("authorization"));
     }
 
     #[test]

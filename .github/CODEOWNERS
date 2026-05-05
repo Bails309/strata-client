@@ -1,0 +1,44 @@
+# Default reviewers for Strata Client.
+#
+# Lines later in this file take precedence; the LAST matching pattern for any
+# given path is the one GitHub uses. The catch-all rule is therefore at the
+# top, with more specific rules below.
+#
+# Replace `@Bails309` with the appropriate org/team handle (e.g. `@your-org/maintainers`)
+# once a maintainer team exists.
+
+# Catch-all
+*                                   @Bails309
+
+# Backend (Rust)
+/backend/                           @Bails309
+/backend/src/services/              @Bails309
+/backend/migrations/                @Bails309
+Cargo.toml                          @Bails309
+Cargo.lock                          @Bails309
+
+# Frontend (React / TypeScript)
+/frontend/                          @Bails309
+/frontend/package.json              @Bails309
+/frontend/package-lock.json         @Bails309
+
+# guacd image and patches — extra scrutiny on patches.
+/guacd/                             @Bails309
+/guacd/patches/                     @Bails309
+
+# End-to-end tests
+/e2e/                               @Bails309
+
+# Infrastructure / deployment
+/docker-compose.yml                 @Bails309
+/docker-compose.*.yml               @Bails309
+/.github/                           @Bails309
+/.github/workflows/                 @Bails309
+
+# Documentation
+/docs/                              @Bails309
+/README.md                          @Bails309
+/CHANGELOG.md                       @Bails309
+/WHATSNEW.md                        @Bails309
+/CONTRIBUTING.md                    @Bails309
+/SECURITY.md                        @Bails309

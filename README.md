@@ -12,8 +12,22 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.4.1-blue?style=flat-square" alt="Version">
-  <img src="https://img.shields.io/badge/license-Apache%202.0-green?style=flat-square" alt="License">
+  <a href="https://github.com/Bails309/strata-client/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Bails309/strata-client/ci.yml?branch=main&label=CI&style=flat-square&logo=github" alt="CI"></a>
+  <a href="https://github.com/Bails309/strata-client/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/Bails309/strata-client/codeql.yml?branch=main&label=CodeQL&style=flat-square&logo=github" alt="CodeQL"></a>
+  <a href="https://github.com/Bails309/strata-client/actions/workflows/trivy.yml"><img src="https://img.shields.io/github/actions/workflow/status/Bails309/strata-client/trivy.yml?branch=main&label=Trivy&style=flat-square&logo=aquasec&logoColor=white" alt="Trivy"></a>
+  <a href="https://github.com/Bails309/strata-client/releases/latest"><img src="https://img.shields.io/github/v/release/Bails309/strata-client?style=flat-square&logo=github&label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Bails309/strata-client?style=flat-square&color=green" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Bails309/strata-client/commits/main"><img src="https://img.shields.io/github/last-commit/Bails309/strata-client?style=flat-square&logo=git&logoColor=white" alt="Last commit"></a>
+  <a href="https://github.com/Bails309/strata-client/issues"><img src="https://img.shields.io/github/issues/Bails309/strata-client?style=flat-square&logo=github" alt="Open issues"></a>
+  <a href="https://github.com/Bails309/strata-client/pulls"><img src="https://img.shields.io/github/issues-pr/Bails309/strata-client?style=flat-square&logo=github" alt="Open PRs"></a>
+  <a href="https://github.com/Bails309/strata-client/graphs/contributors"><img src="https://img.shields.io/github/contributors/Bails309/strata-client?style=flat-square&logo=github" alt="Contributors"></a>
+  <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-informational?style=flat-square&logo=github" alt="Security policy"></a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/rust-1.95-orange?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=white" alt="React">
   <img src="https://img.shields.io/badge/typescript-6-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
@@ -27,7 +41,8 @@
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/api-reference.md">API Reference</a> ·
   <a href="docs/deployment.md">Deployment</a> ·
-  <a href="docs/security.md">Security</a>
+  <a href="docs/security.md">Security</a> ·
+  <a href="https://github.com/Bails309/strata-client/discussions">Discussions</a>
 </p>
 
 ---
@@ -107,41 +122,71 @@ For the full per-version history of how these capabilities were built and the bu
 | 1.3.1   | 2026-04-30 | SSH terminal defaults matching `rustguac`, phantom-selection mouse hygiene, recording-playback URL fix. ([details](CHANGELOG.md#131--2026-04-30))                       |
 | 1.3.0   | 2026-04-30 | Web-kiosk lifecycle correctness, Trusted-CA NSS DB resolution, suppressed Chromium infobar, protocol-aware Quick Share, nginx upstream resilience. ([details](CHANGELOG.md#130--2026-04-30)) |
 
+## � vs. vanilla Apache Guacamole
+
+Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — without forking guacd.
+
+| Capability                                | Apache Guacamole reference webapp | **Strata Client**                                                                                  |
+| ----------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Protocols                                 | RDP, VNC, SSH, Telnet, Kubernetes | **Same plus Web kiosk + VDI desktop containers**, all through one tunnel/recording/audit pipeline  |
+| Authentication                            | Built-in users, LDAP, SAML, etc.  | **OIDC / SSO with dynamic JWKS**, local auth, refresh-token rotation aligned with OWASP guidance   |
+| Authorisation                             | User/group permission model       | **10-permission RBAC** enforced at every admin endpoint, share-token mode, scoped checkout approvers |
+| Credential storage                        | XML / JDBC, encrypted-at-rest     | **HashiCorp Vault Transit envelope encryption** (bundled & auto-unsealed, or external)             |
+| Privileged-account workflow               | Not included                      | **Built-in PAM**: checkout / approval / rotation, LDAP `unicodePwd` reset, dedicated Approvals UI  |
+| Audit log                                 | Application log                   | **Append-only, SHA-256 hash-chained** `audit_logs` covering every privileged action                |
+| Live session observation                  | Not included                      | **NVR-style live observe** with 5-minute rewind buffer, share links (view/control), kill controls  |
+| Recording playback                        | Server-side render to video       | **In-browser playback** with seek/speed; optional Azure Blob Storage offload                       |
+| H.264 GFX                                 | Server-side transcode             | **End-to-end passthrough** to the browser's WebCodecs decoder — no proxy-side decode               |
+| Web / VDI sessions                        | Not supported                     | **First-class** kiosk Chromium-in-Xvnc and Strata-managed `xrdp` Docker containers                 |
+| Multi-monitor                             | Limited                           | **Window Management API** spans a session across physical monitors                                 |
+| Operator UX                               | JSP web app                       | **React 19 SPA** with setup wizard, scriptable Command Palette, Quick Share file CDN              |
+| Deployment                                | Tomcat + guacd + DB               | **`docker compose up -d` zero-config first boot** with bundled Postgres + Vault                    |
+
 ## 🏗️ Architecture
 
-```
-                          ┌──────────┐
-               :80/:443   │  Nginx   │
-          ◄──────────────►│ Gateway  │
-               HTTP(S)    └────┬─────┘
-                               │
-                  ┌────────────┴────────────┐
-                  │ /api/*          /* (SPA) │
-           ┌──────▼──────────┐   ┌──────────▼───┐
-           │  Rust Backend   │   │   Frontend   │
-           │  (Axum + Tokio) │   │   (nginx)    │
-           └────────┬────────┘   └──────────────┘
-                    │
-         TCP 4822   │               ┌────────────┐
-                    ├──────────────►│   guacd     │
-                    │               │ (FreeRDP3   │
-                    │               │  + H.264)   │
-                    │               ├─────────────┤
-                    │               │  guacd-2…   │
-                    │               │  (scale)    │
-                    │               └─────────────┘
-                    │
-       ┌────────────┴────────────┐
-       │                         │
- ┌─────▼─────┐           ┌──────▼────────┐
- │ PostgreSQL│           │  Vault 1.19   │
- │ (local or │           │  Transit      │
- │  external)│           │  (bundled or  │
- └───────────┘           │   external)   │
-                         └───────────────┘
+```mermaid
+flowchart LR
+    subgraph Browser
+        SPA["React 19 SPA<br/><sub>session client · admin · audit</sub>"]
+    end
+
+    Browser -->|HTTPS / WSS<br/>:80 :443| Nginx
+
+    subgraph EdgeNet["Edge"]
+        Nginx["<b>Nginx Gateway</b><br/><sub>TLS · routing · upstream resolver</sub>"]
+    end
+
+    Nginx -->|/api/*<br/>WebSocket tunnel| Backend
+    Nginx -->|/* SPA assets| Frontend
+
+    subgraph AppNet["Application tier"]
+        Backend["<b>Rust Backend</b><br/>Axum + Tokio<br/><sub>auth · RBAC · tunnel · audit · recording</sub>"]
+        Frontend["<b>Frontend container</b><br/><sub>nginx + static SPA</sub>"]
+    end
+
+    Backend -->|TCP 4822<br/>round-robin pool| GuacdPool
+    subgraph GuacdPool["guacd pool (custom image)"]
+        Guacd1["guacd<br/><sub>FreeRDP 3 · Kerberos · K8s · H.264</sub>"]
+        GuacdN["guacd-N<br/><sub>(horizontal scale)</sub>"]
+    end
+
+    Backend --> Postgres
+    Backend --> Vault
+    Backend --> SMTP
+    Backend -.->|optional| Blob
+
+    subgraph DataNet["Data tier"]
+        Postgres["<b>PostgreSQL 16</b><br/><sub>bundled or external</sub>"]
+        Vault["<b>HashiCorp Vault 1.19</b><br/><sub>Transit · auto-unsealed<br/>bundled or external</sub>"]
+    end
+
+    SMTP["SMTP relay<br/><sub>checkout notifications</sub>"]
+    Blob["Azure Blob Storage<br/><sub>recording offload</sub>"]
+
+    GuacdPool -->|RDP / VNC / SSH<br/>Kerberos / K8s API| Targets["Target hosts<br/><sub>Windows · Linux · K8s · Web</sub>"]
 ```
 
-See [docs/architecture.md](docs/architecture.md) for a detailed breakdown.
+See [docs/architecture.md](docs/architecture.md) for a detailed breakdown of every component, data path, and trust boundary.
 
 ## 🚀 Quick Start
 

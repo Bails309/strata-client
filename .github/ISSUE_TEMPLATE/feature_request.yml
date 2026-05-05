@@ -1,0 +1,67 @@
+name: ✨ Feature request
+description: Suggest a new capability or an improvement to an existing one.
+title: "feat: <one-line summary>"
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement.
+
+        For **larger ideas** or anything you'd like to discuss before code is written,
+        please open a [Discussion in the *Ideas* category](https://github.com/Bails309/strata-client/discussions/categories/ideas)
+        first — that gets more eyeballs than the issue tracker.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the operator / end-user pain point. Real-world examples are persuasive.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How should it work? Be concrete. UI sketches, API shapes, migration impact, RBAC implications all welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Backend (Rust)
+        - Frontend (React)
+        - guacd / patches
+        - Authentication / OIDC / SSO
+        - RBAC / permissions
+        - Audit / observability
+        - Recording / NVR
+        - Credential profiles / Vault
+        - Privileged Account Password Management
+        - Connection editor / dashboard
+        - Tunnel / WebSocket
+        - Documentation
+        - CI / CD / packaging
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you think about, and why does the proposed solution win?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mock-ups, references to similar features in other tools, related issues / ADRs.
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and discussions and confirmed this is not a duplicate.
+          required: true

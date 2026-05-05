@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Question / How do I…?
+    url: https://github.com/Bails309/strata-client/discussions
+    about: Ask in GitHub Discussions — questions, configuration help, deployment topology, comparisons. Faster answers than the issue tracker.
+  - name: 🔐 Security vulnerability
+    url: https://github.com/Bails309/strata-client/security/advisories/new
+    about: Privately report a security issue. Please do NOT open a public issue for security reports.
+  - name: 📖 Documentation
+    url: https://github.com/Bails309/strata-client/tree/main/docs
+    about: Architecture, security, API reference, deployment, runbooks, ADRs.

@@ -21,8 +21,10 @@ mod config;
 mod connector;
 mod registry;
 mod supervisor;
+mod tls;
 
 pub use config::{LinkConfig, LinkEndpoint};
 pub use connector::{BoxedStream, Connector};
 pub use registry::{LinkRegistry, LinkState, LinkStatus};
 pub use supervisor::spawn_link_supervisors;
+pub use tls::TlsLinkConnector;

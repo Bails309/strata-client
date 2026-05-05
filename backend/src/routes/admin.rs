@@ -4133,6 +4133,7 @@ mod tests {
                 )),
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
+            dmz_link_registry: None,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;
@@ -4162,6 +4163,7 @@ mod tests {
                 )),
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
+            dmz_link_registry: None,
             started_at: std::time::Instant::now(),
         }));
         let result = require_running(&state).await;

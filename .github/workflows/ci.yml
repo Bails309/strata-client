@@ -155,6 +155,14 @@ jobs:
       - name: Run unit tests
         run: cargo test -p strata-backend -- --test-threads=1
 
+      - name: Run strata-protocol unit tests
+        # Pure-rust crate, runs fast and shares the cargo cache; doing
+        # this in the same job keeps DMZ protocol coverage on the
+        # critical-path PR check rather than relying on the
+        # dmz-deps.yml workflow which only builds, never tests.
+        working-directory: .
+        run: cargo test -p strata-protocol
+
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
 

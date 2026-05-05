@@ -2,7 +2,7 @@
 
 > **Status:** Approved design, scaffold in progress.
 > **Supersedes:** `strata-dmz-implementation-plan.md` (v1, single-binary `--mode` flag design).
-> **Related ADR:** `docs/adr/0001-dmz-architecture.md` (to be authored in Phase 5).
+> **Related ADR:** [`docs/adr/ADR-0009-dmz-deployment-mode.md`](adr/ADR-0009-dmz-deployment-mode.md).
 
 This document is the canonical plan for adding a DMZ deployment mode to
 Strata Client. It replaces the single-binary `--mode internal|dmz` design

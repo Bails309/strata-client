@@ -146,8 +146,9 @@ export default function TagsTab({
       {/* Create new tag */}
       <div className="flex gap-2 items-end mb-6">
         <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-          <label>Tag Name</label>
+          <label htmlFor="tag-new-name">Tag Name</label>
           <input
+            id="tag-new-name"
             type="text"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -156,8 +157,8 @@ export default function TagsTab({
           />
         </div>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Color</label>
-          <div className="flex gap-1">
+          <span id="tag-new-color-label" className="form-label">Color</span>
+          <div className="flex gap-1" role="group" aria-labelledby="tag-new-color-label">
             {ADMIN_TAG_COLORS.map((c) => (
               <button
                 key={c}

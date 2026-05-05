@@ -76,28 +76,31 @@ export default function TrustedCAsTab({ onSave }: { onSave: () => void }) {
 
       <form onSubmit={handleAdd} className="mb-6">
         <div className="form-group">
-          <label>Name</label>
+          <label htmlFor="trusted-ca-name">Name</label>
           <input
+            id="trusted-ca-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Internal Corp Root CA"
           />
         </div>
         <div className="form-group">
-          <label>Description (optional)</label>
+          <label htmlFor="trusted-ca-description">Description (optional)</label>
           <input
+            id="trusted-ca-description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Issued 2024-03; expires 2034-03"
           />
         </div>
         <div className="form-group">
-          <label>PEM file</label>
-          <input type="file" accept=".pem,.crt,.cer" onChange={handleFile} />
+          <label htmlFor="trusted-ca-file">PEM file</label>
+          <input id="trusted-ca-file" type="file" accept=".pem,.crt,.cer" onChange={handleFile} />
         </div>
         <div className="form-group">
-          <label>PEM contents</label>
+          <label htmlFor="trusted-ca-pem">PEM contents</label>
           <textarea
+            id="trusted-ca-pem"
             rows={8}
             value={pem}
             onChange={(e) => setPem(e.target.value)}

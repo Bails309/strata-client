@@ -226,6 +226,9 @@ export default function QuickShare({
       {/* Upload area */}
       <div className="p-4 border-b border-white/5">
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Drop files or click to browse"
           className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${dragOver ? "border-accent bg-accent/10" : "border-white/10 hover:border-white/20 hover:bg-white/5"}`}
           onDragOver={(e) => {
             e.preventDefault();
@@ -234,6 +237,12 @@ export default function QuickShare({
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+            }
+          }}
         >
           <input
             ref={fileInputRef}

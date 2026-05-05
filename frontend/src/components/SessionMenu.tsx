@@ -67,7 +67,10 @@ export default function SessionMenu({
   if (!isOpen) return null;
 
   return (
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
     <div
+      role="dialog"
+      aria-label="Session menu"
       style={{
         position: "absolute",
         top: 0,
@@ -82,6 +85,7 @@ export default function SessionMenu({
         boxShadow: "4px 0 16px rgba(0,0,0,0.3)",
         overflow: "hidden",
       }}
+      // Stop click bubbling so the parent overlay does not dismiss the menu.
       onMouseDown={(e) => e.stopPropagation()}
     >
       {/* Header */}

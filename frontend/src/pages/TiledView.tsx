@@ -245,6 +245,9 @@ function TiledTile({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Session tile${session ? `: ${session.name}` : ""}`}
       style={{
         position: "relative",
         overflow: "hidden",
@@ -255,6 +258,12 @@ function TiledTile({
         transition: "border-color 0.15s",
       }}
       onMouseDown={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick(e as unknown as React.MouseEvent);
+        }
+      }}
     >
       {/* Title bar */}
       <div
@@ -331,7 +340,11 @@ function TiledTile({
 
       {/* Per-tile credential prompt */}
       {requiredParams && (
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
         <div
+          role="dialog"
+          aria-label="Enter credentials for this tile"
+          // Stop mousedown bubbling so the underlying tile click does not refocus.
           onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: "absolute",
@@ -369,6 +382,8 @@ function TiledTile({
                 placeholder={param.charAt(0).toUpperCase() + param.slice(1)}
                 value={credForm[param] || ""}
                 onChange={(e) => setCredForm((prev) => ({ ...prev, [param]: e.target.value }))}
+                // First required param on tiled prompt-modal mount — focus-on-appear UX.
+                // eslint-disable-next-line jsx-a11y/no-autofocus
                 autoFocus={param === requiredParams[0]}
                 style={{
                   width: "100%",

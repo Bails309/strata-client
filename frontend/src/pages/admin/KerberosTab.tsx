@@ -164,11 +164,13 @@ export default function KerberosTab({ onSave }: { onSave: () => void }) {
               value={editing.realm}
               onChange={(e) => setEditing({ ...editing, realm: e.target.value })}
               placeholder="EXAMPLE.COM"
+              // Realm-edit modal just opened — focus-on-appear UX.
+              // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
             />
           </div>
           <div className="form-group">
-            <label>KDC Servers</label>
+            <label htmlFor="krb-kdc-0">KDC Servers</label>
             {editing.kdcs.map((k, i) => (
               <div key={i} className="flex gap-2 mb-[0.4rem]">
                 <input

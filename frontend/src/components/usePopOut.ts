@@ -134,10 +134,10 @@ export function usePopOut(
     let height = Math.round(screen.availHeight * 0.8);
 
     try {
-      if ("getScreenDetails" in window) {
-        const details: ScreenDetails = await (window as any).getScreenDetails();
+      if (window.getScreenDetails) {
+        const details = await window.getScreenDetails();
         if (details.screens.length > 1) {
-          const secondary = details.screens.find((s: any) => !s.isPrimary) || details.screens[1];
+          const secondary = details.screens.find((s) => !s.isPrimary) || details.screens[1];
           left = secondary.availLeft;
           top = secondary.availTop;
           width = secondary.availWidth;
@@ -341,7 +341,8 @@ export function usePopOut(
     // window-resize event misses.
     let resizeObs: ResizeObserver | null = null;
     try {
-      resizeObs = new (popup as any).ResizeObserver(() => handleResize());
+      const PopupResizeObserver = (popup as Window & typeof globalThis).ResizeObserver;
+      resizeObs = new PopupResizeObserver(() => handleResize());
       resizeObs?.observe(body);
     } catch {
       // ResizeObserver not available in this popup — fall back to event
@@ -457,19 +458,4 @@ export function usePopOut(
   // handles teardown when the session actually ends.
 
   return { isPoppedOut, popOut, returnDisplay };
-}
-
-// Window Management API type augmentation
-interface ScreenDetails {
-  screens: ScreenDetailed[];
-  currentScreen: ScreenDetailed;
-}
-
-interface ScreenDetailed {
-  availLeft: number;
-  availTop: number;
-  availWidth: number;
-  availHeight: number;
-  isPrimary: boolean;
-  label: string;
 }

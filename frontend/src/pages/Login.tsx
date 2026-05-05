@@ -83,21 +83,25 @@ export default function Login({ onLogin }: Props) {
               className={status.sso_enabled ? "mb-6 pb-6 border-b border-border/50" : ""}
             >
               <div className="form-group">
-                <label>Username</label>
+                <label htmlFor="login-username">Username</label>
                 <input
+                  id="login-username"
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="admin"
                   autoComplete="username"
+                  // First field of the login form — expected focus-on-load UX.
+                  // eslint-disable-next-line jsx-a11y/no-autofocus
                   autoFocus
                   required
                 />
               </div>
 
               <div className="form-group">
-                <label>Password</label>
+                <label htmlFor="login-password">Password</label>
                 <input
+                  id="login-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}

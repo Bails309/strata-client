@@ -203,6 +203,8 @@ export default function NvrPlayer() {
         resizeObserver.disconnect();
       };
     },
+    // useAdminEndpoint is derived from searchParams once and stable for this view
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionId, cleanup]
   );
 
@@ -457,6 +459,12 @@ export default function NvrPlayer() {
           {/* Track */}
           <div
             ref={timelineRef}
+            role="slider"
+            aria-label="Playback timeline"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={availablePct}
+            tabIndex={0}
             className="relative h-3 rounded-full cursor-pointer select-none group"
             style={{ background: "var(--color-surface-elevated)" }}
             onMouseDown={(e) => {

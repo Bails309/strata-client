@@ -71,8 +71,8 @@ export default function VaultTab({
       )}
 
       <div className="form-group">
-        <label className="text-sm font-medium mb-2 block">Vault Mode</label>
-        <div className="flex gap-2">
+        <span id="vault-mode-label" className="text-sm font-medium mb-2 block">Vault Mode</span>
+        <div className="flex gap-2" role="group" aria-labelledby="vault-mode-label">
           <button
             className={`btn flex-1 ${mode === "local" ? "!bg-accent/10 !border-accent !text-accent" : ""}`}
             onClick={() => setMode("local")}
@@ -98,16 +98,18 @@ export default function VaultTab({
       {mode === "external" && (
         <>
           <div className="form-group">
-            <label>Vault URL</label>
+            <label htmlFor="vault-url">Vault URL</label>
             <input
+              id="vault-url"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="http://vault:8200"
             />
           </div>
           <div className="form-group">
-            <label>Vault Token / AppRole</label>
+            <label htmlFor="vault-token">Vault Token / AppRole</label>
             <input
+              id="vault-token"
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -118,8 +120,8 @@ export default function VaultTab({
       )}
 
       <div className="form-group">
-        <label>Transit Key Name</label>
-        <input value={transitKey} onChange={(e) => setTransitKey(e.target.value)} />
+        <label htmlFor="vault-transit-key">Transit Key Name</label>
+        <input id="vault-transit-key" value={transitKey} onChange={(e) => setTransitKey(e.target.value)} />
       </div>
 
       <button className="btn-primary" onClick={handleSave} disabled={saving}>
@@ -140,9 +142,10 @@ export default function VaultTab({
           password before expired credentials will be used. Maximum allowed TTL is 12 hours.
         </p>
         <div className="form-group">
-          <label>Time-to-Live (hours)</label>
+          <label htmlFor="vault-cred-ttl">Time-to-Live (hours)</label>
           <div className="flex items-center gap-3">
             <input
+              id="vault-cred-ttl"
               type="range"
               min={1}
               max={12}

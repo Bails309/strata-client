@@ -14,6 +14,7 @@ interface SelectProps {
   disabled?: boolean;
   className?: string;
   searchable?: boolean;
+  id?: string;
 }
 
 export default function Select({
@@ -24,6 +25,7 @@ export default function Select({
   disabled,
   className,
   searchable,
+  id,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -93,6 +95,7 @@ export default function Select({
     <div className={`relative ${className || "w-full"}`} ref={ref}>
       <button
         type="button"
+        id={id}
         className={`cs-trigger ${open ? "cs-trigger-open" : ""} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
@@ -169,11 +172,19 @@ export default function Select({
                 <li
                   key={opt.value}
                   role="option"
+                  tabIndex={-1}
                   aria-selected={opt.value === value}
                   className={`cs-option ${opt.value === value ? "cs-option-selected" : ""}`}
                   onClick={() => {
                     onChange(opt.value);
                     setOpen(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onChange(opt.value);
+                      setOpen(false);
+                    }
                   }}
                 >
                   {opt.label}

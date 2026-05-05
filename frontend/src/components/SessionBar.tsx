@@ -929,7 +929,15 @@ function SessionThumbnail({
   return (
     <div
       className={`session-thumb ${isActive ? "session-thumb-active" : ""} ${session.error ? "session-thumb-error" : ""}`}
+      role="button"
+      tabIndex={0}
       onClick={onSwitch}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSwitch();
+        }
+      }}
       title={sessionBarCollapsed ? undefined : session.name}
     >
       <canvas
@@ -974,17 +982,25 @@ function SessionThumbnail({
           {/* Tag Picker Modal Overlay */}
           {tagPickerOpen && (
             <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Display tag"
               className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
-              onClick={(e) => {
-                e.stopPropagation();
-                setTagPickerOpen(false);
-              }}
             >
+              <button
+                type="button"
+                aria-label="Close"
+                tabIndex={-1}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTagPickerOpen(false);
+                }}
+                className="absolute inset-0 cursor-default bg-transparent border-0"
+              />
               <div
                 ref={tagPickerRef}
-                className="card w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col"
+                className="card w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col relative"
                 style={{ maxHeight: "min(70vh, 600px)" }}
-                onClick={(e) => e.stopPropagation()}
               >
                 {/* Header */}
                 <div className="flex items-start justify-between gap-3 mb-3">
@@ -1021,6 +1037,8 @@ function SessionThumbnail({
                 {userTags.length > 6 && (
                   <input
                     type="text"
+                    // Tag-filter input only mounts after the user opens the filter — expected UX is focus-on-appear.
+                    // eslint-disable-next-line jsx-a11y/no-autofocus
                     autoFocus
                     value={tagFilter}
                     onChange={(e) => setTagFilter(e.target.value)}

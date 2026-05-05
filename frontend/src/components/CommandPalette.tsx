@@ -805,14 +805,22 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
       className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh]"
-      onClick={onClose}
       style={{ background: "rgba(0, 0, 0, 0.6)", backdropFilter: "blur(8px)" }}
     >
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default bg-transparent border-0"
+      />
       {/* Palette container */}
       <div
-        className="w-full max-w-[560px] rounded-2xl border overflow-hidden shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[560px] rounded-2xl border overflow-hidden shadow-2xl relative"
         style={{
           background: "var(--color-surface-secondary)",
           borderColor: "var(--color-border)",
@@ -935,6 +943,12 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       opacity: cmd.valid ? 1 : 0.6,
                     }}
                     onClick={() => executeCommand(cmd)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        executeCommand(cmd);
+                      }
+                    }}
                     onMouseEnter={() => setSelectedIndex(i)}
                   >
                     <div
@@ -1039,6 +1053,12 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                     color: "var(--color-txt-primary)",
                   }}
                   onClick={() => launch(conn)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      launch(conn);
+                    }
+                  }}
                   onMouseEnter={() => setSelectedIndex(i)}
                 >
                   <div

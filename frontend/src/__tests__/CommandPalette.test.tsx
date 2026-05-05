@@ -180,9 +180,9 @@ describe("CommandPalette", () => {
     const { onClose } = setup();
     await waitFor(() => expect(screen.getByText("Dev Server")).toBeInTheDocument());
 
-    // Click the backdrop (the outer overlay element)
-    const backdrop = screen.getByText("Dev Server").closest(".fixed");
-    if (backdrop) await user.click(backdrop);
+    // Click the backdrop button overlay
+    const backdrop = screen.getByLabelText("Close");
+    await user.click(backdrop);
     expect(onClose).toHaveBeenCalled();
   });
 

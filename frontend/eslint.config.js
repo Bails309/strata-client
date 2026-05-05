@@ -78,7 +78,16 @@ export default [
       // associated, plus a handful of `autoFocus` UX choices). They're real
       // a11y debt but not security/correctness — we surface them as warnings
       // and ratchet them up per-page as forms are touched. Tracked under W4-2.
-      "jsx-a11y/label-has-associated-control": "warn",
+      "jsx-a11y/label-has-associated-control": [
+        "warn",
+        {
+          // `Select` is our custom dropdown that renders an aria-labellable
+          // <button> trigger; treat it as a labelable control so labels that
+          // wrap or reference one satisfy the rule.
+          controlComponents: ["Select"],
+          depth: 3,
+        },
+      ],
       "jsx-a11y/no-autofocus": "warn",
 
       // Security — errors

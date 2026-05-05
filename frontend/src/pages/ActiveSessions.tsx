@@ -56,7 +56,7 @@ export default function ActiveSessions() {
       await killSessions(Array.from(selected));
       setSelected(new Set());
       await refresh();
-    } catch (err) {
+    } catch {
       alert("Failed to terminate sessions");
     } finally {
       setKilling(false);

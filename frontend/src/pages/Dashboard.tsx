@@ -551,6 +551,8 @@ export default function Dashboard() {
       // All connections have vault credentials – open immediately
       launchTiled(ready, {});
     }
+    // launchTiled is defined below; including it would create a circular dep cycle
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checked, connections]);
 
   /** Create all tiled sessions and navigate */
@@ -666,6 +668,8 @@ export default function Dashboard() {
           <div className="recent-cards-grid">
             {recentConnections.map((conn) => {
               const status = getCredStatus(conn.id);
+              // Bounded {3} repetition, no nested quantifiers — not ReDoS-vulnerable.
+              // eslint-disable-next-line security/detect-unsafe-regex
               const isIP = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(conn.hostname);
               const domainLabel =
                 conn.domain || (isIP ? "" : conn.hostname.split(".").slice(1).join("."));
@@ -673,7 +677,15 @@ export default function Dashboard() {
                 <div
                   key={conn.id}
                   className="recent-card"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => navigate(`/session/${conn.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      navigate(`/session/${conn.id}`);
+                    }
+                  }}
                 >
                   {/* Status indicator dot */}
                   <div
@@ -823,11 +835,12 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="!mb-0 text-xs uppercase text-txt-tertiary font-semibold tracking-wide">
+          <label htmlFor="dashboard-type-filter" className="!mb-0 text-xs uppercase text-txt-tertiary font-semibold tracking-wide">
             Type
           </label>
           <div className="min-w-[140px]">
             <Select
+              id="dashboard-type-filter"
               value={typeFilter}
               onChange={setTypeFilter}
               placeholder="Select select"
@@ -925,9 +938,18 @@ export default function Dashboard() {
                 {!adminTags.some((at) => at.id === tag.id) && (
                   <span
                     className="ml-0.5 opacity-50 hover:opacity-100"
+                    role="button"
+                    tabIndex={0}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteTag(tag.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeleteTag(tag.id);
+                      }
                     }}
                     title="Delete tag"
                   >
@@ -1163,6 +1185,9 @@ export default function Dashboard() {
       {/* ── Tiled credential prompt modal ── */}
       {tiledCredPrompt && (
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Enter Credentials"
           style={{
             position: "fixed",
             inset: 0,
@@ -1172,12 +1197,17 @@ export default function Dashboard() {
             justifyContent: "center",
             background: "rgba(0,0,0,0.5)",
           }}
-          onClick={() => setTiledCredPrompt(null)}
         >
+          <button
+            type="button"
+            aria-label="Cancel"
+            tabIndex={-1}
+            onClick={() => setTiledCredPrompt(null)}
+            className="absolute inset-0 cursor-default bg-transparent border-0"
+          />
           <div
             className="card"
-            style={{ maxWidth: 440, width: "100%", maxHeight: "80vh", overflow: "auto" }}
-            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 440, width: "100%", maxHeight: "80vh", overflow: "auto", position: "relative" }}
           >
             <h3 style={{ marginBottom: 4 }}>Enter Credentials</h3>
             <p className="text-[0.8125rem] text-txt-secondary" style={{ marginBottom: 16 }}>

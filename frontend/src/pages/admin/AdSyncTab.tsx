@@ -130,8 +130,8 @@ export default function AdSyncTab({
     try {
       const result = await testAdSyncConnection(config);
       setTestResult(result);
-    } catch (e: any) {
-      setTestResult({ status: "error", message: e.message || "Test failed" });
+    } catch (e) {
+      setTestResult({ status: "error", message: e instanceof Error ? e.message : "Test failed" });
     } finally {
       setTesting(false);
     }
@@ -144,8 +144,11 @@ export default function AdSyncTab({
     try {
       const res = await testRotation(editing.id);
       setRotationResult(res);
-    } catch (e: any) {
-      setRotationResult({ success: false, message: e.message || "Rotation test failed" });
+    } catch (e) {
+      setRotationResult({
+        success: false,
+        message: e instanceof Error ? e.message : "Rotation test failed",
+      });
     } finally {
       setRotationTesting(false);
     }
@@ -158,8 +161,11 @@ export default function AdSyncTab({
     try {
       const res = await testPmTargetFilter(editing);
       setFilterResult(res);
-    } catch (e: any) {
-      setFilterResult({ status: "error", message: e.message || "Filter test failed" });
+    } catch (e) {
+      setFilterResult({
+        status: "error",
+        message: e instanceof Error ? e.message : "Filter test failed",
+      });
     } finally {
       setFilterTesting(false);
     }
@@ -499,10 +505,11 @@ export default function AdSyncTab({
               </div>
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 mb-4">
                 <div className="form-group !mb-0">
-                  <label title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted.">
+                  <label htmlFor="ad-cd-keyboard" title="The server-side keyboard layout. This is the layout of the RDP server and determines how keystrokes are interpreted.">
                     Keyboard Layout
                   </label>
                   <Select
+                    id="ad-cd-keyboard"
                     value={(editing.connection_defaults ?? {})["server-layout"] || ""}
                     onChange={(v) => {
                       const cd = { ...(editing.connection_defaults ?? {}) };
@@ -515,10 +522,11 @@ export default function AdSyncTab({
                   />
                 </div>
                 <div className="form-group !mb-0">
-                  <label title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">
+                  <label htmlFor="ad-cd-timezone" title="The timezone that the client should send to the server for configuring the local time display, in IANA format (e.g. America/New_York).">
                     Timezone
                   </label>
                   <Select
+                    id="ad-cd-timezone"
                     value={(editing.connection_defaults ?? {})["timezone"] || ""}
                     onChange={(v) => {
                       const cd = { ...(editing.connection_defaults ?? {}) };

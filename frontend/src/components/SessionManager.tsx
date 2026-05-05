@@ -302,7 +302,7 @@ export function SessionManagerProvider({
           writer.sendEnd();
           session.remoteClipboard = text; // Update local state to avoid echo
         }
-      } catch (err) {
+      } catch {
         // Silently fail if clipboard access is denied
       }
     };
@@ -435,6 +435,8 @@ export function SessionManagerProvider({
     setSessions((prev) => [...prev, session]);
     setActiveSessionId(sessionId);
     return session;
+    // openSession is intentionally stable; cleanupPopout is referenced via closure and is itself stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const closeSession = useCallback(

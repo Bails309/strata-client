@@ -55,8 +55,8 @@ export default function SetupWizard({ onComplete }: Props) {
         )}
 
         <div className="form-group">
-          <label className="text-sm font-medium mb-2 block">Vault Mode</label>
-          <div className="grid gap-2">
+          <span id="setup-vault-mode-label" className="text-sm font-medium mb-2 block">Vault Mode</span>
+          <div className="grid gap-2" role="radiogroup" aria-labelledby="setup-vault-mode-label">
             {[
               {
                 value: "local" as VaultMode,
@@ -102,8 +102,9 @@ export default function SetupWizard({ onComplete }: Props) {
         {vaultMode === "external" && (
           <>
             <div className="form-group">
-              <label>Vault URL</label>
+              <label htmlFor="setup-vault-url">Vault URL</label>
               <input
+                id="setup-vault-url"
                 type="text"
                 placeholder="http://vault:8200"
                 value={vaultAddr}
@@ -112,8 +113,9 @@ export default function SetupWizard({ onComplete }: Props) {
             </div>
 
             <div className="form-group">
-              <label>Vault Token / AppRole</label>
+              <label htmlFor="setup-vault-token">Vault Token / AppRole</label>
               <input
+                id="setup-vault-token"
                 type="password"
                 placeholder="s.xxxxxxxxx"
                 value={vaultToken}
@@ -125,8 +127,8 @@ export default function SetupWizard({ onComplete }: Props) {
 
         {vaultMode !== "skip" && (
           <div className="form-group">
-            <label>Transit Key Name</label>
-            <input type="text" value={vaultKey} onChange={(e) => setVaultKey(e.target.value)} />
+            <label htmlFor="setup-vault-transit-key">Transit Key Name</label>
+            <input id="setup-vault-transit-key" type="text" value={vaultKey} onChange={(e) => setVaultKey(e.target.value)} />
           </div>
         )}
 

@@ -66,8 +66,9 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
 
   // Cleanup timers on unmount
   useEffect(() => {
+    const timers = revealTimers.current;
     return () => {
-      Object.values(revealTimers.current).forEach(clearTimeout);
+      Object.values(timers).forEach(clearTimeout);
     };
   }, []);
 
@@ -133,6 +134,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
     } catch {
       setError("Failed to load credential data");
     }
+    // isCheckoutExpired is a stable derivation; including it would re-fetch every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -305,8 +308,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       setScheduleEnabled(false);
       setScheduledStart("");
       load();
-    } catch (e: any) {
-      flash(e.message || "Request failed");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Request failed");
     }
     setSubmitting(false);
   };
@@ -316,8 +319,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       const res = await revealCheckoutPassword(id);
       setRevealedPw((p) => ({ ...p, [id]: res.password }));
       scheduleHidePassword(id);
-    } catch (e: any) {
-      flash(e.message || "Failed to reveal password");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Failed to reveal password");
     }
   };
 
@@ -327,8 +330,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       flash(checkoutId ? "Checkout linked to profile" : "Checkout unlinked");
       setLinkingProfileId(null);
       await load();
-    } catch (e: any) {
-      flash(e.message || "Failed to link checkout");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Failed to link checkout");
     }
   };
 
@@ -636,8 +639,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                               setError("");
                               await retryCheckoutActivation(c.id);
                               await load();
-                            } catch (e: any) {
-                              setError(e?.message || "Retry failed");
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : "Retry failed");
                             }
                           }}
                         >
@@ -794,10 +797,19 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                       {/* Profile header */}
                       <div
                         className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors duration-150"
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={isExpanded}
                         style={{
                           borderBottom: isExpanded ? "1px solid var(--color-border)" : "none",
                         }}
                         onClick={() => setExpanded(isExpanded ? null : profile.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setExpanded(isExpanded ? null : profile.id);
+                          }
+                        }}
                       >
                         <div className="flex items-center gap-3">
                           <div
@@ -959,9 +971,9 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 className="mt-3 pt-3"
                                 style={{ borderTop: "1px solid var(--color-border)" }}
                               >
-                                <label className="text-xs font-medium text-txt-secondary mb-2 block uppercase tracking-wider">
+                                <span className="text-xs font-medium text-txt-secondary mb-2 block uppercase tracking-wider">
                                   Checked-Out Account
-                                </label>
+                                </span>
                                 {profile.checkout_id ? (
                                   (() => {
                                     const linked = allCheckouts.find(
@@ -1054,14 +1066,24 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 paddingTop: profileMappings.length > 0 ? "1rem" : 0,
                               }}
                             >
-                              <label className="text-xs font-medium text-txt-secondary mb-1 block">
+                              <label htmlFor="add-mapping-connections" className="text-xs font-medium text-txt-secondary mb-1 block">
                                 Connections
                               </label>
                               <div className="relative">
                                 <div
                                   ref={mappingTriggerRef}
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-haspopup="listbox"
+                                  aria-expanded={mappingDropdownOpen}
                                   className="cs-trigger cursor-pointer min-h-[2.5rem] flex flex-wrap items-center gap-1.5 !py-1.5"
                                   onClick={() => setMappingDropdownOpen(!mappingDropdownOpen)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      setMappingDropdownOpen(!mappingDropdownOpen);
+                                    }
+                                  }}
                                 >
                                   {mappingConnectionIds.map((cid) => {
                                     const conn = connections.find((c) => c.id === cid);
@@ -1129,6 +1151,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                           value={mappingSearch}
                                           onChange={(e) => setMappingSearch(e.target.value)}
                                           onClick={(e) => e.stopPropagation()}
+                                          // Mapping picker just opened — focus-on-appear is the expected UX.
+                                          // eslint-disable-next-line jsx-a11y/no-autofocus
                                           autoFocus
                                         />
                                       </div>
@@ -1147,6 +1171,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                             <li
                                               key={c.id}
                                               role="option"
+                                              tabIndex={-1}
                                               aria-selected={isSelected}
                                               className="cs-option flex items-center gap-2 cursor-pointer"
                                               onClick={(e) => {
@@ -1158,6 +1183,18 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                                       )
                                                     : [...mappingConnectionIds, c.id]
                                                 );
+                                              }}
+                                              onKeyDown={(e) => {
+                                                if (e.key === "Enter" || e.key === " ") {
+                                                  e.preventDefault();
+                                                  setMappingConnectionIds(
+                                                    isSelected
+                                                      ? mappingConnectionIds.filter(
+                                                          (id) => id !== c.id
+                                                        )
+                                                      : [...mappingConnectionIds, c.id]
+                                                  );
+                                                }
                                               }}
                                             >
                                               <span
@@ -1273,12 +1310,20 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       {checkinId &&
         createPortal(
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Check in account"
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
-            onClick={() => setCheckinId(null)}
           >
+            <button
+              type="button"
+              aria-label="Cancel"
+              tabIndex={-1}
+              onClick={() => setCheckinId(null)}
+              className="absolute inset-0 cursor-default bg-transparent border-0"
+            />
             <div
-              className="card max-w-sm w-full mx-4 shadow-2xl scale-in"
-              onClick={(e) => e.stopPropagation()}
+              className="card max-w-sm w-full mx-4 shadow-2xl scale-in relative"
               style={{ border: "1px solid rgba(var(--accent-rgb, 139, 92, 246), 0.3)" }}
             >
               <div className="flex items-center gap-3 text-accent mb-4">
@@ -1321,8 +1366,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                         return rest;
                       });
                       await load();
-                    } catch (e: any) {
-                      setError(e?.message || "Check-in failed");
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Check-in failed");
                     }
                   }}
                 >
@@ -1341,12 +1386,20 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
       {deletingId &&
         createPortal(
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Delete profile"
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
-            onClick={() => setDeletingId(null)}
           >
+            <button
+              type="button"
+              aria-label="Cancel"
+              tabIndex={-1}
+              onClick={() => setDeletingId(null)}
+              className="absolute inset-0 cursor-default bg-transparent border-0"
+            />
             <div
-              className="card max-w-sm w-full mx-4 shadow-2xl scale-in"
-              onClick={(e) => e.stopPropagation()}
+              className="card max-w-sm w-full mx-4 shadow-2xl scale-in relative"
               style={{ border: "1px solid rgba(239, 68, 68, 0.2)" }}
             >
               <div className="flex items-center gap-3 text-danger mb-4">

@@ -70,7 +70,7 @@ interface SecondaryWindow {
 }
 
 /** Live ScreenDetails object — fires `screenschange` when monitors change. */
-let liveScreenDetails: any = null;
+let liveScreenDetails: ScreenDetails | null = null;
 
 /**
  * Map raw ScreenDetailed objects to ScreenInfo, falling back to
@@ -79,10 +79,10 @@ let liveScreenDetails: any = null;
  * `availHeight` in the `getScreenDetails()` API for fingerprinting
  * protection.
  */
-function mapScreenDetails(details: any): ScreenInfo[] {
+function mapScreenDetails(details: ScreenDetails): ScreenInfo[] {
   const fallbackW = window.screen.availWidth;
   const fallbackH = window.screen.availHeight;
-  return details.screens.map((s: any) => ({
+  return details.screens.map((s) => ({
     left: s.availLeft ?? 0,
     top: s.availTop ?? 0,
     width: s.availWidth > 0 ? s.availWidth : fallbackW,
@@ -187,9 +187,9 @@ export function useMultiMonitor(
     // it from the click handler (user gesture) as a fallback.
     (async () => {
       try {
-        liveScreenDetails = await (window as any).getScreenDetails();
+        liveScreenDetails = (await window.getScreenDetails?.()) ?? null;
         refreshCache();
-        liveScreenDetails.addEventListener("screenschange", refreshCache);
+        liveScreenDetails?.addEventListener("screenschange", refreshCache);
       } catch {
         /* permission denied or no user gesture — will retry on click */
       }
@@ -219,13 +219,14 @@ export function useMultiMonitor(
     // This is the critical call that tells Chrome to allow multiple popups.
     // When the permission is already granted, it resolves in ~1ms and
     // Chrome preserves user activation through the await.
-    let details: any;
+    let details: ScreenDetails | undefined;
     try {
-      details = await (window as any).getScreenDetails();
+      details = await window.getScreenDetails?.();
     } catch {
       // Permission denied — cannot do multi-monitor
       return;
     }
+    if (!details) return;
 
     // Update the cache from the fresh details
     liveScreenDetails = details;

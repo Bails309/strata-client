@@ -400,9 +400,9 @@ describe("HistoricalPlayer", () => {
   it("calls onClose when overlay background clicked", () => {
     render(<HistoricalPlayer recording={mockRecording as any} onClose={onClose} />);
 
-    const overlay = document.querySelector(".player-overlay");
+    const overlay = screen.getByLabelText("Close");
     act(() => {
-      fireEvent.click(overlay!);
+      fireEvent.click(overlay);
     });
     expect(onClose).toHaveBeenCalled();
   });

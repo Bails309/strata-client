@@ -1238,10 +1238,8 @@ describe("uploadQuickShareFile", () => {
 
   it("throws Session expired when refresh fails on 401", async () => {
     localStorage.setItem("access_token", "expired");
-    let callCount = 0;
 
     globalThis.fetch = vi.fn(async () => {
-      callCount++;
       return new Response("", { status: 401 });
     }) as unknown as typeof fetch;
 

@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+
 interface ConfirmModalProps {
   isOpen: boolean;
   title: string;
@@ -19,16 +21,33 @@ export default function ConfirmModal({
   onCancel,
   isDangerous = false,
 }: ConfirmModalProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onCancel]);
+
   if (!isOpen) return null;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-modal-title"
       className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
-      onClick={onCancel}
     >
+      <button
+        type="button"
+        aria-label="Close dialog"
+        onClick={onCancel}
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default bg-transparent border-0"
+      />
       <div
-        className="card w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200"
-        onClick={(e) => e.stopPropagation()}
+        className="card w-full max-w-sm shadow-2xl animate-in fade-in zoom-in duration-200 relative"
         style={{
           border: isDangerous
             ? "1px solid var(--color-danger-dim, rgba(239, 68, 68, 0.2))"
@@ -50,7 +69,7 @@ export default function ConfirmModal({
               </svg>
             </div>
           )}
-          <h3 className="text-lg font-bold !mb-0">{title}</h3>
+          <h3 id="confirm-modal-title" className="text-lg font-bold !mb-0">{title}</h3>
         </div>
 
         <p className="text-sm text-txt-secondary mb-6 leading-relaxed">{message}</p>

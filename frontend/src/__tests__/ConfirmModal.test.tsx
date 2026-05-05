@@ -122,11 +122,11 @@ describe("ConfirmModal", () => {
   it("calls onCancel when backdrop clicked", async () => {
     const user = userEvent.setup();
     const fn = vi.fn();
-    const { container } = render(
+    render(
       <ConfirmModal isOpen={true} title="T" message="M" onConfirm={onConfirm} onCancel={fn} />
     );
-    // Click the backdrop (outermost fixed div)
-    const backdrop = container.firstElementChild as HTMLElement;
+    // Click the backdrop button (now an inner aria-labelled button overlay)
+    const backdrop = screen.getByLabelText("Close dialog");
     await user.click(backdrop);
     expect(fn).toHaveBeenCalled();
   });

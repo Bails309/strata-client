@@ -46,6 +46,8 @@ export default function NetworkTab({
       .filter(Boolean);
     for (const entry of entries) {
       // Accept ip or ip:port
+      // Bounded \d{1,3} repetitions and a single optional port group — not ReDoS-vulnerable.
+      // eslint-disable-next-line security/detect-unsafe-regex
       const ipPortMatch = entry.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d+))?$/);
       if (!ipPortMatch) return `Invalid DNS server address: "${entry}". Use IP or IP:port format.`;
       const octets = ipPortMatch[1].split(".").map(Number);
@@ -68,6 +70,8 @@ export default function NetworkTab({
       .filter(Boolean);
     if (domains.length > 6) return "resolv.conf supports at most 6 search domains.";
     for (const d of domains) {
+      // Optional middle group is single-quantifier; outer anchors prevent backtracking blowup.
+      // eslint-disable-next-line security/detect-unsafe-regex
       if (!/^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(d)) {
         return `Invalid domain: "${d}". Use only letters, numbers, dots, and hyphens.`;
       }
@@ -101,7 +105,7 @@ export default function NetworkTab({
             hostname-based authentication (including Kerberos/NLA).
           </p>
           <div className="form-group">
-            <label className="flex items-center gap-3 cursor-pointer group">
+            <label className="flex items-center gap-3 cursor-pointer group" aria-label="Enable Custom DNS">
               <input
                 type="checkbox"
                 checked={dnsEnabled}
@@ -129,8 +133,9 @@ export default function NetworkTab({
               DNS Servers
             </h4>
             <div className="form-group">
-              <label className="form-label">DNS Server Addresses</label>
+              <label htmlFor="dns-server-addresses" className="form-label">DNS Server Addresses</label>
               <input
+                id="dns-server-addresses"
                 className="input"
                 value={dnsServers}
                 onChange={(e) => {
@@ -147,8 +152,9 @@ export default function NetworkTab({
             </div>
 
             <div className="form-group mt-6">
-              <label className="form-label">Search Domains</label>
+              <label htmlFor="dns-search-domains" className="form-label">Search Domains</label>
               <input
+                id="dns-search-domains"
                 className="input"
                 value={dnsSearchDomains}
                 onChange={(e) => {

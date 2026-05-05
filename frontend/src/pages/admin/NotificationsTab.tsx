@@ -264,7 +264,7 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
 
         <div className="space-y-6">
           <div className="form-group">
-            <label className="flex items-center gap-3 cursor-pointer group">
+            <label className="flex items-center gap-3 cursor-pointer group" aria-label="Enable notification emails">
               <input
                 type="checkbox"
                 checked={enabled}
@@ -286,8 +286,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
           {enabled && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t border-border/10">
               <div className="form-group">
-                <label className="form-label">SMTP host</label>
+                <label htmlFor="smtp-host" className="form-label">SMTP host</label>
                 <input
+                  id="smtp-host"
                   className="input"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
@@ -296,8 +297,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Port</label>
+                <label htmlFor="smtp-port-mode" className="form-label">Port</label>
                 <Select
+                  id="smtp-port-mode"
                   value={portMode}
                   onChange={handlePortModeChange}
                   options={[
@@ -321,8 +323,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               </div>
 
               <div className="form-group">
-                <label className="form-label">TLS mode</label>
+                <label htmlFor="smtp-tls-mode" className="form-label">TLS mode</label>
                 <Select
+                  id="smtp-tls-mode"
                   value={tlsMode}
                   onChange={handleTlsModeChange}
                   options={[
@@ -340,8 +343,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
 
               {tlsMode !== "none" && (
                 <div className="form-group">
-                  <label className="form-label">Username</label>
+                  <label htmlFor="smtp-username" className="form-label">Username</label>
                   <input
+                    id="smtp-username"
                     className="input"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
@@ -353,9 +357,10 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
 
               {tlsMode !== "none" && (
                 <div className="form-group md:col-span-2">
-                  <label className="form-label">Password</label>
+                  <label htmlFor="smtp-password" className="form-label">Password</label>
                   <div className="flex gap-2">
                     <input
+                      id="smtp-password"
                       type="password"
                       className="input flex-1"
                       value={newPassword ?? ""}
@@ -403,8 +408,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               )}
 
               <div className="form-group">
-                <label className="form-label">From address</label>
+                <label htmlFor="smtp-from-address" className="form-label">From address</label>
                 <input
+                  id="smtp-from-address"
                   className="input"
                   value={fromAddress}
                   onChange={(e) => setFromAddress(e.target.value)}
@@ -416,8 +422,9 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               </div>
 
               <div className="form-group">
-                <label className="form-label">From name</label>
+                <label htmlFor="smtp-from-name" className="form-label">From name</label>
                 <input
+                  id="smtp-from-name"
                   className="input"
                   value={fromName}
                   onChange={(e) => setFromName(e.target.value)}
@@ -426,9 +433,10 @@ export default function NotificationsTab({ onSave }: { onSave: () => void }) {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Brand accent colour</label>
+                <label htmlFor="smtp-brand-accent" className="form-label">Brand accent colour</label>
                 <div className="flex items-center gap-2">
                   <input
+                    id="smtp-brand-accent"
                     type="color"
                     value={accent}
                     onChange={(e) => setAccent(e.target.value)}

@@ -241,9 +241,18 @@ export default function FileBrowser({ filesystem, onClose }: Props) {
           entries.map((entry) => (
             <div
               key={entry.name}
+              role="button"
+              tabIndex={0}
               onDoubleClick={() => {
                 if (entry.type === "directory") navigateTo(entry.name);
                 else downloadFile(entry.name);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (entry.type === "directory") navigateTo(entry.name);
+                  else downloadFile(entry.name);
+                }
               }}
               style={{
                 display: "flex",

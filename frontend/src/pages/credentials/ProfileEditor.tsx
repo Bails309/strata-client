@@ -58,11 +58,14 @@ export default function ProfileEditor(props: ProfileEditorProps) {
     >
       <h2 className="!mb-4">{editing.id ? "Edit Profile" : "New Credential Profile"}</h2>
       <div className="form-group">
-        <label>Label</label>
+        <label htmlFor="prof-label">Label</label>
         <input
+          id="prof-label"
           value={editing.label}
           onChange={(e) => setEditing({ ...editing, label: e.target.value })}
           placeholder="e.g. Domain Admin, SSH Dev Server"
+          // Profile-editor modal just opened — focus-on-appear UX.
+          // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus
         />
       </div>
@@ -115,8 +118,9 @@ export default function ProfileEditor(props: ProfileEditorProps) {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
             <div className="form-group">
-              <label>Username</label>
+              <label htmlFor="prof-username">Username</label>
               <input
+                id="prof-username"
                 value={editing.username}
                 onChange={(e) => setEditing({ ...editing, username: e.target.value })}
                 placeholder={editing.id ? "(unchanged)" : "sAMAccountName (e.g. jsmith)"}
@@ -127,8 +131,9 @@ export default function ProfileEditor(props: ProfileEditorProps) {
               </p>
             </div>
             <div className="form-group">
-              <label>Password</label>
+              <label htmlFor="prof-password">Password</label>
               <input
+                id="prof-password"
                 type="password"
                 value={editing.password}
                 onChange={(e) => setEditing({ ...editing, password: e.target.value })}
@@ -138,9 +143,10 @@ export default function ProfileEditor(props: ProfileEditorProps) {
             </div>
           </div>
           <div className="form-group">
-            <label>Password Expiry</label>
+            <label htmlFor="prof-ttl">Password Expiry</label>
             <div className="flex items-center gap-3">
               <input
+                id="prof-ttl"
                 type="range"
                 min={1}
                 max={12}
@@ -166,7 +172,7 @@ export default function ProfileEditor(props: ProfileEditorProps) {
         (activeCheckouts.filter((c) => isCheckoutLive(c)).length > 0 ||
           currentProfile?.checkout_id) && (
           <div className="form-group">
-            <label>Link Checked-Out Account</label>
+            <label htmlFor="prof-link-checkout">Link Checked-Out Account</label>
             <p className="text-txt-tertiary text-xs mb-2">
               Populate this profile with credentials from an active password checkout. The
               profile&apos;s expiry will match the checkout duration.

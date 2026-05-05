@@ -81,7 +81,7 @@ export function formatDateTime(
 
 export function getTimezones(): string[] {
   try {
-    return (Intl as any).supportedValuesOf("timeZone");
+    return Intl.supportedValuesOf("timeZone");
   } catch {
     return ["UTC"];
   }

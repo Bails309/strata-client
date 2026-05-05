@@ -294,8 +294,8 @@ export default function AccessTab({
         setFormExtra(c.extra || {});
       }
       closeForm();
-    } catch (err: any) {
-      alert(err.message || "Failed to save connection");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save connection");
     }
   }
 
@@ -312,8 +312,8 @@ export default function AccessTab({
           if (id === formId) {
             closeForm();
           }
-        } catch (err: any) {
-          alert(err.message || "Failed to delete connection");
+        } catch (err) {
+          alert(err instanceof Error ? err.message : "Failed to delete connection");
         } finally {
           setConfirmModal(null);
         }
@@ -424,8 +424,8 @@ export default function AccessTab({
                                 try {
                                   await deleteRole(r.id);
                                   getRoles().then(onRolesChanged);
-                                } catch (err: any) {
-                                  alert(err.message || "Failed to delete role");
+                                } catch (err) {
+                                  alert(err instanceof Error ? err.message : "Failed to delete role");
                                 } finally {
                                   setConfirmModal(null);
                                 }
@@ -487,7 +487,7 @@ export default function AccessTab({
           {/* Role Modal */}
           {roleModalOpen && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-              <div className="card w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="card w-full max-w-sm shadow-2xl">
                 <h3 className="text-lg font-bold mb-4">
                   {editingRole ? "Edit Role" : "Create New Role"}
                 </h3>
@@ -510,8 +510,9 @@ export default function AccessTab({
                 {roleModalTab === "permissions" ? (
                   <>
                     <div className="form-group mb-4">
-                      <label>Role Name</label>
+                      <label htmlFor="role-name">Role Name</label>
                       <input
+                        id="role-name"
                         value={newRole.name}
                         onChange={(e) => setNewRole({ ...newRole, name: e.target.value })}
                         placeholder="e.g. Helpdesk"
@@ -520,9 +521,9 @@ export default function AccessTab({
                     </div>
 
                     <div className="space-y-3 mb-6">
-                      <label className="text-xs font-bold uppercase tracking-wider text-txt-tertiary">
+                      <span className="text-xs font-bold uppercase tracking-wider text-txt-tertiary">
                         Permissions
-                      </label>
+                      </span>
                       <label className="flex items-center gap-3 cursor-pointer group">
                         <input
                           type="checkbox"
@@ -662,9 +663,9 @@ export default function AccessTab({
                 ) : (
                   <div className="space-y-4 mb-6 max-h-[400px] overflow-y-auto pr-1">
                     <div>
-                      <label className="text-xs font-bold uppercase tracking-wider text-txt-tertiary block mb-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-txt-tertiary block mb-2">
                         Assigned Folders
-                      </label>
+                      </span>
                       <div className="space-y-1 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
                         {folders.length === 0 ? (
                           <div className="text-[10px] text-txt-tertiary italic p-1">
@@ -699,9 +700,9 @@ export default function AccessTab({
                     </div>
 
                     <div>
-                      <label className="text-xs font-bold uppercase tracking-wider text-txt-tertiary block mb-2">
+                      <span className="text-xs font-bold uppercase tracking-wider text-txt-tertiary block mb-2">
                         Individual Connections
-                      </label>
+                      </span>
                       <div className="space-y-1 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
                         {connections.length === 0 ? (
                           <div className="text-[10px] text-txt-tertiary italic p-1">
@@ -770,8 +771,8 @@ export default function AccessTab({
                           onRolesChanged([...roles, r]);
                         }
                         setRoleModalOpen(false);
-                      } catch (err: any) {
-                        alert(err.message || "Failed to save role");
+                      } catch (err) {
+                        alert(err instanceof Error ? err.message : "Failed to save role");
                       } finally {
                         setRoleSaving(false);
                       }
@@ -919,16 +920,18 @@ export default function AccessTab({
             }}
           >
             <div className="form-group !mb-0">
-              <label>Name</label>
+              <label htmlFor="conn-name">Name</label>
               <input
+                id="conn-name"
                 value={formCore.name}
                 onChange={(e) => setFormCore({ ...formCore, name: e.target.value })}
                 placeholder="My Server"
               />
             </div>
             <div className="form-group !mb-0">
-              <label>Protocol</label>
+              <label htmlFor="conn-protocol">Protocol</label>
               <Select
+                id="conn-protocol"
                 value={formCore.protocol}
                 onChange={(v) => {
                   // Default port comes from the protocol registry. For
@@ -942,8 +945,9 @@ export default function AccessTab({
             </div>
             {protocolDescriptor(formCore.protocol).showHostname && (
               <div className="form-group !mb-0">
-                <label>Hostname</label>
+                <label htmlFor="conn-hostname">Hostname</label>
                 <input
+                  id="conn-hostname"
                   value={formCore.hostname}
                   onChange={(e) => setFormCore({ ...formCore, hostname: e.target.value })}
                   placeholder="10.0.0.10"
@@ -952,8 +956,9 @@ export default function AccessTab({
             )}
             {protocolDescriptor(formCore.protocol).showPort && (
               <div className="form-group !mb-0">
-                <label>Port</label>
+                <label htmlFor="conn-port">Port</label>
                 <input
+                  id="conn-port"
                   type="number"
                   value={formCore.port}
                   onChange={(e) =>
@@ -964,8 +969,9 @@ export default function AccessTab({
             )}
             {protocolDescriptor(formCore.protocol).showDomain && (
               <div className="form-group !mb-0">
-                <label>Domain</label>
+                <label htmlFor="conn-domain">Domain</label>
                 <input
+                  id="conn-domain"
                   value={formCore.domain}
                   onChange={(e) => setFormCore({ ...formCore, domain: e.target.value })}
                   placeholder="EXAMPLE.COM"
@@ -978,16 +984,18 @@ export default function AccessTab({
             style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem" }}
           >
             <div className="form-group !mb-0">
-              <label>Description</label>
+              <label htmlFor="conn-description">Description</label>
               <input
+                id="conn-description"
                 value={formCore.description}
                 onChange={(e) => setFormCore({ ...formCore, description: e.target.value })}
                 placeholder="Optional description"
               />
             </div>
             <div className="form-group !mb-0">
-              <label>Folder</label>
+              <label htmlFor="conn-folder">Folder</label>
               <Select
+                id="conn-folder"
                 value={formCore.folder_id}
                 onChange={(v) => setFormCore({ ...formCore, folder_id: v })}
                 placeholder="No folder"
@@ -1001,8 +1009,9 @@ export default function AccessTab({
               />
             </div>
             <div className="form-group !mb-0">
-              <label>Session Watermark</label>
+              <label htmlFor="conn-watermark">Session Watermark</label>
               <Select
+                id="conn-watermark"
                 value={formCore.watermark}
                 onChange={(v) => setFormCore({ ...formCore, watermark: v })}
                 options={[
@@ -1108,8 +1117,8 @@ export default function AccessTab({
                               try {
                                 await deleteConnectionFolder(f.id);
                                 onFoldersChanged(folders.filter((x) => x.id !== f.id));
-                              } catch (err: any) {
-                                alert(err.message || "Failed to delete folder");
+                              } catch (err) {
+                                alert(err instanceof Error ? err.message : "Failed to delete folder");
                               } finally {
                                 setConfirmModal(null);
                               }
@@ -1251,8 +1260,8 @@ export default function AccessTab({
                             await updateUser(u.id, { role_id: newRoleId });
                             const refreshed = await getUsers();
                             onUsersChanged(refreshed);
-                          } catch (err: any) {
-                            alert(err.message || "Failed to update role");
+                          } catch (err) {
+                            alert(err instanceof Error ? err.message : "Failed to update role");
                           }
                         }}
                       />
@@ -1270,8 +1279,8 @@ export default function AccessTab({
                                 await restoreUser(u.id);
                                 const all = await getUsers();
                                 onUsersChanged(all);
-                              } catch (err: any) {
-                                alert(err.message || "Failed to restore user");
+                              } catch (err) {
+                                alert(err instanceof Error ? err.message : "Failed to restore user");
                               }
                             }}
                           >
@@ -1290,8 +1299,8 @@ export default function AccessTab({
                                   try {
                                     await deleteUser(u.id);
                                     onUsersChanged(users.filter((x) => x.id !== u.id));
-                                  } catch (err: any) {
-                                    alert(err.message || "Failed to delete user");
+                                  } catch (err) {
+                                    alert(err instanceof Error ? err.message : "Failed to delete user");
                                   } finally {
                                     setConfirmModal(null);
                                   }
@@ -1315,10 +1324,7 @@ export default function AccessTab({
       {/* Create User Modal */}
       {userModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div
-            className="card w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="card w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-bold text-txt-primary">Provision New User</h3>
               {!createdPassword && (
@@ -1373,16 +1379,18 @@ export default function AccessTab({
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="form-group !mb-0">
-                    <label>Username</label>
+                    <label htmlFor="user-username">Username</label>
                     <input
+                      id="user-username"
                       value={userForm.username}
                       onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
                       placeholder="jsmith"
                     />
                   </div>
                   <div className="form-group !mb-0">
-                    <label>Auth Type</label>
+                    <label htmlFor="user-auth-type">Auth Type</label>
                     <Select
+                      id="user-auth-type"
                       value={userForm.auth_type}
                       onChange={(v) =>
                         setUserForm({ ...userForm, auth_type: v as "local" | "sso" })
@@ -1396,8 +1404,9 @@ export default function AccessTab({
                 </div>
 
                 <div className="form-group !mb-0">
-                  <label>Email Address</label>
+                  <label htmlFor="user-email">Email Address</label>
                   <input
+                    id="user-email"
                     type="email"
                     value={userForm.email}
                     onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
@@ -1406,8 +1415,9 @@ export default function AccessTab({
                 </div>
 
                 <div className="form-group !mb-0">
-                  <label>Initial Role</label>
+                  <label htmlFor="user-initial-role">Initial Role</label>
                   <Select
+                    id="user-initial-role"
                     value={userForm.role_id}
                     onChange={(v) => setUserForm({ ...userForm, role_id: v })}
                     options={roles.map((r) => ({ value: r.id, label: r.name }))}
@@ -1443,8 +1453,8 @@ export default function AccessTab({
                           setUserModalOpen(false);
                           getUsers().then(onUsersChanged);
                         }
-                      } catch (err: any) {
-                        setUserError(err.message || "Failed to create user");
+                      } catch (err) {
+                        setUserError(err instanceof Error ? err.message : "Failed to create user");
                       } finally {
                         setUserSaving(false);
                       }

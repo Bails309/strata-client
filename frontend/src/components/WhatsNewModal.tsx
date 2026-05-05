@@ -1856,6 +1856,8 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
       setCardIndex(0);
       setVisible(true);
     }
+    // `visible` is read only to short-circuit redundant state updates
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   function dismiss() {
@@ -1875,6 +1877,16 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
     setVisible(false);
   }
 
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, mode, userId]);
+
   if (!visible || !mode) return null;
 
   const isWelcome = mode === "welcome";
@@ -1885,10 +1897,19 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={isWelcome ? "Welcome" : "What's new"}
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       style={{ background: "rgba(0, 0, 0, 0.6)", backdropFilter: "blur(4px)" }}
-      onClick={dismiss}
     >
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={dismiss}
+        tabIndex={-1}
+        className="absolute inset-0 cursor-default bg-transparent border-0"
+      />
       <div
         className="relative w-full max-w-lg rounded-xl overflow-hidden"
         style={{
@@ -1897,7 +1918,6 @@ export default function WhatsNewModal({ userId }: WhatsNewModalProps) {
           boxShadow:
             "0 8px 32px rgba(0,0,0,0.4), 0 24px 64px rgba(0,0,0,0.3), inset 0 1px 0 var(--color-glass-highlight-strong)",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header accent bar */}
         <div

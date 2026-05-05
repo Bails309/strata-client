@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
 import { getDisplaySettings, updateSettings as apiUpdateSettings, readCookie } from "../api";
 import { TimeSettings, formatDateTime as formatUtil } from "../utils/time";
 
@@ -46,11 +46,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     refreshSettings();
   }, [refreshSettings]);
 
-  const timeSettings: TimeSettings = {
-    display_timezone: settings.display_timezone || "UTC",
-    display_time_format: settings.display_time_format || "HH:mm:ss",
-    display_date_format: settings.display_date_format || "YYYY-MM-DD",
-  };
+  const timeSettings: TimeSettings = useMemo(
+    () => ({
+      display_timezone: settings.display_timezone || "UTC",
+      display_time_format: settings.display_time_format || "HH:mm:ss",
+      display_date_format: settings.display_date_format || "YYYY-MM-DD",
+    }),
+    [settings.display_timezone, settings.display_time_format, settings.display_date_format]
+  );
 
   const formatDateTime = useCallback(
     (date: string | number | Date | null) => {

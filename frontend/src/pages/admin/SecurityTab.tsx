@@ -81,7 +81,7 @@ export default function SecurityTab({
           </h4>
           <div className="space-y-5">
             <div className="form-group">
-              <label className="flex items-center gap-3 cursor-pointer group">
+              <label className="flex items-center gap-3 cursor-pointer group" aria-label="Local Authentication">
                 <input
                   type="checkbox"
                   checked={localAuthEnabled}
@@ -104,7 +104,7 @@ export default function SecurityTab({
             </div>
 
             <div className="form-group">
-              <label className="flex items-center gap-3 cursor-pointer group">
+              <label className="flex items-center gap-3 cursor-pointer group" aria-label="SSO / OIDC (Keycloak)">
                 <input
                   type="checkbox"
                   checked={ssoEnabled}
@@ -134,7 +134,7 @@ export default function SecurityTab({
             Session Protection
           </h4>
           <div className="form-group">
-            <label className="flex items-center gap-3 cursor-pointer group">
+            <label className="flex items-center gap-3 cursor-pointer group" aria-label="Session Watermark">
               <input
                 type="checkbox"
                 checked={watermarkEnabled}

@@ -161,6 +161,8 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
   useEffect(() => {
     connectWithParams(0, 1);
     return cleanup;
+    // Re-run only when the recording itself changes; cleanup/connectWithParams identities would loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recording.id]);
 
   // Track fullscreen changes
@@ -209,11 +211,17 @@ export default function HistoricalPlayer({ recording, onClose, streamUrlBuilder 
   const controlsDisabled = loading || recordingEndedRef.current;
 
   return (
-    <div className="player-overlay" onClick={onClose}>
+    <div role="dialog" aria-modal="true" aria-label="Recording playback" className="player-overlay">
+      <button
+        type="button"
+        aria-label="Close"
+        tabIndex={-1}
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-transparent border-0"
+      />
       <div
         ref={cardRef}
-        className={`player-card animate-in zoom-in duration-200 ${isFullscreen ? "player-card-fullscreen" : ""}`}
-        onClick={(e) => e.stopPropagation()}
+        className={`player-card animate-in zoom-in duration-200 relative ${isFullscreen ? "player-card-fullscreen" : ""}`}
       >
         {/* Header */}
         <div className="player-header">

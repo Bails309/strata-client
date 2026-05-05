@@ -140,6 +140,8 @@ export default function SharedViewer() {
         /* ignore */
       }
     };
+    // searchParams is read once at connect time; re-running on URL changes would tear down the share session
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shareToken]);
 
   return createPortal(

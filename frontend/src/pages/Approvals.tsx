@@ -44,8 +44,8 @@ export default function Approvals({ user: _user }: { user: MeResponse }) {
       await decideCheckout(id, approved);
       flash(approved ? "Checkout approved" : "Checkout denied");
       loadPending();
-    } catch (e: any) {
-      flash(e.message || "Decision failed");
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Decision failed");
     } finally {
       setDeciding(null);
     }

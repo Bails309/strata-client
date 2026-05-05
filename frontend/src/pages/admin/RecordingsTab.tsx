@@ -31,7 +31,7 @@ export default function RecordingsTab({
     <div className="card">
       <h2>Session Recordings</h2>
       <div className="form-group">
-        <label className="flex items-center gap-2">
+        <label className="flex items-center gap-2" aria-label="Enable session recording">
           <input
             type="checkbox"
             checked={enabled}
@@ -42,12 +42,13 @@ export default function RecordingsTab({
         </label>
       </div>
       <div className="form-group">
-        <label>Retention (days)</label>
-        <input type="number" value={days} onChange={(e) => setDays(e.target.value)} />
+        <label htmlFor="rec-retention-days">Retention (days)</label>
+        <input id="rec-retention-days" type="number" value={days} onChange={(e) => setDays(e.target.value)} />
       </div>
       <div className="form-group">
-        <label>Storage Backend</label>
+        <label htmlFor="rec-storage-backend">Storage Backend</label>
         <Select
+          id="rec-storage-backend"
           value={storageType}
           onChange={(v) => setStorageType(v)}
           options={[
@@ -59,24 +60,27 @@ export default function RecordingsTab({
       {storageType === "azure_blob" && (
         <>
           <div className="form-group">
-            <label>Account Name</label>
+            <label htmlFor="rec-azure-account">Account Name</label>
             <input
+              id="rec-azure-account"
               value={azureAccount}
               onChange={(e) => setAzureAccount(e.target.value)}
               placeholder="mystorageaccount"
             />
           </div>
           <div className="form-group">
-            <label>Container Name</label>
+            <label htmlFor="rec-azure-container">Container Name</label>
             <input
+              id="rec-azure-container"
               value={azureContainer}
               onChange={(e) => setAzureContainer(e.target.value)}
               placeholder="recordings"
             />
           </div>
           <div className="form-group">
-            <label>Access Key</label>
+            <label htmlFor="rec-azure-key">Access Key</label>
             <input
+              id="rec-azure-key"
               type="password"
               value={azureKey}
               onChange={(e) => setAzureKey(e.target.value)}

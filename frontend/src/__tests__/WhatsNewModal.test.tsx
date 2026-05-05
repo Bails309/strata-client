@@ -60,11 +60,8 @@ describe("WhatsNewModal", () => {
   it("dismisses on backdrop click", async () => {
     localStorage.setItem(`${WELCOME_KEY}-user1`, "true");
     render(<WhatsNewModal userId="user1" />);
-    const backdrop = screen
-      .getByText(`What's New in ${RELEASE_CARDS[0].version}`)
-      .closest(".fixed");
-    expect(backdrop).toBeTruthy();
-    await userEvent.click(backdrop!);
+    const backdrop = screen.getByLabelText("Dismiss");
+    await userEvent.click(backdrop);
     expect(screen.queryByText(`What's New in ${RELEASE_CARDS[0].version}`)).not.toBeInTheDocument();
   });
 

@@ -371,8 +371,8 @@ export default function SessionClient() {
         };
         setPhase("connected");
       }
-    } catch (err: any) {
-      setRenewError(err?.message || "Failed to update credentials.");
+    } catch (err) {
+      setRenewError(err instanceof Error ? err.message : "Failed to update credentials.");
     } finally {
       setRenewLoading(false);
     }
@@ -437,6 +437,8 @@ export default function SessionClient() {
         }
       }, delay);
     },
+    // fileTransferEnabled is intentionally read at retry time, not captured at memo time
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [connectionId, connectionName, protocol, ignoreCert, createSession]
   );
 
@@ -550,6 +552,8 @@ export default function SessionClient() {
         setSshRequired(parameters);
       };
     },
+    // setActiveSessionId is a stable setter from context; including it would force memo invalidation
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [attemptReconnect]
   );
 
@@ -627,12 +631,14 @@ export default function SessionClient() {
     } finally {
       setReconnectLoading(false);
     }
+    // fileTransferEnabled is read at reconnect-time only; capturing would stale the value
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, connectionName, protocol, ignoreCert, createSession, closeSession, getSession]);
 
   // ── Handle reconnect signal from SessionBar ──
   const reconnectStampRef = useRef<number>(0);
   useEffect(() => {
-    const stamp = (location.state as any)?.reconnect;
+    const stamp = (location.state as { reconnect?: number } | null)?.reconnect;
     if (stamp && stamp !== reconnectStampRef.current) {
       reconnectStampRef.current = stamp;
       // Clear router state so a page refresh doesn't re-trigger
@@ -839,6 +845,8 @@ export default function SessionClient() {
       // Restore previous handler (if any) to avoid leaking our closure.
       display.onresize = prevOnResize ?? null;
     };
+    // updatePrimarySize is defined in this effect's scope; deps cover all reactive inputs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession, isMultiMonitor, getLayout]);
 
   // Keyboard management — focus-scoped with capture-phase key trap
@@ -969,6 +977,8 @@ export default function SessionClient() {
       removeShortcutProxy();
       removeKeyboardLock();
     };
+    // openCommandPalette is stable for the session lifetime; re-binding would re-attach listeners
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession, activeSessionId, phase, sshRequired]);
 
   // Auto-focus the session container when a session becomes active
@@ -1068,6 +1078,8 @@ export default function SessionClient() {
       // Last session ended — show overlay.
       setError("The remote session has ended. You may have logged out of the server.");
     }
+  // reconnectLoading is read at runtime only; including it would re-run the cleanup spuriously
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     sessions,
     connectionId,
@@ -1104,6 +1116,34 @@ export default function SessionClient() {
         : ["username", "password", "domain"]
       : ["username", "password"];
 
+  // ── Register pop-out actions with SessionManager ──
+  useEffect(() => {
+    if (currentSession) {
+      currentSession.isPoppedOut = isPoppedOut;
+      currentSession.popOut = popOut;
+      currentSession.popIn = returnDisplay;
+    }
+  }, [currentSession, isPoppedOut, popOut, returnDisplay]);
+
+  // ── Register multi-monitor actions with SessionManager ──
+  useEffect(() => {
+    if (currentSession) {
+      currentSession.isMultiMonitor = isMultiMonitor;
+      currentSession.screenCount = screenCount;
+      currentSession.enableMultiMonitor =
+        canMultiMonitor && !isPoppedOut ? enableMultiMonitor : undefined;
+      currentSession.disableMultiMonitor = isMultiMonitor ? disableMultiMonitor : undefined;
+    }
+  }, [
+    currentSession,
+    isMultiMonitor,
+    canMultiMonitor,
+    isPoppedOut,
+    enableMultiMonitor,
+    disableMultiMonitor,
+    screenCount,
+  ]);
+
   // Render via portal into document.body to escape the .main-content container.
   return createPortal(
     <div
@@ -1118,10 +1158,14 @@ export default function SessionClient() {
           "left 0.2s cubic-bezier(0.4, 0, 0.2, 1), right 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
       }}
     >
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
       <div
         ref={containerRef}
         // Container is intentionally focusable so keyboard input is captured
         // by the remote session canvas (RDP/VNC/SSH key passthrough).
+        // role="application" tells AT to pass keystrokes through.
+        role="application"
+        aria-label="Remote session"
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
         tabIndex={0}
         onFocus={() => {
@@ -1153,38 +1197,6 @@ export default function SessionClient() {
           outline: "none",
         }}
       />
-
-      {/* Registration of pop-out actions with SessionManager */}
-      {
-        useEffect(() => {
-          if (currentSession) {
-            currentSession.isPoppedOut = isPoppedOut;
-            currentSession.popOut = popOut;
-            currentSession.popIn = returnDisplay;
-          }
-        }, [currentSession, isPoppedOut, popOut, returnDisplay]) as any
-      }
-
-      {/* Registration of multi-monitor actions with SessionManager */}
-      {
-        useEffect(() => {
-          if (currentSession) {
-            currentSession.isMultiMonitor = isMultiMonitor;
-            currentSession.screenCount = screenCount;
-            currentSession.enableMultiMonitor =
-              canMultiMonitor && !isPoppedOut ? enableMultiMonitor : undefined;
-            currentSession.disableMultiMonitor = isMultiMonitor ? disableMultiMonitor : undefined;
-          }
-        }, [
-          currentSession,
-          isMultiMonitor,
-          canMultiMonitor,
-          isPoppedOut,
-          enableMultiMonitor,
-          disableMultiMonitor,
-          screenCount,
-        ]) as any
-      }
 
       {/* Touch controls and watermark */}
       {currentSession && <SessionWatermark connectionWatermark={connectionWatermark} />}
@@ -1399,10 +1411,11 @@ export default function SessionClient() {
                           </div>
                         )}
                         <div className="form-group !mb-3">
-                          <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">
+                          <label htmlFor="renew-duration" className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">
                             Checkout Duration
                           </label>
                           <Select
+                            id="renew-duration"
                             value={String(renewDuration)}
                             onChange={(v) => setRenewDuration(parseInt(v))}
                             options={[
@@ -1415,10 +1428,11 @@ export default function SessionClient() {
                           />
                         </div>
                         <div className="form-group !mb-3">
-                          <label className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">
+                          <label htmlFor="renew-justification" className="text-[0.625rem] uppercase tracking-wider font-bold text-txt-tertiary mb-1.5">
                             Justification / Comment
                           </label>
                           <textarea
+                            id="renew-justification"
                             className="w-full text-xs p-2 rounded-md bg-input-bg border border-border"
                             rows={2}
                             placeholder="Why do you need this checkout?"
@@ -1431,19 +1445,23 @@ export default function SessionClient() {
                     ) : (
                       <>
                         <div className="form-group !mb-2">
-                          <label className="text-xs">Username</label>
+                          <label htmlFor="renew-username" className="text-xs">Username</label>
                           <input
+                            id="renew-username"
                             type="text"
                             value={renewForm.username}
                             onChange={(e) =>
                               setRenewForm((f) => ({ ...f, username: e.target.value }))
                             }
+                            // Credential renewal modal just opened — focus-on-appear UX.
+                            // eslint-disable-next-line jsx-a11y/no-autofocus
                             autoFocus
                           />
                         </div>
                         <div className="form-group !mb-2">
-                          <label className="text-xs">Password</label>
+                          <label htmlFor="renew-password" className="text-xs">Password</label>
                           <input
+                            id="renew-password"
                             type="password"
                             value={renewForm.password}
                             onChange={(e) =>
@@ -1519,8 +1537,9 @@ export default function SessionClient() {
                 >
                   {vaultProfiles.length > 0 && (
                     <div className="form-group">
-                      <label>Saved Credential Profile</label>
+                      <label htmlFor="saved-cred-profile">Saved Credential Profile</label>
                       <Select
+                        id="saved-cred-profile"
                         value={selectedProfileId}
                         onChange={(val) => {
                           setSelectedProfileId(val);
@@ -1541,6 +1560,8 @@ export default function SessionClient() {
                           type={field === "password" ? "password" : "text"}
                           value={credForm[field] || ""}
                           onChange={(e) => setCredForm({ ...credForm, [field]: e.target.value })}
+                          // First credential field on prompt-modal mount — focus-on-appear UX.
+                          // eslint-disable-next-line jsx-a11y/no-autofocus
                           autoFocus={!expiredProfile && field === preConnectFields[0]}
                         />
                       </div>
@@ -1590,6 +1611,8 @@ export default function SessionClient() {
                     type={param === "password" ? "password" : "text"}
                     value={credForm[param] || ""}
                     onChange={(e) => setCredForm({ ...credForm, [param]: e.target.value })}
+                    // First required SSH param on prompt-modal mount — focus-on-appear UX.
+                    // eslint-disable-next-line jsx-a11y/no-autofocus
                     autoFocus={param === sshRequired[0]}
                   />
                 </div>

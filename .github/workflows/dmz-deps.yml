@@ -1,0 +1,87 @@
+name: dmz-deps
+
+# CI guard: the public-facing strata-dmz binary MUST hold no Strata
+# business secrets and MUST NOT depend on DB, Vault, LDAP, Kerberos, or
+# guacd-tunnel crates. See docs/dmz-implementation-plan.md §5.
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "backend/Cargo.toml"
+      - ".github/workflows/dmz-deps.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dep-closure:
+    name: dmz crate dependency closure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dmz-deps
+
+      - name: Forbidden crates must not appear in strata-dmz dep closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Resolve the dependency tree once (prefix lines, no duplicate dedupe noise).
+          cargo tree -p strata-dmz --prefix=none --no-dedupe --edges=normal,build > dmz-deps.txt
+          echo "------- top of strata-dmz dep tree -------"
+          head -n 60 dmz-deps.txt
+          echo "------------------------------------------"
+
+          forbidden='^(sqlx|deadpool-postgres|vaultrs|ldap3|krb5|kerberos|gssapi|libgssapi|guac)'
+          if grep -E "$forbidden" dmz-deps.txt; then
+            echo ""
+            echo "FAIL: strata-dmz pulled in a forbidden crate."
+            echo "      The DMZ binary must not depend on DB/Vault/LDAP/Kerberos/guac crates."
+            echo "      Move the offending feature to strata-internal."
+            exit 1
+          fi
+          echo "OK: strata-dmz dep closure is clean."
+
+  binary-strings:
+    name: dmz binary string scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dmz-deps
+
+      - name: Build strata-dmz (release)
+        run: cargo build --release -p strata-dmz
+
+      - name: Strip
+        run: strip target/release/strata-dmz
+
+      - name: Forbidden secret-related strings must not appear in binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden='JWT_SIGNING_KEY|OIDC_CLIENT_SECRET|VAULT_TOKEN|VAULT_ADDR|DATABASE_URL|guac-master-key|GUAC_MASTER_KEY'
+          if strings target/release/strata-dmz | grep -E "$forbidden"; then
+            echo ""
+            echo "FAIL: strata-dmz binary contains a forbidden env-var/secret name."
+            echo "      The DMZ binary should not even know these names exist."
+            exit 1
+          fi
+          echo "OK: strata-dmz binary string scan clean."

@@ -1,0 +1,54 @@
+[package]
+name = "strata-dmz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Strata Client DMZ node — public-facing dumb-proxy. Holds NO Strata business secrets."
+
+[[bin]]
+name = "strata-dmz"
+path = "src/main.rs"
+
+# IMPORTANT: this crate's dependency closure is enforced by CI
+# (`.github/workflows/dmz-deps.yml`). It MUST NOT pull in any of:
+#   sqlx, deadpool-postgres, vaultrs, ldap3, kerberos, guac*
+# If you find yourself wanting one, you are writing the feature in the
+# wrong crate — it belongs in `strata-internal`.
+
+[dependencies]
+strata-protocol = { path = "../strata-protocol" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+
+# Web framework (DMZ-side public + link servers)
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Serde
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# TLS
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Metrics
+axum-prometheus = { workspace = true }
+
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# IDs
+uuid = { workspace = true }

@@ -180,10 +180,24 @@ pub async fn ws_tunnel(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
     // Capture the access token used to authenticate this upgrade so the
-    // tunnel watchdog (below) can react to logout/revocation/expiry while
-    // the long-lived WebSocket is open. The middleware has already
-    // validated this token; we just need a copy. Match the same priority
-    // order as `require_auth` to stay consistent.
+    // tunnel watchdog (below) can react to explicit logout / admin
+    // revocation while the long-lived WebSocket is open. The middleware
+    // has already validated this token; we just keep a copy of the raw
+    // string so the watchdog can call `is_revoked` against it. Match the
+    // same priority order as `require_auth` to stay consistent.
+    //
+    // NOTE: We deliberately do NOT capture and enforce the token's `exp`
+    // claim here. The 20-minute access-token TTL is rotated by the
+    // frontend's proactive refresh on user activity, but the WebSocket
+    // upgrade was authenticated with the token that existed at connect
+    // time — we have no way to learn about subsequent rotations from
+    // inside this future. Enforcing the original `exp` therefore tore
+    // down active sessions every 20 minutes even when the user was still
+    // logged in and actively using both the web UI and the remote
+    // session. The hard cap on tunnel lifetime is enforced separately
+    // below via `MAX_TUNNEL_DURATION` (measured from upgrade time), and
+    // the idle / manual / admin logout paths all revoke the token, which
+    // the watchdog still observes.
     let watchdog_token: Option<String> = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -195,29 +209,6 @@ pub async fn ws_tunnel(
                 original_uri.query().unwrap_or_default(),
             )
         });
-
-    // Decode the JWT `exp` claim once at upgrade time so the watchdog can
-    // close the tunnel as soon as the access token's lifetime ends without
-    // having to decode the full token on every tick. Non-local (e.g. OIDC)
-    // tokens fall through to `None` and the watchdog only checks revocation.
-    let watchdog_exp: Option<u64> = watchdog_token.as_deref().and_then(|tok| {
-        use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-        #[derive(serde::Deserialize)]
-        struct ExpClaim {
-            exp: u64,
-        }
-        let secret = crate::config::JWT_SECRET.get().cloned().unwrap_or_default();
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.set_issuer(&["strata-local"]);
-        validation.set_required_spec_claims(&["exp"]);
-        decode::<ExpClaim>(
-            tok,
-            &DecodingKey::from_secret(secret.as_bytes()),
-            &validation,
-        )
-        .ok()
-        .map(|d| d.claims.exp)
-    });
     // ── Per-user tunnel rate limiting ──
     {
         let mut map = TUNNEL_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
@@ -975,9 +966,20 @@ pub async fn ws_tunnel(
             // Defence-in-depth: even if the frontend never tells us the
             // user logged out (browser killed, network died, hostile
             // client), close the tunnel as soon as the access token is
-            // revoked or its `exp` claim has elapsed. Without this the
-            // session_registry entry — and the recording write — would
-            // continue indefinitely. Polled every 30s.
+            // explicitly revoked OR a hard maximum tunnel lifetime is
+            // reached. Without this the session_registry entry — and the
+            // recording write — would continue indefinitely.
+            //
+            // Revocation covers: manual logout, idle-timeout logout
+            // (frontend calls /auth/logout which revokes both access &
+            // refresh tokens), and admin-side token invalidation.
+            //
+            // The hard cap is measured from this very `upgrade` point,
+            // so token-rotation that happens during the session is
+            // irrelevant. Polled every 30s.
+            const MAX_TUNNEL_DURATION: std::time::Duration =
+                std::time::Duration::from_secs(8 * 60 * 60); // 8 hours
+            let tunnel_started_at = std::time::Instant::now();
             let watchdog_token_inner = watchdog_token.clone();
             let watchdog = async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -993,18 +995,13 @@ pub async fn ws_tunnel(
                             return "revoked";
                         }
                     }
-                    if let Some(exp) = watchdog_exp {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                        if now >= exp {
-                            tracing::info!(
-                                "Tunnel watchdog: access token expired, closing tunnel for user {}",
-                                user_id
-                            );
-                            return "expired";
-                        }
+                    if tunnel_started_at.elapsed() >= MAX_TUNNEL_DURATION {
+                        tracing::info!(
+                            "Tunnel watchdog: max session duration ({}h) reached, closing tunnel for user {}",
+                            MAX_TUNNEL_DURATION.as_secs() / 3600,
+                            user_id
+                        );
+                        return "max_duration";
                     }
                 }
             };

@@ -935,6 +935,148 @@ For the bundled Vault, HA is not applicable — it runs as a single-node file-st
 
 ---
 
+## DMZ split topology (optional)
+
+> Reference: [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md), [DMZ implementation plan](dmz-implementation-plan.md), [DMZ incident runbook](runbooks/dmz-incident.md).
+
+For deployments that require the public-facing surface to be a
+separate, minimally-trusted host (no Vault, no DB, no AD, no
+Kerberos), Strata supports a split deployment with two binaries:
+`strata-dmz` (public) and `strata-backend` (internal). The internal
+node dials out to the DMZ over an mTLS-wrapped HTTP/2 tunnel; no
+inbound rule from the public network to the internal network is
+required.
+
+### Topology
+
+```
+Internet ──► strata-dmz (public host) ──mTLS h2 link── strata-backend (internal host)
+                  │                                         │
+                  │                                         ▼
+                  ▼                            Vault, PostgreSQL, AD, guacd
+       (terminates TLS,
+        signs edge headers,
+        rate-limits + body-caps,
+        no business secrets)
+```
+
+### Compose (development / evaluation)
+
+```bash
+# 1. Generate ephemeral mTLS material (test certs only)
+./scripts/dmz/gen-test-certs.sh
+
+# 2. Copy + populate the env template
+cp scripts/dmz/sample.env.dmz .env.dmz
+# fill in three secrets via:  openssl rand -hex 32
+
+# 3. Bring the split stack up
+docker compose --env-file .env.dmz \
+    -f docker-compose.yml \
+    -f docker-compose.dmz.yml \
+    up -d --build
+```
+
+The DMZ container exposes three ports:
+
+| Port  | Purpose | Reachability |
+|-------|---------|--------------|
+| 8443  | Public HTTPS | Internet (or CDN edge) |
+| 8444  | Link listener (the internal node dials in here) | **Internal network only** |
+| 9444  | Operator API (status, links, disconnect) | **Loopback or management VLAN only** |
+
+### Required environment
+
+On the **DMZ host**:
+
+```env
+STRATA_DMZ_PUBLIC_BIND=0.0.0.0:8443
+STRATA_DMZ_PUBLIC_TLS_CERT=/certs/public.crt
+STRATA_DMZ_PUBLIC_TLS_KEY=/certs/public.key
+
+STRATA_DMZ_LINK_BIND=0.0.0.0:8444
+STRATA_DMZ_LINK_TLS_CERT=/certs/server.crt
+STRATA_DMZ_LINK_TLS_KEY=/certs/server.key
+STRATA_DMZ_LINK_TLS_CA=/certs/ca.crt
+
+STRATA_DMZ_OPERATOR_BIND=127.0.0.1:9444
+STRATA_DMZ_OPERATOR_TOKEN=<openssl rand -hex 32>
+
+# Format: current:HEX[,previous:HEX]
+STRATA_DMZ_LINK_PSKS=current:<openssl rand -hex 32>
+
+STRATA_DMZ_EDGE_HMAC_KEY=<openssl rand -hex 32>
+
+STRATA_DMZ_NODE_ID=dmz-1
+STRATA_DMZ_CLUSTER_ID=strata-cluster-prod
+
+# Optional: list of trusted upstream proxies whose X-Forwarded-For
+# the DMZ should honour. Empty list (default) ignores XFF entirely.
+# STRATA_DMZ_TRUST_FORWARDED_FROM=10.0.0.1,10.0.0.2
+```
+
+On the **internal host** (added alongside the existing backend env):
+
+```env
+STRATA_DMZ_MODE=link-client
+STRATA_LINK_ENDPOINTS=dmz-1.example.com:8444[,dmz-2.example.com:8444]
+STRATA_LINK_TLS_CA=/certs/ca.crt
+STRATA_LINK_TLS_CLIENT_CERT=/certs/client.crt
+STRATA_LINK_TLS_CLIENT_KEY=/certs/client.key
+STRATA_LINK_PSK=<same value used as `current` on the DMZ>
+STRATA_LINK_EDGE_HMAC_KEYS=<same value as STRATA_DMZ_EDGE_HMAC_KEY>
+STRATA_LINK_NODE_ID=internal-1
+STRATA_LINK_CLUSTER_ID=strata-cluster-prod
+```
+
+### Firewall posture
+
+The DMZ split is only as strong as the firewall rules that enforce it.
+Recommended:
+
+| Source | Destination | Port | Action |
+|--------|-------------|------|--------|
+| Internet | `dmz-host:443` (proxied to 8443) | 443/tcp | ALLOW |
+| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW |
+| `dmz-host` | anywhere on the internal network | * | **DENY** |
+| Internet | `dmz-host:8444` | 8444/tcp | **DENY** |
+| Internet | `dmz-host:9444` | 9444/tcp | **DENY** |
+
+The `dmz-host → internal *` deny rule is the heart of the design — it
+is what makes a full RCE on the DMZ unable to reach Vault / DB / AD.
+
+### Production checklist
+
+- [ ] Three secrets generated independently with `openssl rand -hex 32`
+      (operator token, link PSK, edge HMAC key) — none reused, none
+      stored in the same file.
+- [ ] mTLS material issued by your operator-controlled CA (not the
+      test-cert script). Server cert SAN includes the DMZ DNS name;
+      client cert has `extendedKeyUsage=clientAuth`.
+- [ ] Public TLS cert is issued by a publicly-trusted CA (Let's
+      Encrypt, your enterprise CA — whatever browsers will trust).
+- [ ] Firewall rules above are in place AND tested with `nc -vz` from
+      the wrong source.
+- [ ] Operator API (`9444`) bound to loopback or a private management
+      VLAN — never to a public interface.
+- [ ] Grafana dashboard imported from
+      [`docs/grafana/strata-dmz-dashboard.json`](grafana/strata-dmz-dashboard.json)
+      and pointed at your Prometheus.
+- [ ] Runbook reviewed by on-call:
+      [`docs/runbooks/dmz-incident.md`](runbooks/dmz-incident.md).
+- [ ] Cert expiry monitored (see the certificate-rotation runbook).
+
+### Kubernetes (Helm)
+
+A reference Helm chart lives at
+[`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/) covering the
+DMZ side only. The internal backend uses the existing Helm chart
+unchanged plus the `STRATA_LINK_*` env vars above. See the chart's
+`values.yaml` for tunables (replica count, resources, ingress, the
+three secrets via `existingSecret` references).
+
+---
+
 ## Backup & Restore
 
 ### Database

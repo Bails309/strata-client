@@ -1,0 +1,48 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "strata-dmz.fullname" . }}
+  labels: {{- include "strata-dmz.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "strata-dmz.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Public port -- only the configured ingress controller may dial.
+    - ports:
+        - port: 8443
+          protocol: TCP
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
+          podSelector: {{- toYaml .Values.networkPolicy.ingressControllerSelector | nindent 12 }}
+    # Link port -- only the internal backend pods may dial.
+    - ports:
+        - port: 8444
+          protocol: TCP
+      from:
+        - podSelector: {{- toYaml .Values.networkPolicy.internalBackendSelector | nindent 12 }}
+    # Operator port -- only labelled operator clients.
+    - ports:
+        - port: 9444
+          protocol: TCP
+      from:
+        - podSelector: {{- toYaml .Values.networkPolicy.operatorClientSelector | nindent 12 }}
+  egress:
+    # The DMZ does not initiate any cluster-internal connections.
+    # Allow only DNS so liveness/readiness can resolve via kube-dns.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+{{- end }}

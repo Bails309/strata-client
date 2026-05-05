@@ -1,0 +1,32 @@
+name: Release Drafter
+
+# Maintains a single in-progress draft Release on GitHub. Every merge to main
+# updates the draft with categorised PR entries. Tagging a release publishes it.
+#
+# Configuration: .github/release-drafter.yml
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  update_release_draft:
+    permissions:
+      contents: write       # write the draft Release
+      pull-requests: write  # autolabeler writes labels on PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          disable-autolabeler: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

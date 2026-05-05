@@ -15,6 +15,7 @@
   <a href="https://github.com/Bails309/strata-client/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Bails309/strata-client/ci.yml?branch=main&label=CI&style=flat-square&logo=github" alt="CI"></a>
   <a href="https://github.com/Bails309/strata-client/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/Bails309/strata-client/codeql.yml?branch=main&label=CodeQL&style=flat-square&logo=github" alt="CodeQL"></a>
   <a href="https://github.com/Bails309/strata-client/actions/workflows/trivy.yml"><img src="https://img.shields.io/github/actions/workflow/status/Bails309/strata-client/trivy.yml?branch=main&label=Trivy&style=flat-square&logo=aquasec&logoColor=white" alt="Trivy"></a>
+  <a href="https://api.securityscorecards.dev/projects/github.com/Bails309/strata-client"><img src="https://api.securityscorecards.dev/projects/github.com/Bails309/strata-client/badge?style=flat-square" alt="OpenSSF Scorecard"></a>
   <a href="https://github.com/Bails309/strata-client/releases/latest"><img src="https://img.shields.io/github/v/release/Bails309/strata-client?style=flat-square&logo=github&label=release" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Bails309/strata-client?style=flat-square&color=green" alt="License"></a>
 </p>

@@ -302,10 +302,19 @@ mod tests {
         let shutdown = CancellationToken::new();
         let h = spawn_sweeper(r.clone(), Duration::from_millis(10), shutdown.clone());
 
-        // Advance past entry expiry plus at least one sweep interval.
+        // Let the sweeper task be polled at least once so its
+        // `tokio::time::interval` is registered with the (paused)
+        // runtime clock before we advance time. Without this yield the
+        // `advance` below races the task's first poll and the timer is
+        // created *after* the advance, so no tick ever fires.
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+
+        // Advance past entry expiry plus several sweep intervals.
         tokio::time::advance(Duration::from_millis(200)).await;
         // Yield repeatedly so the sweeper task gets to run.
-        for _ in 0..16 {
+        for _ in 0..32 {
             tokio::task::yield_now().await;
         }
 

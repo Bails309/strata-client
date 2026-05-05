@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rustls_pki_types::pem::PemObject;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres};
 use uuid::Uuid;

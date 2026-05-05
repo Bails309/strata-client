@@ -15,6 +15,7 @@
 //! (`created_at` / `updated_at` / `created_by`).
 
 use chrono::{DateTime, Utc};
+use rustls_pki_types::pem::PemObject;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;

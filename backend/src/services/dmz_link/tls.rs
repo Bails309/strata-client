@@ -315,8 +315,10 @@ mod tests {
             link_ca_path: None,
         };
         let r = TlsLinkConnector::from_config(&cfg);
-        assert!(r.is_err());
-        let msg = format!("{}", r.unwrap_err());
+        let Err(err) = r else {
+            panic!("expected error when client cert is missing");
+        };
+        let msg = format!("{err}");
         assert!(msg.contains("STRATA_DMZ_LINK_TLS_CLIENT_CERT"));
     }
 

@@ -37,13 +37,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bollard::container::{
-    Config, CreateContainerOptions, ListContainersOptions, NetworkingConfig,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
-};
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::models::{
-    EndpointSettings, HostConfig, HostConfigLogConfig, RestartPolicy, RestartPolicyNameEnum,
+    ContainerCreateBody, ContainerSummaryStateEnum, EndpointSettings, HostConfig,
+    HostConfigLogConfig, NetworkingConfig, RestartPolicy, RestartPolicyNameEnum,
+};
+use bollard::query_parameters::{
+    CreateContainerOptionsBuilder, ListContainersOptionsBuilder, RemoveContainerOptionsBuilder,
+    StartContainerOptions, StopContainerOptionsBuilder,
 };
 use bollard::Docker;
 use uuid::Uuid;
@@ -135,7 +136,7 @@ impl DockerVdiDriver {
         connection_id: Uuid,
         user_id: Uuid,
         network: &str,
-    ) -> Result<Config<String>, VdiError> {
+    ) -> Result<ContainerCreateBody, VdiError> {
         // Validate operator-supplied env keys + values BEFORE layering
         // in `VDI_USERNAME` / `VDI_PASSWORD` (which are runtime-trusted).
         for (k, v) in &spec.env {
@@ -229,21 +230,17 @@ impl DockerVdiDriver {
             ..Default::default()
         };
 
-        Ok(Config {
+        Ok(ContainerCreateBody {
             image: Some(spec.image.clone()),
             env: Some(env),
             labels: Some(labels),
             // The xrdp process inside the container listens on 3389;
             // we do not publish a host port — the backend reaches it
             // by container_name on the shared docker network.
-            exposed_ports: Some({
-                let mut m: HashMap<String, HashMap<(), ()>> = HashMap::new();
-                m.insert(format!("{}/tcp", VDI_DEFAULT_PORT), HashMap::new());
-                m
-            }),
+            exposed_ports: Some(vec![format!("{}/tcp", VDI_DEFAULT_PORT)]),
             host_config: Some(host_config),
             networking_config: Some(NetworkingConfig {
-                endpoints_config: endpoints,
+                endpoints_config: Some(endpoints),
             }),
             ..Default::default()
         })
@@ -256,11 +253,10 @@ impl DockerVdiDriver {
     async fn container_exists(&self, name: &str) -> Result<Option<ContainerSummary>, VdiError> {
         let mut filters: HashMap<String, Vec<String>> = HashMap::new();
         filters.insert("name".to_owned(), vec![name.to_owned()]);
-        let opts = ListContainersOptions::<String> {
-            all: true,
-            filters,
-            ..Default::default()
-        };
+        let opts = ListContainersOptionsBuilder::new()
+            .all(true)
+            .filters(&filters)
+            .build();
         let list = self
             .docker
             .list_containers(Some(opts))
@@ -279,7 +275,7 @@ impl DockerVdiDriver {
                         .or_else(|| c.image.clone())
                         .unwrap_or_default();
                     return Ok(Some(ContainerSummary {
-                        running: c.state.as_deref() == Some("running"),
+                        running: c.state == Some(ContainerSummaryStateEnum::RUNNING),
                         image,
                     }));
                 }
@@ -405,7 +401,7 @@ impl VdiDriver for DockerVdiDriver {
             } else {
                 if !summary.running {
                     self.docker
-                        .start_container(&name, None::<StartContainerOptions<String>>)
+                        .start_container(&name, None::<StartContainerOptions>)
                         .await
                         .map_err(|e| VdiError::Docker(e.to_string()))?;
                 }
@@ -436,17 +432,14 @@ impl VdiDriver for DockerVdiDriver {
         let config = Self::build_create_config(spec, connection_id, user_id, &self.network)?;
         self.docker
             .create_container(
-                Some(CreateContainerOptions {
-                    name: name.clone(),
-                    platform: None,
-                }),
+                Some(CreateContainerOptionsBuilder::new().name(&name).build()),
                 config,
             )
             .await
             .map_err(|e| VdiError::Docker(e.to_string()))?;
 
         self.docker
-            .start_container(&name, None::<StartContainerOptions<String>>)
+            .start_container(&name, None::<StartContainerOptions>)
             .await
             .map_err(|e| VdiError::Docker(e.to_string()))?;
 
@@ -468,17 +461,19 @@ impl VdiDriver for DockerVdiDriver {
         // contract. Same for remove with a missing container.
         let _ = self
             .docker
-            .stop_container(name, Some(StopContainerOptions { t: 10 }))
+            .stop_container(name, Some(StopContainerOptionsBuilder::new().t(10).build()))
             .await;
         match self
             .docker
             .remove_container(
                 name,
-                Some(RemoveContainerOptions {
-                    force: true,
-                    v: true, // also remove anonymous volumes (the home dir is a bind, not anonymous)
-                    ..Default::default()
-                }),
+                Some(
+                    RemoveContainerOptionsBuilder::new()
+                        .force(true)
+                        // also remove anonymous volumes (the home dir is a bind, not anonymous)
+                        .v(true)
+                        .build(),
+                ),
             )
             .await
         {
@@ -494,11 +489,10 @@ impl VdiDriver for DockerVdiDriver {
     async fn list_managed_containers(&self) -> Result<Vec<String>, VdiError> {
         let mut filters: HashMap<String, Vec<String>> = HashMap::new();
         filters.insert("label".to_owned(), vec!["strata.managed=true".to_owned()]);
-        let opts = ListContainersOptions::<String> {
-            all: true,
-            filters,
-            ..Default::default()
-        };
+        let opts = ListContainersOptionsBuilder::new()
+            .all(true)
+            .filters(&filters)
+            .build();
         let list = self
             .docker
             .list_containers(Some(opts))
@@ -522,11 +516,10 @@ impl VdiDriver for DockerVdiDriver {
         // "active desktops" UI (`/api/admin/vdi/containers`).
         let mut filters: HashMap<String, Vec<String>> = HashMap::new();
         filters.insert("label".to_owned(), vec!["strata.managed=true".to_owned()]);
-        let opts = ListContainersOptions::<String> {
-            all: true,
-            filters,
-            ..Default::default()
-        };
+        let opts = ListContainersOptionsBuilder::new()
+            .all(true)
+            .filters(&filters)
+            .build();
         let list = self
             .docker
             .list_containers(Some(opts))
@@ -553,7 +546,7 @@ impl VdiDriver for DockerVdiDriver {
                 .cloned()
                 .or_else(|| c.image.clone())
                 .unwrap_or_default();
-            let running = c.state.as_deref() == Some("running");
+            let running = c.state == Some(ContainerSummaryStateEnum::RUNNING);
             out.push(ManagedContainer {
                 container_id: c.id.unwrap_or_default(),
                 container_name,
@@ -611,7 +604,7 @@ mod tests {
         }
     }
 
-    fn build_for(spec: &VdiSpawnSpec, conn: Uuid, user: Uuid, net: &str) -> Config<String> {
+    fn build_for(spec: &VdiSpawnSpec, conn: Uuid, user: Uuid, net: &str) -> ContainerCreateBody {
         DockerVdiDriver::build_create_config(spec, conn, user, net).expect("fixture spec is valid")
     }
 

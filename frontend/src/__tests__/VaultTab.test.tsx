@@ -46,9 +46,7 @@ describe("VaultTab", () => {
     expect(screen.getByText("8h")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save Expiry Setting" }));
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
-    expect(api.updateSettings).toHaveBeenCalledWith([
-      { key: "credential_ttl_hours", value: "8" },
-    ]);
+    expect(api.updateSettings).toHaveBeenCalledWith([{ key: "credential_ttl_hours", value: "8" }]);
     expect(onSave).toHaveBeenCalled();
   });
 

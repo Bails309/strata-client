@@ -129,9 +129,9 @@ describe("TrustedCAsTab", () => {
     Object.defineProperty(fileInput, "files", { value: [file] });
     fireEvent.change(fileInput);
     await waitFor(() =>
-      expect(
-        (screen.getByPlaceholderText("Internal Corp Root CA") as HTMLInputElement).value
-      ).toBe("internal-ca")
+      expect((screen.getByPlaceholderText("Internal Corp Root CA") as HTMLInputElement).value).toBe(
+        "internal-ca"
+      )
     );
     expect((screen.getByPlaceholderText(/BEGIN CERTIFICATE/) as HTMLTextAreaElement).value).toBe(
       "pem-data"

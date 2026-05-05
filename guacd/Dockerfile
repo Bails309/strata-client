@@ -8,9 +8,11 @@
 # Kerberos NLA support.
 #
 # Pinned to guacamole-server commit 4163ead (head of staging/1.6.1 as of
-# May 3, 2026). This branch natively supports FreeRDP 3.25 AuthenticateEx
-# (GUACAMOLE-2273, upstream commit 7696572) via autoconf detection, so our
-# local patch 006 is no longer required. Other notable fixes since 2980cf0:
+# May 3, 2026). NOTE: GUACAMOLE-2273 (FreeRDP 3.25 AuthenticateEx, upstream
+# commit 7696572) has NOT yet landed on staging/1.6.1 at this pin, so our
+# local patch 006 is still required to build against FreeRDP 3.25 (which
+# removed the legacy `Authenticate` callback from struct rdp_freerdp).
+# Other notable fixes since 2980cf0:
 # GUACAMOLE-2268 (VNC UTF-8 clipboard), GUACAMOLE-2271 (VNC
 # FinishedFrameBufferUpdate), GUACAMOLE-2255 (RDP uninitialized var),
 # GUACAMOLE-2264 (FreeRDP CMAKE_BUILD_TYPE=Release), GUACAMOLE-2259 (cursor
@@ -51,7 +53,9 @@ RUN apk add --no-cache patch && cd /src && \
     for p in /tmp/patches/*.patch; do \
         echo "Applying $(basename $p)..." && \
         (git apply "$p" 2>/dev/null || patch -p1 -F3 < "$p") || { echo "ERROR: Patch $(basename $p) failed to apply" && exit 1; }; \
-    done
+    done && \
+    grep -q '#include <freerdp/version.h>' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not add freerdp/version.h include" && exit 1; } && \
+    grep -q 'rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;' src/protocols/rdp/rdp.c || { echo "ERROR: 006 patch did not introduce AuthenticateEx assignment" && exit 1; }
 
 WORKDIR /src
 

@@ -36,6 +36,12 @@
 //!   route reconnect attempts back to the originating node via the
 //!   DMZ's connection-affinity layer.
 
+// Phase 7 scaffolding: the resume registry is fully unit-tested but
+// not yet wired into the WebSocket upgrade path on `tunnel.rs`. The
+// inner-attribute allow keeps the module compiling clean while the
+// runtime integration is staged.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

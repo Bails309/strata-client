@@ -119,6 +119,11 @@ mrml = { version = "6", default-features = false, features = ["parse", "render"]
 tera = { version = "1", default-features = false }
 async-trait = "0.1"
 
+# DMZ link wire protocol (handshake, edge-header HMAC, resume tokens).
+# Phase 1a wires the edge-header verifier; the link client and resume
+# map use the rest in subsequent phases.
+strata-protocol = { path = "../crates/strata-protocol" }
+
 # Web Browser Sessions (shipped in v0.30.0).
 # `ipnet`  — CIDR parsing for the `web_allowed_networks` egress allow-list.
 # `url`    — host extraction from connection URLs before the CIDR check.

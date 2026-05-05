@@ -3335,6 +3335,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.0",
  "sqlx",
+ "strata-protocol",
  "sysinfo",
  "tempfile",
  "tera",

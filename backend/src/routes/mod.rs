@@ -421,6 +421,12 @@ pub fn build_router(state: SharedState) -> Router {
         .layer(middleware::from_fn(
             crate::services::request_id::inject_request_id,
         ))
+        // DMZ — verify or strip `x-strata-edge-*` headers. No-op for
+        // standalone deployments (env var not set). Runs after request-id
+        // injection so debug logs are correlated.
+        .layer(middleware::from_fn(
+            crate::services::edge_header::verify_edge_headers,
+        ))
         .layer(
             TraceLayer::new_for_http().make_span_with(
                 DefaultMakeSpan::new()

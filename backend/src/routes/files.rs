@@ -269,7 +269,10 @@ async fn sniff_mime(path: &std::path::Path, claimed: &str) -> Result<String, App
 /// - Some browsers: `image/x-png` ↔ `image/png`, `image/jpg` ↔ `image/jpeg`
 fn mime_aliases_match(detected: &str, claimed: &str) -> bool {
     const ALIASES: &[(&str, &[&str])] = &[
-        ("application/zip", &["application/x-zip-compressed", "application/x-zip"]),
+        (
+            "application/zip",
+            &["application/x-zip-compressed", "application/x-zip"],
+        ),
         ("application/x-rar-compressed", &["application/vnd.rar"]),
         ("application/x-7z-compressed", &["application/7z"]),
         ("application/gzip", &["application/x-gzip"]),

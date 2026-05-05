@@ -23,7 +23,7 @@
 //!   (`components/os_crypt/sync/key_storage_linux.cc`). Writing the
 //!   blob with any other parameters means Chromium won't decrypt it.
 //! - **IV** 16 bytes of `0x20` (ASCII space). Also fixed.
-//! - **Padding** PKCS#7 (handled by [`cbc::Encryptor::encrypt_padded_vec_mut`]).
+//! - **Padding** PKCS#7 (handled by [`cbc::Encryptor::encrypt_padded_vec`]).
 //!
 //! This is the same fixed-key construction every Chromium-on-Linux
 //! profile uses — it's not a security mechanism, it's an obfuscation
@@ -44,8 +44,8 @@
 //!   [`decrypt_chromium_v10`] for round-trip tests only.
 
 #[cfg(test)]
-use aes::cipher::BlockDecryptMut;
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use aes::cipher::BlockModeDecrypt;
+use aes::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
 
 /// Magic prefix Chromium prepends to every basic-profile-encrypted
 /// `password_value`.
@@ -98,7 +98,7 @@ pub fn encrypt_chromium_v10(plaintext: &[u8]) -> Vec<u8> {
     let key = chromium_basic_key();
     let iv = [0x20u8; IV_LEN];
     let cipher = Aes128CbcEnc::new(&key.into(), &iv.into());
-    let ct = cipher.encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+    let ct = cipher.encrypt_padded_vec::<Pkcs7>(plaintext);
     let mut out = Vec::with_capacity(CHROMIUM_V10_PREFIX.len() + ct.len());
     out.extend_from_slice(CHROMIUM_V10_PREFIX);
     out.extend_from_slice(&ct);
@@ -117,7 +117,7 @@ pub(crate) fn decrypt_chromium_v10(blob: &[u8]) -> Result<Vec<u8>, &'static str>
     let iv = [0x20u8; IV_LEN];
     let cipher = Aes128CbcDec::new(&key.into(), &iv.into());
     cipher
-        .decrypt_padded_vec_mut::<Pkcs7>(body)
+        .decrypt_padded_vec::<Pkcs7>(body)
         .map_err(|_| "padding error")
 }
 

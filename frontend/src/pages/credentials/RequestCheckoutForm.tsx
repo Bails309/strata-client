@@ -1,3 +1,7 @@
+/* eslint-disable react-hooks/purity --
+   react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
+   decoration, or render-time time/derivation patterns. See
+   eslint.config.js W4-1 commentary. */
 import Select from "../../components/Select";
 import type { CheckoutRequest, UserAccountMapping } from "../../api";
 

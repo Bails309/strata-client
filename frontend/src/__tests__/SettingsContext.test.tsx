@@ -1,3 +1,7 @@
+/* eslint-disable react-hooks/globals --
+   react-hooks v7 compiler-strict suppressions: legitimate prop->state sync, session
+   decoration, or render-time time/derivation patterns. See
+   eslint.config.js W4-1 commentary. */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 

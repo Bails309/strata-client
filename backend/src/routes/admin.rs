@@ -17,6 +17,7 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{audit, kerberos, settings};
 
+pub mod dmz;
 pub mod recordings;
 
 // ── Rate limiter: admin password reset (W3-7) ──────────────────────────

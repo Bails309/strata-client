@@ -282,6 +282,11 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .route("/api/recordings/{filename}", get(user::get_recording))
         .route("/api/admin/roadmap/{item_id}", put(roadmap::set_status))
+        .route("/api/admin/dmz-links", get(admin::dmz::list_links))
+        .route(
+            "/api/admin/dmz-links/reconnect",
+            post(admin::dmz::reconnect_links),
+        )
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         // CSRF runs first on the request path (outermost layer). It inspects

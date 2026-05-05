@@ -2,7 +2,7 @@
 
 Public-facing DMZ proxy for Strata Client. See
 [ADR-0009](../../../docs/adr/ADR-0009-dmz-deployment-mode.md) for the
-architecture and [the deployment guide §DMZ](../../../docs/deployment.md#dmz-split-topology-optional)
+architecture and [the deployment guide §DMZ](../../../docs/deployment.md#dmz-deployment-mode)
 for the operator-facing summary.
 
 > **Looking for an end-to-end walkthrough?** See
@@ -34,7 +34,7 @@ kubectl create secret tls strata-dmz-public-tls \
 
 # 4. Install the chart.
 helm install strata-dmz ./deploy/helm/strata-dmz \
-    --set image.tag=1.4.1 \
+    --set image.tag=1.5.0 \
     --set config.nodeId=dmz-1 \
     --set config.clusterId=strata-cluster-prod \
     --set ingress.hosts[0].host=strata.example.com

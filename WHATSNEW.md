@@ -1,3 +1,170 @@
+# What's New in v1.5.0
+
+> **Minor release: DMZ deployment mode.** v1.5.0 introduces a
+> split-topology deployment where the public-internet surface is a
+> separate, minimal, sandboxable binary (`strata-dmz`) and the full
+> backend (`strata-internal`) stays inside the corporate network. The
+> internal node opens a persistent **outbound** mTLS tunnel to the
+> DMZ; the DMZ initiates **no** connections to the internal network
+> and holds **no** Strata business secrets — no JWT signing key, no
+> database credentials, no Vault tokens, no `guac-master-key`, no
+> recording-storage credentials. Every existing Strata feature works
+> through the DMZ on day one because the tunnel carries arbitrary
+> HTTP requests rather than custom message types. Single-node
+> operators are not affected: when the DMZ environment variables are
+> not set the internal node continues serving public traffic
+> directly. **Drop-in upgrade from v1.4.1** — no database migrations,
+> no breaking `/api/*` changes, no `config.toml` schema changes;
+> rebuild backend and frontend so the new bits actually run.
+
+---
+
+## 🛡️ Public surface as a separate, minimal binary
+
+The new `strata-dmz` crate (`crates/strata-dmz`) is a deliberately
+small Axum binary that owns the public TLS listener (default
+`0.0.0.0:8443`), a separate link-server listener for inbound mTLS
+from internal nodes (default `0.0.0.0:9443`), the SPA static-serving
+path, the slow-loris / rate-limit / inflight-cap guards, and the
+`x-strata-edge-*` HMAC header signer. It does **not** link in any
+Postgres, Vault, JWT-signing, OIDC-client-secret or recording-storage
+code. The zero-secret-overlap matrix (in `docs/architecture.md`) is
+CI-enforced: a Cargo deny rule rejects any DMZ-side dependency on the
+internal-only secret-handling crates.
+
+## 🔁 HTTP/2-over-mTLS reverse tunnel
+
+The internal node dials **out** to the DMZ over TLS 1.3 + mTLS using
+operator-supplied certs and a private CA bundle (the system trust
+store is **not** consulted on the link path). On top of TLS the wire
+format is HTTP/2: each user request becomes one HTTP/2 stream on the
+persistent link, WebSockets are carried as RFC 8441 Extended CONNECT
+streams (the same mechanism browsers use for WebSocket-over-HTTP/2),
+and per-stream `WINDOW_UPDATE` flow control gives back-pressure for
+free. No custom codec to fuzz; we lean on `h2` and `hyper`. The
+internal node's existing `axum::Router` handles the request unmodified
+— **every existing feature works through the DMZ on day one**.
+
+## 🧷 PSK-bound handshake on top of mTLS
+
+Layered on top of the mTLS link is an application-level
+challenge–response: the DMZ sends a 32-byte random nonce, the
+internal node returns HMAC-SHA-256(psk_key, nonce ‖ cluster_id ‖
+node_id) and an `AuthHello` frame identifying its cluster id, node
+id and software version. PSKs are configured per-id
+(`STRATA_DMZ_LINK_PSK_<id>=<base64>` on the internal node;
+`STRATA_DMZ_LINK_PSKS=id:b64,id2:b64` on the DMZ — first entry is the
+active key, rest accepted during rotation). A stolen mTLS cert alone
+is not enough to bring up a link; a stolen PSK alone is not enough
+either. Both must hold.
+
+## ✍️ Edge-header HMAC, rotation-aware
+
+Once a request reaches the internal node from the DMZ it must carry
+a valid `x-strata-edge-{ts,id,client-ip,sig}` header set, signed by
+the DMZ with a key configured via `STRATA_DMZ_EDGE_HMAC_KEYS`. The
+internal-side verifier
+(`backend/src/services/edge_header.rs`) accepts any key in the
+comma-separated list (first active, rest accepted) so keys can be
+rotated without dropping live links: stage the new key first on the
+internal side, then on the DMZ side, then drop the old key from both.
+Constant-time signature compare; ±60 s timestamp window; the client
+IP from the header is what reaches RBAC and audit (the DMZ is an
+expensive NAT). When `STRATA_DMZ_EDGE_HMAC_KEYS` is unset the
+verifier is a no-op (single-node mode).
+
+## 🖥️ Admin DMZ Links tab
+
+A new **Admin → DMZ Links** page (`frontend/src/pages/admin/DmzLinksTab.tsx`)
+surfaces every supervisor's state (`up` / `connecting` /
+`authenticating` / `initializing` / `backoff` / `stopped`), connect
+counter, failure counter, last error and uptime. A **Force reconnect**
+button calls `POST /api/admin/dmz-links/reconnect` to drop and redial
+every link — used during scheduled DMZ restarts and as the first
+button in the incident-response runbook. The page auto-refreshes every
+15 seconds. The configured-but-empty case ("no DMZ endpoints
+configured") and the disabled case ("DMZ mode is not enabled") render
+distinct empty-state cards so the operator can tell at a glance
+whether they're looking at a misconfiguration or a green-field
+single-node host.
+
+## 📚 Operator-grade documentation refresh
+
+- `docs/architecture.md` — new DMZ chapter with sequence diagrams for
+  the link handshake, the per-request flow and the WebSocket-tunnel
+  flow, plus the zero-secret-overlap matrix.
+- `docs/security.md` — DMZ threat model (W6-1 through W6-5) covering
+  compromised-DMZ blast radius, link-tier PKI rotation runbook, abuse
+  guards, audit-event surface.
+- `docs/deployment.md` — full env-var reference for both binaries,
+  certificate generation steps, Helm-chart pointer, scheduled
+  rotation worked example, troubleshooting matrix.
+- `docs/api-reference.md` — admin DMZ endpoints documented next to
+  the existing admin surface.
+- `docs/threat-model.md` — STRIDE rows for every new asset / trust
+  boundary.
+- `docs/runbooks/dmz-incident.md` — operator runbook for DMZ
+  compromise, link flap and key-rotation incidents.
+
+## ⚙️ New environment variables
+
+DMZ side (`strata-dmz` binary):
+
+| Variable | Purpose |
+| --- | --- |
+| `STRATA_DMZ_PUBLIC_BIND` | Public-facing listener (default `0.0.0.0:8443`). |
+| `STRATA_DMZ_LINK_BIND` | Link-server listener (default `0.0.0.0:9443`). |
+| `STRATA_DMZ_PUBLIC_TLS_{CERT,KEY}` | Public TLS material (PEM). |
+| `STRATA_DMZ_LINK_TLS_{CERT,KEY}` | DMZ side of the link mTLS material (PEM). |
+| `STRATA_DMZ_LINK_CA_BUNDLE` | Private CA bundle that signs the **internal** node link cert (PEM). |
+| `STRATA_DMZ_LINK_PSKS` | `id:base64,id2:base64,…` — first active. |
+| `STRATA_DMZ_EDGE_HMAC_KEY` | Base64 key used to sign `x-strata-edge-*` headers. |
+| `STRATA_DMZ_CLUSTER_ID`, `STRATA_DMZ_NODE_ID` | Cluster + node identification. |
+| `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES`, `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP`, `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS`, `STRATA_DMZ_PUBLIC_RATE_RPS`, `STRATA_DMZ_PUBLIC_RATE_BURST`, `STRATA_DMZ_PUBLIC_MAX_INFLIGHT`, `STRATA_DMZ_TRUST_FORWARDED_FROM` | Public-surface abuse guards. |
+
+Internal-node side (`strata-backend`):
+
+| Variable | Purpose |
+| --- | --- |
+| `STRATA_DMZ_ENDPOINTS` | Comma-separated list of DMZ endpoints to dial; unset = standalone. |
+| `STRATA_CLUSTER_ID`, `STRATA_NODE_ID` | Required when `STRATA_DMZ_ENDPOINTS` is set. |
+| `STRATA_DMZ_LINK_TLS_{CERT,KEY}` | Internal side of the link mTLS material (PEM). |
+| `STRATA_DMZ_LINK_CA` | Private CA bundle that signs the **DMZ** server cert (PEM). |
+| `STRATA_DMZ_LINK_PSK_<id>` | One env var per PSK; value is base64 raw key. |
+| `STRATA_DMZ_EDGE_HMAC_KEYS` | Comma-separated list of base64 HMAC keys; first active, rest accepted during rotation. |
+
+See `docs/deployment.md` for the full reference table including
+defaults, accepted ranges and rotation procedure.
+
+## 🆕 New admin API endpoints
+
+- `GET /api/admin/dmz-links` — supervisor snapshot.
+  Response: `{ configured: bool, links: [{ endpoint, state, connects,
+  failures, since_unix_secs, last_error }, …] }`.
+- `POST /api/admin/dmz-links/reconnect` — best-effort kick that drops
+  and redials every link. Response: `{ nudged: <count> }`.
+
+Both require `can_manage_system` and the standard `X-CSRF-Token`
+double-submit cookie. Documented in `docs/api-reference.md`.
+
+## ↗️ Drop-in upgrade from v1.4.1
+
+No database migrations. No breaking `/api/*` changes (two new admin
+endpoints, additive only). No `config.toml` schema changes. Rebuild
+backend and frontend so the new bits actually run:
+
+```bash
+docker compose build backend frontend
+docker compose up -d
+```
+
+If you don't want DMZ mode, you're done — `STRATA_DMZ_ENDPOINTS` is
+unset by default and the internal node serves public traffic
+directly, exactly as it did in v1.4.1. To adopt the split topology,
+follow `docs/deployment.md` → **DMZ deployment mode**.
+
+---
+
 # What's New in v1.4.1
 
 > **Patch release on top of v1.4.0.** One operator-affecting fix

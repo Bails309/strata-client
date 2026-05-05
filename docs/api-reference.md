@@ -738,6 +738,102 @@ controlled file paths).
 
 ---
 
+### DMZ link management (v1.5.0)
+
+These endpoints surface the state of the internal node's outbound
+HTTP/2-over-mTLS links to the DMZ binary. They are mounted in
+[`backend/src/routes/mod.rs`](../backend/src/routes/mod.rs) and
+implemented in
+[`backend/src/routes/admin/dmz.rs`](../backend/src/routes/admin/dmz.rs).
+Both require `can_manage_system`. State endpoints documented in
+[architecture.md](architecture.md#internal-node-supervisor-and-operator-ui-v150)
+and [security.md](security.md#dmz-deployment-mode-v150).
+
+#### `GET /api/admin/dmz-links`
+
+Returns a snapshot of every link supervisor's current state. Used
+by the **Admin → DMZ Links** tab; auto-refreshed every 15 seconds.
+
+**Response** `200 OK`
+```json
+{
+  "configured": true,
+  "links": [
+    {
+      "endpoint": "dmz-a.example.com:9443",
+      "state": "up",
+      "connects": 4,
+      "failures": 1,
+      "since_unix_secs": 1714780000,
+      "last_error": null
+    },
+    {
+      "endpoint": "dmz-b.example.com:9443",
+      "state": "backoff",
+      "connects": 0,
+      "failures": 7,
+      "since_unix_secs": 1714779931,
+      "last_error": "tls: handshake failure: certificate verify failed"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `configured` | bool | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`. |
+| `links[].endpoint` | string | `host:port` for one DMZ peer. |
+| `links[].state` | enum | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`. |
+| `links[].connects` | int | Successful link establishments since process start. |
+| `links[].failures` | int | Failed handshake or TCP attempts since process start. |
+| `links[].since_unix_secs` | int | Wall-clock instant the link entered its current `state`. |
+| `links[].last_error` | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run. |
+
+`curl` example:
+
+```bash
+curl -sS \
+  -H "Cookie: token=<jwt>" \
+  https://strata.example.com/api/admin/dmz-links | jq
+```
+
+#### `POST /api/admin/dmz-links/reconnect`
+
+Drops every live link and lets the supervisor's exponential back-off
+loop redial. Used during scheduled DMZ restarts and as the first step
+in the [DMZ incident runbook](runbooks/dmz-incident.md).
+
+**Request body** — none. Standard CSRF double-submit applies.
+
+**Response** `200 OK`
+```json
+{ "nudged": 2 }
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `nudged` | int | Number of supervisor tasks that were signalled to drop and redial. Equals the number of configured endpoints. |
+
+`curl` example:
+
+```bash
+curl -sS -X POST \
+  -H "Cookie: token=<jwt>" \
+  -H "X-CSRF-Token: <csrf>" \
+  https://strata.example.com/api/admin/dmz-links/reconnect
+```
+
+**Errors**
+
+| Status | When |
+|---|---|
+| `401 Unauthorized` | Missing / expired session. |
+| `403 Forbidden` | Caller lacks `can_manage_system`. |
+| `403 Forbidden` | Missing or mismatched `X-CSRF-Token`. |
+| `503 Service Unavailable` | Returned by `GET` when DMZ mode is configured but the supervisor pool failed to start; check backend logs for the `dmz_link.bootstrap` event. |
+
+---
+
 ## User Endpoints
 
 These endpoints require authentication (any role).

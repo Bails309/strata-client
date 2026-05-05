@@ -29,6 +29,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.5.0",
+    subtitle:
+      "DMZ deployment mode — split-topology release with a separate edge binary, HTTP/2-over-mTLS reverse tunnel, and zero-secret-overlap with the internal node",
+    sections: [
+      {
+        title: "Public surface as a separate, minimal binary",
+        description:
+          "The new strata-dmz crate (crates/strata-dmz) is a deliberately small Axum binary that owns the public TLS listener (default 0.0.0.0:8443), a separate link-server listener for inbound mTLS from internal nodes (default 0.0.0.0:9443), the SPA static-serving path, the slow-loris / rate-limit / inflight-cap guards and the x-strata-edge-* HMAC header signer. It does NOT link in any Postgres, Vault, JWT-signing, OIDC-client-secret or recording-storage code. The zero-secret-overlap matrix in docs/architecture.md is CI-enforced: a Cargo deny rule rejects any DMZ-side dependency on the internal-only secret-handling crates. Single-node operators are not affected — when STRATA_DMZ_ENDPOINTS is unset the internal node continues serving public traffic directly with no link supervisor spawned.",
+      },
+      {
+        title: "HTTP/2-over-mTLS reverse tunnel — every existing feature works through the DMZ on day one",
+        description:
+          "The internal node dials OUT to the DMZ over TLS 1.3 + mTLS using operator-supplied certs and a private CA bundle (the system trust store is NOT consulted on the link path). On top of TLS the wire format is HTTP/2: each user request becomes one HTTP/2 stream on the persistent link, WebSockets are carried as RFC 8441 Extended CONNECT streams (the same mechanism browsers use for WebSocket-over-HTTP/2), and per-stream WINDOW_UPDATE flow control gives back-pressure for free. No custom codec to fuzz; we lean on h2 and hyper. The internal node's existing axum::Router handles the request unmodified — every existing feature works through the DMZ on day one because the tunnel carries arbitrary HTTP requests rather than custom message types.",
+      },
+      {
+        title: "PSK-bound handshake on top of mTLS plus rotation-aware edge-header HMAC",
+        description:
+          "Layered on top of the mTLS link is an application-level challenge–response: the DMZ sends a 32-byte random nonce, the internal node returns HMAC-SHA-256(psk_key, nonce ‖ cluster_id ‖ node_id) and an AuthHello frame. PSKs are configured per-id (STRATA_DMZ_LINK_PSK_<id>=<base64> on the internal node, STRATA_DMZ_LINK_PSKS=id:b64,id2:b64 on the DMZ — first active, rest accepted during rotation). A stolen mTLS cert alone is not enough to bring up a link. Once a request reaches the internal node from the DMZ it must carry a valid x-strata-edge-{ts,id,client-ip,sig} header set, signed by the DMZ with a key configured via STRATA_DMZ_EDGE_HMAC_KEYS. The internal-side verifier (backend/src/services/edge_header.rs) accepts any key in the comma-separated list (first active, rest accepted) so keys can be rotated without dropping live links. Constant-time compare, ±60s timestamp window, client IP from the header is what reaches RBAC and audit (the DMZ is an expensive NAT).",
+      },
+      {
+        title: "Admin → DMZ Links tab",
+        description:
+          "A new Admin → DMZ Links page (frontend/src/pages/admin/DmzLinksTab.tsx) surfaces every supervisor's state (up / connecting / authenticating / initializing / backoff / stopped), connect counter, failure counter, last error and uptime. A Force reconnect button calls POST /api/admin/dmz-links/reconnect to drop and redial every link — used during scheduled DMZ restarts and as the first button in the incident-response runbook. The page auto-refreshes every 15 seconds. The configured-but-empty case (\"no DMZ endpoints configured\") and the disabled case (\"DMZ mode is not enabled\") render distinct empty-state cards so the operator can tell at a glance whether they're looking at a misconfiguration or a green-field single-node host.",
+      },
+      {
+        title: "Operator-grade documentation, two new admin endpoints, drop-in upgrade",
+        description:
+          "Docs refreshed end-to-end: architecture.md gains a DMZ chapter with sequence diagrams and the zero-secret-overlap matrix; security.md gets a DMZ threat-model section (W6-1 through W6-5) covering compromised-DMZ blast radius, key-rotation runbook and abuse guards; deployment.md gets a full env-var reference for both binaries plus certificate generation and rotation procedures; api-reference.md documents the two new admin endpoints (GET /api/admin/dmz-links snapshot, POST /api/admin/dmz-links/reconnect kick). No database migrations, no breaking /api/* changes (additive only), no config.toml schema changes — DMZ is configured exclusively via environment variables so the same config file continues to work in both single-node and split deployments. Rebuild backend and frontend (docker compose build backend frontend && docker compose up -d) to roll v1.5.0 forward.",
+      },
+    ],
+  },
+  {
     version: "1.4.1",
     subtitle:
       "Tunnel watchdog regression fix, crypto crate refresh, and a 334-warning ESLint sweep",

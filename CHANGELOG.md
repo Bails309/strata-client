@@ -5,6 +5,124 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-05-05
+
+### DMZ deployment mode — split-topology release
+
+v1.5.0 introduces a **DMZ deployment mode**: a separate, minimal,
+sandboxable edge binary (`strata-dmz`) terminates public TLS while the
+existing `strata-backend` ("internal node") stays inside the corporate
+network. The internal node opens a persistent **outbound** mTLS tunnel
+to the DMZ; the DMZ initiates **no** connections to the internal
+network and holds **no** Strata business secrets. Every existing
+Strata feature works through the DMZ on day one because the tunnel
+carries arbitrary HTTP requests rather than custom message types.
+
+Single-node operators are not affected — when the DMZ environment
+variables are not set the internal node continues serving public
+traffic directly. Drop-in upgrade from v1.4.1.
+
+#### What ships in this release
+
+- **New crate `crates/strata-dmz`** — the DMZ edge binary. Owns the
+  public TLS listener (default `0.0.0.0:8443`), a separate link-server
+  listener for inbound mTLS from internal nodes (default `0.0.0.0:9443`),
+  the slow-loris / rate-limit / inflight-cap guards, the SPA static
+  serving path, and the `x-strata-edge-*` header signer. No Postgres,
+  no Vault, no JWT signing key, no `guac-master-key`, no recording
+  storage, no OIDC client secret. Configured entirely from environment
+  variables (see [`docs/deployment.md`](docs/deployment.md#dmz-deployment-mode)).
+- **New crate `crates/strata-protocol`** — versioned wire-format
+  primitives shared by both binaries: `AuthHello` / `AuthAccept`
+  handshake frames, PSK challenge–response, `x-strata-edge-*` HMAC
+  scheme, `tunnel.terminated` audit reason enum.
+- **Internal-node link supervisor** —
+  [`backend/src/services/dmz_link/`](backend/src/services/dmz_link/)
+  spawns one supervisor task per configured DMZ endpoint, dials out
+  over mTLS using the operator-supplied client certificate / key /
+  link CA bundle, performs the PSK-bound handshake, and serves the
+  internal `axum::Router` over an HTTP/2 connection back to the DMZ.
+  Exponential back-off with jitter; unfailing reconnect; per-link
+  state (`up` / `connecting` / `authenticating` / `initializing` /
+  `backoff` / `stopped`) and lightweight metrics surfaced in the admin
+  UI.
+- **Edge-header HMAC** —
+  [`backend/src/services/edge_header.rs`](backend/src/services/edge_header.rs)
+  implements the internal-side verifier for the
+  `x-strata-edge-{ts,id,client-ip,sig}` header set. The header is
+  HMAC-SHA-256 signed by the DMZ with a key configured via
+  `STRATA_DMZ_EDGE_HMAC_KEYS` (rotation-aware: first key active, rest
+  accepted). Requests reaching the internal node without a valid edge
+  header are rejected unless they arrive on the local-loopback path
+  (single-node mode).
+- **Admin DMZ Links tab** —
+  [`frontend/src/pages/admin/DmzLinksTab.tsx`](frontend/src/pages/admin/DmzLinksTab.tsx)
+  surfaces every supervisor's state, connect / failure counters, last
+  error, and uptime. A **Force reconnect** button calls
+  `POST /api/admin/dmz-links/reconnect` to drop and redial every link
+  (used during scheduled DMZ restarts and incident response). The page
+  auto-refreshes every 15 s.
+- **New admin API endpoints**
+  - `GET /api/admin/dmz-links` — supervisor snapshot
+    (`{configured, links: [{endpoint, state, connects, failures, since_unix_secs, last_error}, ...]}`).
+  - `POST /api/admin/dmz-links/reconnect` — kick every link
+    (`{nudged: <count>}`).
+  Both require `can_manage_system` and the standard `X-CSRF-Token`
+  double-submit cookie.
+- **Operator-grade documentation**
+  - [`docs/architecture.md`](docs/architecture.md) — new chapter on
+    the DMZ split, sequence diagrams, secret-overlap matrix.
+  - [`docs/security.md`](docs/security.md) — DMZ threat-model section
+    (W6-1 through W6-5) covering compromised-DMZ blast radius, key
+    rotation runbook, abuse guards.
+  - [`docs/deployment.md`](docs/deployment.md) — full env-var
+    reference, certificate generation, Helm chart pointer, scheduled
+    rotation worked example.
+  - [`docs/api-reference.md`](docs/api-reference.md) — admin DMZ
+    endpoints documented next to the existing admin surface.
+  - [`docs/threat-model.md`](docs/threat-model.md) — STRIDE rows for
+    every new asset and trust boundary.
+  - [`docs/runbooks/dmz-incident.md`](docs/runbooks/dmz-incident.md) —
+    incident response procedure.
+- **Helm chart** —
+  [`deploy/helm/strata-dmz/`](deploy/helm/strata-dmz/) ships the
+  edge-side Kubernetes deployment.
+- **CI / supply-chain** — `cargo audit` now runs against the workspace
+  `Cargo.lock` so every member crate is scanned in one pass; coverage
+  thresholds raised in lock-step with the new code; `strata-dmz` and
+  `strata-protocol` get matching CodeQL + Trivy passes.
+
+#### Backwards compatibility
+
+- **Single-node (default) deployments** — no behaviour change. When
+  `STRATA_DMZ_ENDPOINTS` is unset the internal node serves public
+  traffic directly with no link supervisor spawned.
+- **Database migrations** — none. The DMZ feature is stateless on the
+  edge and stateless on the internal node beyond the in-memory link
+  registry.
+- **`/api/*` contract** — additive only (two new admin endpoints).
+  No existing endpoint changed shape.
+- **`config.toml`** — unchanged. DMZ is configured exclusively via
+  environment variables so the same config file continues to work in
+  both single-node and split deployments.
+- **Audit log** — `tunnel.terminated` reason enum unchanged from
+  v1.4.1. New `dmz.link.{up,down,handshake_failed,reconnect_requested}`
+  events are added; dashboards filtering on the `event_type` column
+  can opt in.
+
+#### Upgrade procedure
+
+1. `docker compose pull` and rebuild backend / frontend.
+2. **No DMZ desired** — start the stack as before, no env vars to
+   add.
+3. **Adopt DMZ mode** — generate the link-tier mTLS PKI and the edge
+   HMAC key (see [`docs/deployment.md`](docs/deployment.md#dmz-deployment-mode)),
+   stand up the `strata-dmz` container on its public-facing host,
+   set `STRATA_DMZ_ENDPOINTS` + `STRATA_CLUSTER_ID` + `STRATA_NODE_ID`
+   + the matching `STRATA_DMZ_LINK_PSK_<id>` and
+   `STRATA_DMZ_EDGE_HMAC_KEYS` on the internal node, restart it,
+   verify the link comes up green in **Admin → DMZ Links**.
+
 ## [1.4.1] — 2026-05-05
 
 ### Tunnel watchdog no longer reaps active sessions at the access-token TTL

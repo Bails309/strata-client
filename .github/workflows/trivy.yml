@@ -32,8 +32,10 @@ jobs:
           push: false
           load: true
           tags: strata/${{ matrix.service }}:scan
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          # No GHA build cache: Docker would replay a stale apt layer and
+          # ship outdated OS packages, which Trivy then flags as CVEs that
+          # are already fixed upstream. A cold build is 2-3 min slower but
+          # guarantees `apt-get update && upgrade` actually runs.
 
       # Coding Standards §18.2 / §18.3 — fail the build on any Critical/High CVE
       # in a deployable image. The SARIF upload feeds Code Scanning so findings

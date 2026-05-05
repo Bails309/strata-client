@@ -35,8 +35,8 @@
 //! `cluster_id` or different timestamp will not verify.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use hmac::{Hmac, Mac};
-use rand::RngCore;
+use hmac::{digest::KeyInit, Hmac, Mac};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -164,7 +164,7 @@ pub fn compute_response(
         &challenge.psk_id,
     );
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(psk)
+    let mut mac = HmacSha256::new_from_slice(psk)
         .expect("HMAC-SHA-256 accepts any key length");
     mac.update(&input);
     Ok(AuthResponse {
@@ -215,7 +215,7 @@ pub fn verify_response(
         &challenge.psk_id,
     );
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(psk)
+    let mut mac = HmacSha256::new_from_slice(psk)
         .expect("HMAC-SHA-256 accepts any key length");
     mac.update(&input);
     mac.verify_slice(&tag)

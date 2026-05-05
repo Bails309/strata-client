@@ -8,7 +8,7 @@
 //! thundering-herd reconnects when N internal nodes converge on a
 //! recovering DMZ at once.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::time::Duration;
 
 /// Tunable backoff parameters.

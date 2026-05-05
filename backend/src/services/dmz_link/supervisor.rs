@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use rand::rngs::OsRng;
 use strata_protocol::backoff::default_link_backoff;
 use strata_protocol::link::{client_handshake, ClientHandshakeConfig};
 use tokio::task::JoinHandle;
@@ -82,7 +81,8 @@ async fn run_endpoint(
                 let msg = format!("dial failed: {e}");
                 tracing::warn!(endpoint = %url, error = %msg, "DMZ link dial failed");
                 registry.set_state(&url, LinkState::Backoff, Some(msg));
-                if !sleep_with_cancel(backoff.next_delay(&mut OsRng), &shutdown).await {
+                let delay = backoff.next_delay(&mut rand::rng());
+                if !sleep_with_cancel(delay, &shutdown).await {
                     registry.set_state(&url, LinkState::Stopped, None);
                     return;
                 }
@@ -104,7 +104,8 @@ async fn run_endpoint(
                 let msg = format!("handshake failed: {e}");
                 tracing::warn!(endpoint = %url, error = %msg, "DMZ link handshake failed");
                 registry.set_state(&url, LinkState::Backoff, Some(msg));
-                if !sleep_with_cancel(backoff.next_delay(&mut OsRng), &shutdown).await {
+                let delay = backoff.next_delay(&mut rand::rng());
+                if !sleep_with_cancel(delay, &shutdown).await {
                     registry.set_state(&url, LinkState::Stopped, None);
                     return;
                 }
@@ -137,7 +138,8 @@ async fn run_endpoint(
         tracing::warn!(endpoint = %url, reason = %msg, "DMZ link down");
         registry.set_state(&url, LinkState::Backoff, Some(msg));
 
-        if !sleep_with_cancel(backoff.next_delay(&mut OsRng), &shutdown).await {
+        let delay = backoff.next_delay(&mut rand::rng());
+                if !sleep_with_cancel(delay, &shutdown).await {
             registry.set_state(&url, LinkState::Stopped, None);
             return;
         }

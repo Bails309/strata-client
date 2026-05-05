@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use hmac::{Hmac, Mac};
+use hmac::{digest::KeyInit, Hmac, Mac};
 use sha2::Sha256;
 
 use crate::errors::ProtocolError;
@@ -80,7 +80,7 @@ fn canonical_input(headers: &HashMap<String, String>) -> Vec<u8> {
 ///
 /// Used by the DMZ. The internal node never calls this.
 pub fn sign(headers: &HashMap<String, String>, key: &[u8]) -> String {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
+    let mut mac = HmacSha256::new_from_slice(key)
         .expect("HMAC-SHA-256 accepts any key length");
     mac.update(&canonical_input(headers));
     B64.encode(mac.finalize().into_bytes())
@@ -104,7 +104,7 @@ pub fn verify(
     let input = canonical_input(headers);
 
     for key in keys {
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
+        let mut mac = HmacSha256::new_from_slice(key)
             .expect("HMAC-SHA-256 accepts any key length");
         mac.update(&input);
         if mac.verify_slice(&tag).is_ok() {

@@ -79,7 +79,7 @@ impl LinkRegistry {
     }
 
     /// Update only the state field (and bump `since`), preserving counters.
-    pub(super) fn set_state(&self, endpoint: &str, state: LinkState, err: Option<String>) {
+    pub(crate) fn set_state(&self, endpoint: &str, state: LinkState, err: Option<String>) {
         let mut g = self.inner.write().expect("LinkRegistry poisoned");
         if let Some(s) = g.get_mut(endpoint) {
             s.state = state;

@@ -20,8 +20,8 @@
 //! Total 56 bytes raw, 76 chars base64 (URL-safe, no padding).
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64URL, Engine as _};
-use hmac::{Hmac, Mac};
-use rand::RngCore;
+use hmac::{digest::KeyInit, Hmac, Mac};
+use rand::Rng;
 use sha2::Sha256;
 use std::time::Duration;
 
@@ -62,7 +62,7 @@ pub fn seal(expiry_ms: i64, key: &[u8]) -> (ResumeToken, String) {
     buf[..TOKEN_ID_LEN].copy_from_slice(&token_id);
     buf[TOKEN_ID_LEN..TOKEN_ID_LEN + 8].copy_from_slice(&expiry_ms.to_be_bytes());
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
+    let mut mac = HmacSha256::new_from_slice(key)
         .expect("HMAC-SHA-256 accepts any key length");
     mac.update(&buf[..TOKEN_ID_LEN + 8]);
     let tag = mac.finalize().into_bytes();
@@ -91,7 +91,7 @@ pub fn unseal(token: &str, key: &[u8], now_ms: i64) -> Result<ResumeToken, Proto
         return Err(ProtocolError::InvalidResumeToken);
     }
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
+    let mut mac = HmacSha256::new_from_slice(key)
         .expect("HMAC-SHA-256 accepts any key length");
     mac.update(&raw[..TOKEN_ID_LEN + 8]);
     mac.verify_slice(&raw[TOKEN_ID_LEN + 8..])

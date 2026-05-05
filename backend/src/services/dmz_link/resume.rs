@@ -293,29 +293,31 @@ mod tests {
         assert!(matches!(r.take(&token), Err(ResumeError::Invalid)));
     }
 
-    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    #[tokio::test(flavor = "current_thread")]
     async fn sweeper_evicts_in_background() {
-        let r = ResumeRegistry::<u64>::new(key(), Duration::from_millis(50));
+        // NOTE: this test runs on real wall-clock time on purpose.
+        // The registry uses `Utc::now()` to compute expiry (see
+        // `now_ms` above), which is not driven by `tokio::time::pause`
+        // / `advance`. A previous version of this test used
+        // `start_paused = true` and `tokio::time::advance(...)`, which
+        // moved the Tokio clock but left `Utc::now()` unchanged — so
+        // `sweep()` never saw any entry as expired and the assertion
+        // tripped. Real time + tiny windows is reliable here because
+        // we only need ~tens of milliseconds.
+        let r = ResumeRegistry::<u64>::new(key(), Duration::from_millis(20));
         let _ = r.put(1);
         let _ = r.put(2);
 
         let shutdown = CancellationToken::new();
-        let h = spawn_sweeper(r.clone(), Duration::from_millis(10), shutdown.clone());
+        let h = spawn_sweeper(r.clone(), Duration::from_millis(5), shutdown.clone());
 
-        // Let the sweeper task be polled at least once so its
-        // `tokio::time::interval` is registered with the (paused)
-        // runtime clock before we advance time. Without this yield the
-        // `advance` below races the task's first poll and the timer is
-        // created *after* the advance, so no tick ever fires.
-        for _ in 0..4 {
-            tokio::task::yield_now().await;
-        }
-
-        // Advance past entry expiry plus several sweep intervals.
-        tokio::time::advance(Duration::from_millis(200)).await;
-        // Yield repeatedly so the sweeper task gets to run.
-        for _ in 0..32 {
-            tokio::task::yield_now().await;
+        // Window is 20 ms, sweep interval is 5 ms. Wait long enough
+        // for at least a few sweeps after the entries expire.
+        for _ in 0..40 {
+            if r.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         assert!(r.is_empty(), "sweeper should have evicted expired entries");

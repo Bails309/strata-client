@@ -49,6 +49,20 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
 
+      # Diagnostic: also print findings to the job log as a table on failure.
+      # SARIF output suppresses the human-readable CVE list, so this gives a
+      # quick view in the Actions log without waiting for Code Scanning.
+      - name: Print Trivy findings (table)
+        if: failure()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: strata/${{ matrix.service }}:scan
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: os,library
+
       # Only upload when Trivy actually produced a SARIF. Earlier failures
       # (image build, action setup) leave the file missing, which made
       # `if: always()` upload-sarif fail with "Path does not exist".

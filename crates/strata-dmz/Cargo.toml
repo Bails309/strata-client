@@ -50,5 +50,10 @@ axum-prometheus = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# Config / secrets
+base64 = { workspace = true }
+zeroize = { workspace = true }
+hostname = "0.4"
+
 # IDs
 uuid = { workspace = true }

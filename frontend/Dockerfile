@@ -3,7 +3,7 @@
 # without needing a Dependabot PR every week. Dependabot (docker ecosystem)
 # still opens PRs whenever the tag itself moves, and Trivy (CI image scan)
 # gates HIGH/CRITICAL fixable CVEs so staleness cannot ship to main.
-FROM node:25-alpine AS builder
+FROM node:25-alpine@sha256:4139d71ec06d1d705b0d86fdea4fc4084c95029100bcfdfa8bab80b3328fa4ee AS builder
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -14,7 +14,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ── Runtime stage (nginx) ─────────────────────────────────────────────
-FROM nginx:alpine
+FROM nginx:alpine@sha256:3bcf852aed06467cf075c6105892e4d5a6ebbbafa0ce22d35062db9e90ddef4c
 
 # Pull the latest Alpine package security patches. `nginx:alpine` is often
 # a few days behind on libcrypto/musl/zlib fixes — this shaves the lag so

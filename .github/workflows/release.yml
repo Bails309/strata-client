@@ -24,10 +24,7 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write        # create / update Releases
-  packages: write        # push to GHCR
-  id-token: write        # OIDC token for cosign keyless + SLSA
-  attestations: write    # attach attestations to the artefact
+  contents: read
 
 env:
   REGISTRY: ghcr.io
@@ -38,6 +35,11 @@ jobs:
   build-and-push:
     name: Build & push ${{ matrix.service }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create / update Releases
+      packages: write        # push to GHCR
+      id-token: write        # OIDC token for cosign keyless + SLSA
+      attestations: write    # attach attestations to the artefact
     strategy:
       fail-fast: false
       matrix:

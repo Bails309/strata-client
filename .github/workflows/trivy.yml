@@ -8,12 +8,14 @@ on:
 
 permissions:
   contents: read
-  security-events: write  # upload SARIF to Code Scanning
 
 jobs:
   trivy:
     name: Trivy — ${{ matrix.service }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # upload SARIF to Code Scanning
     strategy:
       fail-fast: false
       matrix:

@@ -222,6 +222,7 @@ features:
 | **3** | Frontend admin UI: link status, per-endpoint health, force-reconnect. DMZ operator status endpoint with separate operator credential. | 1w |
 | **4** | Testing: unit, integration (docker-compose), chaos (toxiproxy), security (port scan, fuzzing, replay, header forgery), load (1k WS, 500 guacd). | 2w |
 | **5** | Docs: ADR, threat model (STRIDE), runbook (cert/PSK rotation, link diagnosis, scaling), deployment guide (compose + Helm). | 1w |
+| **6** | Hardening: backend mTLS cert hot-reload (W6-1), audit-log edge enrichment (W6-4), per-public-IP body-cap tuning (W6-2), completion ADR. W6-3 (Ed25519 link auth) recorded as Backlog with rationale; W6-5 (WS resume) deferred to Phase 7. See [ADR-0010](adr/ADR-0010-dmz-phase6-hardening.md). | 1w |
 
 Realistic single-developer end-to-end: **9–10 weeks**.
 Two-developer (Phase 1 + Phase 2 in parallel): **6–7 weeks**.

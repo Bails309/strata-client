@@ -37,11 +37,13 @@ pub async fn serve_public(
     let scheme = if tls.is_some() { "https" } else { "http" };
     tracing::info!(addr = %bind, %scheme, "DMZ public listener up");
 
-    // Build a make-service that injects ConnectInfo<SocketAddr> per
-    // connection. We mint a fresh per-connection axum service for
-    // every accept so handlers (and the proxy's edge-header signer)
-    // see the socket peer.
-    let mut make_router = router.into_make_service_with_connect_info::<SocketAddr>();
+    // We used to call `router.into_make_service_with_connect_info::<SocketAddr>()`
+    // here, but axum 0.8 produces an `AddExtension<Router, ConnectInfo<...>>`
+    // service from that wrapper which our `HyperRouterService` does not
+    // accept (it owns a bare `Router`). Inject the per-connection
+    // `ConnectInfo<SocketAddr>` extension by hand inside the per-request
+    // call instead, which is both simpler and keeps the service type
+    // monomorphic.
 
     loop {
         tokio::select! {
@@ -62,14 +64,13 @@ pub async fn serve_public(
                     tracing::warn!(%peer, error = %e, "set_nodelay failed on public socket");
                 }
 
-                // Mint the per-connection service while we still own
-                // `make_router`. axum's IntoMakeService future is
-                // `Infallible`, so a Result error is unreachable.
-                let service: Router = match make_router.call(peer).await {
-                    Ok(s) => s,
-                    Err(_) => continue,
+                // Mint a per-connection HyperRouterService bound to the
+                // accepted peer so it can stamp `ConnectInfo<SocketAddr>`
+                // onto every inbound request before dispatch.
+                let svc = HyperRouterService {
+                    router: router.clone(),
+                    peer,
                 };
-                let svc = HyperRouterService { router: service };
 
                 let tls = tls.clone();
                 let shutdown = shutdown.clone();
@@ -130,6 +131,7 @@ async fn drive<I>(
 #[derive(Clone)]
 struct HyperRouterService {
     router: Router,
+    peer: SocketAddr,
 }
 
 impl hyper::service::Service<http::Request<hyper::body::Incoming>> for HyperRouterService {
@@ -141,8 +143,15 @@ impl hyper::service::Service<http::Request<hyper::body::Incoming>> for HyperRout
 
     fn call(&self, req: http::Request<hyper::body::Incoming>) -> Self::Future {
         let mut router = self.router.clone();
+        let peer = self.peer;
         Box::pin(async move {
-            let (parts, body) = req.into_parts();
+            let (mut parts, body) = req.into_parts();
+            // Inject the connect-info extension so axum extractors
+            // such as `ConnectInfo<SocketAddr>` and the per-IP body-cap
+            // / rate-limit middleware can observe the real peer.
+            parts
+                .extensions
+                .insert(axum::extract::ConnectInfo(peer));
             let req = http::Request::from_parts(parts, Body::new(body));
             <Router as Service<http::Request<Body>>>::call(&mut router, req).await
         })

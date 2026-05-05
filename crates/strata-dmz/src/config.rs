@@ -21,6 +21,7 @@
 //! | `STRATA_DMZ_CLUSTER_ID` | _required_ | Cluster id this DMZ belongs to. Internal-node handshakes that present a different cluster id are rejected. |
 //! | `STRATA_DMZ_NODE_ID` | hostname | Logical id used in metrics / logs. |
 //! | `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES` | `8388608` (8 MiB) | Cap on inbound public request bodies. |
+//! | `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP` | _(unset)_ | Optional CIDR `=` bytes table that overrides the global cap per source IP. See [`crate::body_caps`] for format. |
 //! | `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS` | `15000` | Slow-loris guard: time allowed to receive request headers. |
 //! | `STRATA_DMZ_PUBLIC_RATE_RPS` | `0` (off) | Per-IP request rate cap in req/s. `0` disables. |
 //! | `STRATA_DMZ_PUBLIC_RATE_BURST` | `64` | Per-IP burst bucket size when rate limiting is enabled. |
@@ -154,6 +155,11 @@ pub struct DmzConfig {
 
     /// Cap on inbound public request bodies.
     pub public_body_limit_bytes: usize,
+    /// Per-CIDR override table for the body cap (W6-2). Empty = every
+    /// peer falls through to `public_body_limit_bytes`. Populated from
+    /// `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP` (see
+    /// [`crate::body_caps`] for the format).
+    pub public_body_caps: Vec<crate::body_caps::Rule>,
     /// Slow-loris header-receipt timeout.
     pub public_header_timeout_ms: u64,
     /// Per-IP rate cap (req/s). Zero = disabled.
@@ -203,6 +209,7 @@ impl std::fmt::Debug for DmzConfig {
             .field("cluster_id", &self.cluster_id)
             .field("node_id", &self.node_id)
             .field("public_body_limit_bytes", &self.public_body_limit_bytes)
+            .field("public_body_caps_count", &self.public_body_caps.len())
             .field("public_header_timeout_ms", &self.public_header_timeout_ms)
             .field("public_rate_rps", &self.public_rate_rps)
             .field("public_rate_burst", &self.public_rate_burst)
@@ -277,6 +284,15 @@ impl DmzConfig {
             "STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES",
             DEFAULT_PUBLIC_BODY_LIMIT_BYTES,
         )?;
+        let public_body_caps = match std::env::var("STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP") {
+            Err(_) => Vec::new(),
+            Ok(raw) => crate::body_caps::parse(&raw).map_err(|reason| {
+                ConfigError::Parse {
+                    var: "STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP",
+                    reason,
+                }
+            })?,
+        };
         let public_header_timeout_ms = parse_u64_env(
             "STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS",
             DEFAULT_PUBLIC_HEADER_TIMEOUT_MS,
@@ -337,6 +353,7 @@ impl DmzConfig {
             cluster_id,
             node_id,
             public_body_limit_bytes,
+            public_body_caps,
             public_header_timeout_ms,
             public_rate_rps,
             public_rate_burst,

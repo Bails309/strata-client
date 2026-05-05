@@ -132,17 +132,11 @@ impl PerIpRateLimiter {
 /// and `retry-after: 1`.
 pub async fn rate_limit_middleware(
     axum::extract::State(limiter): axum::extract::State<PerIpRateLimiter>,
-    ci: Option<ConnectInfo<std::net::SocketAddr>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     req: axum::extract::Request,
     next: Next,
 ) -> Response {
-    // If we have no peer info (shouldn't happen with
-    // into_make_service_with_connect_info), bypass the limiter — the
-    // server-side request id will let operators investigate.
-    let allowed = match ci {
-        Some(ConnectInfo(addr)) => limiter.check(addr.ip()),
-        None => true,
-    };
+    let allowed = limiter.check(addr.ip());
     if !allowed {
         let mut resp = (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
         resp.headers_mut().insert(

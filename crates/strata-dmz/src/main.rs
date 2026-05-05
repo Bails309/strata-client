@@ -18,11 +18,11 @@ use std::sync::Arc;
 
 use axum::{routing::get, Router};
 use tower::limit::GlobalConcurrencyLimitLayer;
-use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod body_caps;
 mod config;
 mod edge_signer;
 mod limits;
@@ -158,6 +158,10 @@ async fn main() -> anyhow::Result<()> {
     // load), request timeout (slow-loris), body limit (memory
     // exhaustion).
     let limiter = limits::PerIpRateLimiter::new(cfg.public_rate_rps, cfg.public_rate_burst);
+    let body_cap_policy = body_caps::BodyCapPolicy::new(
+        cfg.public_body_limit_bytes,
+        cfg.public_body_caps.clone(),
+    );
     let request_timeout =
         std::time::Duration::from_millis(cfg.public_header_timeout_ms.max(1_000));
 
@@ -181,7 +185,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .fallback(proxy::proxy_handler)
         .with_state(proxy_state)
-        .layer(RequestBodyLimitLayer::new(cfg.public_body_limit_bytes))
+        // W6-2 — per-public-IP body-cap tuning. The middleware resolves
+        // the effective cap from the peer IP and the operator-supplied
+        // CIDR table (`STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP`), falling
+        // back to `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES`. This replaces
+        // the older static `RequestBodyLimitLayer` so a per-IP rule
+        // can grant trusted partner networks a larger headroom or
+        // shrink the cap for known-noisy sources.
+        .layer(axum::middleware::from_fn_with_state(
+            body_cap_policy,
+            body_caps::body_cap_middleware,
+        ))
         .layer(TimeoutLayer::new(request_timeout))
         .layer(GlobalConcurrencyLimitLayer::new(cfg.public_max_inflight))
         .layer(axum::middleware::from_fn_with_state(

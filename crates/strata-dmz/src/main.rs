@@ -5,9 +5,9 @@
 //! request through a persistent **inbound** mTLS link to the internal
 //! `strata-backend` node. It holds NO Strata business secrets.
 //!
-//! Phase 3a scope: link server + reverse-proxy adapter + edge-header
+//! Phase 3b scope: link server + reverse-proxy adapter + edge-header
 //! HMAC signer + abuse-mitigation tower stack + operator status
-//! listener live. Public TLS termination lands in Phase 3b.
+//! listener + public TLS termination live.
 
 // Crate-wide we deny unsafe; the only exception is the boot-time env
 // scrubber in `config`, which is a single `unsafe` block guarded by
@@ -29,6 +29,8 @@ mod limits;
 mod link_server;
 mod operator;
 mod proxy;
+mod public_server;
+mod public_tls;
 
 use config::DmzConfig;
 
@@ -187,25 +189,43 @@ async fn main() -> anyhow::Result<()> {
             limits::rate_limit_middleware,
         ));
 
-    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 3a: link server + reverse-proxy + edge-header signer + abuse mitigation + operator listener live)");
+    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 3b: link server + reverse-proxy + edge-header signer + abuse mitigation + operator listener + public TLS live)");
 
-    let listener = tokio::net::TcpListener::bind(cfg.public_bind).await?;
-    let serve_result = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-        .with_graceful_shutdown({
-            let s = shutdown.clone();
-            async move {
-                tokio::signal::ctrl_c().await.ok();
-                s.cancel();
-            }
-        })
-        .await;
+    // Phase 3b — the public listener terminates TLS itself (rustls)
+    // when material is present; in dev mode (no cert/key) it falls
+    // back to plaintext HTTP. axum::serve doesn't expose a TLS seam,
+    // so we drive hyper-util's auto::Builder directly.
+    let public_tls = match &cfg.public_tls {
+        Some(mat) => Some(public_tls::build_public_acceptor(
+            &mat.cert_pem,
+            &mat.key_pem,
+        )?),
+        None => {
+            tracing::warn!("strata-dmz running with PLAINTEXT public listener (dev mode)");
+            None
+        }
+    };
+
+    let public_bind = cfg.public_bind;
+    let public_shutdown = shutdown.clone();
+    let public_handle = tokio::spawn(async move {
+        if let Err(e) = public_server::serve_public(public_bind, app, public_tls, public_shutdown.clone()).await
+        {
+            tracing::error!(error = %e, "DMZ public listener exited with error");
+        }
+    });
+
+    // Wait for ctrl-c to cancel the shared shutdown token, which in
+    // turn drains all three listeners.
+    let cancel_for_signal = shutdown.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        cancel_for_signal.cancel();
+    });
 
     let _ = link_handle.await;
     let _ = operator_handle.await;
-    serve_result?;
+    let _ = public_handle.await;
     Ok(())
 }
 

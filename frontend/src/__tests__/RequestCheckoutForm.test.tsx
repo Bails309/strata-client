@@ -4,11 +4,13 @@ import RequestCheckoutForm from "../pages/credentials/RequestCheckoutForm";
 import type { UserAccountMapping } from "../api";
 
 const makeAccount = (over: Partial<UserAccountMapping> = {}): UserAccountMapping => ({
+  id: "m1",
   user_id: "u1",
   ad_sync_config_id: "ads-1",
   managed_ad_dn: "CN=admin,DC=corp",
   friendly_name: "Domain Admin",
   can_self_approve: true,
+  created_at: "2026-01-01T00:00:00Z",
   pm_allow_emergency_bypass: false,
   ...over,
 });
@@ -83,9 +85,7 @@ describe("RequestCheckoutForm — extra coverage", () => {
       scheduleEnabled: true,
       scheduledStart: "2099-01-01T12:00",
     });
-    const dt = document.querySelector(
-      "input[type='datetime-local']"
-    ) as HTMLInputElement;
+    const dt = document.querySelector("input[type='datetime-local']") as HTMLInputElement;
     expect(dt).toBeTruthy();
     fireEvent.change(dt, { target: { value: "2099-02-02T08:30" } });
     expect(setScheduledStart).toHaveBeenCalledWith("2099-02-02T08:30");
@@ -93,9 +93,7 @@ describe("RequestCheckoutForm — extra coverage", () => {
 
   it("renders 'No managed accounts' message when managedAccounts empty", () => {
     renderForm({ managedAccounts: [] });
-    expect(
-      screen.getByText(/No managed accounts assigned to you/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/No managed accounts assigned to you/)).toBeInTheDocument();
   });
 
   it("renders 'all blocked' message when every account has an active checkout", () => {

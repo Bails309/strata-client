@@ -60,24 +60,14 @@ describe("RecordingsTab", () => {
   });
 
   it("shows Azure fields when storage type is azure_blob", () => {
-    render(
-      <RecordingsTab
-        settings={{ recordings_storage_type: "azure_blob" }}
-        onSave={vi.fn()}
-      />
-    );
+    render(<RecordingsTab settings={{ recordings_storage_type: "azure_blob" }} onSave={vi.fn()} />);
     expect(screen.getByLabelText("Account Name")).toBeInTheDocument();
     expect(screen.getByLabelText("Container Name")).toBeInTheDocument();
     expect(screen.getByLabelText("Access Key")).toBeInTheDocument();
   });
 
   it("updates Azure account/container/key fields", () => {
-    render(
-      <RecordingsTab
-        settings={{ recordings_storage_type: "azure_blob" }}
-        onSave={vi.fn()}
-      />
-    );
+    render(<RecordingsTab settings={{ recordings_storage_type: "azure_blob" }} onSave={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("Account Name"), { target: { value: "myacct" } });
     fireEvent.change(screen.getByLabelText("Container Name"), { target: { value: "myc" } });
     fireEvent.change(screen.getByLabelText("Access Key"), { target: { value: "abc==" } });
@@ -135,9 +125,7 @@ describe("RecordingsTab", () => {
       <RecordingsTab settings={{ recordings_retention_days: "10" }} onSave={vi.fn()} />
     );
     expect(screen.getByLabelText("Retention (days)")).toHaveValue(10);
-    rerender(
-      <RecordingsTab settings={{ recordings_retention_days: "120" }} onSave={vi.fn()} />
-    );
+    rerender(<RecordingsTab settings={{ recordings_retention_days: "120" }} onSave={vi.fn()} />);
     expect(screen.getByLabelText("Retention (days)")).toHaveValue(120);
   });
 });

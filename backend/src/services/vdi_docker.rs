@@ -813,10 +813,6 @@ mod tests {
         spec.env.remove("VDI_USERNAME");
         spec.env.remove("VDI_PASSWORD");
         let cfg = build_for(&spec, Uuid::new_v4(), Uuid::new_v4(), "guac-internal");
-        assert!(cfg
-            .exposed_ports
-            .unwrap()
-            .iter()
-            .any(|p| p == "3389/tcp"));
+        assert!(cfg.exposed_ports.unwrap().iter().any(|p| p == "3389/tcp"));
     }
 }

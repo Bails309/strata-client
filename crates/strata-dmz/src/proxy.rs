@@ -477,4 +477,174 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert_eq!(h.get("x-existing").map(|v| v.as_bytes()), Some(b"1".as_ref()));
     }
+
+    // ── End-to-end round-trip ────────────────────────────────────────
+    //
+    // Exercises the full proxy path: pick session from registry →
+    // sign edge headers → send via h2 → drive a fake "internal" h2
+    // server → stream the response body back. This is the integration
+    // test that covers the gap between the unit tests for each module
+    // and the (deferred) docker-compose end-to-end test.
+
+    use crate::edge_signer::HmacEdgeSigner;
+    use crate::link_server::{LinkSessionInfo, LinkSessionRegistry};
+    use h2::server::Builder as H2ServerBuilder;
+    use http::Response as HttpResponse;
+    use tokio::io::duplex;
+    use zeroize::Zeroizing;
+
+    /// Run a tiny "internal-side" h2 server on `stream` that accepts
+    /// exactly one request, hands its parts back via `tx`, and replies
+    /// with 200 + body `"hello from internal"`.
+    async fn run_fake_internal_server<S>(
+        stream: S,
+        tx: tokio::sync::oneshot::Sender<http::request::Parts>,
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let mut conn = H2ServerBuilder::new()
+            .handshake::<_, Bytes>(stream)
+            .await
+            .expect("h2 server handshake");
+        let mut tx = Some(tx);
+        while let Some(item) = conn.accept().await {
+            let (request, mut respond) = item.expect("h2 accept");
+            let (parts, mut body) = request.into_parts();
+            // Drain the request body so the client can finish its
+            // send_data; we don't care about the contents here.
+            while let Some(chunk) = body.data().await {
+                let chunk = chunk.expect("body chunk");
+                let _ = body.flow_control().release_capacity(chunk.len());
+            }
+            if let Some(tx) = tx.take() {
+                let _ = tx.send(parts);
+            }
+            let resp = HttpResponse::builder()
+                .status(200)
+                .header("content-type", "text/plain")
+                .body(())
+                .unwrap();
+            let mut send = respond.send_response(resp, false).expect("send response");
+            send.send_data(Bytes::from_static(b"hello from internal"), true)
+                .expect("send body");
+        }
+    }
+
+    #[tokio::test]
+    async fn end_to_end_roundtrip_signs_and_forwards() {
+        // Wide buffer so neither half ever back-pressures during the
+        // test.
+        let (server_io, client_io) = duplex(64 * 1024);
+
+        let (req_tx, req_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(run_fake_internal_server(server_io, req_tx));
+
+        // Client side — equivalent of what link_server does after the
+        // strata-link/1.0 handshake completes.
+        let (sender, h2_conn) = h2::client::Builder::new()
+            .handshake::<_, Bytes>(client_io)
+            .await
+            .expect("h2 client handshake");
+        // Drive the connection in the background until either side
+        // closes.
+        let conn_task = tokio::spawn(async move {
+            let _ = h2_conn.await;
+        });
+        // Wait for the sender to be ready before we register it —
+        // otherwise the proxy's first .ready() can race the
+        // handshake.
+        let sender = sender.ready().await.expect("sender ready");
+
+        // Build a registry with our one fake session.
+        let registry = LinkSessionRegistry::new();
+        registry.insert(
+            LinkSessionInfo {
+                link_id: "test-link".into(),
+                cluster_id: "test-cluster".into(),
+                node_id: "test-node".into(),
+                software_version: "0.0.0-test".into(),
+                since: std::time::Instant::now(),
+            },
+            sender,
+        );
+
+        // Real HMAC signer with a 32-byte key. The integration test
+        // doesn't currently verify the MAC — that's covered in
+        // edge_signer's unit tests — but using a real signer ensures
+        // the canonical bundle is well-formed and reaches the
+        // internal side.
+        let signer = HmacEdgeSigner::from_config(
+            Zeroizing::new(b"a-32-char-or-longer-edge-hmac-key!!".to_vec()),
+            "test-node".into(),
+            &[],
+        );
+
+        let state = ProxyState::new(registry, Arc::new(signer));
+
+        // Construct a public-side request. No ConnectInfo extension
+        // — peer falls back to "0.0.0.0", which is what the signer
+        // emits for non-trusted-proxy peers without a forwarded-from
+        // header.
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/api/echo?q=1")
+            .header("host", "public.example.com")
+            .header("user-agent", "strata-test/0.1")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = proxy(state, req).await.expect("proxy ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), MAX_PROXY_BODY_BYTES)
+            .await
+            .expect("collect body");
+        assert_eq!(&body[..], b"hello from internal");
+
+        // Assert the internal side saw the request with edge headers
+        // injected and hop-by-hop headers stripped.
+        let upstream_parts = req_rx.await.expect("internal received request");
+        assert_eq!(upstream_parts.method, http::Method::GET);
+        assert_eq!(
+            upstream_parts.uri.path_and_query().map(|p| p.as_str()),
+            Some("/api/echo?q=1")
+        );
+        // Edge headers MUST be present.
+        for h in [
+            "x-strata-edge-client-ip",
+            "x-strata-edge-user-agent",
+            "x-strata-edge-request-id",
+            "x-strata-edge-link-id",
+            "x-strata-edge-timestamp-ms",
+            "x-strata-edge-trusted-mac",
+        ] {
+            assert!(
+                upstream_parts.headers.get(h).is_some(),
+                "missing edge header: {h}"
+            );
+        }
+        // Host header MUST have been stripped (h2 uses :authority).
+        assert!(upstream_parts.headers.get("host").is_none());
+        // user-agent forwarded through edge bundle, not as raw header
+        // (the proxy doesn't strip it but the canonical UA lives in
+        // x-strata-edge-user-agent for sig).
+        assert_eq!(
+            upstream_parts
+                .headers
+                .get("x-strata-edge-user-agent")
+                .map(|v| v.as_bytes()),
+            Some(b"strata-test/0.1".as_ref()),
+        );
+        assert_eq!(
+            upstream_parts
+                .headers
+                .get("x-strata-edge-link-id")
+                .map(|v| v.as_bytes()),
+            Some(b"test-node".as_ref()),
+        );
+
+        // Cleanup.
+        let _ = server_task.await;
+        let _ = conn_task.await;
+    }
 }

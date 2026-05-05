@@ -17,6 +17,7 @@ Good fits for Discussions:
 
 If your question can be answered by reading docs first, please skim:
 
+- [docs/faq.md](docs/faq.md) — start here; covers the most common operator questions.
 - [README.md](README.md) — capabilities and quick-start.
 - [docs/architecture.md](docs/architecture.md) — how the pieces fit.
 - [docs/deployment.md](docs/deployment.md) — production deployment + upgrades.

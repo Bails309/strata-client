@@ -43,6 +43,7 @@
   <a href="docs/api-reference.md">API Reference</a> ·
   <a href="docs/deployment.md">Deployment</a> ·
   <a href="docs/security.md">Security</a> ·
+  <a href="docs/faq.md">FAQ</a> ·
   <a href="https://github.com/Bails309/strata-client/discussions">Discussions</a>
 </p>
 
@@ -123,7 +124,7 @@ For the full per-version history of how these capabilities were built and the bu
 | 1.3.1   | 2026-04-30 | SSH terminal defaults matching `rustguac`, phantom-selection mouse hygiene, recording-playback URL fix. ([details](CHANGELOG.md#131--2026-04-30))                       |
 | 1.3.0   | 2026-04-30 | Web-kiosk lifecycle correctness, Trusted-CA NSS DB resolution, suppressed Chromium infobar, protocol-aware Quick Share, nginx upstream resilience. ([details](CHANGELOG.md#130--2026-04-30)) |
 
-## � vs. vanilla Apache Guacamole
+## vs. vanilla Apache Guacamole
 
 Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — without forking guacd.
 
@@ -199,16 +200,55 @@ See [docs/architecture.md](docs/architecture.md) for a detailed breakdown of eve
 ### 1. Clone & configure
 
 ```bash
-git clone https://github.com/your-org/strata-client.git
+git clone https://github.com/Bails309/strata-client.git
 cd strata-client
 cp .env.example .env        # review and edit as needed
 ```
 
-### 2. Build & run
+### 2. Run
+
+You have two options. **Pre-built images is the faster path** (~30 s on a cold host); building from source takes ~5 minutes on first boot but is the right choice if you've forked the repo or are running unreleased commits.
+
+#### Option A — Pull pre-built images from GHCR (recommended)
+
+Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
+
+```bash
+export STRATA_VERSION=1.4.1                                  # or "latest"
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+```
+
+Images:
+
+| Image                                                              | What it is                            |
+| ------------------------------------------------------------------ | ------------------------------------- |
+| `ghcr.io/bails309/strata-client/backend:<version>`                 | Rust backend (Axum + Tokio)           |
+| `ghcr.io/bails309/strata-client/frontend:<version>`                | Frontend SPA (nginx + static React)   |
+| `ghcr.io/bails309/strata-client/custom-guacd:<version>`            | Custom guacd (FreeRDP 3 + Kerberos + H.264) |
+
+Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
+
+```bash
+cosign verify ghcr.io/bails309/strata-client/backend:1.4.1 \
+  --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The published SBOM is also attached as an in-toto attestation:
+
+```bash
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.4.1 \
+  --predicate-type https://cyclonedx.org/bom
+```
+
+#### Option B — Build from source
 
 ```bash
 docker compose up -d --build
 ```
+
+This builds `backend`, `frontend`, and `custom-guacd` locally from the Dockerfiles in this repo. Use this path when you've modified source, are testing an unreleased commit, or need an air-gapped build.
 
 ### ⌨️ Windows Key Proxy
 
@@ -310,6 +350,7 @@ See [docs/deployment.md](docs/deployment.md) for production deployment and upgra
 | [docs/api-reference.md](docs/api-reference.md) | REST & WebSocket API endpoints             |
 | [docs/deployment.md](docs/deployment.md)       | Production deployment, upgrades, HA        |
 | [docs/security.md](docs/security.md)           | Threat model, encryption, auth details     |
+| [docs/faq.md](docs/faq.md)                     | Frequently asked questions                 |
 | [CHANGELOG.md](CHANGELOG.md)                   | Version history                            |
 | [CONTRIBUTING.md](CONTRIBUTING.md)             | Contribution guidelines                    |
 | [NOTICE](NOTICE)                               | Third-party software notices               |

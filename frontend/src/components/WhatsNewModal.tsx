@@ -29,6 +29,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.4.1",
+    subtitle:
+      "Tunnel watchdog regression fix, crypto crate refresh, and a 334-warning ESLint sweep",
+    sections: [
+      {
+        title: "Active sessions no longer get reaped every 20 minutes",
+        description:
+          "v1.3.2 introduced a WebSocket-tunnel auth watchdog that captured the access token's exp claim once at upgrade time and force-closed the tunnel when that timestamp was reached. Access tokens carry a 20-minute TTL but the frontend's SessionTimeoutWarning rotates them via POST /api/auth/refresh on user activity — the already-open WebSocket has no way to learn about that rotation, so the watchdog held on to the original token's exp and tore down the session at T+20m even when the operator was actively using the UI. backend/src/routes/tunnel.rs ws_tunnel now drops the exp cache entirely; teardown comes from three sources only: token revocation (polled every 30s, audit reason='revoked'), TCP-level WebSocket close (browser-closed, network died), and a new 8-hour MAX_TUNNEL_DURATION wall-clock cap measured from upgrade time (audit reason='max_duration'). The audit reason enum gained 'max_duration' and dropped 'expired'; dashboards filtering on 'expired' should add 'max_duration' to the same defence-in-depth bucket.",
+      },
+      {
+        title: "guacd build pin/patch story documented (no behaviour change)",
+        description:
+          "Between commits de0ba24 and 1064a8e on main the guacd image build was briefly broken while we attempted to drop our local 006-freerdp325-authenticate-ex.patch on the assumption that GUACAMOLE-2273 (upstream commit 7696572, the AuthenticateEx callback fix) had landed on staging/1.6.1. It hadn't — 7696572 still exists only as an unmerged PR — and pinning directly to that PR commit failed compilation against FreeRDP 3.25 with an undeclared AUTH_FIDO_PIN error from a post-3.25 rdp_auth_reason enum value. v1.4.1 keeps the working v1.4.0 combination (staging/1.6.1 HEAD 4163ead + patch 006 + the two grep guards in guacd/Dockerfile) and updates the Dockerfile comment block so the next maintainer doesn't re-walk the same path. Functionally a no-op vs. v1.4.0; only the pin/patch story changed.",
+      },
+      {
+        title: "RustCrypto refresh on the Chromium autofill-import path",
+        description:
+          "backend/src/services/web_autofill.rs (Chromium-format Login Data decryption — PBKDF2 peanuts/saltysalt, AES-128-CBC, v10 prefix, used by the Chromium-export ingestion path under VDI / web sessions) gets aes 0.8→0.9, cbc 0.1→0.2, pbkdf2 0.12→0.13, and sha1 0.10→0.11. The decrypted secret is never written to disk by the backend; this path lives entirely behind the autofill-import feature toggle that is still gated by can_manage_system. Envelope encryption of stored credentials still goes through aes-gcm (unchanged) and Vault Transit (unchanged).",
+      },
+      {
+        title: "Frontend ESLint debt cleared (334 → 0 warnings)",
+        description:
+          "Phases 1–7 of a frontend code-quality sweep eliminate every standing ESLint warning: explicit unknown-narrowing in error catches, removal of dead imports, JSX accessibility tightening, useCallback / useMemo dependency arrays normalised, optional-chaining where the type already permits undefined. No behavioural changes. The CI lint job now exits with 0 warnings instead of a noisy allow-list, and coverage thresholds in frontend/vitest.config.ts have been raised in lock-step against the new measured baseline (statements / branches / functions / lines) to prevent backsliding. Dependabot PRs for ESLint 10 / eslint-plugin-react-hooks 7.1.1 are held until eslint-plugin-react and eslint-plugin-jsx-a11y ship v10-compatible releases (the current latest still call the removed context.getFilename() and cap their peer range at eslint@^9 respectively).",
+      },
+      {
+        title: "Drop-in upgrade from v1.4.0",
+        description:
+          "No database migrations, no /api/* contract changes (only the tunnel.terminated audit reason enum gained a member), no config.toml schema changes. Rebuild backend and frontend so the new bits actually run: docker compose build backend frontend && docker compose up -d. The guacd image build is unchanged from v1.4.0 — rebuild only if you want the documentation-only Dockerfile comment refresh. Other backend bumps: bollard 0.18.1 → 0.21.0 (typed models::* responses replace serde_json::Value in list_images / inspect_container; test-side adjustments in services/vdi_docker.rs), tokio 1.52.1 → 1.52.2. CI bumps: docker/login-action 3.7.0 → 4.1.0, actions/cache 4.3.0 → 5.0.5, github/codeql-action 4.35.2 → 4.35.3, plus the Trivy scan now prints the findings table on failure and the GHA OS-package build cache is dropped per-run so freshly-published patch CVEs surface same-day.",
+      },
+    ],
+  },
+  {
     version: "1.4.0",
     subtitle:
       "Kubernetes pod console as a first-class protocol — kubectl attach / exec rendered as a terminal, with kubeconfig importer",

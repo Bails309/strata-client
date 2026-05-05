@@ -128,7 +128,7 @@ url = "2"
 # `unix:///var/run/docker.sock` URI at runtime with "URI scheme is
 # not supported". Debian trixie-slim already ships libssl3 for
 # chromium so the OpenSSL transitive dep costs us nothing.
-bollard = "0.20"
+bollard = "0.21"
 
 # rusqlite — Chromium `Login Data` SQLite writer for the web-session
 # autofill path (rustguac parity C4). `bundled` ships libsqlite3

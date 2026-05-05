@@ -904,7 +904,7 @@ host's link port.
 | Decision + alternatives | [adr/ADR-0009-dmz-deployment-mode.md](adr/ADR-0009-dmz-deployment-mode.md) |
 | Implementation plan (canonical) | [dmz-implementation-plan.md](dmz-implementation-plan.md) |
 | Threat model (STRIDE per component) | [threat-model.md](threat-model.md) §6 |
-| Operator deployment guide | [deployment.md](deployment.md#dmz-split-topology-optional) |
+| Operator deployment guide | [deployment.md](deployment.md#dmz-deployment-mode) |
 | On-call runbook | [runbooks/dmz-incident.md](runbooks/dmz-incident.md) |
 | Grafana dashboard | [grafana/strata-dmz-dashboard.json](grafana/strata-dmz-dashboard.json) |
 | Compose overlay | [`docker-compose.dmz.yml`](../docker-compose.dmz.yml) |
@@ -920,6 +920,39 @@ and Helm chart). The token "edge" is reserved for the
 `x-strata-edge-*` request-attribution header bundle stamped by the
 DMZ on every forwarded request — it is not a synonym for the node
 itself.
+
+### Internal-node supervisor and operator UI (v1.5.0)
+
+The internal node owns the dialler. One **link supervisor** task is
+spawned per endpoint listed in `STRATA_DMZ_ENDPOINTS`
+([`backend/src/services/dmz_link/supervisor.rs`](../backend/src/services/dmz_link/supervisor.rs)).
+Each supervisor runs an exponential-back-off reconnect loop with
+jitter and a per-link state machine:
+
+- `connecting` — TCP + TLS handshake in progress.
+- `authenticating` — `AuthHello` + PSK challenge–response in flight.
+- `initializing` — mTLS handshake succeeded, HTTP/2 preface still
+  pending.
+- `up` — h2 connection healthy, ready to serve forwarded requests.
+- `backoff` — last attempt failed; sleeping before the next try.
+- `stopped` — supervisor cancelled (shutdown or Force reconnect).
+
+Operators see this state machine surfaced in real time in
+**Admin → DMZ Links**
+([`frontend/src/pages/admin/DmzLinksTab.tsx`](../frontend/src/pages/admin/DmzLinksTab.tsx)),
+which hits two endpoints:
+
+- `GET /api/admin/dmz-links` returns
+  `{ configured: bool, links: [{ endpoint, state, connects, failures,
+  since_unix_secs, last_error }, …] }`. Auto-refreshed every 15 s.
+- `POST /api/admin/dmz-links/reconnect` drops every link's TCP
+  connection and lets the supervisor's back-off loop redial. Used
+  during scheduled DMZ restarts and as the first step in the
+  incident runbook.
+
+Both endpoints require `can_manage_system` and the standard
+`X-CSRF-Token` double-submit cookie. They are documented in
+[api-reference.md](api-reference.md#dmz-link-management-v150).
 
 ## Architecture Decision Records
 

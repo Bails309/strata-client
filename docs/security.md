@@ -1010,6 +1010,130 @@ The proxy operates entirely in the browser (client-side JavaScript). No keysym r
 
 ---
 
+## DMZ deployment mode (v1.5.0)
+
+When deployed in DMZ split topology (`STRATA_DMZ_ENDPOINTS` set on
+the internal node and a `strata-dmz` binary running on the public-
+facing host), Strata splits its attack surface deliberately so that
+RCE on the public-internet host yields no Strata business secrets.
+This section is the security-side companion to
+[architecture.md](architecture.md#dmz-split-topology-optional) and
+[deployment.md](deployment.md#dmz-deployment-mode).
+
+### Trust boundaries
+
+| Asset | DMZ node | Internal node |
+| --- | --- | --- |
+| Public TLS material | ✓ | ✗ |
+| Link-mTLS material | ✓ (DMZ side) | ✓ (internal side) |
+| Link-PSK keys | ✓ | ✓ |
+| Edge-HMAC keys | ✓ (active key only) | ✓ (active + rotation set) |
+| Strata JWT signing key | ✗ | ✓ |
+| Vault root / Transit keys | ✗ | ✓ |
+| Database credentials | ✗ | ✓ |
+| OIDC client secret | ✗ | ✓ |
+| `guac-master-key` | ✗ | ✓ |
+| Recording-storage credentials | ✗ | ✓ |
+| AD bind credentials | ✗ | ✓ |
+
+A Cargo deny rule rejects any DMZ-side dependency on the
+internal-only secret-handling crates so the matrix above is
+mechanically enforceable, not just aspirational.
+
+### Defence-in-depth at the link
+
+Three independent controls must all hold for a connection to be
+accepted as a valid internal-node link:
+
+1. **TLS 1.3 with mTLS.** The DMZ requires a client cert chained to
+   the operator-supplied private CA in `STRATA_DMZ_LINK_CA_BUNDLE`.
+   The system trust store is **not** consulted — only the configured
+   bundle. The internal node performs the symmetrical check against
+   `STRATA_DMZ_LINK_CA`. Stolen public-CA certs do not bring up a
+   link.
+2. **Application-level PSK challenge–response.** The DMZ sends a
+   32-byte random nonce; the internal node returns
+   HMAC-SHA-256(psk_key, nonce ‖ cluster_id ‖ node_id) plus an
+   `AuthHello` frame. PSKs are configured per-id
+   (`STRATA_DMZ_LINK_PSK_<id>=<base64>` on the internal node;
+   `STRATA_DMZ_LINK_PSKS=id:b64,id2:b64` on the DMZ — first active,
+   rest accepted). A stolen mTLS cert without the matching PSK fails
+   the handshake.
+3. **Cluster-id pinning.** The DMZ rejects internal-node handshakes
+   whose `AuthHello.cluster_id` does not match
+   `STRATA_DMZ_CLUSTER_ID`. Two clusters cannot accidentally share a
+   DMZ.
+
+### Edge-header HMAC (`x-strata-edge-*`)
+
+Once a request reaches the internal node from the DMZ it must carry a
+valid `x-strata-edge-{ts,id,client-ip,sig}` header set, signed by
+the DMZ with a key configured via `STRATA_DMZ_EDGE_HMAC_KEYS`.
+Properties:
+
+- **Constant-time signature compare** in
+  [`backend/src/services/edge_header.rs`](../backend/src/services/edge_header.rs).
+- **±60 s timestamp window** (replay guard).
+- **Rotation-aware**: the verifier accepts any key in the
+  comma-separated list. First entry is the active key, rest are
+  accepted during rotation windows. Keys can be rotated without
+  dropping live links.
+- **Client IP from the header is what reaches RBAC and audit.** The
+  DMZ is an expensive NAT and the internal node never sees the
+  real client TCP source. Audit-log "source IP" therefore
+  corresponds to the value the DMZ asserted; this is verifiable from
+  the edge HMAC.
+- **Single-node mode is a no-op.** When `STRATA_DMZ_EDGE_HMAC_KEYS`
+  is unset the verifier is bypassed and no `x-strata-edge-*` header
+  is required. Production split deployments must set this var.
+
+### Threat model (W6 series)
+
+| ID | Threat | Mitigation |
+| --- | --- | --- |
+| **W6-1** | RCE on the DMZ host. | DMZ holds no Strata business secrets (matrix above). Attacker can drop / observe transit traffic but cannot read or forge sessions; sessions remain bound to the internal node's JWT signing key. |
+| **W6-2** | Stolen public-internet TLS cert. | Public cert is valuable only for impersonating the public surface; it does **not** authenticate on the link path. The link path requires the link-mTLS cert + PSK. |
+| **W6-3** | Compromised DMZ floods backend with bogus requests. | Internal-side admin can `POST /api/admin/dmz-links/reconnect` to drop every link; if a single DMZ peer is hostile its mTLS cert can be removed from the trust list and the link refused on next connect. Per-IP rate limit + inflight cap on the DMZ side limit the public-surface amplification. (Backlog: per-link request-rate cap on the internal side.) |
+| **W6-4** | Replay of edge-HMAC headers. | ±60 s timestamp window, request-id is unique-per-request and enters the audit log; replay attempts are visible in `audit_logs`. |
+| **W6-5** | Stolen PSK / edge-HMAC key. | Both are rotation-aware. PSKs are per-id so multiple keys can be active simultaneously; HMAC keys are a comma-separated list with first active and rest accepted. Rotation runbook: `docs/runbooks/dmz-incident.md`. |
+
+### Auditable surface
+
+The internal node emits `dmz.link.{up,down,handshake_failed,
+reconnect_requested}` audit events for every supervisor state
+change. Operators can wire a SIEM rule on `event_type LIKE
+'dmz.link.%'` and alert on a sustained `down` window or any
+`handshake_failed`. The `audit_logs` row carries the link endpoint,
+the supervisor's `cluster_id` / `node_id` and the failure reason
+(verbatim from the `AuthAccept`/handshake error path).
+
+### Kubernetes / Helm posture
+
+The Helm chart in [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/)
+ships a NetworkPolicy that denies all egress from the DMZ pod **except
+DNS to kube-dns**. The DMZ never needs to reach the database, Vault,
+or the internal node — the link is initiated outbound from the
+internal side. Even a fully RCE'd DMZ pod has no kubernetes-level
+permission to reach the data tier.
+
+### Configuration sanity checks
+
+Both binaries fail closed on missing or malformed link material:
+
+- DMZ refuses to start without `STRATA_DMZ_LINK_TLS_CERT`,
+  `STRATA_DMZ_LINK_TLS_KEY`, `STRATA_DMZ_LINK_CA_BUNDLE`,
+  `STRATA_DMZ_LINK_PSKS`, `STRATA_DMZ_EDGE_HMAC_KEY`,
+  `STRATA_DMZ_CLUSTER_ID`.
+- Internal node refuses to come up in DMZ mode (i.e. with
+  `STRATA_DMZ_ENDPOINTS` set) without `STRATA_CLUSTER_ID`,
+  `STRATA_NODE_ID` and at least one matching `STRATA_DMZ_LINK_PSK_<id>`
+  whose id appears in the DMZ's `STRATA_DMZ_LINK_PSKS`.
+- Both PSK and HMAC keys are validated to be base64 ≥ 32 bytes
+  on parse; shorter keys produce `Malformed` config errors at startup
+  rather than weak runtime crypto.
+
+---
+
 ## Recommendations for Production
 
 1. **TLS everywhere** — supply certificates to the frontend nginx gateway via `./certs/`, or terminate TLS at an external reverse proxy / load balancer

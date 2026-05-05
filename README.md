@@ -106,6 +106,7 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 ### Operations & deployment
 
 - **Zero-config first boot** — bundled PostgreSQL 16 and Vault 1.19 containers; promote to external services any time through the UI.
+- **DMZ deployment mode** — split-topology option where a separate, minimal `strata-dmz` edge binary terminates public TLS while the internal node stays inside the corporate network and dials **out** over an HTTP/2-over-mTLS reverse tunnel. Zero-secret-overlap (no JWT key, no Vault, no DB credentials on the DMZ); every existing feature works through the DMZ on day one. See [docs/deployment.md](docs/deployment.md#dmz-deployment-mode).
 - **DNS configuration in admin UI** — admin-managed DNS servers and search domains pushed to `guacd` containers without editing `docker-compose.yml`.
 - **Recording disclaimer / Terms of Service** — mandatory first-login acceptance modal, timestamped in the database, declining logs the user out.
 - **Production-grade nginx gateway** — embedded-DNS resolver with per-request upstream resolution; nginx survives a backend outage and recovers automatically.
@@ -118,6 +119,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date       | Highlight                                                                                                                                                |
 | ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.5.0   | 2026-05-05 | **DMZ deployment mode** — split-topology release with a separate `strata-dmz` edge binary, HTTP/2-over-mTLS reverse tunnel, zero-secret-overlap with the internal node, and a new admin DMZ Links tab. ([details](CHANGELOG.md#150--2026-05-05)) |
 | 1.4.1   | 2026-05-05 | Tunnel watchdog regression fixed — active sessions no longer reaped at the access-token TTL. RustCrypto refresh, ESLint sweep. ([details](CHANGELOG.md#141--2026-05-05)) |
 | 1.4.0   | 2026-05-01 | Kubernetes pod console as a first-class connection protocol, end-to-end through the existing tunnel/recording/audit pipeline. ([details](CHANGELOG.md#140--2026-05-01)) |
 | 1.3.2   | 2026-05-01 | guacd FreeRDP 3.25 callback ABI fix, RDP resize ghost-region fix, WebSocket-tunnel auth watchdog, immediate logout teardown. ([details](CHANGELOG.md#132--2026-05-01))  |
@@ -214,7 +216,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.4.1                                  # or "latest"
+export STRATA_VERSION=1.5.0                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -230,7 +232,7 @@ Images:
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.4.1 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.5.0 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -238,7 +240,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.4.1 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.4.1 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.5.0 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

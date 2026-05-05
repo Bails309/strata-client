@@ -935,9 +935,12 @@ For the bundled Vault, HA is not applicable — it runs as a single-node file-st
 
 ---
 
-## DMZ split topology (optional)
+## DMZ deployment mode
 
 > Reference: [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md), [DMZ implementation plan](dmz-implementation-plan.md), [DMZ incident runbook](runbooks/dmz-incident.md).
+
+> Also known as the **DMZ split topology**. Optional — single-node
+> deployments are unchanged when `STRATA_DMZ_ENDPOINTS` is unset.
 
 For deployments that require the public-facing surface to be a
 separate, minimally-trusted host (no Vault, no DB, no AD, no

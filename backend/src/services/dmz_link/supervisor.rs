@@ -1,20 +1,20 @@
 //! Per-endpoint link supervisor task.
 //!
-//! Drives a single endpoint's lifecycle: dial → handshake → hold open
-//! until disconnect → backoff → repeat. Cancellation token aware so
-//! the existing graceful-shutdown harness in `main.rs` can drain it.
+//! Drives a single endpoint's lifecycle: dial → handshake → h2 serve
+//! loop → backoff → repeat. Cancellation token aware so the existing
+//! graceful-shutdown harness in `main.rs` can drain it.
 
 use std::sync::Arc;
 
 use rand::rngs::OsRng;
 use strata_protocol::backoff::default_link_backoff;
 use strata_protocol::link::{client_handshake, ClientHandshakeConfig};
-use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::config::{LinkConfig, LinkEndpoint};
 use super::connector::{BoxedStream, Connector};
+use super::h2_serve::{serve_h2, RequestHandler};
 use super::registry::{LinkRegistry, LinkState};
 
 /// Spawn one supervisor task per configured endpoint.
@@ -24,6 +24,7 @@ use super::registry::{LinkRegistry, LinkState};
 pub fn spawn_link_supervisors(
     cfg: Arc<LinkConfig>,
     connector: Arc<dyn Connector>,
+    handler: Arc<dyn RequestHandler>,
     registry: LinkRegistry,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
@@ -34,10 +35,11 @@ pub fn spawn_link_supervisors(
         for endpoint in cfg.endpoints.clone() {
             let cfg = cfg.clone();
             let connector = connector.clone();
+            let handler = handler.clone();
             let registry = registry.clone();
             let shutdown = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                run_endpoint(cfg, endpoint, connector, registry, shutdown).await
+                run_endpoint(cfg, endpoint, connector, handler, registry, shutdown).await
             }));
         }
         for h in handles {
@@ -50,6 +52,7 @@ async fn run_endpoint(
     cfg: Arc<LinkConfig>,
     endpoint: LinkEndpoint,
     connector: Arc<dyn Connector>,
+    handler: Arc<dyn RequestHandler>,
     registry: LinkRegistry,
     shutdown: CancellationToken,
 ) {
@@ -108,25 +111,28 @@ async fn run_endpoint(
                 continue;
             }
         };
+        tracing::info!(endpoint = %url, link_id = %accepted.link_id, "DMZ link authenticated");
 
-        // ── up ──────────────────────────────────────────────────────
-        tracing::info!(endpoint = %url, link_id = %accepted.link_id, "DMZ link up");
-        registry.set_state(&url, LinkState::Up, None);
-        backoff.reset();
+        // ── h2 serve loop ───────────────────────────────────────────
+        // The link state stays `Authenticating` until the h2 handshake
+        // completes (the on_ready callback flips it to `Up`). This
+        // means a stuck h2 layer never falsely advertises readiness
+        // to /readyz consumers.
+        let url_for_ready = url.clone();
+        let registry_for_ready = registry.clone();
+        let serve_result = serve_h2(stream, handler.clone(), shutdown.clone(), move || {
+            registry_for_ready.set_state(&url_for_ready, LinkState::Up, None);
+        })
+        .await;
 
-        // Phase 1d will turn this block into an HTTP/2 request multiplexer.
-        // For now: hold the link open by reading from the server until it
-        // disconnects, which keeps the supervisor loop semantically correct
-        // (a peer-initiated FIN or any read error means "link down").
-        let dc = wait_for_disconnect(&mut stream, &shutdown).await;
-        if let Disconnect::ShutdownObserved = dc {
+        if shutdown.is_cancelled() {
             registry.set_state(&url, LinkState::Stopped, None);
             return;
         }
-        let msg = match dc {
-            Disconnect::PeerClosed => "peer closed link".to_string(),
-            Disconnect::IoError(e) => format!("link i/o: {e}"),
-            Disconnect::ShutdownObserved => unreachable!(),
+
+        let msg = match serve_result {
+            Ok(()) => "peer closed link".to_string(),
+            Err(e) => format!("h2 serve: {e}"),
         };
         tracing::warn!(endpoint = %url, reason = %msg, "DMZ link down");
         registry.set_state(&url, LinkState::Backoff, Some(msg));
@@ -135,37 +141,11 @@ async fn run_endpoint(
             registry.set_state(&url, LinkState::Stopped, None);
             return;
         }
-    }
-}
 
-enum Disconnect {
-    PeerClosed,
-    IoError(std::io::Error),
-    ShutdownObserved,
-}
-
-async fn wait_for_disconnect<S>(stream: &mut S, shutdown: &CancellationToken) -> Disconnect
-where
-    S: AsyncRead + Unpin,
-{
-    let mut buf = [0u8; 1];
-    tokio::select! {
-        biased;
-        _ = shutdown.cancelled() => Disconnect::ShutdownObserved,
-        r = stream.read(&mut buf) => match r {
-            Ok(0) => Disconnect::PeerClosed,
-            Ok(_) => {
-                // Phase 1d will route bytes into the h2 decoder. Until
-                // then: any unexpected byte from the peer is a protocol
-                // violation; treat it as a disconnect to force a fresh
-                // handshake.
-                Disconnect::IoError(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "unexpected post-handshake byte from peer",
-                ))
-            }
-            Err(e) => Disconnect::IoError(e),
-        }
+        // Reset backoff once we've seen a successful link cycle (h2
+        // handshake completed at least once); otherwise a flapping
+        // peer that reaches Up briefly would never escape the cap.
+        backoff.reset();
     }
 }
 
@@ -184,11 +164,26 @@ mod tests {
     use crate::services::dmz_link::config::{LinkConfig, LinkEndpoint};
     use crate::services::dmz_link::connector::{BoxedStream, Connector};
     use async_trait::async_trait;
+    use bytes::Bytes;
+    use http::{Request, Response, StatusCode};
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::time::Duration;
     use strata_protocol::link::{server_handshake, ServerHandshakeConfig};
-    use tokio::io::AsyncWriteExt;
+
+    /// Minimal handler for the supervisor tests — replies 204 to any
+    /// request. We never actually issue requests in these tests; the
+    /// handler exists only to satisfy `serve_h2`'s signature.
+    struct NullHandler;
+    #[async_trait]
+    impl RequestHandler for NullHandler {
+        async fn handle(&self, _: Request<Bytes>) -> Response<Bytes> {
+            Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Bytes::new())
+                .unwrap()
+        }
+    }
 
     fn cfg() -> Arc<LinkConfig> {
         let mut psks = HashMap::new();
@@ -208,18 +203,13 @@ mod tests {
     }
 
     /// Connector backed by `tokio::io::duplex`: every `connect` call
-    /// pairs a fresh client end with a server end and spawns the
+    /// pairs a fresh client end with a server end and runs the
     /// requested server-side script (`server_action`) on the latter.
     struct TestConnector {
         psks: HashMap<String, Vec<u8>>,
         link_id: String,
-        /// Number of `connect()` calls so far. Used to script
-        /// "first call fails, second succeeds" tests.
         calls: Arc<Mutex<usize>>,
-        /// Closure run on the server-side stream after a successful
-        /// handshake. Replaces Phase 1d's request multiplexer in tests.
         server_after_auth: Arc<dyn Fn(BoxedStream) + Send + Sync>,
-        /// Whether to fail the first dial outright (to exercise backoff).
         fail_first_dial: bool,
     }
 
@@ -235,7 +225,7 @@ mod tests {
                 anyhow::bail!("scripted dial failure");
             }
 
-            let (client, server) = tokio::io::duplex(8192);
+            let (client, server) = tokio::io::duplex(64 * 1024);
             let psks = self.psks.clone();
             let link_id = self.link_id.clone();
             let after_auth = self.server_after_auth.clone();
@@ -290,48 +280,78 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "current_thread", start_paused = false)]
-    async fn supervisor_brings_link_up() {
-        // Server: hold the stream open forever so the link stays Up.
-        let after = Arc::new(|stream: BoxedStream| {
+    /// Drive the DMZ-side h2 client handshake on the server end of the
+    /// duplex pair, then keep it open until told to shut down. This is
+    /// what the real DMZ does with the authenticated stream after
+    /// `server_handshake` returns.
+    fn dmz_h2_client_holder() -> Arc<dyn Fn(BoxedStream) + Send + Sync> {
+        Arc::new(|stream: BoxedStream| {
             tokio::spawn(async move {
-                let _hold = stream;
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                let (h2, conn) = match h2::client::handshake(stream).await {
+                    Ok(p) => p,
+                    Err(_) => return,
+                };
+                // Hold the SendRequest handle so the connection stays
+                // up; drop on this task's death tears it down.
+                let _h2 = h2;
+                let _ = conn.await;
             });
-        });
+        })
+    }
 
-        let (connector, _calls) = make_connector(false, after);
+    /// Run h2 client handshake then immediately drop the connection,
+    /// forcing the supervisor's serve_h2 to return and trigger a
+    /// reconnect.
+    fn dmz_h2_client_drops_after_ready() -> Arc<dyn Fn(BoxedStream) + Send + Sync> {
+        Arc::new(|stream: BoxedStream| {
+            tokio::spawn(async move {
+                if let Ok((h2, conn)) = h2::client::handshake(stream).await {
+                    drop(h2);
+                    let _ = conn.await;
+                }
+            });
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn supervisor_brings_link_up_after_h2_handshake() {
+        let (connector, _calls) = make_connector(false, dmz_h2_client_holder());
         let reg = LinkRegistry::new();
         let shutdown = CancellationToken::new();
 
-        let h = spawn_link_supervisors(cfg(), connector, reg.clone(), shutdown.clone());
+        let h = spawn_link_supervisors(
+            cfg(),
+            connector,
+            Arc::new(NullHandler),
+            reg.clone(),
+            shutdown.clone(),
+        );
 
-        assert!(wait_state(&reg, "test://dmz", LinkState::Up, 2000).await);
+        assert!(wait_state(&reg, "test://dmz", LinkState::Up, 3000).await);
 
         shutdown.cancel();
-        let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
         assert!(reg.snapshot().iter().any(|s| s.state == LinkState::Stopped));
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = false)]
     async fn supervisor_reconnects_after_disconnect() {
-        // Server: close the stream immediately after auth completes,
-        // forcing the supervisor to backoff + reconnect at least once.
-        let after = Arc::new(|stream: BoxedStream| {
-            tokio::spawn(async move {
-                let mut s = stream;
-                let _ = s.shutdown().await;
-            });
-        });
-
-        let (connector, calls) = make_connector(false, after);
+        // DMZ side completes h2 handshake then drops, so each cycle
+        // briefly reaches Up before bouncing back to Backoff.
+        let (connector, calls) = make_connector(false, dmz_h2_client_drops_after_ready());
         let reg = LinkRegistry::new();
         let shutdown = CancellationToken::new();
 
-        let h = spawn_link_supervisors(cfg(), connector, reg.clone(), shutdown.clone());
+        let h = spawn_link_supervisors(
+            cfg(),
+            connector,
+            Arc::new(NullHandler),
+            reg.clone(),
+            shutdown.clone(),
+        );
 
         // Wait until at least 2 connect attempts (proving reconnect happened).
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if *calls.lock().unwrap() >= 2 {
                 break;
@@ -343,29 +363,67 @@ mod tests {
         }
 
         shutdown.cancel();
-        let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = false)]
     async fn supervisor_recovers_from_dial_failure() {
-        let after = Arc::new(|stream: BoxedStream| {
-            tokio::spawn(async move {
-                let _hold = stream;
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            });
-        });
-        let (connector, _calls) = make_connector(true, after);
+        let (connector, _calls) = make_connector(true, dmz_h2_client_holder());
         let reg = LinkRegistry::new();
         let shutdown = CancellationToken::new();
 
-        let h = spawn_link_supervisors(cfg(), connector, reg.clone(), shutdown.clone());
+        let h = spawn_link_supervisors(
+            cfg(),
+            connector,
+            Arc::new(NullHandler),
+            reg.clone(),
+            shutdown.clone(),
+        );
 
         // Should hit Backoff once, then come Up after the second dial.
-        assert!(wait_state(&reg, "test://dmz", LinkState::Backoff, 2000).await);
-        assert!(wait_state(&reg, "test://dmz", LinkState::Up, 4000).await);
+        assert!(wait_state(&reg, "test://dmz", LinkState::Backoff, 3000).await);
+        assert!(wait_state(&reg, "test://dmz", LinkState::Up, 5000).await);
 
         shutdown.cancel();
-        let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+        let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn supervisor_stays_in_authenticating_when_h2_handshake_stalls() {
+        // DMZ side never speaks h2 — opens raw stream and sits idle.
+        // Auth completes, but h2 handshake never does, so the link
+        // must NEVER advertise Up to consumers (e.g. /readyz).
+        let after = Arc::new(|stream: BoxedStream| {
+            tokio::spawn(async move {
+                let _hold = stream;
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            });
+        });
+        let (connector, _calls) = make_connector(false, after);
+        let reg = LinkRegistry::new();
+        let shutdown = CancellationToken::new();
+
+        let h = spawn_link_supervisors(
+            cfg(),
+            connector,
+            Arc::new(NullHandler),
+            reg.clone(),
+            shutdown.clone(),
+        );
+
+        // Reach Authenticating quickly, then verify we DON'T flip to
+        // Up over the next second.
+        assert!(wait_state(&reg, "test://dmz", LinkState::Authenticating, 2000).await);
+        let bumped_to_up =
+            tokio::time::timeout(Duration::from_secs(1), wait_state(&reg, "test://dmz", LinkState::Up, 1000)).await;
+        match bumped_to_up {
+            Ok(true) => panic!("link reached Up despite stalled h2 handshake"),
+            _ => {}
+        }
+        assert!(!reg.any_up());
+
+        shutdown.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = false)]
@@ -381,7 +439,13 @@ mod tests {
 
         let reg = LinkRegistry::new();
         let shutdown = CancellationToken::new();
-        let h = spawn_link_supervisors(cfg(), Arc::new(AlwaysFail), reg.clone(), shutdown.clone());
+        let h = spawn_link_supervisors(
+            cfg(),
+            Arc::new(AlwaysFail),
+            Arc::new(NullHandler),
+            reg.clone(),
+            shutdown.clone(),
+        );
 
         // Wait until at least one Backoff has been recorded.
         assert!(wait_state(&reg, "test://dmz", LinkState::Backoff, 2000).await);

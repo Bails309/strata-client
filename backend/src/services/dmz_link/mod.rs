@@ -26,7 +26,9 @@ mod tls;
 
 pub use config::{LinkConfig, LinkEndpoint};
 pub use connector::{BoxedStream, Connector};
-pub use h2_serve::{serve_h2, RequestHandler, MAX_CONCURRENT_STREAMS, MAX_REQUEST_BODY_BYTES};
+pub use h2_serve::{
+    serve_h2, RejectHandler, RequestHandler, MAX_CONCURRENT_STREAMS, MAX_REQUEST_BODY_BYTES,
+};
 pub use registry::{LinkRegistry, LinkState, LinkStatus};
 pub use supervisor::spawn_link_supervisors;
 pub use tls::TlsLinkConnector;

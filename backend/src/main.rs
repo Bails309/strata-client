@@ -332,6 +332,13 @@ async fn main() -> anyhow::Result<()> {
     if let (Some(link_cfg), Some(registry)) = (dmz_link_cfg, dmz_link_registry.clone()) {
         let connector =
             std::sync::Arc::new(services::dmz_link::TlsLinkConnector::from_config(&link_cfg)?);
+        // Phase 1f: link is up end-to-end (mTLS + auth handshake + h2
+        // multiplexer), but inbound DMZ-pushed requests are not yet
+        // routed into the axum router — that lands in Phase 1g. Until
+        // then the link advertises 503 to anything the DMZ tries to
+        // forward, which fails closed loudly rather than silently.
+        let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> =
+            std::sync::Arc::new(services::dmz_link::RejectHandler);
         tracing::info!(
             cluster_id = %link_cfg.cluster_id,
             node_id = %link_cfg.node_id,
@@ -341,6 +348,7 @@ async fn main() -> anyhow::Result<()> {
         worker_handles.push(services::dmz_link::spawn_link_supervisors(
             std::sync::Arc::new(link_cfg),
             connector,
+            handler,
             registry,
             shutdown.clone(),
         ));

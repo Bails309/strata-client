@@ -1,0 +1,49 @@
+# docker-compose.dmz-chaos.yml — toxiproxy fault-injection overlay.
+#
+# Layered on top of docker-compose.yml + docker-compose.dmz.yml. Inserts
+# Shopify Toxiproxy between the internal backend and the DMZ link
+# listener so chaos scenarios (latency, bandwidth, hard reset, packet
+# loss) can be applied at runtime via the toxiproxy HTTP API on
+# 127.0.0.1:8474.
+#
+# Use:
+#   docker compose --env-file .env.dmz \
+#       -f docker-compose.yml \
+#       -f docker-compose.dmz.yml \
+#       -f docker-compose.dmz-chaos.yml \
+#       up -d --build
+#
+#   # then run a chaos scenario:
+#   ./scripts/dmz/chaos/link-flap.sh
+#
+# Topology when this overlay is active:
+#
+#   backend ──► toxiproxy:8444 ──► strata-dmz:8444
+#               (latency/reset toxics applied here)
+
+services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    restart: unless-stopped
+    networks:
+      - dmz-link
+    ports:
+      # Toxiproxy admin API (do NOT expose in production).
+      - "127.0.0.1:8474:8474"
+    command: ["-host=0.0.0.0", "-port=8474"]
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Override the backend dial target so it goes through toxiproxy.
+  # toxiproxy must have a "dmz-link" upstream registered pointing at
+  # strata-dmz:8444 — scripts/dmz/chaos/init-toxics.sh does this once
+  # the container is up.
+  backend:
+    environment:
+      - STRATA_LINK_ENDPOINTS=toxiproxy:8444
+    depends_on:
+      toxiproxy:
+        condition: service_healthy

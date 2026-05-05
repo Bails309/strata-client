@@ -1,0 +1,46 @@
+name: Dependency Review
+
+# Comments on every PR with a diff of changed dependencies, flags new CVEs,
+# and blocks merge if a vulnerability above the configured severity is
+# introduced. Free GitHub-native action; no external service required.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write  # post the summary comment
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Block PRs that introduce HIGH or CRITICAL CVEs in new dependencies.
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+          # Allow only OSI / FSF-approved licences for new dependencies.
+          # Add to this list (deny-licenses) rather than allow-listing — keeps
+          # the surface conservative.
+          deny-licenses: >-
+            AGPL-1.0-only,
+            AGPL-1.0-or-later,
+            AGPL-3.0-only,
+            AGPL-3.0-or-later,
+            GPL-2.0-only,
+            GPL-2.0-or-later,
+            GPL-3.0-only,
+            GPL-3.0-or-later,
+            LGPL-2.0-only,
+            LGPL-2.0-or-later,
+            LGPL-2.1-only,
+            LGPL-2.1-or-later,
+            LGPL-3.0-only,
+            LGPL-3.0-or-later

@@ -1,0 +1,36 @@
+# docker-compose.ghcr.yml
+#
+# OVERLAY: pull pre-built images from GitHub Container Registry instead
+# of building locally from source. Composes on top of docker-compose.yml.
+#
+# Usage:
+#   export STRATA_VERSION=1.4.1                # or "latest"
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# What this changes vs. plain `docker compose up -d`:
+#   - backend / frontend / guacd images come from ghcr.io (no local build)
+#   - Quick Start drops from ~5 minutes to ~30 seconds on a cold host
+#   - The published images are Cosign-signed (keyless) and carry SLSA
+#     Level-3 provenance + a CycloneDX SBOM. See SECURITY.md for the
+#     verification commands.
+#
+# To pin to a specific release set STRATA_VERSION (recommended for
+# production); leaving it unset falls back to `latest`.
+
+services:
+  guacd:
+    build: !reset null
+    image: ghcr.io/bails309/strata-client/custom-guacd:${STRATA_VERSION:-latest}
+
+  guacd-2:
+    build: !reset null
+    image: ghcr.io/bails309/strata-client/custom-guacd:${STRATA_VERSION:-latest}
+
+  backend:
+    build: !reset null
+    image: ghcr.io/bails309/strata-client/backend:${STRATA_VERSION:-latest}
+
+  frontend:
+    build: !reset null
+    image: ghcr.io/bails309/strata-client/frontend:${STRATA_VERSION:-latest}

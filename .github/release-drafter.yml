@@ -1,0 +1,109 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+# Categories drive the section headings on the rendered Release page.
+# Each PR is sorted into the FIRST matching category by label.
+categories:
+  - title: "🚨 Security"
+    labels:
+      - "security"
+  - title: "✨ Features"
+    labels:
+      - "enhancement"
+      - "feature"
+  - title: "🐛 Bug fixes"
+    labels:
+      - "bug"
+      - "fix"
+  - title: "🛡️ Hardening & refactors"
+    labels:
+      - "refactor"
+      - "hardening"
+      - "tech-debt"
+  - title: "📚 Documentation"
+    labels:
+      - "documentation"
+      - "docs"
+  - title: "🧪 Tests"
+    labels:
+      - "tests"
+      - "testing"
+  - title: "🏗️ CI / build"
+    labels:
+      - "ci"
+      - "build"
+  - title: "📦 Dependencies"
+    labels:
+      - "dependencies"
+    collapse-after: 5
+
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+change-title-escapes: '\<*_&'
+
+# Auto-bump the version based on the highest-impact label present on
+# any PR included in this draft. Falls back to patch.
+version-resolver:
+  major:
+    labels:
+      - "breaking"
+      - "major"
+  minor:
+    labels:
+      - "enhancement"
+      - "feature"
+      - "minor"
+  patch:
+    labels:
+      - "bug"
+      - "fix"
+      - "security"
+      - "patch"
+      - "documentation"
+      - "dependencies"
+      - "ci"
+  default: patch
+
+# Auto-label PRs by branch name and/or title prefix so the categories above
+# actually fill in even when contributors forget to add labels.
+autolabeler:
+  - label: "feature"
+    branch:
+      - '/^feat\/.+/'
+    title:
+      - '/^feat(\(.+\))?:/i'
+  - label: "bug"
+    branch:
+      - '/^fix\/.+/'
+    title:
+      - '/^fix(\(.+\))?:/i'
+  - label: "security"
+    branch:
+      - '/^security\/.+/'
+    title:
+      - '/^security(\(.+\))?:/i'
+  - label: "documentation"
+    branch:
+      - '/^docs?\/.+/'
+    title:
+      - '/^docs(\(.+\))?:/i'
+  - label: "refactor"
+    title:
+      - '/^refactor(\(.+\))?:/i'
+  - label: "tests"
+    title:
+      - '/^tests?(\(.+\))?:/i'
+  - label: "ci"
+    title:
+      - '/^(ci|build)(\(.+\))?:/i'
+  - label: "dependencies"
+    title:
+      - '/^(deps|chore\(deps\))(\(.+\))?:/i'
+
+template: |
+  ## What's changed
+
+  $CHANGES
+
+  **Full changelog:** https://github.com/Bails309/strata-client/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+  See [CHANGELOG.md](https://github.com/Bails309/strata-client/blob/main/CHANGELOG.md) for the full hand-written release notes (architecture impact, upgrade-path notes, and the why-this-matters prose) and [WHATSNEW.md](https://github.com/Bails309/strata-client/blob/main/WHATSNEW.md) for the in-app *What's New* card.

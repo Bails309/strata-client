@@ -11,9 +11,22 @@
 //! intentionally **not** consulted: the DMZ link is a private link
 //! between paired nodes; pinning to a private CA prevents any
 //! publicly-trusted CA from minting a cert that could MITM the link.
+//!
+//! ## Hot-reload (W6-1)
+//!
+//! The connector keeps the parsed [`ClientConfig`] behind a
+//! [`std::sync::RwLock`] and exposes [`TlsLinkConnector::reload`] for
+//! operator-driven rotation, plus an opt-in background poller (via
+//! [`TlsLinkConnector::spawn_mtime_watcher`]) that rebuilds the config
+//! whenever any of the three PEM files changes on disk. New `connect`
+//! calls pick up the rotated material immediately; in-flight TLS
+//! sessions are unaffected (rustls bakes the chosen cert into each
+//! session at handshake). This lets cert-manager's PEM-file rewrite
+//! workflow rotate the link mTLS material without a backend restart.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use rustls::pki_types::ServerName;
@@ -21,13 +34,17 @@ use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::pem::PemObject;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use tokio_util::sync::CancellationToken;
 
 use super::config::{LinkConfig, LinkEndpoint};
 use super::connector::{BoxedStream, Connector};
 
 /// Production mTLS [`Connector`] implementation.
 pub struct TlsLinkConnector {
-    rustls_config: Arc<ClientConfig>,
+    rustls_config: RwLock<Arc<ClientConfig>>,
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    ca_path: PathBuf,
 }
 
 impl TlsLinkConnector {
@@ -51,9 +68,80 @@ impl TlsLinkConnector {
 
         let rustls_config = build_client_config(cert_path, key_path, ca_path)?;
         Ok(Self {
-            rustls_config: Arc::new(rustls_config),
+            rustls_config: RwLock::new(Arc::new(rustls_config)),
+            cert_path: cert_path.to_path_buf(),
+            key_path: key_path.to_path_buf(),
+            ca_path: ca_path.to_path_buf(),
         })
     }
+
+    /// Re-read the configured PEM files and atomically swap in a fresh
+    /// [`ClientConfig`]. Idempotent. On any parse failure, the existing
+    /// config is preserved and the error is returned — a botched
+    /// rotation never takes the link down.
+    pub fn reload(&self) -> anyhow::Result<()> {
+        let fresh = build_client_config(&self.cert_path, &self.key_path, &self.ca_path)?;
+        let mut guard = self
+            .rustls_config
+            .write()
+            .map_err(|_| anyhow::anyhow!("dmz link tls config rwlock poisoned"))?;
+        *guard = Arc::new(fresh);
+        tracing::info!(
+            cert = %self.cert_path.display(),
+            "DMZ link mTLS config reloaded from disk"
+        );
+        Ok(())
+    }
+
+    /// Take a snapshot of the current `ClientConfig`. Cheap (one Arc clone
+    /// under a read lock).
+    fn current(&self) -> Arc<ClientConfig> {
+        self.rustls_config
+            .read()
+            .expect("dmz link tls config rwlock not poisoned")
+            .clone()
+    }
+
+    /// Spawn a background task that polls `cert_path`, `key_path`, and
+    /// `ca_path` mtimes every `interval` and calls [`Self::reload`]
+    /// whenever any of them advances. Cancellation token shuts the
+    /// poller down on graceful shutdown. Safe to call at most once per
+    /// connector; calling twice spawns two pollers (harmless but
+    /// wasteful). Returns the join handle so `main.rs` can park it
+    /// alongside the other supervisor handles.
+    pub fn spawn_mtime_watcher(
+        self: Arc<Self>,
+        interval: Duration,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut last = mtimes(&self.cert_path, &self.key_path, &self.ca_path);
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => {
+                        tracing::debug!("dmz link cert watcher shutdown");
+                        return;
+                    }
+                    _ = tokio::time::sleep(interval) => {}
+                }
+                let now = mtimes(&self.cert_path, &self.key_path, &self.ca_path);
+                if now != last && now.iter().all(Option::is_some) {
+                    if let Err(e) = self.reload() {
+                        tracing::warn!(error = %e, "dmz link cert reload failed; keeping previous config");
+                    }
+                    last = now;
+                }
+            }
+        })
+    }
+}
+
+/// Best-effort mtime read for the three PEM files. `None` for any file
+/// whose metadata can't be read this tick (network FS hiccup, racing
+/// rename) — the watcher treats `None` as "no change observed" and
+/// retries on the next tick.
+fn mtimes(cert: &Path, key: &Path, ca: &Path) -> [Option<SystemTime>; 3] {
+    [cert, key, ca].map(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
 }
 
 #[async_trait]
@@ -68,7 +156,7 @@ impl Connector for TlsLinkConnector {
         // interactive guacd traffic, not bulk file transfers.
         let _ = tcp.set_nodelay(true);
 
-        let connector = TlsConnector::from(self.rustls_config.clone());
+        let connector = TlsConnector::from(self.current());
         let tls = connector.connect(server_name, tcp).await?;
         Ok(Box::new(tls))
     }

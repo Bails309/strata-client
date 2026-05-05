@@ -5,15 +5,16 @@
 //! request through a persistent **inbound** mTLS link to the internal
 //! `strata-backend` node. It holds NO Strata business secrets.
 //!
-//! Phase 2a scope: env-driven configuration loading + boot-time
-//! validation. The public listener is still a minimal stub serving
-//! `/healthz` and `/readyz`; the link server, reverse-proxy adapter,
-//! and edge-header signer land in 2b–2d.
+//! Phase 2c scope: link server + reverse-proxy adapter live. Public
+//! TLS, abuse-mitigation tower layers, and the edge-header signer
+//! land in 2d–2e.
 
 // Crate-wide we deny unsafe; the only exception is the boot-time env
 // scrubber in `config`, which is a single `unsafe` block guarded by
 // "called from main, before any worker thread exists".
 #![deny(unsafe_code)]
+
+use std::sync::Arc;
 
 use axum::{routing::get, Router};
 use tracing::info;
@@ -21,6 +22,7 @@ use tracing_subscriber::EnvFilter;
 
 mod config;
 mod link_server;
+mod proxy;
 
 use config::DmzConfig;
 
@@ -101,8 +103,15 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Phase 2c will replace this stub with the real public surface
-    // (TLS termination + abuse mitigation + reverse-proxy adapter).
+    // Phase 2c — public surface forwards every non-health request
+    // through the reverse-proxy adapter, which picks a session from
+    // `registry` per request. Phase 2d will swap NoopEdgeSigner for
+    // the real HMAC signer; Phase 2e adds rate-limit / body-cap
+    // / concurrency tower layers.
+    let proxy_state = proxy::ProxyState::new(
+        registry.clone(),
+        Arc::new(proxy::NoopEdgeSigner) as Arc<dyn proxy::EdgeSigner>,
+    );
     let registry_for_readyz = registry.clone();
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -121,9 +130,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }),
-        );
+        )
+        .fallback(proxy::proxy_handler)
+        .with_state(proxy_state);
 
-    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2b: link server live; public stub)");
+    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2c: link server + reverse-proxy adapter live)");
 
     let listener = tokio::net::TcpListener::bind(cfg.public_bind).await?;
     let serve_result = axum::serve(listener, app)

@@ -52,16 +52,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY backend/Cargo.toml ./
-COPY backend/Cargo.lock* ./
+# The backend is a member of a Cargo workspace rooted at the repo
+# root and depends on the in-tree `strata-protocol` and `strata-dmz`
+# crates under `crates/`. Copy the workspace manifests + per-crate
+# Cargo.toml stubs first so the dependency graph can be fetched and
+# compiled before the real sources land — that's what gives us the
+# layer-cache win on incremental rebuilds.
+COPY Cargo.toml Cargo.lock* ./
 COPY VERSION ./
-# Dependency-cache layer: dummy main so cargo fetches+builds the
+COPY backend/Cargo.toml backend/Cargo.toml
+COPY backend/build.rs backend/build.rs
+COPY crates/strata-protocol/Cargo.toml crates/strata-protocol/Cargo.toml
+COPY crates/strata-dmz/Cargo.toml crates/strata-dmz/Cargo.toml
+# Dependency-cache layer: stub each crate so cargo fetches+builds the
 # dependency graph before we COPY in the real source.
-RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release 2>/dev/null || true
-RUN rm -rf src
+RUN mkdir -p backend/src crates/strata-protocol/src crates/strata-dmz/src \
+    && echo "fn main() {}" > backend/src/main.rs \
+    && : > crates/strata-protocol/src/lib.rs \
+    && echo "fn main() {}" > crates/strata-dmz/src/main.rs \
+    && cargo build --release -p strata-backend 2>/dev/null || true
+RUN rm -rf backend/src crates/strata-protocol/src crates/strata-dmz/src
 
-COPY backend/ .
-RUN touch src/main.rs && cargo build --release
+COPY backend/ backend/
+COPY crates/ crates/
+# Touching the entrypoint files forces cargo to re-evaluate them
+# rather than re-using the stubbed compile artefacts.
+RUN touch backend/src/main.rs crates/strata-protocol/src/lib.rs crates/strata-dmz/src/main.rs \
+    && cargo build --release -p strata-backend
 
 # ── Runtime stage ─────────────────────────────────────────────────────
 FROM debian:trixie-slim@sha256:e18da95f66066b7c5fa31491b524e83121271eca59a3d140f4906c8d0a090367

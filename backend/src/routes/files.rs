@@ -230,7 +230,7 @@ async fn sniff_mime(path: &std::path::Path, claimed: &str) -> Result<String, App
     match (detected, claim_is_generic) {
         (Some(d), true) => Ok(d),
         (Some(d), false) => {
-            if d.eq_ignore_ascii_case(claimed_trimmed) {
+            if d.eq_ignore_ascii_case(claimed_trimmed) || mime_aliases_match(&d, claimed_trimmed) {
                 Ok(d)
             } else {
                 Err(AppError::Validation(format!(
@@ -257,6 +257,32 @@ async fn sniff_mime(path: &std::path::Path, claimed: &str) -> Result<String, App
             Ok(claimed_trimmed.to_string())
         }
     }
+}
+
+/// Accepts a small allow-list of legacy/vendor MIME aliases that mean the
+/// same thing as a modern IANA type. The browser/OS sends one form, `infer`
+/// returns the other; both should pass validation.
+///
+/// Examples:
+/// - Windows Explorer / older WinINet: `application/x-zip-compressed` ↔ `application/zip`
+/// - Old IE Excel: `application/vnd.ms-excel` ↔ `application/excel`
+/// - Some browsers: `image/x-png` ↔ `image/png`, `image/jpg` ↔ `image/jpeg`
+fn mime_aliases_match(detected: &str, claimed: &str) -> bool {
+    const ALIASES: &[(&str, &[&str])] = &[
+        ("application/zip", &["application/x-zip-compressed", "application/x-zip"]),
+        ("application/x-rar-compressed", &["application/vnd.rar"]),
+        ("application/x-7z-compressed", &["application/7z"]),
+        ("application/gzip", &["application/x-gzip"]),
+        ("image/png", &["image/x-png"]),
+        ("image/jpeg", &["image/jpg", "image/pjpeg"]),
+    ];
+    let d = detected.to_ascii_lowercase();
+    let c = claimed.to_ascii_lowercase();
+    ALIASES.iter().any(|(canonical, aliases)| {
+        let canonical = canonical.to_ascii_lowercase();
+        (d == canonical && aliases.iter().any(|a| a.eq_ignore_ascii_case(&c)))
+            || (c == canonical && aliases.iter().any(|a| a.eq_ignore_ascii_case(&d)))
+    })
 }
 
 /// `GET /api/files/:token` — Download a file.

@@ -22,8 +22,8 @@ bytes = "1"
 
 # Web framework
 axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "fs", "request-id"] }
+tower = { version = "0.5", features = ["limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "request-id", "limit", "timeout"] }
 
 # Serialisation
 serde = { version = "1", features = ["derive"] }

@@ -5,9 +5,10 @@
 //! request through a persistent **inbound** mTLS link to the internal
 //! `strata-backend` node. It holds NO Strata business secrets.
 //!
-//! Phase 2d scope: link server + reverse-proxy adapter + edge-header
-//! HMAC signer live. Public TLS termination and abuse-mitigation
-//! tower layers land in 2e.
+//! Phase 2e scope: link server + reverse-proxy adapter + edge-header
+//! HMAC signer + abuse-mitigation tower stack (per-IP rate limit,
+//! global concurrency cap, request timeout, body limit) live. Public
+//! TLS termination lands in Phase 3.
 
 // Crate-wide we deny unsafe; the only exception is the boot-time env
 // scrubber in `config`, which is a single `unsafe` block guarded by
@@ -17,11 +18,15 @@
 use std::sync::Arc;
 
 use axum::{routing::get, Router};
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod config;
 mod edge_signer;
+mod limits;
 mod link_server;
 mod proxy;
 
@@ -119,6 +124,16 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(edge_signer) as Arc<dyn proxy::EdgeSigner>,
     );
     let registry_for_readyz = registry.clone();
+
+    // Phase 2e — abuse mitigation. Layers are applied outermost-to-
+    // innermost as listed: rate-limit (cheapest, drops bad actors
+    // before any work), concurrency cap (bounds tail latency under
+    // load), request timeout (slow-loris), body limit (memory
+    // exhaustion).
+    let limiter = limits::PerIpRateLimiter::new(cfg.public_rate_rps, cfg.public_rate_burst);
+    let request_timeout =
+        std::time::Duration::from_millis(cfg.public_header_timeout_ms.max(1_000));
+
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route(
@@ -138,9 +153,16 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .fallback(proxy::proxy_handler)
-        .with_state(proxy_state);
+        .with_state(proxy_state)
+        .layer(RequestBodyLimitLayer::new(cfg.public_body_limit_bytes))
+        .layer(TimeoutLayer::new(request_timeout))
+        .layer(GlobalConcurrencyLimitLayer::new(cfg.public_max_inflight))
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            limits::rate_limit_middleware,
+        ));
 
-    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2d: link server + reverse-proxy adapter + edge-header signer live)");
+    info!(bind = %cfg.public_bind, "strata-dmz starting (Phase 2e: link server + reverse-proxy + edge-header signer + abuse mitigation live)");
 
     let listener = tokio::net::TcpListener::bind(cfg.public_bind).await?;
     let serve_result = axum::serve(

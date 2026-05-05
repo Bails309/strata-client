@@ -60,6 +60,7 @@ pub trait RequestHandler: Send + Sync + 'static {
 /// (Phase 1g) is in place — the link is operationally up and observable
 /// in the registry, but any traffic the DMZ pushes through fails closed
 /// rather than reaching an unintended fallback.
+#[allow(dead_code)]
 pub struct RejectHandler;
 
 #[async_trait]

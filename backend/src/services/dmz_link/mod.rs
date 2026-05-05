@@ -25,13 +25,20 @@ mod registry;
 // HMAC token format are implemented and unit-tested; runtime
 // integration with the `tunnel.rs` WebSocket upgrade path is deferred
 // to a follow-on phase (browser-side reconnect handshake required).
-#[allow(dead_code)]
+// The dead-code suppression lives inside resume.rs as an inner
+// attribute so it covers items defined in the module file.
 mod resume;
 mod router_adapter;
 mod supervisor;
 mod tls;
 
+// `LinkEndpoint`, `BoxedStream`, `Connector`, and the body-cap
+// constants are re-exported so tests and downstream code can name
+// them; some are unused inside the binary today but kept as
+// public-API surface.
+#[allow(unused_imports)]
 pub use config::{LinkConfig, LinkEndpoint};
+#[allow(unused_imports)]
 pub use connector::{BoxedStream, Connector};
 // `RejectHandler` and the body-cap constants are re-exported so tests
 // and the early supervisor wireup can name them; kept public-API even
@@ -44,6 +51,7 @@ pub use registry::{LinkRegistry, LinkState, LinkStatus};
 // Phase 7 — see `mod resume` comment above.
 #[allow(unused_imports)]
 pub use resume::{spawn_sweeper, ResumeError, ResumeRegistry};
+#[allow(unused_imports)]
 pub use router_adapter::{RouterHandler, MAX_RESPONSE_BODY_BYTES};
 pub use supervisor::spawn_link_supervisors;
 pub use tls::TlsLinkConnector;

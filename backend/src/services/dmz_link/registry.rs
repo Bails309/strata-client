@@ -73,6 +73,7 @@ impl LinkRegistry {
     }
 
     /// Insert / replace the status entry for `endpoint`.
+    #[allow(dead_code)]
     pub(super) fn put(&self, status: LinkStatus) {
         let mut g = self.inner.write().expect("LinkRegistry poisoned");
         g.insert(status.endpoint.clone(), status);
@@ -102,6 +103,7 @@ impl LinkRegistry {
     }
 
     /// True iff at least one configured link is `Up`. Empty registry → false.
+    #[allow(dead_code)]
     pub fn any_up(&self) -> bool {
         let g = self.inner.read().expect("LinkRegistry poisoned");
         g.values().any(|s| s.state.is_ready())

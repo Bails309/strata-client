@@ -48,6 +48,13 @@ use zeroize::Zeroizing;
 
 /// Verified, attacker-resistant edge metadata. Attached to the request
 /// extensions when MAC verification succeeds.
+//
+// Fields below are read indirectly via the `serde_json::json!` macro
+// inside `audit::log`; rustc's dead-code lint doesn't follow into the
+// macro expansion for field-read attribution, so we suppress the
+// false positive at the struct level rather than annotating every
+// individual field.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TrustedEdgeContext {
     /// Real client IP as seen by the DMZ.
@@ -117,6 +124,7 @@ fn keys() -> &'static [Zeroizing<Vec<u8>>] {
 /// Used by `/healthz` to surface DMZ-mode posture and by the operator
 /// admin status endpoint so the UI can render "DMZ-attributed" badges
 /// next to audit rows that carry an `_edge` enrichment block.
+#[allow(dead_code)]
 pub fn is_enabled() -> bool {
     !keys().is_empty()
 }

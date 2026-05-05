@@ -1589,6 +1589,7 @@ required, but the response intentionally omits the PEM bytes.
 | `role_connections.updated` | Role-connection mapping changed |
 | `credential.updated` | User saves encrypted credential |
 | `tunnel.connected` | User opens a remote session |
+| `tunnel.terminated` | WebSocket tunnel closed by the in-band auth watchdog. `details`: `{ connection_id, reason }`. The `reason` field takes one of: `revoked` (the access token used at upgrade time appeared in the in-memory revocation set after a `/api/auth/logout` call), `max_duration` (`MAX_TUNNEL_DURATION = 8h` wall-clock cap exceeded — added in v1.4.1, replaces the v1.3.2 `expired` reason). Added in v1.3.2; revised in v1.4.1.
 | `connection.shared` | User generates a connection share link (includes mode) |
 | `notifications.skipped_opt_out` | Recipient opted out via `users.notifications_opt_out`; suppression recorded in `email_deliveries` (`status='suppressed'`) |
 | `notifications.misconfigured` | Dispatcher refused to send (empty `smtp_from_address` or `smtp_enabled = false`) |

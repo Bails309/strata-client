@@ -11,7 +11,7 @@ By contributing to this project, you agree that your contributions will be licen
 ### Development Environment
 
 **Backend (Rust):**
-- Rust 1.94 (`rustup` recommended)
+- Rust 1.95 (`rustup` recommended)
 - A running PostgreSQL instance (or use the bundled Docker container)
 
 ```bash

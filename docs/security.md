@@ -58,20 +58,32 @@ Authentication uses a **dual-token architecture** aligned with OWASP session tim
 
 **Per-user session tracking:** Each login records an entry in the `active_sessions` table with the token's JTI (UUID), user ID, IP address, user agent, and expiry time. This provides visibility into how many active sessions a user has.
 
-### WebSocket-tunnel auth watchdog (v1.3.2)
+### WebSocket-tunnel auth watchdog (v1.3.2; revised v1.4.1)
 
-A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is *revoked* or *expires* during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.
+A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is *revoked* during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.
 
 `backend/src/routes/tunnel.rs` `ws_tunnel` mitigates this with an in-band auth watchdog:
 
 1. The access token used to authenticate the upgrade is captured (Bearer header → `access_token` cookie → query string, matching `require_auth`'s priority order) and stored as `watchdog_token`.
-2. The token's `exp` claim is decoded once at upgrade time using a fully-validated `Validation::new(Algorithm::HS256)` with `iss=strata-local` and `set_required_spec_claims(&["exp"])`. Non-local OIDC tokens (which use a different signing key) fall through to `None` and the watchdog gracefully degrades to revocation-only checks.
+2. The upgrade-time wall-clock instant is captured as `upgraded_at`.
 3. A 30-second `tokio::time::interval` tick loop runs alongside `tunnel::proxy(...)`. On every tick the watchdog:
-   - calls `services::token_revocation::is_revoked(token)` (O(1) lookup against an in-memory `RwLock<HashSet>`),
-   - compares `chrono::Utc::now().timestamp() as u64` to the cached `exp`.
+   - calls `services::token_revocation::is_revoked(token)` (O(1) lookup against an in-memory `RwLock<HashSet>`) — if revoked, abort with `reason = "revoked"`,
+   - compares `Instant::now() - upgraded_at` to `MAX_TUNNEL_DURATION = 8h` — if exceeded, abort with `reason = "max_duration"`.
 4. Either condition logs at `INFO` and aborts the proxy loop, so the recording stream flushes, the `session_registry` row decrements, and the live-sessions admin page accurately reflects the live set.
 
-The 30 s cadence detects revocation in ≤ 30 s even on an aggressive 1-minute access-token TTL while costing at most 40 ticks per session on a normal 20-minute TTL — negligible next to the WebSocket I/O. Polling is a deliberate choice over a notification channel because both the revocation lookup and the `exp` comparison are cheap, in-process operations; per-tunnel subscribers would add complexity for no measurable benefit.
+The 30 s cadence detects revocation in ≤ 30 s even on an aggressive 1-minute access-token TTL while costing at most 40 ticks per session on a normal 20-minute TTL — negligible next to the WebSocket I/O. Polling is a deliberate choice over a notification channel because both checks are cheap, in-process operations; per-tunnel subscribers would add complexity for no measurable benefit.
+
+#### v1.4.1: removal of `exp`-claim enforcement
+
+The original v1.3.2 watchdog also decoded the access token's `exp` claim once at upgrade time and reaped the tunnel when wall-clock `Utc::now()` reached that timestamp. This **looked** correct but was wrong in practice: access tokens carry a 20-minute TTL, and the frontend's `SessionTimeoutWarning` proactively rotates them via `POST /api/auth/refresh` after roughly ten minutes of UI activity. The already-open WebSocket has no mechanism to learn about that rotation, so the watchdog held on to the *original* token's `exp` and reaped the session at T+20m even when the user was actively driving the UI. From the operator's point of view this was *"my session keeps disconnecting every 20 minutes"*; from the audit log it surfaced as `tunnel.terminated reason: "expired"`.
+
+The fix in v1.4.1 removes the `exp` decode and the `watchdog_exp: Option<u64>` cache entirely. The 8-hour `MAX_TUNNEL_DURATION` hard cap is the new long-tail backstop and is *deliberately measured against `upgraded_at`* (an `Instant`, not a token claim), so token rotation cannot move the deadline. The `tunnel.terminated` audit `reason` enum gained `"max_duration"` and lost `"expired"`; consumers that filtered on `expired` should also accept `max_duration` — they refer to the same defence-in-depth backstop, just measured differently.
+
+| Teardown trigger                          | Mechanism                                                                | Audit `reason`    | Latency      |
+| ----------------------------------------- | ------------------------------------------------------------------------ | ----------------- | ------------ |
+| Manual logout / 20-min idle logout        | Frontend calls `/api/auth/logout` → both tokens revoked → watchdog tick  | `revoked`         | ≤ 30 s       |
+| Browser closed / network died             | TCP-level WebSocket close → `tunnel::proxy(...)` returns                 | (TCP close, not watchdog) | immediate    |
+| Long-lived idle session                   | Watchdog tick observes `Instant::now() - upgraded_at >= 8h`              | `max_duration`    | ≤ 30 s past 8h |
 
 ### Logout closes tunnels immediately (v1.3.2)
 

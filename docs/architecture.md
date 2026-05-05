@@ -309,6 +309,20 @@ Additional tunnel details:
 - Per-session bandwidth counters (`bytes_from_guacd`, `bytes_to_guacd`)
   are updated atomically on every read/write for the session-metrics
   endpoint.
+- **Auth watchdog (v1.3.2; revised v1.4.1).** A 30-second ticker runs
+  alongside the proxy loop and forces tunnel teardown on either of
+  two conditions: (a) the upgrade-time access token appears in the
+  in-memory revocation set
+  (`services::token_revocation::is_revoked(token)` — populated by
+  `/api/auth/logout`), audit `reason = "revoked"`; or (b) the
+  elapsed wall-clock time since the upgrade exceeds
+  `MAX_TUNNEL_DURATION = 8h`, audit `reason = "max_duration"`. The
+  v1.3.2 implementation also reaped on the access token's `exp`
+  claim, but that broke under proactive token rotation — the
+  WebSocket cannot learn that the cookie was rotated, so the cached
+  `exp` reaped active sessions every 20 minutes; v1.4.1 removes
+  that path. Full prose at
+  [`docs/security.md` § WebSocket-tunnel auth watchdog](security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
 
 #### H.264 GFX passthrough (v0.28.0+)
 

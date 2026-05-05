@@ -5,6 +5,201 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] — 2026-05-05
+
+### Tunnel watchdog no longer reaps active sessions at the access-token TTL
+
+v1.4.1 fixes a high-impact regression in the v1.3.2 WebSocket-tunnel
+auth watchdog ([`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)).
+Reported by users: active connection sessions were being torn down
+roughly every 20 minutes even though the operator was still logged in
+and actively using the web UI.
+
+**Root cause.** The watchdog captured the access token's `exp` claim
+once at WebSocket-upgrade time and forced the tunnel closed when that
+timestamp was reached. Access tokens carry a 20-minute TTL, but the
+frontend's `SessionTimeoutWarning` rotates them via
+`POST /api/auth/refresh` on user activity (proactive refresh after
+~10 minutes of activity). The already-open WebSocket has no mechanism
+to learn about that rotation, so the watchdog held on to the
+*original* token's `exp` and reaped the session at T+20m regardless of
+how active the user was.
+
+**Fix.** The dead `jsonwebtoken::decode` block at upgrade time and
+the `watchdog_exp: Option<u64>` cache are removed. Teardown semantics
+are now:
+
+1. **Manual logout / 20-min idle logout** — the frontend already calls
+   `POST /api/auth/logout`, which revokes both access and refresh
+   tokens. The watchdog still polls
+   `services::token_revocation::is_revoked(token)` every 30 s and
+   closes the tunnel within one tick. Audit `reason: "revoked"`.
+2. **Browser closed / network died** — TCP-level WebSocket close
+   already triggers normal teardown via `tunnel::proxy(...)`
+   returning. No watchdog needed.
+3. **Hard cap on session duration** — newly enforced by the watchdog
+   as `MAX_TUNNEL_DURATION = 8h`, measured from upgrade time so it is
+   unaffected by token rotation. Audit `reason: "max_duration"`.
+
+The audit-log payload shape is unchanged; the `reason` field can now
+take the values `"revoked"` or `"max_duration"` (previously
+`"revoked"` or `"expired"`). Operators who consume the
+`tunnel.terminated` audit event should update any dashboards that
+filtered on `expired` to also accept `max_duration` — they refer to
+the same defence-in-depth backstop, just measured against wall-clock
+elapsed time rather than the (now-rotating) token `exp`.
+
+### guacd image build resilience: `staging/1.6.1` pin churn
+
+The guacd image build was briefly broken on `origin/main` between
+commits `de0ba24` and `1064a8e` while we attempted to drop our local
+patch [`guacd/patches/006-freerdp325-authenticate-ex.patch`](guacd/patches/006-freerdp325-authenticate-ex.patch).
+The hypothesis — that GUACAMOLE-2273 (upstream commit `7696572`,
+*"Implement FreeRDP AuthenticateEx callback and handle deprecation
+of Authenticate callback"*) had landed on `staging/1.6.1` and
+rendered our patch redundant — was wrong: at this writing GUACAMOLE-2273
+exists only as an unmerged PR commit, not on the staging branch
+HEAD. Rebuilding `guacd` against the new pin (`4163ead`) without
+patch 006 fails at `src/protocols/rdp/rdp.c:558`:
+
+```
+rdp.c:558:15: error: 'freerdp' {aka 'struct rdp_freerdp'} has no
+member named 'Authenticate'; did you mean 'AuthenticateEx'?
+```
+
+Independently, attempting to pin directly to the GUACAMOLE-2273
+PR commit (`7696572`) trades that error for a different one against
+FreeRDP 3.25:
+
+```
+rdp.c:387:14: error: 'AUTH_FIDO_PIN' undeclared (first use in this
+function)
+```
+
+`AUTH_FIDO_PIN` is part of the FreeRDP `rdp_auth_reason` enum
+introduced after FreeRDP 3.25, and Alpine edge currently ships
+`freerdp-libs 3.25.0-r0` / `freerdp-dev 3.25.0-r0`. Net result:
+neither *"drop patch 006"* nor *"pin to the unmerged PR"* works
+today. v1.4.1 keeps the working v1.4.0 combination — pin
+`4163ead8be54baa35ef5f7ad8897a57497649112` (`staging/1.6.1` HEAD)
+plus patch 006 plus the two grep guards in
+[`guacd/Dockerfile`](guacd/Dockerfile) — and updates the Dockerfile
+comment block to record the reasoning so the next maintainer does
+not re-walk the same path. Functionally a no-op vs. v1.4.0; only
+the pin/patch *story* changed.
+
+### Crypto crate refresh
+
+[`backend/src/services/web_autofill.rs`](backend/src/services/web_autofill.rs) — Chromium-format
+`Login Data` decryption (PBKDF2 `peanuts`/`saltysalt`, AES-128-CBC,
+v10 prefix, used by the Chromium-export ingestion path under VDI /
+web sessions) — gets a refresh of the underlying RustCrypto crates
+to the current major lines:
+
+| Crate    | Old   | New   | Notes                                           |
+| -------- | ----- | ----- | ----------------------------------------------- |
+| `aes`    | 0.8   | 0.9   | API: `KeyInit::new` is now panicking-only       |
+| `cbc`    | 0.1   | 0.2   | feature `std` → `alloc`                         |
+| `pbkdf2` | 0.12  | 0.13  | `pbkdf2_hmac::<Sha1>(...)` signature unchanged  |
+| `sha1`   | 0.10  | 0.11  | re-export hygiene                               |
+
+The decrypted secret is never written to disk by the backend; this
+path lives entirely behind the autofill-import feature toggle that
+is still gated by `can_manage_system`. Envelope encryption of stored
+credentials still goes through `aes-gcm` (unchanged) and Vault
+Transit (unchanged) — see
+[`docs/security.md` § Envelope Encryption](docs/security.md#envelope-encryption-credentials-at-rest).
+
+### Frontend code-quality sweep
+
+`chore(frontend): eliminate 334 ESLint warnings (Phases 1-7)`. No
+behavioural changes — explicit `unknown`-narrowing in error
+catches, removal of dead imports, JSX accessibility tightening,
+`useCallback` / `useMemo` dependency arrays normalised, optional-
+chaining where the type already permits `undefined`. The frontend
+ESLint job in CI now exits with `0` warnings instead of a noisy
+allow-list. Coverage thresholds in
+[`frontend/vitest.config.ts`](frontend/vitest.config.ts) raised in
+lock-step (`statements`, `branches`, `functions`, `lines` all
+≥ the new measured baseline) to prevent backsliding.
+
+### Dependency bumps
+
+Backend:
+
+- `bollard` 0.18.1 → 0.20.2 → 0.21.0 (transitive `hyper-util` /
+  `hyper` / `http-body-util` refresh; `bollard::Docker::list_images`
+  / `inspect_container` now return strongly-typed `models::*`
+  instead of `serde_json::Value`). Test-side adjustments live in
+  [`backend/src/services/vdi_docker.rs` test module](backend/src/services/vdi_docker.rs).
+- `tokio` 1.52.1 → 1.52.2 (patch).
+
+CI / GitHub Actions:
+
+- `docker/login-action` 3.7.0 → 4.1.0
+- `actions/cache` 4.3.0 → 5.0.5
+- `github/codeql-action` 4.35.2 → 4.35.3
+- Trivy scan now prints the findings table on failure
+  ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and the
+  GHA build cache for the OS-package layer is dropped on each run
+  so freshly-published patch CVEs are surfaced same-day rather than
+  hidden behind a cached layer.
+
+E2E:
+
+- `eslint` 10.3.0 / `eslint-plugin-react-hooks` 7.1.1 / `@eslint/js`
+  10.0.1 / `eslint-plugin-security` 4.0.0 — Dependabot PRs reviewed
+  and held: ESLint 10 is **not yet mergeable** because
+  `eslint-plugin-react@7.37.5` (latest) still calls the removed
+  `context.getFilename()` method (TypeError at lint time) and
+  `eslint-plugin-jsx-a11y@6.10.2` (latest) caps its peer range at
+  `eslint@^9`. We re-evaluate when those plugins ship v10-compatible
+  releases.
+
+### Documentation
+
+- [`docs/security.md`](docs/security.md) — *WebSocket-tunnel auth
+  watchdog* section revised with v1.4.1 semantics
+  (`MAX_TUNNEL_DURATION = 8h`, removal of `exp` enforcement, new
+  `max_duration` audit reason).
+- [`docs/architecture.md`](docs/architecture.md) — *Connection
+  Tunnel* prose updated to match the watchdog v1.4.1 contract.
+- [`docs/api-reference.md`](docs/api-reference.md) — `tunnel.terminated`
+  audit `reason` enum updated.
+- This changelog and [`WHATSNEW.md`](WHATSNEW.md) — the v1.4.1
+  card and the headline regression-fix narrative above.
+- [`README.md`](README.md) — version badge bumped to 1.4.1.
+
+### Tests
+
+- [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)
+  watchdog tests: assert `reason = "revoked"` survives the removal
+  of `exp` enforcement and assert `reason = "max_duration"` is
+  emitted when the elapsed-time guard fires (test substitutes a
+  small `MAX_TUNNEL_DURATION` via `cfg(test)`).
+- [`backend/src/services/vdi_docker.rs`](backend/src/services/vdi_docker.rs)
+  — fixture types updated for `bollard 0.20+` typed responses.
+- [`frontend`](frontend) — coverage thresholds raised; new tests
+  for `parseKubeconfig` mocking inside `AdminSettings` and
+  miscellaneous unit tests added during the ESLint sweep.
+
+### Upgrade notes
+
+Drop-in upgrade from v1.4.0. No database migrations, no `/api/*`
+contract changes (only the `tunnel.terminated` audit `reason` enum
+gained a member), no `config.toml` schema changes. Rebuild backend,
+frontend and (optionally) `guacd` images so the new bits actually
+run:
+
+```bash
+docker compose build backend frontend
+# guacd build is unchanged from v1.4.0; rebuild only if you also
+# want the documentation-only Dockerfile comment refresh.
+docker compose up -d
+```
+
+---
+
 ## [1.4.0] — 2026-05-01
 
 ### Kubernetes pod console as a first-class protocol

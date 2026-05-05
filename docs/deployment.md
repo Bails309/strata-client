@@ -534,6 +534,104 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v1.4.0 → v1.4.1 (drop-in image rebuild — backend + frontend)
+
+v1.4.1 is a patch release on top of v1.4.0. The headline fix is the
+WebSocket-tunnel auth watchdog regression: tunnels were being torn
+down at the access-token TTL (every 20 minutes) regardless of how
+active the operator was, because the watchdog cached the token's
+`exp` claim once at upgrade time and could not learn about
+proactive token rotation. v1.4.1 removes the `exp` enforcement and
+replaces it with an 8-hour wall-clock hard cap that is unaffected
+by token rotation. See
+[`docs/security.md` § WebSocket-tunnel auth watchdog](security.md#websocket-tunnel-auth-watchdog-v132-revised-v141)
+for full prose.
+
+No database migrations. No `/api/*` contract changes (only the
+`tunnel.terminated` audit `reason` enum gained `"max_duration"`
+and lost `"expired"`). No `config.toml` schema changes.
+
+```bash
+cd strata-client
+git pull
+docker compose pull               # refresh base images
+docker compose build backend frontend
+# guacd image is unchanged from v1.4.0; rebuild only if you want
+# the documentation-only Dockerfile comment refresh.
+docker compose up -d
+```
+
+Verify post-upgrade:
+
+```bash
+# 1. Active session survives 20-minute access-token rollover
+#    Open a connection, leave it idle for 25 minutes, confirm the
+#    tunnel is still up. (Pre-1.4.1 the watchdog would have reaped
+#    it at T+20m.)
+
+# 2. Audit log shows the new reason values
+docker compose exec postgres-local psql -U strata -d strata -c \
+  "SELECT action_type, details->>'reason'
+   FROM audit_logs
+   WHERE action_type = 'tunnel.terminated'
+   ORDER BY created_at DESC LIMIT 20;"
+# Expected reasons: 'revoked' or 'max_duration'.
+# 'expired' should no longer appear for new closures.
+
+# 3. Manual logout still closes any open tunnels within ~30 s
+docker compose logs --tail=200 backend | grep tunnel.terminated
+```
+
+If you scrape the audit log, dashboards that filtered on
+`reason = 'expired'` should add `'max_duration'` to the filter.
+
+#### v1.3.x → v1.4.0 (drop-in image rebuild — backend + frontend; one new migration)
+
+v1.4.0 introduces the Kubernetes pod console as a first-class
+connection protocol. The image rebuild is mandatory, but the
+upgrade is otherwise drop-in.
+
+- **Migration `060_kubernetes_protocol.sql`** widens the `connections.protocol`
+  and `ad_sync_configs.protocol` `CHECK` constraints to include
+  `'kubernetes'`. The migration runs automatically on backend boot.
+- **`guacd` image** was not changed for v1.4.0 itself, but the
+  Dockerfile guard `test -f /build/usr/local/lib/libguac-client-kubernetes.so`
+  was added in v1.3.x to fail the image build if the
+  `kubernetes` protocol driver ever silently regresses; if you are
+  pulling images from a registry, no guacd rebuild is required.
+- **No `config.toml` changes.** All Kubernetes form fields and
+  endpoints are admin-gated at runtime.
+
+```bash
+cd strata-client
+git pull
+docker compose pull
+docker compose build backend frontend
+docker compose up -d
+docker compose logs --tail=50 backend | grep "060_kubernetes_protocol"
+```
+
+Verify post-upgrade:
+
+```bash
+# 1. Migration applied
+docker compose exec postgres-local psql -U strata -d strata -c \
+  "SELECT pg_get_constraintdef(oid)
+   FROM pg_constraint
+   WHERE conname = 'connections_protocol_check';"
+# Expected: contains 'kubernetes'
+
+# 2. Admin can paste a kubeconfig and POST it to /parse-kubeconfig
+#    (see docs/api-reference.md for the full request/response shape)
+
+# 3. New connection picker shows 'Kubernetes Pod' as a protocol
+```
+
+Rollback: drop the new migration and revert the backend image. The
+connection editor will refuse to render `kubernetes`-protocol rows
+on a backend that does not know the protocol, but other connection
+types are unaffected.
+
 #### v1.2.0 → v1.3.0 (mandatory image rebuild — backend *and* frontend)
 
 v1.3.0 is a focused production-hardening release. It fixes four

@@ -647,4 +647,204 @@ mod tests {
         let _ = server_task.await;
         let _ = conn_task.await;
     }
+
+    /// Build a one-shot DMZ proxy state + h2 transport pair for
+    /// security tests. The fake internal server runs as a spawned
+    /// task and forwards the first incoming request `parts` over the
+    /// returned oneshot channel.
+    async fn make_proxy_with_fake_internal(
+        node_id: &str,
+        trust_forwarded_from: &[String],
+    ) -> (
+        ProxyState,
+        tokio::sync::oneshot::Receiver<http::request::Parts>,
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (server_io, client_io) = duplex(64 * 1024);
+        let (req_tx, req_rx) = tokio::sync::oneshot::channel();
+        let server_task = tokio::spawn(run_fake_internal_server(server_io, req_tx));
+        let (sender, h2_conn) = h2::client::Builder::new()
+            .handshake::<_, Bytes>(client_io)
+            .await
+            .expect("h2 client handshake");
+        let conn_task = tokio::spawn(async move {
+            let _ = h2_conn.await;
+        });
+        let sender = sender.ready().await.expect("sender ready");
+
+        let registry = LinkSessionRegistry::new();
+        registry.insert(
+            LinkSessionInfo {
+                link_id: "test-link".into(),
+                cluster_id: "test-cluster".into(),
+                node_id: node_id.into(),
+                software_version: "0.0.0-test".into(),
+                since: std::time::Instant::now(),
+            },
+            sender,
+        );
+        let signer = HmacEdgeSigner::from_config(
+            Zeroizing::new(b"a-32-char-or-longer-edge-hmac-key!!".to_vec()),
+            node_id.into(),
+            trust_forwarded_from,
+        );
+        let state = ProxyState::new(registry, Arc::new(signer));
+        (state, req_rx, server_task, conn_task)
+    }
+
+    #[tokio::test]
+    async fn forged_edge_headers_from_public_are_overwritten() {
+        // A malicious public client tries to inject pre-signed edge
+        // headers, claiming to be a trusted DMZ peer. The proxy MUST
+        // strip every incoming `x-strata-edge-*` header before
+        // signing; what reaches the upstream MUST be the proxy's own
+        // freshly-signed bundle, not the attacker's.
+        let (state, req_rx, server_task, conn_task) =
+            make_proxy_with_fake_internal("real-dmz-node", &[]).await;
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/api/me")
+            .header("host", "public.example.com")
+            // Forged edge bundle the attacker hopes the internal node
+            // will trust as-is:
+            .header("x-strata-edge-client-ip", "10.0.0.1")
+            .header("x-strata-edge-user-agent", "attacker/1.0")
+            .header("x-strata-edge-link-id", "spoofed-node")
+            .header("x-strata-edge-timestamp-ms", "1")
+            .header("x-strata-edge-trusted-mac", "AAAA")
+            // Real UA the proxy should propagate:
+            .header("user-agent", "honest-client/1.0")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = proxy(state, req).await.expect("proxy ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let parts = req_rx.await.expect("internal received");
+        // link-id MUST be the proxy's configured node_id, not the
+        // attacker's "spoofed-node".
+        assert_eq!(
+            parts.headers.get("x-strata-edge-link-id").map(|v| v.as_bytes()),
+            Some(b"real-dmz-node".as_ref()),
+        );
+        // user-agent MUST be the honest client's, not "attacker/1.0".
+        assert_eq!(
+            parts
+                .headers
+                .get("x-strata-edge-user-agent")
+                .map(|v| v.as_bytes()),
+            Some(b"honest-client/1.0".as_ref()),
+        );
+        // timestamp MUST NOT be the attacker's "1" — it's stamped by
+        // the signer at sign time, well after the unix epoch.
+        let ts: i64 = std::str::from_utf8(
+            parts
+                .headers
+                .get("x-strata-edge-timestamp-ms")
+                .expect("timestamp present")
+                .as_bytes(),
+        )
+        .unwrap()
+        .parse()
+        .unwrap();
+        assert!(ts > 1_700_000_000_000, "timestamp not freshly signed: {ts}");
+        // MAC MUST NOT be the attacker's "AAAA".
+        let mac = parts
+            .headers
+            .get("x-strata-edge-trusted-mac")
+            .expect("mac present");
+        assert_ne!(mac.as_bytes(), b"AAAA");
+
+        let _ = server_task.await;
+        let _ = conn_task.await;
+    }
+
+    #[tokio::test]
+    async fn xff_from_untrusted_peer_is_ignored() {
+        // The proxy's trust list is empty here, so any X-Forwarded-For
+        // from the public client must be ignored when computing
+        // x-strata-edge-client-ip. Without ConnectInfo on the request
+        // the signer falls back to "0.0.0.0".
+        let (state, req_rx, server_task, conn_task) =
+            make_proxy_with_fake_internal("real-dmz-node", &[]).await;
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/api/me")
+            .header("host", "public.example.com")
+            .header("x-forwarded-for", "203.0.113.99, 192.0.2.5")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = proxy(state, req).await.expect("proxy ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let parts = req_rx.await.expect("internal received");
+        // No ConnectInfo + untrusted XFF source → fallback "0.0.0.0".
+        assert_eq!(
+            parts
+                .headers
+                .get("x-strata-edge-client-ip")
+                .map(|v| v.as_bytes()),
+            Some(b"0.0.0.0".as_ref()),
+        );
+
+        let _ = server_task.await;
+        let _ = conn_task.await;
+    }
+
+    #[tokio::test]
+    async fn each_request_gets_a_fresh_signed_bundle() {
+        // Replay protection at the proxy boundary: a single public
+        // request produces a single signed bundle. A second pass
+        // through the proxy MUST mint a fresh timestamp + MAC, even
+        // if the public request bytes are byte-identical. (The
+        // internal-side replay window is asserted by
+        // strata-protocol::edge_header::check_timestamp; here we
+        // only need the proxy to never reuse a stamp.)
+        let (state1, rx1, st1, ct1) =
+            make_proxy_with_fake_internal("real-dmz-node", &[]).await;
+        let (state2, rx2, st2, ct2) =
+            make_proxy_with_fake_internal("real-dmz-node", &[]).await;
+
+        let make_req = || {
+            http::Request::builder()
+                .method("GET")
+                .uri("/api/me")
+                .header("host", "public.example.com")
+                .header("user-agent", "rep/1.0")
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let _ = proxy(state1, make_req()).await.expect("proxy ok 1");
+        // Sleep at least 2ms so the second timestamp is guaranteed to
+        // differ from the first even if the system clock is coarse.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let _ = proxy(state2, make_req()).await.expect("proxy ok 2");
+
+        let p1 = rx1.await.expect("internal 1 received");
+        let p2 = rx2.await.expect("internal 2 received");
+
+        let ts1 = p1.headers.get("x-strata-edge-timestamp-ms").unwrap();
+        let ts2 = p2.headers.get("x-strata-edge-timestamp-ms").unwrap();
+        let mac1 = p1.headers.get("x-strata-edge-trusted-mac").unwrap();
+        let mac2 = p2.headers.get("x-strata-edge-trusted-mac").unwrap();
+        let rid1 = p1.headers.get("x-strata-edge-request-id").unwrap();
+        let rid2 = p2.headers.get("x-strata-edge-request-id").unwrap();
+        // Timestamps MUST advance.
+        assert_ne!(ts1.as_bytes(), ts2.as_bytes(), "timestamp reused");
+        // MACs MUST differ (different bundle → different MAC).
+        assert_ne!(mac1.as_bytes(), mac2.as_bytes(), "MAC reused");
+        // Request IDs MUST be freshly minted UUIDs (no incoming
+        // header was supplied).
+        assert_ne!(rid1.as_bytes(), rid2.as_bytes(), "request-id reused");
+
+        let _ = st1.await;
+        let _ = ct1.await;
+        let _ = st2.await;
+        let _ = ct2.await;
+    }
 }

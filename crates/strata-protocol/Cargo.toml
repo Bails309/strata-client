@@ -22,3 +22,11 @@ zeroize = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 bytes = { workspace = true }
+
+# Async I/O for the framed-message codec used during the link handshake.
+# Only `io-util` is enabled — this crate must NOT pull in tokio's net /
+# process / signal / fs subsystems (those belong to the DMZ binary).
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "rt", "time", "sync", "io-std"] }

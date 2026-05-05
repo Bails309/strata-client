@@ -20,5 +20,8 @@ pub mod edge_header;
 pub mod resume_token;
 pub mod versioning;
 pub mod errors;
+pub mod frame;
+pub mod backoff;
+pub mod link;
 
 pub use errors::ProtocolError;

@@ -143,9 +143,7 @@ mod tests {
             )
             .route(
                 "/api/json",
-                get(|| async {
-                    Json(serde_json::json!({"hello": "world"}))
-                }),
+                get(|| async { Json(serde_json::json!({"hello": "world"})) }),
             )
             .route(
                 "/api/big",

@@ -333,26 +333,27 @@ async fn main() -> anyhow::Result<()> {
     // Only when STRATA_DMZ_ENDPOINTS is set; otherwise this is a no-op
     // and the node behaves as a standalone deployment.
     if let (Some(link_cfg), Some(registry)) = (dmz_link_cfg, dmz_link_registry.clone()) {
-        let connector =
-            std::sync::Arc::new(services::dmz_link::TlsLinkConnector::from_config(&link_cfg)?);
+        let connector = std::sync::Arc::new(services::dmz_link::TlsLinkConnector::from_config(
+            &link_cfg,
+        )?);
         // W6-1 — auto-reload mTLS material when cert-manager (or an
         // operator's rotation script) rewrites the PEM files on disk.
         // Poll interval is intentionally coarse (60s) so this is
         // operationally invisible during steady state but quick enough
         // that a fresh cert is in use within ~1 link reconnect cycle.
-        worker_handles.push(connector.clone().spawn_mtime_watcher(
-            std::time::Duration::from_secs(60),
-            shutdown.clone(),
-        ));
+        worker_handles.push(
+            connector
+                .clone()
+                .spawn_mtime_watcher(std::time::Duration::from_secs(60), shutdown.clone()),
+        );
         // Phase 1g: dispatch inbound DMZ-pushed requests through the
         // same axum router that serves the public listener. The router
         // already has `verify_edge_headers` middleware mounted, so the
         // signed `x-strata-edge-*` bundle the DMZ injected is honoured
         // exactly as on a direct connection — no separate code path to
         // keep in sync.
-        let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> = std::sync::Arc::new(
-            services::dmz_link::RouterHandler::new(app.clone()),
-        );
+        let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> =
+            std::sync::Arc::new(services::dmz_link::RouterHandler::new(app.clone()));
         tracing::info!(
             cluster_id = %link_cfg.cluster_id,
             node_id = %link_cfg.node_id,

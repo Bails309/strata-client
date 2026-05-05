@@ -139,7 +139,7 @@ async fn run_endpoint(
         registry.set_state(&url, LinkState::Backoff, Some(msg));
 
         let delay = backoff.next_delay(&mut rand::rng());
-                if !sleep_with_cancel(delay, &shutdown).await {
+        if !sleep_with_cancel(delay, &shutdown).await {
             registry.set_state(&url, LinkState::Stopped, None);
             return;
         }
@@ -416,8 +416,11 @@ mod tests {
         // Reach Authenticating quickly, then verify we DON'T flip to
         // Up over the next second.
         assert!(wait_state(&reg, "test://dmz", LinkState::Authenticating, 2000).await);
-        let bumped_to_up =
-            tokio::time::timeout(Duration::from_secs(1), wait_state(&reg, "test://dmz", LinkState::Up, 1000)).await;
+        let bumped_to_up = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_state(&reg, "test://dmz", LinkState::Up, 1000),
+        )
+        .await;
         match bumped_to_up {
             Ok(true) => panic!("link reached Up despite stalled h2 handshake"),
             _ => {}

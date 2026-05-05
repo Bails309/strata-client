@@ -196,24 +196,20 @@ fn build_client_config(
             .collect::<Result<_, _>>()
             .map_err(|e| anyhow::anyhow!("parse client cert {}: {e}", cert_path.display()))?;
     if chain.is_empty() {
-        anyhow::bail!(
-            "client cert chain {} is empty",
-            cert_path.display()
-        );
+        anyhow::bail!("client cert chain {} is empty", cert_path.display());
     }
 
     // Client private key — accept PKCS8, PKCS1, or SEC1.
     let key = rustls_pki_types::PrivateKeyDer::from_pem_file(key_path)
         .map_err(|e| anyhow::anyhow!("read client key {}: {e}", key_path.display()))?;
 
-    let cfg = ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|e| anyhow::anyhow!("set TLS protocol versions: {e}"))?
-    .with_root_certificates(roots)
-    .with_client_auth_cert(chain, key)
-    .map_err(|e| anyhow::anyhow!("install client cert: {e}"))?;
+    let cfg =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| anyhow::anyhow!("set TLS protocol versions: {e}"))?
+            .with_root_certificates(roots)
+            .with_client_auth_cert(chain, key)
+            .map_err(|e| anyhow::anyhow!("install client cert: {e}"))?;
 
     Ok(cfg)
 }

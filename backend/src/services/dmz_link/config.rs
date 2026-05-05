@@ -60,11 +60,14 @@ impl LinkConfig {
     /// `STRATA_DMZ_ENDPOINTS` is unset or empty (standalone mode); a
     /// configured endpoint with no PSKs is treated as a fatal misconfig.
     pub fn from_env() -> anyhow::Result<Option<Self>> {
-        Self::from_env_inner(|k| std::env::var(k).ok(), |prefix| {
-            std::env::vars()
-                .filter(move |(k, _)| k.starts_with(prefix))
-                .collect()
-        })
+        Self::from_env_inner(
+            |k| std::env::var(k).ok(),
+            |prefix| {
+                std::env::vars()
+                    .filter(move |(k, _)| k.starts_with(prefix))
+                    .collect()
+            },
+        )
     }
 
     /// Test seam: parse from arbitrary env-like sources.
@@ -88,10 +91,12 @@ impl LinkConfig {
             return Ok(None);
         }
 
-        let cluster_id = get("STRATA_CLUSTER_ID")
-            .ok_or_else(|| anyhow::anyhow!("STRATA_CLUSTER_ID required when STRATA_DMZ_ENDPOINTS set"))?;
-        let node_id = get("STRATA_NODE_ID")
-            .ok_or_else(|| anyhow::anyhow!("STRATA_NODE_ID required when STRATA_DMZ_ENDPOINTS set"))?;
+        let cluster_id = get("STRATA_CLUSTER_ID").ok_or_else(|| {
+            anyhow::anyhow!("STRATA_CLUSTER_ID required when STRATA_DMZ_ENDPOINTS set")
+        })?;
+        let node_id = get("STRATA_NODE_ID").ok_or_else(|| {
+            anyhow::anyhow!("STRATA_NODE_ID required when STRATA_DMZ_ENDPOINTS set")
+        })?;
         let software_version = get("CARGO_PKG_VERSION")
             .or_else(|| get("STRATA_SOFTWARE_VERSION"))
             .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
@@ -157,11 +162,8 @@ mod tests {
 
     #[test]
     fn empty_endpoints_returns_none() {
-        let r = LinkConfig::from_env_inner(
-            vars(&[("STRATA_DMZ_ENDPOINTS", "  ")]),
-            prefixed(&[]),
-        )
-        .unwrap();
+        let r = LinkConfig::from_env_inner(vars(&[("STRATA_DMZ_ENDPOINTS", "  ")]), prefixed(&[]))
+            .unwrap();
         assert!(r.is_none());
     }
 
@@ -221,7 +223,10 @@ mod tests {
         assert_eq!(cfg.node_id, "internal-1");
         assert_eq!(cfg.endpoints.len(), 2);
         assert_eq!(cfg.endpoints[0].url, "tls://dmz1:8444");
-        assert_eq!(cfg.psks.get("current").unwrap().as_slice(), b"shared-link-psk");
+        assert_eq!(
+            cfg.psks.get("current").unwrap().as_slice(),
+            b"shared-link-psk"
+        );
         assert_eq!(
             cfg.client_cert_path.as_ref().unwrap().to_string_lossy(),
             "/run/secrets/c.pem"
@@ -234,7 +239,10 @@ mod tests {
             ("STRATA_DMZ_ENDPOINTS", "tls://dmz1:8444"),
             ("STRATA_CLUSTER_ID", "production"),
             ("STRATA_NODE_ID", "internal-1"),
-            ("STRATA_DMZ_LINK_PSK_CURRENT", &B64.encode(b"super-secret-psk-bytes")),
+            (
+                "STRATA_DMZ_LINK_PSK_CURRENT",
+                &B64.encode(b"super-secret-psk-bytes"),
+            ),
         ];
         let cfg = LinkConfig::from_env_inner(vars(pairs), prefixed(pairs))
             .unwrap()

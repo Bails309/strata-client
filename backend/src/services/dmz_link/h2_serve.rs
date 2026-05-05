@@ -288,7 +288,12 @@ mod tests {
     async fn happy_path_single_request() {
         let (server_io, client_io) = duplex(64 * 1024);
         let shutdown = CancellationToken::new();
-        let server = tokio::spawn(serve_h2(server_io, Arc::new(EchoHandler), shutdown.clone(), || {}));
+        let server = tokio::spawn(serve_h2(
+            server_io,
+            Arc::new(EchoHandler),
+            shutdown.clone(),
+            || {},
+        ));
 
         let req = http::Request::builder()
             .method("GET")
@@ -312,7 +317,12 @@ mod tests {
     async fn multiple_requests_share_one_link() {
         let (server_io, client_io) = duplex(64 * 1024);
         let shutdown = CancellationToken::new();
-        let server = tokio::spawn(serve_h2(server_io, Arc::new(EchoHandler), shutdown.clone(), || {}));
+        let server = tokio::spawn(serve_h2(
+            server_io,
+            Arc::new(EchoHandler),
+            shutdown.clone(),
+            || {},
+        ));
 
         let scripts: Vec<(http::Request<()>, Bytes)> = (0..5)
             .map(|i| {
@@ -351,7 +361,12 @@ mod tests {
 
         let (server_io, client_io) = duplex(MAX_REQUEST_BODY_BYTES + 1024 * 1024);
         let shutdown = CancellationToken::new();
-        let server = tokio::spawn(serve_h2(server_io, Arc::new(PoisonHandler), shutdown.clone(), || {}));
+        let server = tokio::spawn(serve_h2(
+            server_io,
+            Arc::new(PoisonHandler),
+            shutdown.clone(),
+            || {},
+        ));
 
         // First request: oversized → expect 413.
         // Second request: tiny → must succeed (proves link wasn't torn down).
@@ -376,7 +391,12 @@ mod tests {
     async fn cancellation_drains_inflight_and_returns_ok() {
         let (server_io, client_io) = duplex(64 * 1024);
         let shutdown = CancellationToken::new();
-        let server = tokio::spawn(serve_h2(server_io, Arc::new(EchoHandler), shutdown.clone(), || {}));
+        let server = tokio::spawn(serve_h2(
+            server_io,
+            Arc::new(EchoHandler),
+            shutdown.clone(),
+            || {},
+        ));
 
         // Drive one request through to completion, then cancel.
         let req = http::Request::builder()

@@ -78,8 +78,7 @@ export default function DmzLinksTab() {
       <div className="card">
         <h2 className="!mb-2 text-lg font-semibold">DMZ links</h2>
         <p className="text-txt-secondary">
-          DMZ mode is not enabled on this backend node. Inbound mTLS link
-          supervision is inactive.
+          DMZ mode is not enabled on this backend node. Inbound mTLS link supervision is inactive.
         </p>
       </div>
     );
@@ -91,16 +90,11 @@ export default function DmzLinksTab() {
         <div>
           <h1 className="!mb-1 text-xl font-bold">DMZ Links</h1>
           <p className="text-txt-tertiary text-sm italic">
-            Inbound mTLS connections from this backend node to public-facing DMZ
-            relay(s).
+            Inbound mTLS connections from this backend node to public-facing DMZ relay(s).
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            className="btn btn-secondary"
-            onClick={handleReconnect}
-            disabled={reconnecting}
-          >
+          <button className="btn btn-secondary" onClick={handleReconnect} disabled={reconnecting}>
             {reconnecting ? "Reconnecting..." : "Force reconnect"}
           </button>
           <button
@@ -117,9 +111,7 @@ export default function DmzLinksTab() {
         </div>
       </div>
 
-      {msg && (
-        <div className="rounded-md px-4 py-2 bg-success-dim text-success">{msg}</div>
-      )}
+      {msg && <div className="rounded-md px-4 py-2 bg-success-dim text-success">{msg}</div>}
       {err && <div className="rounded-md px-4 py-2 bg-danger/10 text-danger">{err}</div>}
 
       {data.links.length === 0 ? (
@@ -167,9 +159,7 @@ function DmzLinkTableRow({ row }: { row: DmzLinkRow }) {
       <td className="py-2 pr-4">{row.connects}</td>
       <td className="py-2 pr-4">{row.failures}</td>
       <td className="py-2 pr-4">{relTime(row.since_unix_secs)}</td>
-      <td className="py-2 text-txt-secondary truncate max-w-md">
-        {row.last_error ?? "-"}
-      </td>
+      <td className="py-2 text-txt-secondary truncate max-w-md">{row.last_error ?? "-"}</td>
     </tr>
   );
 }

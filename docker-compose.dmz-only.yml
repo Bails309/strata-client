@@ -1,0 +1,100 @@
+# ─────────────────────────────────────────────────────────────────────
+# docker-compose.dmz-only.yml — DMZ-host stack for API-only public
+# exposure (Walkthrough A.5).
+#
+# Runs on the PUBLIC-FACING DMZ host of a two-host split-topology
+# deployment where the SPA is hosted elsewhere (CDN, mobile app,
+# internal-only browser). Brings up exactly one container:
+#
+#   strata-dmz — the mTLS+PSK relay. Listens on :8443 for public
+#                HTTPS API/WebSocket traffic, and on :8444 for the
+#                backend's outbound link.
+#
+# Network model
+#
+#   Internet ─ :8443 ─▶ strata-dmz ── link ──▶ backend
+#                          ▲ :8444 (mTLS+PSK)     (internal host,
+#                          │                       no public IP)
+#                          └────────────────── initiated outbound
+#
+# This overlay does NOT bring up a frontend, backend, guacd, postgres,
+# or vault. Compare to:
+#   - docker-compose.dmz.yml       — single-host eval (DMZ + backend on one host)
+#   - docker-compose.dmz-edge.yml  — two-host with public SPA (DMZ + frontend)
+#
+# Prerequisites
+#   1. mTLS material under ./certs/dmz/ (run scripts/dmz/gen-test-certs.sh
+#      once on a trusted machine, distribute ca.crt + server.{crt,key}
+#      + public.{crt,key} to this host, and keep client.{crt,key}
+#      bundled for distribution to the internal host).
+#   2. A real public-CA-signed cert at ./certs/dmz/public.{crt,key}
+#      for the public hostname (e.g. strata.example.com). Browsers
+#      and downstream API clients hit this directly.
+#   3. A populated .env.dmz with STRATA_DMZ_OPERATOR_TOKEN,
+#      STRATA_DMZ_LINK_PSKS, STRATA_DMZ_EDGE_HMAC_KEY.
+#
+# Usage
+#   docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml \
+#       up -d --build
+#
+#   docker compose -f docker-compose.dmz-only.yml logs -f strata-dmz
+#
+# Verify (from outside the host)
+#   curl -k https://<dmz-host>:8443/api/health        → 200 OK (via link)
+#   curl -k https://127.0.0.1:9444/status \
+#        -H "Authorization: Bearer $STRATA_DMZ_OPERATOR_TOKEN"
+#                                                     → links_up:1
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  strata-dmz:
+    build:
+      context: .
+      dockerfile: crates/strata-dmz/Dockerfile
+    image: strata/dmz:latest
+    restart: unless-stopped
+    ports:
+      # Public HTTPS — the only port the public internet should reach.
+      - "${DMZ_PUBLIC_PORT:-8443}:8443"
+      # Link listener — internal host dials in here. Firewall this
+      # port so only the internal host's egress IP can reach it.
+      - "${DMZ_LINK_PORT:-8444}:8444"
+      # Operator surface — bound to loopback only.
+      - "127.0.0.1:${DMZ_OPERATOR_PORT:-9444}:9444"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65532:65532"
+    volumes:
+      - ./certs/dmz:/certs:ro
+    environment:
+      - RUST_LOG=${DMZ_RUST_LOG:-info,strata_dmz=info}
+      - STRATA_DMZ_PUBLIC_BIND=0.0.0.0:8443
+      # Public listener uses the public-CA-signed cert — this is what
+      # external clients see in their TLS handshake.
+      - STRATA_DMZ_PUBLIC_TLS_CERT=/certs/public.crt
+      - STRATA_DMZ_PUBLIC_TLS_KEY=/certs/public.key
+      - STRATA_DMZ_LINK_BIND=0.0.0.0:8444
+      - STRATA_DMZ_LINK_TLS_CERT=/certs/server.crt
+      - STRATA_DMZ_LINK_TLS_KEY=/certs/server.key
+      - STRATA_DMZ_LINK_CA_BUNDLE=/certs/ca.crt
+      - STRATA_DMZ_OPERATOR_BIND=0.0.0.0:9444
+      - STRATA_DMZ_OPERATOR_TOKEN=${STRATA_DMZ_OPERATOR_TOKEN:?required (>=32 bytes)}
+      - STRATA_DMZ_LINK_PSKS=${STRATA_DMZ_LINK_PSKS:?required, format id:base64[,id:base64]}
+      - STRATA_DMZ_EDGE_HMAC_KEY=${STRATA_DMZ_EDGE_HMAC_KEY:?required (base64)}
+      - STRATA_DMZ_NODE_ID=${STRATA_DMZ_NODE_ID:-dmz-1}
+      - STRATA_DMZ_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-prod}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/strata-dmz", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M

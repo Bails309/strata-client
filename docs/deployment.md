@@ -1010,6 +1010,25 @@ openssl rand -base64 32  # → STRATA_DMZ_EDGE_HMAC_KEY      (BOTH halves, base6
 Generate each independently — never derive one from another and never
 store all three in the same file.
 
+### Choosing a topology
+
+Strata ships **three** docker-compose overlays that cover every
+supported DMZ deployment shape. Pick one before you start; mixing
+overlays on the same host is unsupported.
+
+| Walkthrough | Overlay file | Hosts | Public ports | What's exposed publicly | Best for |
+|---|---|---|---|---|---|
+| [**A**](#walkthrough-a--docker-compose-single-host-evaluation) | [docker-compose.dmz.yml](../docker-compose.dmz.yml) | 1 | `${DMZ_PUBLIC_PORT}` (default 8443), 8444 | Relay only — no SPA | Local eval / smoke-testing the link |
+| [**A.5**](#walkthrough-a5--two-host-bare-metal-api-only-public-exposure) | [docker-compose.dmz-only.yml](../docker-compose.dmz-only.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal) | 2 | 8443, 8444 on DMZ host | Relay only — clients must already speak Strata's API | SPA hosted on a CDN / mobile app / API-only consumers |
+| [**A.6**](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended) ⭐ | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal) | 2 | 80/443 on DMZ host | **Full Strata SPA** + API + WS | Standard production — most operators want this |
+
+> **Picking the right overlay matters.** If you choose A.5 when you
+> meant A.6, end-users won't get a UI when they navigate to your
+> public hostname; they'll see a JSON `401`. If you choose A when you
+> meant A.5/A.6, the backend's database, Vault, and AD sit on the
+> public host alongside the relay — the whole point of the split
+> topology is lost.
+
 ---
 
 ## Walkthrough A — Docker Compose (single-host evaluation)
@@ -1191,26 +1210,53 @@ services on the same docker network. Use this walkthrough instead.
 ### A.5.1  On `dmz-host` — issue mTLS material
 
 Identical to [A.1](#a1--issue-mtls-material). Place files under
-`./certs/dmz/`.
+`./certs/dmz/`:
 
-### A.5.2  On `dmz-host` — run only the DMZ container
-
-Do **not** apply the full `docker-compose.dmz.yml` overlay (it would
-also try to start `backend` on the DMZ host). Instead, copy just the
-`strata-dmz` service block into a standalone `docker-compose.yml` on
-the DMZ host, point the volume at the cert directory, and create
-`.env.dmz` exactly as in [A.2](#a2--populate-envdmz).
-
-Bring it up:
-
-```bash
-docker compose --env-file .env.dmz up -d --build strata-dmz
-docker compose logs -f strata-dmz
+```
+./certs/dmz/
+├── ca.crt           # link-CA root (operator-issued, distribute to internal host)
+├── server.crt       # link server cert (presented by DMZ to internal)
+├── server.key
+├── client.crt       # link client cert (distribute to internal host)
+├── client.key
+├── public.crt       # PUBLIC-CA-signed cert for the API hostname
+└── public.key
 ```
 
-### A.5.3  On `internal-host` — distribute the link material
+`public.crt` MUST chain to a CA that the API consumers trust
+(browsers, mobile apps, downstream services). The `gen-test-certs.sh`
+helper produces a self-signed `public.crt` suitable only for local
+testing — replace it with a real cert before production.
 
-Copy from `dmz-host` to `internal-host` over a secure channel:
+### A.5.2  On `dmz-host` — bring up the DMZ-only stack
+
+The repo ships [docker-compose.dmz-only.yml](../docker-compose.dmz-only.yml),
+a thin overlay that runs **only** `strata-dmz` (no backend, no
+frontend) on the DMZ host. Populate `.env.dmz` exactly as in
+[A.2](#a2--populate-envdmz), then:
+
+```bash
+docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml \
+    up -d --build
+
+docker compose -f docker-compose.dmz-only.yml ps
+docker compose -f docker-compose.dmz-only.yml logs -f strata-dmz
+# expect: "public listener up scheme=https", "DMZ link server listening"
+```
+
+The DMZ host now exposes:
+
+| Port | Origin | Reachability |
+|------|--------|--------------|
+| `${DMZ_PUBLIC_PORT}` (default 8443) | strata-dmz public listener (public TLS cert) | **Internet** — API / WebSocket clients land here |
+| 8444 | strata-dmz link listener | **Internal network only** — firewall: allow only `internal-host → dmz-host:8444/tcp` |
+| 9444 | strata-dmz operator API | **Loopback only** by default |
+
+### A.5.3  Distribute the link material to `internal-host`
+
+Copy from `dmz-host` to `internal-host` over a secure channel
+(e.g. `scp` over SSH between admin workstations, or a secret manager
+that supports file payloads):
 
 ```
 ca.crt          # link-CA root (the same file used by DMZ)
@@ -1218,9 +1264,14 @@ client.crt      # link client cert
 client.key      # link client key
 ```
 
-The link **PSK** and **edge HMAC key** travel out-of-band (e.g. via
-your secret manager). They are NEVER copied via the same channel as
-the certs.
+The link **PSK** and **edge HMAC key** are NEVER copied via the same
+channel as the certs. Inject them into the internal host's secret
+manager out-of-band so a single channel compromise cannot leak both
+the cert chain and the PSK.
+
+On the internal host, place the certs at `./certs/dmz/` (the path
+[docker-compose.internal.yml](../docker-compose.internal.yml) mounts
+into the backend container).
 
 ### A.5.4  On `internal-host` — wire the backend env
 
@@ -1241,13 +1292,22 @@ only values you need to set live in `.env`:
 STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
 STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
 STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as STRATA_DMZ_EDGE_HMAC_KEY>
-# Optional per-host overrides:
+# Must match the DMZ's STRATA_DMZ_CLUSTER_ID exactly:
+STRATA_CLUSTER_ID=strata-cluster-prod
+# Optional per-host override (defaults to "internal-1"):
 # STRATA_NODE_ID=internal-1
-# STRATA_CLUSTER_ID=strata-cluster-prod
 ```
 
-All three are marked `?required` in the overlay, so compose fails fast
-if any is missing.
+All link/HMAC values are marked `?required` in the overlay, so
+compose fails fast if any is missing.
+
+> **Cluster ID must match.** If the DMZ runs with
+> `STRATA_DMZ_CLUSTER_ID=strata-cluster-test` (the value baked into
+> `sample.env.dmz`) but the backend dials with
+> `STRATA_CLUSTER_ID=strata-cluster-prod` (the overlay default), the
+> link handshake succeeds but the DMZ immediately drops the
+> connection with `internal node advertised cluster_id "X", expected
+> "Y"`. Set both to the same string before bringing up either side.
 
 Restart the backend with both compose files applied:
 
@@ -1258,6 +1318,10 @@ docker compose logs -f backend | grep -iE 'link|dmz'
 # expect: "DMZ link authenticated", "h2 serve ready"
 ```
 
+> **Outbound firewall.** The internal host needs egress to
+> `dmz-host:8444/tcp` only. No inbound rules are required from the
+> DMZ network — that's the whole point of the split topology.
+
 ### A.5.5  Verify end-to-end
 
 From `dmz-host`:
@@ -1267,10 +1331,10 @@ curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq
 # → {"links_up": 1, "links_total": 1, "node_id": "dmz-1", ...}
 ```
 
-From an external machine:
+From an external machine (substitute `${DMZ_PUBLIC_PORT}`, default `8443`):
 
 ```bash
-curl https://strata.example.com/api/health
+curl -k https://strata.example.com:${DMZ_PUBLIC_PORT}/api/health
 # → 200 OK, served via the link tunnel
 ```
 
@@ -1313,7 +1377,7 @@ The DMZ host runs the standalone overlay
 [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml). The
 internal host runs the regular [docker-compose.yml](../docker-compose.yml)
 plus [docker-compose.internal.yml](../docker-compose.internal.yml)
-exactly as in [§A.5.4](#a54-on-internal-host--wire-the-backend-env).
+(see [§A.6.5](#a65--on-internal-host--distribute-link-material-and-wire-the-backend) below).
 
 ### A.6.1  On `dmz-host` — issue mTLS material
 
@@ -1384,14 +1448,63 @@ The DMZ host now exposes:
 | 8444 | strata-dmz link listener | **Internal network only** (firewall: allow `internal-host` → :8444) |
 | 9444 | strata-dmz operator API | **Loopback only** (default) |
 
-### A.6.5  On `internal-host` — wire the backend
+### A.6.5  On `internal-host` — distribute link material and wire the backend
 
-Follow [A.5.3](#a53--on-internal-host--distribute-the-link-material)
-and [A.5.4](#a54-on-internal-host--wire-the-backend-env) verbatim,
-with `STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444` in the
-internal `.env`. The internal host runs no `frontend` and no
-`strata-dmz`; just the regular `docker compose` stack plus the
-internal overlay.
+Copy from `dmz-host` to `internal-host` over a secure channel:
+
+```
+ca.crt          # link-CA root
+client.crt      # link client cert
+client.key      # link client key
+```
+
+Place them at `./certs/dmz/` on the internal host. The link **PSK**
+and **edge HMAC key** travel separately (secret manager, sealed
+envelope, etc.) — never via the same channel as the certs.
+
+The backend auto-detects link-client mode whenever
+`STRATA_DMZ_ENDPOINTS` is non-empty — there is no separate `_MODE`
+switch. PSK and HMAC values are **base64**, matching what the DMZ
+side reads.
+
+The repo ships [docker-compose.internal.yml](../docker-compose.internal.yml),
+a thin overlay that appends the link env block and mounts the mTLS
+material onto the existing `backend` service. The required values
+in the internal host's `.env`:
+
+```env
+STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
+STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
+STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as STRATA_DMZ_EDGE_HMAC_KEY>
+# Must match the DMZ's STRATA_DMZ_CLUSTER_ID exactly:
+STRATA_CLUSTER_ID=strata-cluster-prod
+# Optional per-host override (defaults to "internal-1"):
+# STRATA_NODE_ID=internal-1
+```
+
+All link/HMAC values are marked `?required` in the overlay, so
+compose fails fast if any is missing.
+
+> **Cluster ID must match.** If the DMZ runs with
+> `STRATA_DMZ_CLUSTER_ID=strata-cluster-test` but the backend dials
+> with `STRATA_CLUSTER_ID=strata-cluster-prod`, the link handshake
+> succeeds but the DMZ immediately drops the connection with
+> `internal node advertised cluster_id "X", expected "Y"`.
+
+Bring up the internal stack (note: **no** `frontend` container on
+this host — the public-facing nginx lives on the DMZ host):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.internal.yml \
+    up -d --build
+
+docker compose logs -f backend | grep -iE 'link|dmz'
+# expect: "DMZ link authenticated", "h2 serve ready"
+```
+
+> **Outbound firewall.** The internal host needs egress to
+> `dmz-host:8444/tcp` only. No inbound rules are required from the
+> DMZ network — that's the whole point of the split topology.
 
 ### A.6.6  Verify end-to-end
 
@@ -1680,18 +1793,22 @@ kubectl -n strata-dmz delete secret strata-dmz-secrets strata-dmz-link-tls strat
 ## Firewall posture
 
 The DMZ split is only as strong as the firewall rules that enforce it.
-Recommended:
+Recommended (rule set varies slightly by topology — the table below
+covers all three):
 
-| Source | Destination | Port | Action |
-|--------|-------------|------|--------|
-| Internet | `dmz-host:443` (proxied to 8443) | 443/tcp | ALLOW |
-| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW |
-| `dmz-host` | anywhere on the internal network | * | **DENY** |
-| Internet | `dmz-host:8444` | 8444/tcp | **DENY** |
-| Internet | `dmz-host:9444` | 9444/tcp | **DENY** |
+| Source | Destination | Port | Action | A | A.5 | A.6 |
+|--------|-------------|------|--------|---|-----|-----|
+| Internet | `dmz-host:443` | 443/tcp | ALLOW | — | — | ✅ |
+| Internet | `dmz-host:${DMZ_PUBLIC_PORT}` (default 8443) | 8443/tcp | ALLOW | ✅ (eval) | ✅ | — |
+| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW | — | ✅ | ✅ |
+| `dmz-host` | anywhere on the internal network | * | **DENY** | — | ✅ | ✅ |
+| Internet | `dmz-host:8444` | 8444/tcp | **DENY** | ✅ | ✅ | ✅ |
+| Internet | `dmz-host:9444` | 9444/tcp | **DENY** | ✅ | ✅ | ✅ |
 
 The `dmz-host → internal *` deny rule is the heart of the design — it
 is what makes a full RCE on the DMZ unable to reach Vault / DB / AD.
+It does not apply to single-host eval (Walkthrough A) because there
+is only one host.
 
 ## Production checklist
 

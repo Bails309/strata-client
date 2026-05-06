@@ -7,14 +7,13 @@ Windows host prerequisites, and how to verify the codec is actually flowing.
 
 ## Pipeline overview
 
-```
-Windows RDP host  ──RDPGFX/AVC444──►  guacd (patched)  ──"4.h264" Guac op──►  browser
-                                          │                                       │
-                                          │                                       └─ Guacamole.H264Decoder
-                                          │                                          (WebCodecs VideoDecoder)
-                                          └─ guacd/patches/004-h264-display-worker.patch
-                                             hooks RDPGFX SurfaceCommand → enqueues NAL
-                                             units → emits "4.h264,<len>.<bytes>;"
+```mermaid
+flowchart LR
+    Host["Windows RDP host"]
+    Host -->|"RDPGFX / AVC444"| Guacd
+    Guacd["guacd (patched)<br/><sub>004-h264-display-worker.patch<br/>hooks RDPGFX SurfaceCommand →<br/>enqueues NAL units →<br/>emits '4.h264,&lt;len&gt;.&lt;bytes&gt;;'</sub>"]
+    Guacd -->|"'4.h264' Guac op"| Browser
+    Browser["browser<br/><sub>Guacamole.H264Decoder<br/>(WebCodecs VideoDecoder)</sub>"]
 ```
 
 ### Components

@@ -49,24 +49,16 @@ prefer giving them a full VDI desktop instead — see
 
 ## Architecture
 
-```
-   ┌────────────┐    HTTPS     ┌─────────────┐    Guac proto   ┌──────────┐
-   │  Browser   │─────────────▶│  Strata     │────────────────▶│  guacd   │
-   │  (user)    │◀── WSS ──────│  backend    │◀────────────────│ (VNC)    │
-   └────────────┘              └──────┬──────┘                 └────┬─────┘
-                                      │                              │ VNC
-                                      │ spawn / supervise            │
-                                      ▼                              │
-                              ┌──────────────────┐                   │
-                              │  Xvnc display    │                   │
-                              │  :100..:199      │◀──────────────────┘
-                              │  + Chromium      │
-                              │  --kiosk         │
-                              │  --user-data-dir │
-                              │  --host-rules    │
-                              │  --remote-debug  │
-                              │      127.0.0.1   │
-                              └──────────────────┘
+```mermaid
+flowchart LR
+    Browser["Browser (user)"]
+    Browser <-->|"HTTPS / WSS"| Backend
+    Backend["Strata backend"]
+    Backend <-->|"Guac proto"| Guacd
+    Guacd["guacd (VNC)"]
+    Backend -->|"spawn / supervise"| Display
+    Display["Xvnc display :100..:199<br/>+ Chromium<br/><sub>--kiosk<br/>--user-data-dir<br/>--host-rules<br/>--remote-debug 127.0.0.1</sub>"]
+    Guacd -->|"VNC"| Display
 ```
 
 Key properties:

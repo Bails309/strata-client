@@ -952,15 +952,21 @@ required.
 
 ### Topology
 
-```
-Internet ──► strata-dmz (public host) ──mTLS h2 link── strata-backend (internal host)
-                  │                                         │
-                  │                                         ▼
-                  ▼                            Vault, PostgreSQL, AD, guacd
-       (terminates TLS,
-        signs edge headers,
-        rate-limits + body-caps,
-        no business secrets)
+```mermaid
+flowchart LR
+    Internet([Internet])
+    Internet -->|HTTPS| DMZ
+    subgraph DMZHost["DMZ host (public)"]
+        DMZ["strata-dmz<br/><sub>terminates TLS · signs edge headers<br/>rate-limits + body-caps · no business secrets</sub>"]
+    end
+    subgraph InternalHost["Internal host (private)"]
+        Backend["strata-backend"]
+        Backend --> Vault["Vault"]
+        Backend --> Postgres["PostgreSQL"]
+        Backend --> AD["Active Directory"]
+        Backend --> Guacd["guacd"]
+    end
+    Backend -.->|mTLS h2 link<br/>:8444 outbound| DMZ
 ```
 
 The polarity is reversed from a normal proxy: **the internal node
@@ -1348,29 +1354,22 @@ proxying API and websocket traffic over the mTLS+PSK relay to a
 backend on a private network. The backend never opens an inbound
 public port.
 
-```
-                  Internet
-                     │
-                     ▼ :443
-   ┌──────────────────────────────────────────────┐
-   │ DMZ host                                     │
-   │  ┌────────────────────┐   ┌────────────────┐ │
-   │  │ frontend (nginx)   │   │ strata-dmz     │ │
-   │  │ /        → SPA     │   │                │ │
-   │  │ /api/*   ─proxy──▶ │──▶│ :8443 (proxy)  │ │
-   │  │ /ws      ─proxy──▶ │   │                │ │
-   │  └────────────────────┘   └───────┬────────┘ │
-   │                                   │ link     │
-   │                                :8444 (mTLS)  │
-   │                                   │          │
-   └─────────────────────────────────── │ ────────┘
-                                        │ (initiated by backend)
-                                        ▼
-   ┌──────────────────────────────────────────────┐
-   │ Internal host (no public IP)                 │
-   │  backend ─ outbound only                     │
-   │  postgres, guacd, vault, …                   │
-   └──────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Internet([Internet])
+    Internet -->|"HTTPS :443"| Frontend
+    subgraph DMZHost["DMZ host"]
+        Frontend["frontend (nginx)<br/><sub>/      → SPA assets<br/>/api/* → proxy<br/>/ws    → proxy</sub>"]
+        DMZ["strata-dmz<br/><sub>:8443 (private, proxy)<br/>:8444 (mTLS link listener)</sub>"]
+        Frontend -->|"/api/* + /ws<br/>HTTPS over docker net"| DMZ
+    end
+    subgraph InternalHost["Internal host (no public IP)"]
+        Backend["backend"]
+        Backend --- Postgres["postgres"]
+        Backend --- Guacd["guacd"]
+        Backend --- Vault["vault"]
+    end
+    Backend -.->|"mTLS link<br/>:8444 (outbound only)"| DMZ
 ```
 
 The DMZ host runs the standalone overlay

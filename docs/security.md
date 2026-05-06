@@ -153,23 +153,13 @@ Endpoints that do not match a specific permission category (e.g. role CRUD) requ
 
 User credentials (RDP/SSH passwords) are never stored in plaintext. The system uses **envelope encryption** with HashiCorp Vault's Transit Secrets Engine:
 
-```
-                        ┌──────────────────┐
-                        │   Vault Transit  │
-                        │   (KEK: Master   │
-                        │    Encryption    │
-                        │    Key)          │
-                        └────────┬─────────┘
-                                 │
-              ┌──── wraps/unwraps DEK ────┐
-              │                           │
-    ┌─────────▼──────────┐     ┌──────────▼──────────┐
-    │   Data Encryption  │     │     PostgreSQL       │
-    │   Key (DEK)        │     │                      │
-    │   AES-256-GCM      │     │ encrypted_password   │
-    │   (random, 32B)    │     │ encrypted_dek        │
-    │                    │     │ nonce (12B)           │
-    └────────────────────┘     └──────────────────────┘
+```mermaid
+flowchart TB
+    Vault["Vault Transit<br/><sub>KEK: Master Encryption Key</sub>"]
+    DEK["Data Encryption Key (DEK)<br/><sub>AES-256-GCM<br/>(random, 32B)</sub>"]
+    Postgres["PostgreSQL<br/><sub>encrypted_password<br/>encrypted_dek<br/>nonce (12B)</sub>"]
+    Vault <-->|"wraps / unwraps DEK"| DEK
+    Vault <-->|"wraps / unwraps DEK"| Postgres
 ```
 
 **Write path:**

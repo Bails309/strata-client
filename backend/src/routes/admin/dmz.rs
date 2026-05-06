@@ -23,7 +23,7 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::services::app_state::SharedState;
-use crate::services::dmz_link::{LinkState, LinkStatus};
+use crate::services::dmz_link::LinkStatus;
 
 /// One row in the response. Stable JSON shape — the frontend depends
 /// on these field names.
@@ -148,6 +148,7 @@ pub async fn reconnect_links(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::dmz_link::LinkState;
 
     fn st(s: LinkState) -> LinkStatus {
         LinkStatus {

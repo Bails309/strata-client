@@ -37,7 +37,11 @@
 #   docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml \
 #       up -d --build
 #
-#   docker compose -f docker-compose.dmz-only.yml logs -f strata-dmz
+#   docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml logs -f strata-dmz
+#
+#   NB: every compose subcommand (ps, logs, config, down, ...) must
+#   include --env-file .env.dmz, not just `up`. Compose v2 evaluates
+#   the ${VAR:?required} guards at YAML parse time for ALL commands.
 #
 # Verify (from outside the host)
 #   curl -k https://<dmz-host>:8443/api/health        → 200 OK (via link)

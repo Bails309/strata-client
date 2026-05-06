@@ -1249,8 +1249,8 @@ frontend) on the DMZ host. Populate `.env.dmz` exactly as in
 docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml \
     up -d --build
 
-docker compose -f docker-compose.dmz-only.yml ps
-docker compose -f docker-compose.dmz-only.yml logs -f strata-dmz
+docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml ps
+docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml logs -f strata-dmz
 # expect: "public listener up scheme=https", "DMZ link server listening"
 ```
 
@@ -1432,9 +1432,19 @@ docker compose --env-file .env.dmz \
     -f docker-compose.dmz-edge.yml \
     up -d --build
 
-docker compose -f docker-compose.dmz-edge.yml ps
-docker compose -f docker-compose.dmz-edge.yml logs -f strata-dmz frontend
+docker compose --env-file .env.dmz -f docker-compose.dmz-edge.yml ps
+docker compose --env-file .env.dmz -f docker-compose.dmz-edge.yml logs -f strata-dmz frontend
 ```
+
+> **Always pass `--env-file .env.dmz`.** Compose v2 evaluates the
+> `${VAR:?required}` interpolation guards in this overlay at YAML
+> parse time for **every** subcommand — not just `up`. Running
+> `docker compose -f docker-compose.dmz-edge.yml ps` (or `logs`,
+> `config`, `down`, etc.) without `--env-file .env.dmz` will fail
+> with `required variable STRATA_DMZ_OPERATOR_TOKEN is missing a
+> value`, even when the containers are running fine. Either repeat
+> `--env-file .env.dmz` on every invocation, or `export
+> COMPOSE_ENV_FILES=.env.dmz` once in your shell.
 
 Expected:
 
@@ -1523,7 +1533,7 @@ link → backend. Confirm with:
 
 ```bash
 # On dmz-host
-docker compose -f docker-compose.dmz-edge.yml logs strata-dmz | grep -i 'authenticated'
+docker compose --env-file .env.dmz -f docker-compose.dmz-edge.yml logs strata-dmz | grep -i 'authenticated'
 # → "DMZ link authenticated peer=… node_id=internal-1"
 
 curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq

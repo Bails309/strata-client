@@ -15,12 +15,6 @@ ignore = [
     # OIDC JWKS. Revisit when `rsa` publishes a constant-time release.
     "RUSTSEC-2023-0071",
 
-    # RUSTSEC-2025-0134 — `rustls-pemfile` unmaintained (warning only).
-    # Direct dependency used for loading CA bundles / client certs. Upstream
-    # functionality has moved into `rustls-pki-types`; migration is tracked
-    # but non-trivial. No known vulnerability, only a maintenance notice.
-    "RUSTSEC-2025-0134",
-
     # RUSTSEC-2026-0097 — `rand` 0.8.5 unsoundness with custom loggers
     # (warning, not a direct vulnerability). Only reachable via transitive
     # deps (`tungstenite`, `sqlx-*`, `num-bigint-dig`, `jsonwebtoken`) which

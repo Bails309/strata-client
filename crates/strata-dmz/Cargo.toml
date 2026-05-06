@@ -39,7 +39,6 @@ serde_json = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 tokio-rustls = { workspace = true }
-rustls-pemfile = { workspace = true }
 
 # HTTP/2 link transport
 h2 = { workspace = true }

@@ -374,7 +374,7 @@ rebuild with `docker compose up -d --build`. If `certutil` is
 present, inspect the audit log for the `web.session.end` event —
 the failure reason includes the trailing characters of `certutil`'s
 stderr. The most common cause is a malformed PEM, but the upload
-endpoint validates with `rustls-pemfile` + `x509-parser` so this
+endpoint validates with `rustls-pki-types` + `x509-parser` so this
 should not occur post-upload; if it does, re-upload the bundle
 forcing a fresh round-trip through the validator.
 

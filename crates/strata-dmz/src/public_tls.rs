@@ -6,12 +6,11 @@
 //! ALPN list intentionally advertises `h2` and `http/1.1` so both
 //! HTTP/1.1 and HTTP/2 public clients work.
 
-use std::io::{BufReader, Cursor};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use rustls::ServerConfig;
-use rustls_pemfile::{certs, private_key};
+use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 
@@ -25,17 +24,15 @@ pub fn build_public_acceptor(
     server_key_pem: &[u8],
 ) -> anyhow::Result<TlsAcceptor> {
     let server_chain: Vec<CertificateDer<'static>> =
-        certs(&mut BufReader::new(Cursor::new(server_cert_pem)))
+        CertificateDer::pem_slice_iter(server_cert_pem)
             .collect::<Result<Vec<_>, _>>()
             .context("parse DMZ public TLS cert PEM")?;
     if server_chain.is_empty() {
         return Err(anyhow!("DMZ public TLS cert PEM contained no certificates"));
     }
 
-    let server_key: PrivateKeyDer<'static> =
-        private_key(&mut BufReader::new(Cursor::new(server_key_pem)))
-            .context("parse DMZ public TLS key PEM")?
-            .ok_or_else(|| anyhow!("DMZ public TLS key PEM contained no private key"))?;
+    let server_key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(server_key_pem)
+        .context("parse DMZ public TLS key PEM")?;
 
     let mut cfg = ServerConfig::builder()
         .with_no_client_auth()

@@ -44,3 +44,12 @@ jobs:
             LGPL-2.1-or-later,
             LGPL-3.0-only,
             LGPL-3.0-or-later
+          # Per-package overrides for the license deny-list. These are
+          # CI-only GitHub Actions: their code runs on the runner, never
+          # links into any shipped Strata binary, and never ends up on a
+          # customer machine. License copyleft therefore does not apply.
+          #
+          # - Swatinem/rust-cache is LGPL-3.0; it is a Cargo build cache
+          #   helper invoked only during CI.
+          allow-dependencies-licenses: >-
+            pkg:githubactions/Swatinem/rust-cache

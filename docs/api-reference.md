@@ -1562,8 +1562,9 @@ Return rows from `email_deliveries`, newest first. Use the `status` query parame
 
 Reusable PEM bundles used by the `web` protocol's Chromium kiosk so
 operators can attach an internal-PKI root to many connections without
-re-pasting it. PEMs are validated at upload time with `rustls-pemfile`
-+ `x509-parser`; the parsed subject, expiry, and SHA-256 fingerprint
+re-pasting it. PEMs are validated at upload time with `rustls-pki-types`
+(`PemObject` trait) + `x509-parser`; the parsed subject, expiry, and SHA-256
+fingerprint
 are cached on the row so the admin list view never has to re-parse.
 
 The PEM is treated as **public material** and is not envelope-encrypted

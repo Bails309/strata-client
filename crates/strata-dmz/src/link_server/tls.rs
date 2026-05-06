@@ -5,13 +5,12 @@
 //! allowed to complete the TLS handshake. The system truststore is
 //! intentionally not consulted — this is a private trust domain.
 
-use std::io::{BufReader, Cursor};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
-use rustls_pemfile::{certs, private_key};
+use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 
@@ -28,20 +27,19 @@ pub fn build_acceptor(
     server_key_pem: &[u8],
     client_ca_bundle_pem: &[u8],
 ) -> anyhow::Result<TlsAcceptor> {
-    let server_chain: Vec<CertificateDer<'static>> = certs(&mut BufReader::new(Cursor::new(server_cert_pem)))
-        .collect::<Result<Vec<_>, _>>()
-        .context("parse DMZ link server cert PEM")?;
+    let server_chain: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(server_cert_pem)
+            .collect::<Result<Vec<_>, _>>()
+            .context("parse DMZ link server cert PEM")?;
     if server_chain.is_empty() {
         return Err(anyhow!("DMZ link server cert PEM contained no certificates"));
     }
 
-    let server_key: PrivateKeyDer<'static> =
-        private_key(&mut BufReader::new(Cursor::new(server_key_pem)))
-            .context("parse DMZ link server key PEM")?
-            .ok_or_else(|| anyhow!("DMZ link server key PEM contained no private key"))?;
+    let server_key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(server_key_pem)
+        .context("parse DMZ link server key PEM")?;
 
     let mut roots = RootCertStore::empty();
-    let cas: Vec<CertificateDer<'static>> = certs(&mut BufReader::new(Cursor::new(client_ca_bundle_pem)))
+    let cas: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(client_ca_bundle_pem)
         .collect::<Result<Vec<_>, _>>()
         .context("parse DMZ link client-CA bundle PEM")?;
     if cas.is_empty() {

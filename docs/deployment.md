@@ -1209,27 +1209,18 @@ switch. PSK and HMAC values are **base64**, matching what the DMZ
 side reads from `STRATA_DMZ_LINK_PSKS` and `STRATA_DMZ_EDGE_HMAC_KEY`.
 
 The stock [docker-compose.yml](../docker-compose.yml) does **not**
-forward `STRATA_DMZ_*` env vars to the backend container. You must
-either (a) extend the `backend.environment:` block in your
-compose file, or (b) maintain a tiny site-local overlay. Option (b)
-([`docker-compose.internal.yml`](#)) is recommended:
+forward `STRATA_DMZ_*` env vars to the backend container. The repo
+ships a ready-to-use site-local overlay,
+[docker-compose.internal.yml](../docker-compose.internal.yml), that
+appends the link env block and mounts the mTLS material. Edit the
+two values that are site-specific:
 
-```yaml
-# docker-compose.internal.yml — site-local overlay
-services:
-  backend:
-    environment:
-      - STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
-      - STRATA_DMZ_LINK_CA=/certs/ca.crt
-      - STRATA_DMZ_LINK_TLS_CLIENT_CERT=/certs/client.crt
-      - STRATA_DMZ_LINK_TLS_CLIENT_KEY=/certs/client.key
-      - STRATA_DMZ_LINK_PSK_CURRENT=${STRATA_DMZ_LINK_PSK_CURRENT:?required (base64)}
-      - STRATA_DMZ_EDGE_HMAC_KEYS=${STRATA_DMZ_EDGE_HMAC_KEYS:?required (base64)}
-      - STRATA_NODE_ID=internal-1
-      - STRATA_CLUSTER_ID=strata-cluster-prod
-    volumes:
-      - ./certs/dmz:/certs:ro
-```
+- `STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444` — your DMZ host.
+- `STRATA_NODE_ID` / `STRATA_CLUSTER_ID` — override per host as needed.
+
+The remaining `STRATA_DMZ_*` lines are correct as shipped; the PSK
+and HMAC values are pulled from the environment so they never live
+in the compose file.
 
 Provide the two `?required` values via your existing backend `.env`
 (or a separate `--env-file`):

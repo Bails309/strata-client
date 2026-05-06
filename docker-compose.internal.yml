@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────
+# docker-compose.internal.yml — site-local overlay for the INTERNAL
+# host of a two-host DMZ deployment (see docs/deployment.md §A.5).
+#
+# Purpose
+#   Tells the backend container how to reach a remote strata-dmz node
+#   running on a separate host. The base docker-compose.yml does NOT
+#   forward STRATA_DMZ_* env vars to the backend, so this overlay
+#   appends them and mounts the link-side mTLS material.
+#
+# When to use
+#   - Two-host bare-metal split topology (DMZ host + internal host).
+#   - You are NOT using the Helm chart and NOT using
+#     docker-compose.dmz.yml (which only makes sense on a single host
+#     where strata-dmz and backend share a docker network).
+#
+# When NOT to use
+#   - Single-host evaluation     → use docker-compose.dmz.yml instead.
+#   - Helm/Kubernetes deployment → use deploy/helm/strata-dmz.
+#   - Backend without DMZ        → don't apply this file at all.
+#
+# Usage
+#   1. Generate / receive ca.crt + client.crt + client.key from the DMZ
+#      host's CA. Place them under ./certs/dmz/ on the internal host.
+#   2. Add the matching base64 secrets to your .env (or a dedicated
+#      --env-file):
+#         STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
+#         STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as DMZ's STRATA_DMZ_EDGE_HMAC_KEY>
+#   3. Edit STRATA_DMZ_ENDPOINTS below to the DMZ host's hostname:port.
+#   4. Bring the backend up with both compose files applied:
+#         docker compose -f docker-compose.yml \
+#                        -f docker-compose.internal.yml \
+#                        up -d --force-recreate backend
+#         docker compose logs -f backend | grep -iE 'link|dmz'
+#      Expect: "DMZ link authenticated".
+#
+# Notes
+#   - Link-client mode is auto-detected: any non-empty
+#     STRATA_DMZ_ENDPOINTS turns it on. There is no separate _MODE
+#     switch.
+#   - PSK and HMAC values are base64 (`openssl rand -base64 32`),
+#     NOT hex. Hex strings happen to be valid base64 but yield half
+#     the entropy — don't mix them up.
+#   - STRATA_NODE_ID must be unique per internal node when running
+#     active/active behind a single DMZ.
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  backend:
+    environment:
+      # Address the backend dials to reach the DMZ link listener.
+      - STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
+
+      # mTLS material issued by the DMZ host's CA. Paths are inside
+      # the container; the host-side files are mounted via `volumes:`
+      # below.
+      - STRATA_DMZ_LINK_CA=/certs/ca.crt
+      - STRATA_DMZ_LINK_TLS_CLIENT_CERT=/certs/client.crt
+      - STRATA_DMZ_LINK_TLS_CLIENT_KEY=/certs/client.key
+
+      # Shared secrets (base64). Provide via .env / --env-file. The
+      # `?required (base64)` form makes compose fail fast if missing.
+      - STRATA_DMZ_LINK_PSK_CURRENT=${STRATA_DMZ_LINK_PSK_CURRENT:?required (base64)}
+      - STRATA_DMZ_EDGE_HMAC_KEYS=${STRATA_DMZ_EDGE_HMAC_KEYS:?required (base64)}
+
+      # Identity advertised over the link. Override per-host.
+      - STRATA_NODE_ID=${STRATA_NODE_ID:-internal-1}
+      - STRATA_CLUSTER_ID=${STRATA_CLUSTER_ID:-strata-cluster-prod}
+
+    volumes:
+      # Read-only mount of the link mTLS material. Adjust the host
+      # path if you store certs elsewhere.
+      - ./certs/dmz:/certs:ro

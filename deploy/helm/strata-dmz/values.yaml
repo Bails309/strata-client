@@ -30,9 +30,9 @@ secrets:
   existingSecret: strata-dmz-secrets
   create: false
   values:
-    operatorToken: ""    # openssl rand -hex 32
-    linkPsks: ""         # current:HEX[,previous:HEX]
-    edgeHmacKey: ""      # openssl rand -hex 32
+    operatorToken: ""    # openssl rand -base64 32
+    linkPsks: ""         # current:BASE64[,previous:BASE64]
+    edgeHmacKey: ""      # openssl rand -base64 32
 
 config:
   nodeId: dmz-1

@@ -39,7 +39,8 @@ Three concrete requirements drove this ADR:
 A fourth, softer requirement: the existing single-binary "monolith"
 deployment must keep working unchanged — DMZ mode is opt-in, gated
 entirely on whether `STRATA_DMZ_*` env is set on the public host and
-whether `STRATA_LINK_*` env is set on the internal host.
+whether `STRATA_DMZ_ENDPOINTS` (plus the matching mTLS / PSK / HMAC
+vars) is set on the internal host.
 
 ## Decision
 

@@ -10,12 +10,15 @@ cd "$(dirname "$0")/../.."
 ENV_FILE=".env.dmz"
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "[e2e] generating ephemeral $ENV_FILE"
-    HEX1=$(openssl rand -hex 32)
-    HEX2=$(openssl rand -hex 32)
-    HEX3=$(openssl rand -hex 32)
-    sed -e "s|REPLACE_ME_OPERATOR_32_BYTES_HEX_OR_LONGER|${HEX1}|" \
-        -e "s|REPLACE_ME_LINK_PSK_HEX_32_BYTES|${HEX2}|g" \
-        -e "s|REPLACE_ME_EDGE_HMAC_HEX_32_BYTES|${HEX3}|" \
+    # Both PSK and HMAC are decoded as base64 by both halves; keys
+    # generated with `-hex` would only have ~half the entropy after
+    # base64-decoding. Use -base64 directly.
+    B64_1=$(openssl rand -base64 32)
+    B64_2=$(openssl rand -base64 32)
+    B64_3=$(openssl rand -base64 32)
+    sed -e "s|REPLACE_ME_OPERATOR_32_BYTES_BASE64|${B64_1}|" \
+        -e "s|REPLACE_ME_LINK_PSK_32_BYTES_BASE64|${B64_2}|g" \
+        -e "s|REPLACE_ME_EDGE_HMAC_32_BYTES_BASE64|${B64_3}|" \
         scripts/dmz/sample.env.dmz > "$ENV_FILE"
 fi
 

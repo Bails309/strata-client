@@ -1,8 +1,12 @@
-# OSV-Scanner configuration for the Rust backend.
+# OSV-Scanner configuration for the Strata workspace.
 #
-# This file lives next to Cargo.lock so that osv-scanner (and the OpenSSF
-# Scorecard `Vulnerabilities` check, which uses osv-scanner under the hood)
-# applies these rules when scanning the Rust dependency graph.
+# This file lives at the workspace root (next to Cargo.lock) so that
+# osv-scanner — and the OpenSSF Scorecard `Vulnerabilities` check, which
+# uses osv-scanner under the hood — picks it up automatically when scanning
+# the Rust dependency graph. osv-scanner only applies an ignore-config when
+# it lives in the same directory as the manifest/lockfile being scanned, so
+# placing this at the workspace root is REQUIRED — a copy under `backend/`
+# would silently be ignored.
 #
 # Reference: https://google.github.io/osv-scanner/configuration/
 

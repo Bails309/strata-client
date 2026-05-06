@@ -1089,7 +1089,7 @@ a friendly name; any `web` connection can attach a bundle via
 
 `certutil` is provided by the `libnss3-tools` apt package, baked into
 the backend image since v1.2.0. PEMs are validated at upload time
-with `rustls-pemfile::certs` + `x509_parser::parse_x509_certificate`
+with `rustls_pki_types::CertificateDer::pem_slice_iter` + `x509_parser::parse_x509_certificate`
 and the parsed `subject` / `not_after` / `fingerprint` (SHA-256 hex,
 colon-separated) are cached on the row so list views never re-parse.
 The PEM column is treated as **public material** (signatures over

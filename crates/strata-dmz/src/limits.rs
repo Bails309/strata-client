@@ -119,6 +119,7 @@ impl PerIpRateLimiter {
     }
 
     /// Total entries across all stripes; for tests and metrics.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.stripes
             .iter()

@@ -25,7 +25,6 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use http::header::{HeaderMap, HeaderName, HeaderValue};
@@ -85,11 +84,6 @@ impl HmacEdgeSigner {
             })
             .collect();
         Self::new(key, link_id, trusted_proxies)
-    }
-
-    /// Return shared trait-object handle suitable for [`crate::proxy::ProxyState`].
-    pub fn into_arc(self) -> Arc<dyn EdgeSigner> {
-        Arc::new(self)
     }
 }
 

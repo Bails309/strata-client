@@ -106,6 +106,7 @@ impl LinkSessionRegistry {
     }
 
     /// Number of currently-linked internal nodes.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.inner
             .lock()
@@ -114,6 +115,7 @@ impl LinkSessionRegistry {
     }
 
     /// True iff no internal nodes are linked.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

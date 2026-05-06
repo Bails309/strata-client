@@ -22,7 +22,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
-use bytes::Bytes;
 use strata_protocol::link::{server_handshake, LinkPeer, ServerHandshakeConfig};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;

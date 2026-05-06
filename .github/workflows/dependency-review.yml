@@ -52,4 +52,4 @@ jobs:
           # - Swatinem/rust-cache is LGPL-3.0; it is a Cargo build cache
           #   helper invoked only during CI.
           allow-dependencies-licenses: >-
-            actions:Swatinem/rust-cache
+            pkg:githubactions/Swatinem/rust-cache

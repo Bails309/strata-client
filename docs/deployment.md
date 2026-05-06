@@ -1687,6 +1687,61 @@ This brings up the **full** internal stack:
 > ingress paths concurrently — the public listener for the corp
 > frontend and the link supervisor for DMZ-relayed traffic.
 
+#### Custom host ports (both edges)
+
+The two frontends are completely independent listeners with their
+own port variables, so you can pin either or both to a non-default
+port. They are usually only different when port 80/443 is already
+in use on the host (a load balancer, another container, IIS, etc.)
+or when the operator wants to deliberately publish on a non-well-
+known port.
+
+| Side | Variable | Default | Set in | Used by |
+|------|----------|---------|--------|---------|
+| Internal-host frontend (HTTPS) | `HTTPS_PORT` | `443` | `.env` | [docker-compose.yml](../docker-compose.yml) |
+| Internal-host frontend (HTTP redirect) | `HTTP_PORT` | `80` | `.env` | [docker-compose.yml](../docker-compose.yml) |
+| DMZ-host frontend (HTTPS) | `DMZ_EDGE_HTTPS_PORT` | `443` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| DMZ-host frontend (HTTP redirect) | `DMZ_EDGE_HTTP_PORT` | `80` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| DMZ-host link listener | `DMZ_LINK_PORT` | `8444` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| DMZ-host operator API (loopback) | `DMZ_OPERATOR_PORT` | `9444` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+
+Example — internal frontend on `:8443`, public DMZ frontend on `:7443`:
+
+```dotenv
+# .env (internal host)
+HTTPS_PORT=8443
+HTTP_PORT=8080
+
+# .env.dmz (DMZ host)
+DMZ_EDGE_HTTPS_PORT=7443
+DMZ_EDGE_HTTP_PORT=7080
+DMZ_LINK_PORT=8444   # do NOT change unless you also update STRATA_DMZ_ENDPOINTS
+```
+
+If you change `DMZ_LINK_PORT` you must also update
+`STRATA_DMZ_ENDPOINTS` on the internal host to match
+(`dmz-host.example.com:<new port>`), otherwise the link supervisor
+will keep dialing the old port and back off.
+
+After changing any port, recreate the affected container(s):
+
+```bash
+# Internal host
+docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.internal.yml \
+  up -d --force-recreate frontend
+
+# DMZ host
+docker compose --env-file .env.dmz \
+  -f docker-compose.dmz-edge.yml \
+  up -d --force-recreate frontend
+```
+
+Remember to update your firewall rules (see
+[Firewall posture](#firewall-posture)) to match the new port
+numbers. The `Internet → dmz-host:443` ALLOW rule becomes
+`Internet → dmz-host:<DMZ_EDGE_HTTPS_PORT>` and so on.
+
 ### A.7.4  Configure split-horizon DNS (or two distinct hostnames)
 
 Two equivalent options — pick one:

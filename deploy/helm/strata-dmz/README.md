@@ -19,9 +19,9 @@ for the operator-facing summary.
 #    Kubernetes Secret. Production deployments should use external-secrets,
 #    sealed-secrets, or vault-injector instead.
 kubectl create secret generic strata-dmz-secrets \
-    --from-literal=operatorToken="$(openssl rand -hex 32)" \
-    --from-literal=linkPsks="current:$(openssl rand -hex 32)" \
-    --from-literal=edgeHmacKey="$(openssl rand -hex 32)"
+    --from-literal=operatorToken="$(openssl rand -base64 32)" \
+    --from-literal=linkPsks="current:$(openssl rand -base64 32)" \
+    --from-literal=edgeHmacKey="$(openssl rand -base64 32)"
 
 # 2. Load the link mTLS material (server cert + key + CA).
 kubectl create secret generic strata-dmz-link-tls \
@@ -41,10 +41,10 @@ helm install strata-dmz ./deploy/helm/strata-dmz \
 ```
 
 The internal `strata-backend` Helm release should be configured with
-matching `STRATA_LINK_*` env (see the deployment guide). The link
-PSK on the backend must match the `current:` portion of `linkPsks`
-above; the `edgeHmacKey` must be listed in
-`STRATA_LINK_EDGE_HMAC_KEYS`.
+matching `STRATA_DMZ_*` env (see the deployment guide §B.7). The link
+PSK on the backend (`STRATA_DMZ_LINK_PSK_CURRENT`) must equal the
+base64 portion after `current:` in the DMZ's `linkPsks`; the
+`edgeHmacKey` must be listed in `STRATA_DMZ_EDGE_HMAC_KEYS`.
 
 ## NetworkPolicy
 

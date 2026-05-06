@@ -88,7 +88,7 @@ container reports healthy. Public traffic returns `503` from the DMZ.
 
    Expected: a periodic `[link] dialing strata-dmz:8444` log line. If
    absent, the backend isn't in DMZ mode — confirm
-   `STRATA_LINK_ENDPOINTS` is set in its environment.
+   `STRATA_DMZ_ENDPOINTS` is set in its environment.
 
 2. **Confirm the DMZ is listening.** From the DMZ host:
 
@@ -121,10 +121,10 @@ container reports healthy. Public traffic returns `503` from the DMZ.
 or unauthenticated requests to `/links` are succeeding (they should
 all be 401).
 
-1. **Generate a fresh token** (32+ bytes, hex):
+1. **Generate a fresh token** (32+ bytes, base64):
 
    ```bash
-   openssl rand -hex 32
+   openssl rand -base64 32
    ```
 
 2. **Rotate the env var on the DMZ host** in `.env.dmz`:
@@ -165,10 +165,10 @@ the DMZ container).
 > client-IP / TLS metadata bundle. That bundle is then trusted by
 > audit-log writes and rate-limit accounting on the internal side.
 
-1. **Generate a fresh key** (32+ bytes, hex):
+1. **Generate a fresh key** (32+ bytes, base64):
 
    ```bash
-   openssl rand -hex 32
+   openssl rand -base64 32
    ```
 
 2. **Stage the new key as an additional verifier** on the internal
@@ -176,7 +176,7 @@ the DMZ container).
    of currently-trusted keys:
 
    ```env
-   STRATA_LINK_EDGE_HMAC_KEYS=<new-key>,<old-key>
+   STRATA_DMZ_EDGE_HMAC_KEYS=<new-key>,<old-key>
    ```
 
    Restart the backend. It now accepts MACs signed under either key.
@@ -195,7 +195,7 @@ the DMZ container).
 4. **Drop the old key from the internal verifier:**
 
    ```env
-   STRATA_LINK_EDGE_HMAC_KEYS=<new-key>
+   STRATA_DMZ_EDGE_HMAC_KEYS=<new-key>
    ```
 
    Restart the backend. The window during which the leaked key was
@@ -217,10 +217,10 @@ during the strata-link/1.0 handshake was leaked.
 > node — but they would also need a valid client cert (mTLS) to even
 > reach the handshake. Treat this as SEV-1 on principle.
 
-1. **Generate a fresh PSK** (32+ bytes, hex):
+1. **Generate a fresh PSK** (32+ bytes, base64):
 
    ```bash
-   openssl rand -hex 32
+   openssl rand -base64 32
    ```
 
 2. **Stage the new PSK on the DMZ side** as `current` while keeping
@@ -232,10 +232,11 @@ during the strata-link/1.0 handshake was leaked.
 
    Restart the DMZ container.
 
-3. **Update the internal node** to present the new PSK:
+3. **Update the internal node** to present the new PSK. The backend
+   reads one env var per PSK id (`STRATA_DMZ_LINK_PSK_<ID>`):
 
    ```env
-   STRATA_LINK_PSK=<new-psk>
+   STRATA_DMZ_LINK_PSK_CURRENT=<new-psk>
    ```
 
    Restart the backend. Force-reconnect via the admin UI to drop the

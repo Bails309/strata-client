@@ -85,6 +85,7 @@ pub trait EdgeSigner: Send + Sync + 'static {
 
 /// No-op signer — used until Phase 2d. Adds nothing.
 #[derive(Default, Clone, Copy)]
+#[allow(dead_code)]
 pub struct NoopEdgeSigner;
 
 impl EdgeSigner for NoopEdgeSigner {

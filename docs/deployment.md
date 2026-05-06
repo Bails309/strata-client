@@ -988,41 +988,56 @@ DMZ yields no path to Vault, the database, or AD.
 ### The three shared secrets
 
 The DMZ and internal halves are bound together by three independent
-secrets — generate each on a trusted machine, then distribute:
+secrets — generate each on a trusted machine, then distribute. The
+link PSK and edge HMAC key are decoded as **base64** by both halves;
+the operator token is opaque (any sufficiently long random string is
+fine, base64 is shown for consistency).
 
 ```bash
-openssl rand -hex 32  # → STRATA_DMZ_OPERATOR_TOKEN     (DMZ only)
-openssl rand -hex 32  # → STRATA_DMZ_LINK_PSKS current  (BOTH halves)
-openssl rand -hex 32  # → STRATA_DMZ_EDGE_HMAC_KEY      (BOTH halves)
+openssl rand -base64 32  # → STRATA_DMZ_OPERATOR_TOKEN     (DMZ only, opaque)
+openssl rand -base64 32  # → STRATA_DMZ_LINK_PSKS current  (BOTH halves, base64)
+openssl rand -base64 32  # → STRATA_DMZ_EDGE_HMAC_KEY      (BOTH halves, base64)
 ```
 
 | Secret | Purpose | Lives on |
 |---|---|---|
 | `STRATA_DMZ_OPERATOR_TOKEN` | Bearer for the management API on `127.0.0.1:9444` (status, link kick) | DMZ only |
-| `STRATA_DMZ_LINK_PSKS` (`current:HEX[,previous:HEX]`) | Internal proves identity to DMZ. The `previous:` slot exists for rotation. | DMZ |
-| `STRATA_LINK_PSK` | Same hex as DMZ's `current:` value | Internal |
+| `STRATA_DMZ_LINK_PSKS` (`current:BASE64[,previous:BASE64]`) | Internal proves identity to DMZ. The `previous:` slot exists for rotation. | DMZ |
+| `STRATA_DMZ_LINK_PSK_CURRENT` | Same base64 as DMZ's `current:` value (one env var per id) | Internal |
 | `STRATA_DMZ_EDGE_HMAC_KEY` | DMZ signs `x-strata-edge-*` request-attribution headers | DMZ |
-| `STRATA_LINK_EDGE_HMAC_KEYS` | Internal verifies them; comma-separated multi-key list during rotation | Internal |
+| `STRATA_DMZ_EDGE_HMAC_KEYS` | Internal verifies them; comma-separated multi-key list during rotation | Internal |
 
 Generate each independently — never derive one from another and never
 store all three in the same file.
 
 ---
 
-## Walkthrough A — Docker Compose (single-host DMZ)
+## Walkthrough A — Docker Compose (single-host evaluation)
 
-This walkthrough takes you from a clean checkout to a live two-host
-deployment. Use it for evaluation, single-host production, or as a
-reference when adapting to your config-management system.
+This walkthrough takes you from a clean checkout to a live
+split-topology deployment running on **one host** (everything in
+Docker on the same machine). It is the fastest way to evaluate the
+DMZ mode end-to-end. For a true two-host production deployment, see
+[Walkthrough A.5 — Two-host bare-metal](#walkthrough-a5--two-host-bare-metal-no-helm)
+or [Walkthrough B — Kubernetes](#walkthrough-b--kubernetes-helm-chart).
 
-### A.1  On `dmz-host` — issue mTLS material
+> **What the overlay does for you.** The compose overlay
+> [docker-compose.dmz.yml](../docker-compose.dmz.yml) brings up
+> *both* halves on the same docker network: a `strata-dmz` service
+> on the public side, and the existing `backend` service
+> reconfigured into link-client mode. There is **no separate
+> internal host** to configure manually — the overlay injects the
+> right `STRATA_DMZ_*` env vars into the backend container directly
+> from `.env.dmz`. Steps A.1–A.3 below are everything you need.
+
+### A.1  Issue mTLS material
 
 For evaluation, the repo ships a test-cert generator:
 
 ```bash
 git clone <repo-url> strata-client
 cd strata-client
-./scripts/dmz/gen-test-certs.sh        # writes ./certs/{ca,server,client,public}.{crt,key}
+./scripts/dmz/gen-test-certs.sh        # writes ./certs/dmz/{ca,server,client,public}.{crt,key}
 ```
 
 For **production**, replace those files with material from your
@@ -1031,8 +1046,14 @@ the DNS name the internal host will dial; the link client cert MUST
 have `extendedKeyUsage = clientAuth`. The public cert (`public.crt`/
 `public.key`) MUST chain to a CA browsers already trust.
 
+> The compose overlay [docker-compose.dmz.yml](../docker-compose.dmz.yml)
+> mounts `./certs/dmz` into both containers at `/certs`, so the
+> directory name matters. Keep the files under `certs/dmz/` (not
+> `certs/`); the top-level `certs/` directory is reserved for the
+> frontend's nginx TLS material.
+
 ```
-./certs/
+./certs/dmz/
 ├── ca.crt           # link-CA root (operator-issued, PRIVATE)
 ├── server.crt       # link server cert (presented by DMZ to internal)
 ├── server.key
@@ -1042,21 +1063,21 @@ have `extendedKeyUsage = clientAuth`. The public cert (`public.crt`/
 └── public.key
 ```
 
-### A.2  On `dmz-host` — populate `.env.dmz`
+### A.2  Populate `.env.dmz`
 
 ```bash
 cp scripts/dmz/sample.env.dmz .env.dmz
 ```
 
 Edit `.env.dmz` and replace each `REPLACE_ME_*` placeholder with the
-hex value from the corresponding `openssl rand -hex 32` invocation
-above. The full file at minimum must contain:
+base64 value from the corresponding `openssl rand -base64 32`
+invocation above. The full file at minimum must contain:
 
 ```env
-STRATA_DMZ_OPERATOR_TOKEN=<hex>
-STRATA_DMZ_LINK_PSKS=current:<hex>
-STRATA_DMZ_LINK_PSK_CURRENT=<same hex>
-STRATA_DMZ_EDGE_HMAC_KEY=<hex>
+STRATA_DMZ_OPERATOR_TOKEN=<base64>
+STRATA_DMZ_LINK_PSKS=current:<base64>
+STRATA_DMZ_LINK_PSK_CURRENT=<same base64>
+STRATA_DMZ_EDGE_HMAC_KEY=<base64>
 STRATA_DMZ_CLUSTER_ID=strata-cluster-prod
 STRATA_DMZ_NODE_ID=dmz-1
 DMZ_PUBLIC_PORT=8443
@@ -1066,23 +1087,39 @@ DMZ_OPERATOR_PORT=9444
 
 Lock down the file: `chmod 600 .env.dmz`.
 
-### A.3  On `dmz-host` — bring up the DMZ stack
+> **Important on this single-host setup:** the overlay relies on
+> `STRATA_DMZ_LINK_PSK_CURRENT` (and the matching `current:` entry
+> inside `STRATA_DMZ_LINK_PSKS`) being byte-identical — the DMZ side
+> reads the comma-separated map, the backend side reads the
+> per-id env var. They must hold the same base64 value.
+
+> **Single-host dev only:** in production the DMZ runs on its own
+> host, so `DMZ_PUBLIC_PORT=8443` is fine. If you bring the DMZ
+> overlay up on the **same** host that already runs the regular
+> Strata stack, the frontend's nginx (`HTTPS_PORT`, default `8443`)
+> will already own that port. Set `DMZ_PUBLIC_PORT=7443` (or any
+> free port) in `.env.dmz` to avoid the bind collision; the link and
+> operator ports are unaffected.
+
+### A.3  Bring up the DMZ stack
 
 ```bash
 docker compose --env-file .env.dmz \
     -f docker-compose.yml \
     -f docker-compose.dmz.yml \
-    up -d --build strata-dmz
+    up -d --build --force-recreate strata-dmz backend
 
-docker compose ps strata-dmz
+docker compose ps strata-dmz backend
 docker compose logs -f strata-dmz   # confirm "public listener up", "link listener up"
+docker compose logs -f backend  | grep -iE 'link|dmz'
+#    expect: "DMZ link authenticated", "h2 serve ready"
 ```
 
 The DMZ container exposes three ports:
 
 | Port  | Purpose | Reachability |
 |-------|---------|--------------|
-| 8443  | Public HTTPS | Internet (or CDN edge) |
+| 8443  | Public HTTPS (mapped to `${DMZ_PUBLIC_PORT}` on the host) | Internet (or CDN edge) |
 | 8444  | Link listener (the internal node dials in here) | **Internal network only** |
 | 9444  | Operator API (status, links, disconnect) | **Loopback or management VLAN only** |
 
@@ -1090,62 +1127,24 @@ Sanity-check that the link listener answers and the operator API
 demands a token:
 
 ```bash
-openssl s_client -connect dmz-host:8444 -showcerts </dev/null 2>/dev/null | head -3
+openssl s_client -connect localhost:8444 -showcerts </dev/null 2>/dev/null | head -3
 curl -ks https://127.0.0.1:9444/status                                      # → 401
-curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"    # → 200, links_up:0
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"    # → 200, links_up:1
 ```
 
-### A.4  On `internal-host` — distribute the link material
+### A.4  Verify end-to-end
 
-Copy from `dmz-host` to `internal-host` over a secure channel:
-
-```
-ca.crt          # link-CA root (the same file used by DMZ)
-client.crt      # link client cert
-client.key      # link client key
-```
-
-The link **PSK** and **edge HMAC key** travel out-of-band (e.g. via
-your secret manager). They are NEVER copied via the same channel as
-the certs.
-
-### A.5  On `internal-host` — extend the backend env
-
-Append to the existing backend `.env`:
-
-```env
-STRATA_DMZ_MODE=link-client
-STRATA_LINK_ENDPOINTS=dmz-host.example.com:8444
-STRATA_LINK_TLS_CA=/certs/ca.crt
-STRATA_LINK_TLS_CLIENT_CERT=/certs/client.crt
-STRATA_LINK_TLS_CLIENT_KEY=/certs/client.key
-STRATA_LINK_PSK=<same hex as DMZ's current:HEX>
-STRATA_LINK_EDGE_HMAC_KEYS=<same hex as STRATA_DMZ_EDGE_HMAC_KEY>
-STRATA_LINK_NODE_ID=internal-1
-STRATA_LINK_CLUSTER_ID=strata-cluster-prod
-```
-
-Restart the backend:
-
-```bash
-docker compose up -d backend
-docker compose logs -f backend | grep -i "link\|dmz"
-# expect: "DMZ link authenticated", "h2 serve ready"
-```
-
-### A.6  Verify end-to-end
-
-On `dmz-host`:
+Replace `$TOKEN` with the value of `STRATA_DMZ_OPERATOR_TOKEN`:
 
 ```bash
 curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq
 # → {"links_up": 1, "links_total": 1, "node_id": "dmz-1", ...}
 ```
 
-From an external machine:
+And hit the public surface (substituting `${DMZ_PUBLIC_PORT}` for `7443`/`8443`):
 
 ```bash
-curl https://strata.example.com/api/health
+curl -ks https://localhost:${DMZ_PUBLIC_PORT}/api/health
 # → 200 OK, served via the link tunnel
 ```
 
@@ -1161,12 +1160,118 @@ and confirms the management API rejects unauthenticated requests.
 
 ---
 
+## Walkthrough A.5 — Two-host bare-metal (no Helm)
+
+For a real production deployment, the DMZ runs on a separate host
+from the backend, with a one-way firewall rule between them. The
+overlay is **not** suitable here because it expects both services on
+the same docker network. Use this walkthrough instead.
+
+### A.5.1  On `dmz-host` — issue mTLS material
+
+Identical to [A.1](#a1--issue-mtls-material). Place files under
+`./certs/dmz/`.
+
+### A.5.2  On `dmz-host` — run only the DMZ container
+
+Do **not** apply the full `docker-compose.dmz.yml` overlay (it would
+also try to start `backend` on the DMZ host). Instead, copy just the
+`strata-dmz` service block into a standalone `docker-compose.yml` on
+the DMZ host, point the volume at the cert directory, and create
+`.env.dmz` exactly as in [A.2](#a2--populate-envdmz).
+
+Bring it up:
+
+```bash
+docker compose --env-file .env.dmz up -d --build strata-dmz
+docker compose logs -f strata-dmz
+```
+
+### A.5.3  On `internal-host` — distribute the link material
+
+Copy from `dmz-host` to `internal-host` over a secure channel:
+
+```
+ca.crt          # link-CA root (the same file used by DMZ)
+client.crt      # link client cert
+client.key      # link client key
+```
+
+The link **PSK** and **edge HMAC key** travel out-of-band (e.g. via
+your secret manager). They are NEVER copied via the same channel as
+the certs.
+
+### A.5.4  On `internal-host` — wire the backend env
+
+The backend auto-detects link-client mode whenever
+`STRATA_DMZ_ENDPOINTS` is non-empty — there is no separate `_MODE`
+switch. PSK and HMAC values are **base64**, matching what the DMZ
+side reads from `STRATA_DMZ_LINK_PSKS` and `STRATA_DMZ_EDGE_HMAC_KEY`.
+
+The stock [docker-compose.yml](../docker-compose.yml) does **not**
+forward `STRATA_DMZ_*` env vars to the backend container. You must
+either (a) extend the `backend.environment:` block in your
+compose file, or (b) maintain a tiny site-local overlay. Option (b)
+([`docker-compose.internal.yml`](#)) is recommended:
+
+```yaml
+# docker-compose.internal.yml — site-local overlay
+services:
+  backend:
+    environment:
+      - STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
+      - STRATA_DMZ_LINK_CA=/certs/ca.crt
+      - STRATA_DMZ_LINK_TLS_CLIENT_CERT=/certs/client.crt
+      - STRATA_DMZ_LINK_TLS_CLIENT_KEY=/certs/client.key
+      - STRATA_DMZ_LINK_PSK_CURRENT=${STRATA_DMZ_LINK_PSK_CURRENT:?required (base64)}
+      - STRATA_DMZ_EDGE_HMAC_KEYS=${STRATA_DMZ_EDGE_HMAC_KEYS:?required (base64)}
+      - STRATA_NODE_ID=internal-1
+      - STRATA_CLUSTER_ID=strata-cluster-prod
+    volumes:
+      - ./certs/dmz:/certs:ro
+```
+
+Provide the two `?required` values via your existing backend `.env`
+(or a separate `--env-file`):
+
+```env
+STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
+STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as STRATA_DMZ_EDGE_HMAC_KEY>
+```
+
+Restart the backend with both compose files applied:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.internal.yml \
+    up -d --force-recreate backend
+docker compose logs -f backend | grep -iE 'link|dmz'
+# expect: "DMZ link authenticated", "h2 serve ready"
+```
+
+### A.5.5  Verify end-to-end
+
+From `dmz-host`:
+
+```bash
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq
+# → {"links_up": 1, "links_total": 1, "node_id": "dmz-1", ...}
+```
+
+From an external machine:
+
+```bash
+curl https://strata.example.com/api/health
+# → 200 OK, served via the link tunnel
+```
+
+---
+
 ## Walkthrough B — Kubernetes (Helm chart)
 
 This walkthrough provisions the DMZ side of the split using the
 reference chart at [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/).
 The internal `strata-backend` release uses the existing chart
-unchanged plus the `STRATA_LINK_*` env vars from §A.5.
+unchanged plus the `STRATA_DMZ_*` env vars from §B.7.
 
 ### B.1  Pre-flight
 
@@ -1194,12 +1299,15 @@ or a `vault-injector` annotation flow.
 
 ```bash
 kubectl -n strata-dmz create secret generic strata-dmz-secrets \
-    --from-literal=operatorToken="$(openssl rand -hex 32)" \
-    --from-literal=linkPsks="current:$(openssl rand -hex 32)" \
-    --from-literal=edgeHmacKey="$(openssl rand -hex 32)"
+    --from-literal=operatorToken="$(openssl rand -base64 32)" \
+    --from-literal=linkPsks="current:$(openssl rand -base64 32)" \
+    --from-literal=edgeHmacKey="$(openssl rand -base64 32)"
 ```
 
-Capture the values for the internal release:
+Capture the values for the internal release. Note that
+`linkPsks` is a comma-separated `id:base64` map; the internal side
+needs the bare base64 portion (without the `current:` prefix), and
+the edge HMAC key passes through unchanged:
 
 ```bash
 PSK=$(kubectl -n strata-dmz get secret strata-dmz-secrets \
@@ -1329,30 +1437,35 @@ curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"     # �
 
 ### B.7  Wire the internal release to the DMZ
 
-In your existing `strata-backend` Helm release, add to its values:
+In your existing `strata-backend` Helm release, add to its values.
+The backend auto-detects link-client mode whenever
+`STRATA_DMZ_ENDPOINTS` is non-empty — there is no separate `_MODE`
+switch. PSK and HMAC values are **base64** and must match the DMZ
+side byte-for-byte.
 
 ```yaml
 extraEnv:
-  - name: STRATA_DMZ_MODE
-    value: link-client
-  - name: STRATA_LINK_ENDPOINTS
+  - name: STRATA_DMZ_ENDPOINTS
     value: strata-dmz.strata-dmz.svc.cluster.local:8444   # if same cluster
     # …or the externally-resolvable DMZ DNS if cross-cluster
-  - name: STRATA_LINK_TLS_CA
+  - name: STRATA_DMZ_LINK_CA
     value: /link/ca.crt
-  - name: STRATA_LINK_TLS_CLIENT_CERT
+  - name: STRATA_DMZ_LINK_TLS_CLIENT_CERT
     value: /link/client.crt
-  - name: STRATA_LINK_TLS_CLIENT_KEY
+  - name: STRATA_DMZ_LINK_TLS_CLIENT_KEY
     value: /link/client.key
-  - name: STRATA_LINK_PSK
+  # One env var per PSK id advertised by the DMZ side. To accept
+  # the DMZ's `current:` PSK, set STRATA_DMZ_LINK_PSK_CURRENT.
+  # During rotation, also set STRATA_DMZ_LINK_PSK_PREVIOUS, etc.
+  - name: STRATA_DMZ_LINK_PSK_CURRENT
     valueFrom:
       secretKeyRef: { name: strata-link-secrets, key: psk }
-  - name: STRATA_LINK_EDGE_HMAC_KEYS
+  - name: STRATA_DMZ_EDGE_HMAC_KEYS
     valueFrom:
       secretKeyRef: { name: strata-link-secrets, key: edgeHmacKeys }
-  - name: STRATA_LINK_NODE_ID
+  - name: STRATA_NODE_ID
     value: internal-1
-  - name: STRATA_LINK_CLUSTER_ID
+  - name: STRATA_CLUSTER_ID
     value: strata-cluster-prod
 
 extraVolumes:
@@ -1427,7 +1540,7 @@ is what makes a full RCE on the DMZ unable to reach Vault / DB / AD.
 
 ## Production checklist
 
-- [ ] Three secrets generated independently with `openssl rand -hex 32`
+- [ ] Three secrets generated independently with `openssl rand -base64 32`
       (operator token, link PSK, edge HMAC key) — none reused, none
       stored in the same file.
 - [ ] mTLS material issued by your operator-controlled CA (not the

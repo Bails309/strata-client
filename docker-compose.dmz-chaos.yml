@@ -43,7 +43,7 @@ services:
   # the container is up.
   backend:
     environment:
-      - STRATA_LINK_ENDPOINTS=toxiproxy:8444
+      - STRATA_DMZ_ENDPOINTS=toxiproxy:8444
     depends_on:
       toxiproxy:
         condition: service_healthy

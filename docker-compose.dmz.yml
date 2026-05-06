@@ -61,7 +61,7 @@ services:
       - STRATA_DMZ_LINK_BIND=0.0.0.0:8444
       - STRATA_DMZ_LINK_TLS_CERT=/certs/server.crt
       - STRATA_DMZ_LINK_TLS_KEY=/certs/server.key
-      - STRATA_DMZ_LINK_TLS_CA=/certs/ca.crt
+      - STRATA_DMZ_LINK_CA_BUNDLE=/certs/ca.crt
       - STRATA_DMZ_OPERATOR_BIND=0.0.0.0:9444
       - STRATA_DMZ_OPERATOR_TOKEN=${STRATA_DMZ_OPERATOR_TOKEN:?STRATA_DMZ_OPERATOR_TOKEN required (>=32 bytes)}
       - STRATA_DMZ_LINK_PSKS=${STRATA_DMZ_LINK_PSKS:?STRATA_DMZ_LINK_PSKS required, format current:HEX[,previous:HEX]}
@@ -80,23 +80,27 @@ services:
           cpus: "1"
           memory: 256M
 
-  # Backend, in DMZ mode. Drops its public listener and instead
-  # dials out to the DMZ link port. The existing service definition
-  # in docker-compose.yml is extended via the env additions below.
+  # Backend, in DMZ link-client mode. Setting STRATA_DMZ_ENDPOINTS
+  # to a non-empty value flips the backend into link-client mode
+  # (see backend/src/services/dmz_link/config.rs); the public
+  # listener is dropped and the node dials out to the DMZ link port.
   backend:
     networks:
       - dmz-link
     environment:
-      # Tell the backend to stop binding the public port and dial out.
-      - STRATA_DMZ_MODE=link-client
-      - STRATA_LINK_ENDPOINTS=strata-dmz:8444
-      - STRATA_LINK_TLS_CA=/certs/ca.crt
-      - STRATA_LINK_TLS_CLIENT_CERT=/certs/client.crt
-      - STRATA_LINK_TLS_CLIENT_KEY=/certs/client.key
-      - STRATA_LINK_PSK=${STRATA_DMZ_LINK_PSK_CURRENT:?required}
-      - STRATA_LINK_EDGE_HMAC_KEYS=${STRATA_DMZ_EDGE_HMAC_KEY:?required}
-      - STRATA_LINK_NODE_ID=${STRATA_LINK_NODE_ID:-internal-1}
-      - STRATA_LINK_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-test}
+      - STRATA_DMZ_ENDPOINTS=strata-dmz:8444
+      - STRATA_DMZ_LINK_CA=/certs/ca.crt
+      - STRATA_DMZ_LINK_TLS_CLIENT_CERT=/certs/client.crt
+      - STRATA_DMZ_LINK_TLS_CLIENT_KEY=/certs/client.key
+      # Per-id PSK env vars (base64). The DMZ side (STRATA_DMZ_LINK_PSKS)
+      # advertises ids; this side must export STRATA_DMZ_LINK_PSK_<ID>
+      # for each one it knows about. We forward at least the "current"
+      # id; rotation can be handled by adding _PREVIOUS etc. via the
+      # standard compose `environment:` mechanism.
+      - STRATA_DMZ_LINK_PSK_CURRENT=${STRATA_DMZ_LINK_PSK_CURRENT:?required (base64)}
+      - STRATA_DMZ_EDGE_HMAC_KEYS=${STRATA_DMZ_EDGE_HMAC_KEY:?required (base64)}
+      - STRATA_NODE_ID=${STRATA_LINK_NODE_ID:-internal-1}
+      - STRATA_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-test}
     volumes:
       - ./certs/dmz:/certs:ro
 

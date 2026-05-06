@@ -1584,12 +1584,12 @@ flowchart LR
     subgraph DMZHost["DMZ host"]
         DFE["frontend (nginx)<br/><sub>:443 public — SPA assets<br/>/api/* + /ws → strata-dmz</sub>"]
         SDMZ["strata-dmz<br/><sub>:8443 internal proxy<br/>:8444 mTLS link listener</sub>"]
-        DFE -->|"HTTPS over private<br/>docker network"| SDMZ
+        DFE -->|"HTTPS / WS reverse-proxy<br/>(docker net)"| SDMZ
     end
 
     Corp -->|"corp DNS:<br/>strata.corp.example.com<br/>→ internal-host LAN IP"| IFE
     Net -->|"public DNS:<br/>strata.example.com<br/>→ dmz-host public IP"| DFE
-    BE -.->|"mTLS link<br/>(outbound only,<br/>internal → DMZ:8444)"| SDMZ
+    BE -.->|"outbound mTLS / WSS link<br/>(internal initiates,<br/>internal → DMZ:8444)"| SDMZ
 ```
 
 > **Trust model invariant.** The two ingress paths land in the same

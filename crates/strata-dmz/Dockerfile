@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------------------
 
 # -- builder ---------------------------------------------------------------
-FROM rust:1.95-bookworm AS builder
+FROM rust:1.95-bookworm@sha256:adab7941580c74513aa3347f2d2a1f975498280743d29ec62978ba12e3540d3a AS builder
 WORKDIR /src
 
 # Workspace context — copy the bits the DMZ crate actually needs.
@@ -27,7 +27,7 @@ RUN cargo build --release -p strata-dmz \
  && strip target/release/strata-dmz
 
 # -- runtime ---------------------------------------------------------------
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:e2d29aec8061843706b7e484c444f78fafb05bfe47745505252b1769a05d14f1 AS runtime
 COPY --from=builder /src/target/release/strata-dmz /usr/local/bin/strata-dmz
 
 USER nonroot:nonroot

@@ -64,8 +64,20 @@ function defaultFormatFor(protocol: string | undefined): SnippetFormat {
  * already URL-safe — but we still wrap them in single quotes so an
  * exotic origin (e.g. one with `&` in a query string from a future
  * change) cannot break out of the command.
+ *
+ * When `insecure` is true the snippet adds the per-tool flag that
+ * skips TLS verification — needed when the Strata server presents
+ * a self-signed or internal-CA cert that the remote host doesn't
+ * trust. PowerShell uses the ServicePointManager hack instead of
+ * `-SkipCertificateCheck` so the line works on both Windows
+ * PowerShell 5.1 (default on Windows 10/11/Server) and PowerShell 7+.
  */
-function snippetFor(format: SnippetFormat, url: string, filename: string): string {
+function snippetFor(
+  format: SnippetFormat,
+  url: string,
+  filename: string,
+  insecure: boolean,
+): string {
   // Escape any single quote in the filename so it survives single-
   // quoted shell interpolation: `O'Brien.pdf` -> `O'\''Brien.pdf`.
   const safeFilename = filename.replace(/'/g, "'\\''");
@@ -77,12 +89,20 @@ function snippetFor(format: SnippetFormat, url: string, filename: string): strin
       // -L: follow redirects (the SPA may redirect /api/files/* in future).
       // -O: write to a file rather than stdout.
       // -J: honour Content-Disposition for the filename.
-      return `curl -fLOJ '${url}'`;
+      // -k: skip TLS cert verification (only when `insecure`).
+      return insecure ? `curl -kfLOJ '${url}'` : `curl -fLOJ '${url}'`;
     case "wget":
       // --content-disposition: same intent as curl -J.
-      return `wget --content-disposition '${url}'`;
+      // --no-check-certificate: skip TLS cert verification.
+      return insecure
+        ? `wget --no-check-certificate --content-disposition '${url}'`
+        : `wget --content-disposition '${url}'`;
     case "powershell":
-      return `Invoke-WebRequest -Uri '${url}' -OutFile '${safeFilename}'`;
+      // ServicePointManager callback works on both Windows PowerShell
+      // 5.1 and PowerShell 7+; -SkipCertificateCheck is 7+ only.
+      return insecure
+        ? `[Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; Invoke-WebRequest -Uri '${url}' -OutFile '${safeFilename}'`
+        : `Invoke-WebRequest -Uri '${url}' -OutFile '${safeFilename}'`;
   }
 }
 
@@ -109,6 +129,13 @@ export default function QuickShare({
   // overridable via the dropdown — e.g. an SSH user on Windows might
   // want the PowerShell variant instead of curl.
   const [format, setFormat] = useState<SnippetFormat>(() => defaultFormatFor(protocol));
+  // Skip TLS verification in shell snippets. Needed when the Strata
+  // server presents a self-signed / internal-CA cert that the remote
+  // host doesn't trust — otherwise curl/wget/Invoke-WebRequest fail
+  // before the download even starts. Off by default; the user can
+  // opt-in per session and we don't persist it because the answer
+  // depends on which target the URL is being pasted into.
+  const [insecure, setInsecure] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // If the active session changes (different protocol) reset the
@@ -163,9 +190,9 @@ export default function QuickShare({
   const buildSnippet = useCallback(
     (file: QuickShareFile) => {
       const url = `${window.location.origin}${file.download_url}`;
-      return snippetFor(format, url, file.filename);
+      return snippetFor(format, url, file.filename, insecure);
     },
-    [format]
+    [format, insecure],
   );
 
   const copyUrl = useCallback(
@@ -325,6 +352,28 @@ export default function QuickShare({
           />
         </div>
       </div>
+
+      {/* Skip TLS verification toggle. Disabled for the bare URL
+          variant because there's no flag to inject — the user's
+          browser handles cert validation. */}
+      {format !== "url" && (
+        <div className="px-4 py-2 border-b border-white/5 flex items-center gap-2">
+          <input
+            id="quick-share-insecure"
+            type="checkbox"
+            checked={insecure}
+            onChange={(e) => setInsecure(e.target.checked)}
+            className="shrink-0 cursor-pointer"
+          />
+          <label
+            htmlFor="quick-share-insecure"
+            className="text-[0.65rem] text-txt-secondary cursor-pointer leading-tight"
+            title="Adds -k / --no-check-certificate / ServicePointManager bypass so the snippet works against a Strata server with a self-signed or internal-CA TLS cert."
+          >
+            Skip TLS verification (self-signed / internal CA)
+          </label>
+        </div>
+      )}
 
       {/* File list */}
       <div className="flex-1 overflow-auto p-4">

@@ -1212,23 +1212,21 @@ The stock [docker-compose.yml](../docker-compose.yml) does **not**
 forward `STRATA_DMZ_*` env vars to the backend container. The repo
 ships a ready-to-use site-local overlay,
 [docker-compose.internal.yml](../docker-compose.internal.yml), that
-appends the link env block and mounts the mTLS material. Edit the
-two values that are site-specific:
-
-- `STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444` — your DMZ host.
-- `STRATA_NODE_ID` / `STRATA_CLUSTER_ID` — override per host as needed.
-
-The remaining `STRATA_DMZ_*` lines are correct as shipped; the PSK
-and HMAC values are pulled from the environment so they never live
-in the compose file.
-
-Provide the two `?required` values via your existing backend `.env`
-(or a separate `--env-file`):
+appends the link env block and mounts the mTLS material. The overlay
+keeps cert paths and node/cluster IDs at sensible defaults, so the
+only values you need to set live in `.env`:
 
 ```env
+STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
 STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
 STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as STRATA_DMZ_EDGE_HMAC_KEY>
+# Optional per-host overrides:
+# STRATA_NODE_ID=internal-1
+# STRATA_CLUSTER_ID=strata-cluster-prod
 ```
+
+All three are marked `?required` in the overlay, so compose fails fast
+if any is missing.
 
 Restart the backend with both compose files applied:
 

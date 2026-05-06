@@ -24,10 +24,10 @@
 #      host's CA. Place them under ./certs/dmz/ on the internal host.
 #   2. Add the matching base64 secrets to your .env (or a dedicated
 #      --env-file):
+#         STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
 #         STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
 #         STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as DMZ's STRATA_DMZ_EDGE_HMAC_KEY>
-#   3. Edit STRATA_DMZ_ENDPOINTS below to the DMZ host's hostname:port.
-#   4. Bring the backend up with both compose files applied:
+#   3. Bring the backend up with both compose files applied:
 #         docker compose -f docker-compose.yml \
 #                        -f docker-compose.internal.yml \
 #                        up -d --force-recreate backend
@@ -49,7 +49,9 @@ services:
   backend:
     environment:
       # Address the backend dials to reach the DMZ link listener.
-      - STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
+      # Site-specific — set in .env (host:port, comma-separated for
+      # multiple DMZ peers).
+      - STRATA_DMZ_ENDPOINTS=${STRATA_DMZ_ENDPOINTS:?required (e.g. dmz-host.example.com:8444)}
 
       # mTLS material issued by the DMZ host's CA. Paths are inside
       # the container; the host-side files are mounted via `volumes:`

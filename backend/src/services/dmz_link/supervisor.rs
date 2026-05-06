@@ -61,16 +61,38 @@ async fn run_endpoint(
     loop {
         if shutdown.is_cancelled() {
             registry.set_state(&url, LinkState::Stopped, None);
+            registry.clear_active_token(&url);
             return;
         }
+
+        // Per-cycle cancellation token. Inherits from the global
+        // shutdown so a graceful shutdown still cascades, but can
+        // ALSO be cancelled by `LinkRegistry::kick` (admin-requested
+        // reconnect) to drop just this connection without affecting
+        // the rest of the process.
+        let cycle_tok = shutdown.child_token();
+        registry.register_active_token(&url, cycle_tok.clone());
 
         // ── dial ────────────────────────────────────────────────────
         registry.set_state(&url, LinkState::Connecting, None);
         let stream = tokio::select! {
             biased;
-            _ = shutdown.cancelled() => {
-                registry.set_state(&url, LinkState::Stopped, None);
-                return;
+            _ = cycle_tok.cancelled() => {
+                registry.clear_active_token(&url);
+                if shutdown.is_cancelled() {
+                    registry.set_state(&url, LinkState::Stopped, None);
+                    return;
+                }
+                // Kicked while still dialling. Drain the flag and
+                // retry immediately (no failure increment, no sleep).
+                let _ = registry.take_kicked(&url);
+                tracing::info!(endpoint = %url, "DMZ link admin-requested reconnect (during dial)");
+                registry.set_backoff_without_failure(
+                    &url,
+                    "admin-requested reconnect".into(),
+                );
+                backoff.reset();
+                continue;
             }
             r = connector.connect(&endpoint) => r,
         };
@@ -81,6 +103,7 @@ async fn run_endpoint(
                 let msg = format!("dial failed: {e}");
                 tracing::warn!(endpoint = %url, error = %msg, "DMZ link dial failed");
                 registry.set_state(&url, LinkState::Backoff, Some(msg));
+                registry.clear_active_token(&url);
                 let delay = backoff.next_delay(&mut rand::rng());
                 if !sleep_with_cancel(delay, &shutdown).await {
                     registry.set_state(&url, LinkState::Stopped, None);
@@ -104,6 +127,7 @@ async fn run_endpoint(
                 let msg = format!("handshake failed: {e}");
                 tracing::warn!(endpoint = %url, error = %msg, "DMZ link handshake failed");
                 registry.set_state(&url, LinkState::Backoff, Some(msg));
+                registry.clear_active_token(&url);
                 let delay = backoff.next_delay(&mut rand::rng());
                 if !sleep_with_cancel(delay, &shutdown).await {
                     registry.set_state(&url, LinkState::Stopped, None);
@@ -119,16 +143,34 @@ async fn run_endpoint(
         // completes (the on_ready callback flips it to `Up`). This
         // means a stuck h2 layer never falsely advertises readiness
         // to /readyz consumers.
+        //
+        // We pass `cycle_tok` (not the global shutdown) so an admin
+        // "Force reconnect" cancels just this connection and lets
+        // the loop spin a fresh dial; a process-wide shutdown still
+        // works because cycle_tok is a child of `shutdown`.
         let url_for_ready = url.clone();
         let registry_for_ready = registry.clone();
-        let serve_result = serve_h2(stream, handler.clone(), shutdown.clone(), move || {
+        let serve_result = serve_h2(stream, handler.clone(), cycle_tok.clone(), move || {
             registry_for_ready.set_state(&url_for_ready, LinkState::Up, None);
         })
         .await;
 
+        registry.clear_active_token(&url);
+
         if shutdown.is_cancelled() {
             registry.set_state(&url, LinkState::Stopped, None);
             return;
+        }
+
+        // Distinguish admin-requested reconnect from a real
+        // disconnect: kicked links don't increment the failures
+        // counter and skip the backoff sleep so the operator sees
+        // an immediate redial.
+        if registry.take_kicked(&url) {
+            tracing::info!(endpoint = %url, "DMZ link admin-requested reconnect");
+            registry.set_backoff_without_failure(&url, "admin-requested reconnect".into());
+            backoff.reset();
+            continue;
         }
 
         let msg = match serve_result {

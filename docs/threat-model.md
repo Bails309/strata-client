@@ -12,18 +12,19 @@
 
 ### 1.1 Trust boundaries
 
-```
-[ Browser ] ──TLS──▶ [ Nginx (frontend) ] ──HTTP──▶ [ Backend (Rust/Axum) ]
-                                                          │
-                              ┌───────────────────────────┼───────────────────────────┐
-                              ▼                           ▼                           ▼
-                       [ PostgreSQL ]               [ HashiCorp Vault ]        [ guacd pool ]
-                                                                                      │
-                                                                                      ▼
-                                                                           [ Target servers (RDP/VNC/SSH) ]
-                              ▲
-                              │ (LDAP/LDAPS)
-                       [ Active Directory ]
+```mermaid
+flowchart LR
+    Browser([Browser])
+    Browser -->|TLS| Nginx
+    Nginx["Nginx (frontend)"]
+    Nginx -->|HTTP| Backend
+    Backend["Backend (Rust / Axum)"]
+    Backend --> Postgres([PostgreSQL])
+    Backend --> Vault([HashiCorp Vault])
+    Backend --> Guacd([guacd pool])
+    Guacd --> Targets([Target servers (RDP/VNC/SSH)])
+    AD([Active Directory])
+    AD -->|LDAP / LDAPS| Backend
 ```
 
 ### 1.2 Trust zones
@@ -218,13 +219,14 @@
 
 ### 6.1 Updated decomposition
 
-```
-[ Browser ] ──TLS──▶ [ DMZ NODE (strata-dmz) ] ◀──mTLS link── [ Backend (Rust/Axum) ]
-                              │  (no business secrets)               │
-                              │                                       ▼
-                              ▼                              [ Vault, PG, AD, guacd, … ]
-                       (terminates TLS, signs edge headers,
-                        proxies over h2-in-mTLS reverse tunnel)
+```mermaid
+flowchart LR
+    Browser([Browser])
+    Browser -->|TLS| DMZ
+    DMZ["DMZ NODE (strata-dmz)<br/><sub>terminates TLS<br/>signs edge headers<br/>proxies over h2-in-mTLS reverse tunnel<br/>no business secrets</sub>"]
+    Backend["Backend (Rust / Axum)"]
+    Backend -.->|"mTLS link (outbound)"| DMZ
+    Backend --> Internal([Vault, Postgres, AD, guacd, …])
 ```
 
 ### 6.2 New trust zones

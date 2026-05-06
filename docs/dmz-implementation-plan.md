@@ -43,39 +43,22 @@ zero-secret-overlap** between the two roles.
 
 ## 2. Architecture
 
-```
-                              Internet
-                                  │
-                                  ▼
-                  ┌──────────────────────────────┐
-                  │ DMZ NODE  (strata-dmz)       │
-                  │  • TLS termination           │
-                  │  • Rate limit + abuse guard  │
-                  │  • SPA static serving        │
-                  │  • OIDC redirect handler     │
-                  │  • HTTP/WS → frame adapter   │
-                  │  • mTLS server (link side)   │
-                  └────────────┬─────────────────┘
-                               │
-                  ┌────────────┴─────────────────┐
-                  │  REVERSE TUNNEL              │
-                  │  Outbound from internal:     │
-                  │  • TLS 1.3 + mTLS            │
-                  │  • App-layer challenge-resp  │
-                  │  • HTTP/2 framing            │
-                  │  • Stream = HTTP request     │
-                  └────────────┬─────────────────┘
-                               │
-                               ▼
-                  ┌──────────────────────────────┐
-                  │ INTERNAL NODE (strata-internal) │
-                  │  • Existing Axum router      │
-                  │  • Existing auth/RBAC        │
-                  │  • Vault, PG, guacd          │
-                  │  • Audit logging             │
-                  │  • Outbound link client      │
-                  │  • Request adapter           │
-                  └──────────────────────────────┘
+```mermaid
+flowchart TB
+    Internet([Internet])
+    Internet --> DMZ
+    subgraph DMZNode["DMZ NODE (strata-dmz)"]
+        DMZ["• TLS termination<br/>• Rate limit + abuse guard<br/>• SPA static serving<br/>• OIDC redirect handler<br/>• HTTP/WS → frame adapter<br/>• mTLS server (link side)"]
+    end
+    subgraph Tunnel["REVERSE TUNNEL (outbound from internal)"]
+        Link["• TLS 1.3 + mTLS<br/>• App-layer challenge-response<br/>• HTTP/2 framing<br/>• Stream = HTTP request"]
+    end
+    subgraph InternalNode["INTERNAL NODE (strata-internal)"]
+        Internal["• Existing Axum router<br/>• Existing auth / RBAC<br/>• Vault, Postgres, guacd<br/>• Audit logging<br/>• Outbound link client<br/>• Request adapter"]
+    end
+    DMZ --- Link
+    Link --- Internal
+    Internal -.->|dials outbound| Link
 ```
 
 ### 2.1 Why HTTP/2-over-mTLS instead of a custom frame protocol

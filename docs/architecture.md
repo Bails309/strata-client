@@ -4,34 +4,23 @@
 
 Strata Client is a microservices system that replaces the legacy Java/Tomcat + AngularJS Apache Guacamole stack with a Rust proxy and React SPA. The core stack runs four containers (frontend/nginx, backend, guacd, Vault); optional profiles add a bundled PostgreSQL instance and additional guacd sidecar instances for horizontal scaling. The backend image (Debian trixie-slim) additionally ships `Xvnc` and `chromium` baked in to support the `web` protocol out of the box; the `vdi` protocol is gated behind the [`docker-compose.vdi.yml`](../docker-compose.vdi.yml) overlay because it requires mounting `/var/run/docker.sock` (= host root).
 
-```
-                          ┌─────────────────────────────────────────────┐
-                          │           Docker Compose Network            │
-                          │           (guac-internal bridge)            │
-                          │                                             │
-  Browser ────HTTPS/WSS──►│  ┌───────────┐        ┌──────────────────┐  │
-                          │  │  frontend  │──/api─►│     backend      │  │
-                          │  │  (nginx)   │        │  (Rust / Axum)   │  │
-                          │  │  :80/:443  │        │   :8080          │  │
-                          │  └───────────┘        └────────┬─────────┘  │
-                          │                           │         │        │
-                          │                     TCP 4822    SQL / HTTP   │
-                          │                           │         │        │
-                          │                    ┌──────▼───┐  ┌──▼─────┐  │
-                          │                    │  guacd   │  │Postgres│  │
-                          │                    │(FreeRDP3 │  │  :5432 │  │
-                          │                    │ +H.264) │  └────────┘  │
-                          │                    ├──────────┤              │
-                          │                    │ guacd-2… │ (opt)        │
-                          │                    └──────────┘              │
-                          │                                             │
-                          │                    ┌──────────┐              │
-                          │                    │  Vault   │              │
-                          │                    │  1.19    │              │
-                          │                    │ (Transit)│              │
-                          │                    └──────────┘              │
-                          │                                             │
-                          └─────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    Browser([Browser])
+    Browser -->|HTTPS / WSS| Frontend
+    subgraph Net["Docker Compose network (guac-internal bridge)"]
+        Frontend["frontend (nginx)<br/><sub>:80 / :443</sub>"]
+        Backend["backend (Rust / Axum)<br/><sub>:8080</sub>"]
+        Guacd["guacd<br/><sub>FreeRDP 3 + H.264</sub>"]
+        Guacd2["guacd-2… (optional sidecars)"]
+        Postgres["PostgreSQL<br/><sub>:5432</sub>"]
+        Vault["Vault 1.19<br/><sub>Transit</sub>"]
+        Frontend -->|/api| Backend
+        Backend -->|TCP 4822| Guacd
+        Backend -.->|TCP 4822| Guacd2
+        Backend -->|SQL| Postgres
+        Backend -->|HTTP| Vault
+    end
 ```
 
 ## Containers
@@ -199,17 +188,18 @@ Alternatively, users can connect to an **external Vault instance** by selecting 
 
 ### Connection Tunnel
 
-```
-Browser                    Backend                   guacd              Target
-  │                          │                         │                  │
-  │──── WS upgrade ─────────►│                         │                  │
-  │                          │── TCP connect ──────────►│                  │
-  │                          │── Guac handshake ───────►│                  │
-  │                          │   (select + connect     │── RDP/SSH/VNC ──►│
-  │                          │    with injected         │                  │
-  │                          │    credentials)          │                  │
-  │◄─── binary frames ──────►│◄── binary frames ──────►│◄────────────────►│
-  │     (bidirectional)      │    (bidirectional)       │                  │
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant BE as Backend
+    participant G as guacd
+    participant T as Target
+    B->>BE: WS upgrade
+    BE->>G: TCP connect (4822)
+    BE->>G: Guac handshake (select + connect with injected creds)
+    G->>T: RDP / SSH / VNC
+    Note over B,T: Bidirectional binary frames<br/>B ⇄ BE ⇄ G ⇄ T
 ```
 
 #### Proxy loop: decoupled sink + bounded channel
@@ -228,32 +218,19 @@ guacd in bursts — users perceive this as rendering freezes, mouse
 
 The actual architecture decouples the sink from the select loop:
 
-```
-           ┌────────────────────────────────────────────────────┐
-           │                  proxy_session()                   │
-           │                                                    │
-           │   ws ── .split() ──► ws_sink   ws_stream           │
-           │                        │           │                │
-           │                        ▼           │                │
-           │                 ┌──────────────┐   │                │
-           │                 │ writer_task  │   │                │
-           │                 │ (tokio::spawn)│  │                │
-           │                 └──────▲───────┘   │                │
-           │                        │           │                │
-           │           mpsc::<Message>(1024)    │                │
-           │                        │           │                │
-           │                        │           ▼                │
-           │   ┌────────────────────┴───────────────────────┐   │
-           │   │           tokio::select! loop               │   │
-           │   │                                              │   │
-           │   │  tcp_read ─► text assembly ─► ws_tx.send   │   │
-           │   │  ws_stream.next() ────────► tcp_write       │   │
-           │   │  kill_rx ───────────────► ws_tx.send(err)   │   │
-           │   │  shared_input_rx ─────────► tcp_write       │   │
-           │   │  ping_interval ───────────► ws_tx.send(ping)│   │
-           │   │  writer_task join ─────► loop exit          │   │
-           │   └─────────────────────────────────────────────┘   │
-           └────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Session["proxy_session()"]
+        WS["ws (axum::WebSocket)"]
+        WS -->|.split()| Sink["ws_sink"]
+        WS -->|.split()| Stream["ws_stream"]
+        Sink --> Writer["writer_task<br/><sub>tokio::spawn</sub>"]
+        Channel(["mpsc::Message(1024)"])
+        SelectLoop["tokio::select! loop<br/><sub>tcp_read → text assembly → ws_tx.send<br/>ws_stream.next() → tcp_write<br/>kill_rx → ws_tx.send(err)<br/>shared_input_rx → tcp_write<br/>ping_interval → ws_tx.send(ping)<br/>writer_task join → loop exit</sub>"]
+        SelectLoop -->|"ws_tx.send"| Channel
+        Channel --> Writer
+        Stream --> SelectLoop
+    end
 ```
 
 - **`ws.split()`** separates the WebSocket into `ws_sink` (owned
@@ -329,25 +306,17 @@ Additional tunnel details:
 As of v0.28.0, RDP H.264 frames travel **end-to-end without a server-side
 transcode step**. The path is:
 
-```
-Windows RDP host (AVC444 enabled)
-    │  (RDPGFX H.264 stream)
-    ▼
-FreeRDP 3 inside guacd
-    │  SurfaceCommand callback (patched)
-    ▼
-guacd display worker
-    │  queues NAL units on guac_display_layer
-    │  emits "4.h264,…" Guacamole instruction on per-frame flush
-    ▼
-WebSocket tunnel (passthrough — backend never decodes)
-    ▼
-Vendored guacamole-common-js 1.6.0 in browser
-    │  4.h264 opcode handler routes NAL units to H264Decoder
-    ▼
-WebCodecs VideoDecoder (hardware-accelerated where available)
-    ▼
-Display canvas
+```mermaid
+flowchart TB
+    Host["Windows RDP host<br/><sub>AVC444 enabled</sub>"]
+    Host -->|"RDPGFX H.264 stream"| FreeRDP
+    FreeRDP["FreeRDP 3 inside guacd"]
+    FreeRDP -->|"SurfaceCommand callback (patched)"| Worker
+    Worker["guacd display worker<br/><sub>queues NAL units on guac_display_layer<br/>emits '4.h264,…' Guacamole instruction</sub>"]
+    Worker -->|"WebSocket tunnel<br/>(passthrough — backend never decodes)"| JS
+    JS["guacamole-common-js 1.6.0 (vendored)<br/><sub>4.h264 opcode handler routes NAL units</sub>"]
+    JS --> Decoder["WebCodecs VideoDecoder<br/><sub>hardware-accelerated where available</sub>"]
+    Decoder --> Canvas([Display canvas])
 ```
 
 The four cooperating components:
@@ -537,58 +506,32 @@ extension is invisible at the wire-protocol layer.
 
 ### Transactional-Email Pipeline
 
-```
-                                                ┌──────────────────────────────┐
-checkout state-change                           │  email subsystem             │
-(routes/user.rs)                                │  services/email/             │
-       │                                        │                              │
-       │  notifications::spawn_dispatch(event)  │  ┌────────────────────────┐  │
-       ├───────────────────────────────────────►│  │ TemplateKey::from(evt) │  │
-       │                                        │  └─────────┬──────────────┘  │
-       ▼                                        │            │                 │
-┌────────────────┐                              │  ┌─────────▼──────────────┐  │
-│ recipients =   │                              │  │ Tera render (.mjml +   │  │
-│ approvers ∪    │                              │  │  .txt.tera) with       │  │
-│ requester ∪    │                              │  │  per-event context    │  │
-│ audit list     │                              │  └─────────┬──────────────┘  │
-└──────┬─────────┘                              │            │                 │
-       │                                        │  ┌─────────▼──────────────┐  │
-       │ filter users.notifications_opt_out     │  │ mrml MJML → HTML       │  │
-       │ (audit-event templates bypass)         │  └─────────┬──────────────┘  │
-       │                                        │            │                 │
-       │  audit: notifications.skipped_opt_out  │  ┌─────────▼──────────────┐  │
-       │                                        │  │ wrap_for_outlook_      │  │
-       ▼                                        │  │  dark_mode (VML)       │  │
-┌─────────────────────┐                         │  └─────────┬──────────────┘  │
-│ INSERT email_       │                         │            │                 │
-│  deliveries (queued)│                         │  ┌─────────▼──────────────┐  │
-│   per recipient     │                         │  │ EmailMessage::builder  │  │
-└──────────┬──────────┘                         │  │  + cid:strata-logo     │  │
-           │                                    │  │  inline attachment     │  │
-           ▼                                    │  └─────────┬──────────────┘  │
-   ┌───────────────┐                            │            │                 │
-   │ SmtpTransport │◄───────────────────────────┘            │                 │
-   │  (lettre 0.11)│                                         │                 │
-   └───────┬───────┘                                         │                 │
-           │ multipart/related (HTML + text + inline image)  │                 │
-           ▼                                                 │                 │
-      ┌─────────┐                                            │                 │
-      │  SMTP   │                                            │                 │
-      │  relay  │                                            │                 │
-      └────┬────┘                                            │                 │
-           │                                                 │                 │
-   ┌───────▼─────────────────┐                               │                 │
-   │ permanent failure (5xx) │ ─► UPDATE status='failed' (no retry)            │
-   │ transient failure       │ ─► UPDATE status='failed', attempts++           │
-   │ success                 │ ─► UPDATE status='sent', sent_at=now()          │
-   └─────────────────────────┘                                                  │
-                                                                                │
-   ┌────────────────────────────────────────────────────────────────────────┐  │
-   │ services/email/worker.rs (background, 30s tick, 60s warm-up)           │  │
-   │   SELECT * FROM email_deliveries                                       │  │
-   │     WHERE status='failed' AND attempts < 3 AND retry_after < now()     │  │
-   │   → re-render → resend → on 3rd failure mark abandoned                 │  │
-   └────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Trigger["checkout state-change<br/><sub>routes/user.rs</sub>"]
+    Trigger -->|"notifications::spawn_dispatch(event)"| Tmpl
+    subgraph EmailSubsystem["email subsystem (services/email/)"]
+        Tmpl["TemplateKey::from(evt)"]
+        Render["Tera render (.mjml + .txt.tera)<br/><sub>per-event context</sub>"]
+        MJML["mrml: MJML → HTML"]
+        Wrap["wrap_for_outlook_dark_mode (VML)"]
+        Builder["EmailMessage::builder<br/><sub>+ cid:strata-logo inline</sub>"]
+        Tmpl --> Render --> MJML --> Wrap --> Builder
+    end
+    Trigger --> Recipients["recipients = approvers ∪ requester ∪ audit list"]
+    Recipients -->|"filter users.notifications_opt_out<br/>(audit templates bypass)"| Insert
+    Recipients -.->|"audit: notifications.skipped_opt_out"| Audit([audit log])
+    Insert["INSERT email_deliveries (queued)<br/><sub>one row per recipient</sub>"]
+    Insert --> SMTP["SmtpTransport (lettre 0.11)"]
+    Builder --> SMTP
+    SMTP -->|"multipart/related<br/>HTML + text + inline image"| Relay["SMTP relay"]
+    Relay --> Outcome{"send result"}
+    Outcome -->|"permanent failure (5xx)"| Failed["status='failed' (no retry)"]
+    Outcome -->|"transient failure"| Retry["status='failed', attempts++"]
+    Outcome -->|"success"| Sent["status='sent', sent_at=now()"]
+    Worker["services/email/worker.rs<br/><sub>30s tick, 60s warm-up<br/>SELECT … WHERE status='failed'<br/>AND attempts &lt; 3 AND retry_after &lt; now()<br/>→ re-render → resend<br/>→ on 3rd failure mark abandoned</sub>"]
+    Retry --> Worker
+    Worker --> SMTP
 ```
 
 **Why MJML?** MJML compiles to table-based HTML that survives every major
@@ -840,24 +783,17 @@ intended for deployments where the internal Strata host must not
 have any inbound listener exposed to the Internet (regulatory zoning,
 defence-in-depth, or hosting-provider policy).
 
-```
-       Internet ─▶ ┌──────────────────────────┐
-                   │  DMZ NODE  (strata-dmz)  │
-                   │  • TLS 1.3 termination   │
-                   │  • SPA static serving    │
-                   │  • OIDC redirect handler │
-                   │  • Rate limiting         │
-                   │  • mTLS *server* (link)  │  ← inbound only
-                   └────────────┬─────────────┘
-                       (link)   │  outbound from internal
-                                ▼
-                   ┌──────────────────────────┐
-                   │ INTERNAL NODE (strata-   │
-                   │  backend)                │
-                   │  • Axum + RBAC + Vault   │
-                   │  • Postgres + guacd      │
-                   │  • Outbound link client  │  ← initiates the dial
-                   └──────────────────────────┘
+```mermaid
+flowchart TB
+    Internet([Internet])
+    Internet -->|HTTPS| DMZ
+    subgraph DMZNode["DMZ NODE (strata-dmz)"]
+        DMZ["• TLS 1.3 termination<br/>• SPA static serving<br/>• OIDC redirect handler<br/>• Rate limiting<br/>• mTLS <em>server</em> (link side, inbound only)"]
+    end
+    subgraph InternalNode["INTERNAL NODE (strata-backend)"]
+        Internal["• Axum + RBAC + Vault<br/>• Postgres + guacd<br/>• Outbound link client (initiates the dial)"]
+    end
+    Internal -.->|"link (mTLS) outbound from internal"| DMZ
 ```
 
 The link is the only channel between the two halves and reverses the
@@ -1019,38 +955,18 @@ and credential-mapping pipelines unchanged.
 
 ### Web Sessions runtime (shipped v0.30.0)
 
-```
-   ┌────────────────────┐  tunnel.rs    ┌────────────────────────────┐
-   │ Tunnel (web)       │──────────────▶│ WebRuntimeRegistry::ensure │
-   └────────────────────┘               └─────────────┬──────────────┘
-                                                      │
-        ┌─────────────────────────────────────────────┴───────────┐
-        │                                                          │
-        ▼                                                          ▼
- ┌─────────────────┐  alloc :100..:199  ┌────────────┐    write   ┌──────────────┐
- │ WebDisplay      │───────────────────▶│ /tmp/      │───────────▶│ Login Data   │
- │ Allocator       │                    │ strata-    │  autofill  │ (AES-128-CBC)│
- └─────────────────┘                    │ chromium-… │            └──────────────┘
-                                        │ (profile)  │
-                                        └────────────┘
-        │                                       │
-        ▼                                       ▼
- ┌──────────────────┐                 ┌────────────────────────┐
- │ Xvnc :{display}  │◀── DISPLAY ─────│ chromium --kiosk       │
- │ -SecurityTypes   │                 │   --user-data-dir=…    │
- │  None            │                 │   --remote-debugging-  │
- │ -localhost yes   │                 │     address=127.0.0.1  │
- │ -geometry WxH    │                 │   --remote-debugging-  │
- └────────┬─────────┘                 │     port={cdp}         │
-          │                           │   --host-rules="…"     │
-          │                           │   {url}                │
-          ▼                           └──────────┬─────────────┘
-   guacd attaches                               │
-   to vnc://127.0.0.1:                          ▼
-   {5900+display}                  ┌──────────────────────────┐
-                                   │ Login script runner      │
-                                   │ over CDP (localhost-only)│
-                                   └──────────────────────────┘
+```mermaid
+flowchart TB
+    Tunnel["Tunnel (web)<br/><sub>tunnel.rs</sub>"]
+    Tunnel --> Ensure["WebRuntimeRegistry::ensure"]
+    Ensure --> Alloc["WebDisplayAllocator<br/><sub>alloc :100..:199</sub>"]
+    Alloc --> Profile["/tmp/strata-chromium-… (profile)"]
+    Profile -->|"write autofill"| LoginData["Login Data<br/><sub>AES-128-CBC</sub>"]
+    Ensure --> Xvnc["Xvnc :{display}<br/><sub>-SecurityTypes None<br/>-localhost yes<br/>-geometry WxH</sub>"]
+    Xvnc -->|DISPLAY| Chromium["chromium --kiosk<br/><sub>--user-data-dir=…<br/>--remote-debugging-address=127.0.0.1<br/>--remote-debugging-port={cdp}<br/>--host-rules='…'<br/>{url}</sub>"]
+    Profile --> Chromium
+    Chromium --> CDP["Login script runner<br/><sub>over CDP (localhost-only)</sub>"]
+    Xvnc -.->|"guacd attaches to vnc://127.0.0.1:{5900+display}"| Guacd([guacd])
 ```
 
 Allocator state machine: `WebDisplayAllocator` keeps a `BTreeSet<u8>`
@@ -1098,48 +1014,16 @@ public keys) and is *not* envelope-encrypted via Vault — see the
 
 ### VDI runtime (shipped v0.30.0)
 
-```
-   ┌────────────────────┐  tunnel.rs       ┌────────────────────────┐
-   │ Tunnel (vdi)       │─────────────────▶│ VdiDriver::            │
-   │  → wire = "rdp"    │                  │   ensure_container     │
-   │  → host = name     │                  │ (DockerVdiDriver)      │
-   │  → port = 3389     │                  └────────────┬───────────┘
-   └────────────────────┘                               │
-                                                        │ bollard 0.18
-                                  ┌─────────────────────┘
-                                  │
-                                  ▼
-                        ┌───────────────────────┐
-                        │ /var/run/docker.sock  │ (overlay-only)
-                        └───────────┬───────────┘
-                                    │
-                  ┌─────────────────┴────────────────┐
-                  │ create + start + attach network  │
-                  ▼                                  ▼
-        ┌──────────────────────┐         ┌──────────────────────┐
-        │ image whitelisted?   │   no    │ vdi.image.rejected   │
-        │  (strict equality)   │────────▶│  audit event + 503   │
-        └──────────┬───────────┘         └──────────────────────┘
-                   │ yes
-                   ▼
-        ┌──────────────────────────────────────────────┐
-        │ Container: strata-vdi-{conn[..12]}-          │
-        │             {user[..12]}                     │
-        │   • labels: strata.managed=true,             │
-        │             strata.connection_id=…,          │
-        │             strata.user_id=…,                │
-        │             strata.image=…                   │
-        │   • env: VDI_USERNAME, VDI_PASSWORD          │
-        │   • host config: --cpus, --memory            │
-        │   • restart policy: no                       │
-        │   • network: STRATA_VDI_NETWORK              │
-        │   • bind: HOME (when persistent_home=true)   │
-        └────────────────┬─────────────────────────────┘
-                         │
-                         ▼
-                  vdi_containers row upsert
-                  (connection_id, user_id, container_name,
-                   image, state='running', last_seen_at)
+```mermaid
+flowchart TB
+    Tunnel["Tunnel (vdi)<br/><sub>tunnel.rs<br/>wire = 'rdp'<br/>host = name<br/>port = 3389</sub>"]
+    Tunnel --> Driver["VdiDriver::ensure_container<br/><sub>(DockerVdiDriver)</sub>"]
+    Driver -->|"bollard 0.18"| Sock["/var/run/docker.sock<br/><sub>(overlay-only)</sub>"]
+    Sock -->|"create + start + attach network"| Whitelist
+    Whitelist{"image whitelisted?<br/>(strict equality)"}
+    Whitelist -->|no| Reject["vdi.image.rejected<br/><sub>audit event + 503</sub>"]
+    Whitelist -->|yes| Container["Container: strata-vdi-{conn[..12]}-{user[..12]}<br/><sub>labels: strata.managed=true, connection_id, user_id, image<br/>env: VDI_USERNAME, VDI_PASSWORD<br/>host config: --cpus, --memory<br/>restart policy: no<br/>network: STRATA_VDI_NETWORK<br/>bind: HOME (when persistent_home=true)</sub>"]
+    Container --> Upsert["vdi_containers row upsert<br/><sub>(connection_id, user_id, container_name,<br/>image, state='running', last_seen_at)</sub>"]
 ```
 
 Deterministic naming: `container_name_for(connection_id, user_id)`

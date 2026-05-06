@@ -47,6 +47,11 @@ pub use connector::{BoxedStream, Connector};
 pub use h2_serve::{
     serve_h2, RejectHandler, RequestHandler, MAX_CONCURRENT_STREAMS, MAX_REQUEST_BODY_BYTES,
 };
+// `LinkState` is part of the public registry API surface (used by
+// the unit tests in `routes::admin::dmz` and available for any
+// future readyz / metrics consumer); keep the re-export even though
+// the production wireup currently only uses `LinkStatus` directly.
+#[allow(unused_imports)]
 pub use registry::{LinkRegistry, LinkState, LinkStatus};
 // Phase 7 — see `mod resume` comment above.
 #[allow(unused_imports)]

@@ -23,7 +23,7 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::services::app_state::SharedState;
-use crate::services::dmz_link::{LinkState, LinkStatus};
+use crate::services::dmz_link::LinkStatus;
 
 /// One row in the response. Stable JSON shape — the frontend depends
 /// on these field names.
@@ -107,10 +107,17 @@ pub struct ReconnectResponse {
     pub nudged: usize,
 }
 
-/// `POST /api/admin/dmz-links/reconnect` — best-effort "kick the
-/// supervisor". Marks every link `Backoff` with `last_error =
-/// "admin-requested reconnect"`, which causes the supervisor's next
-/// tick to redial. Returns the number of endpoints touched.
+/// `POST /api/admin/dmz-links/reconnect` — physically drop every
+/// active link's underlying h2 stream so the supervisor immediately
+/// re-dials. Implemented by cancelling each endpoint's per-cycle
+/// cancellation token (registered by the supervisor on every loop
+/// iteration); the supervisor then transitions the link through
+/// `Backoff` → `Connecting` → `Up` with a brand-new `link_id`.
+///
+/// Admin-initiated reconnects do NOT increment the `failures`
+/// counter (they aren't real failures) and do NOT incur the
+/// exponential-backoff sleep (we want the user-visible reconnect to
+/// be near-instant).
 pub async fn reconnect_links(
     State(state): State<SharedState>,
 ) -> Result<Json<ReconnectResponse>, AppError> {
@@ -124,11 +131,10 @@ pub async fn reconnect_links(
     let snap = registry.snapshot();
     let mut nudged = 0usize;
     for s in &snap {
-        registry.set_state(
-            &s.endpoint,
-            LinkState::Backoff,
-            Some("admin-requested reconnect".into()),
-        );
+        // kick() always returns whether a live token was present, but
+        // we count every endpoint we touched (including those already
+        // in Backoff) so the admin sees a sensible "N links nudged".
+        let _live = registry.kick(&s.endpoint);
         nudged += 1;
     }
     tracing::info!(
@@ -142,6 +148,7 @@ pub async fn reconnect_links(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::dmz_link::LinkState;
 
     fn st(s: LinkState) -> LinkStatus {
         LinkStatus {
@@ -151,6 +158,7 @@ mod tests {
             since: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(42),
             connects: 3,
             failures: 1,
+            kicked: false,
         }
     }
 

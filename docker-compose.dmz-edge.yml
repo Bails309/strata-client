@@ -129,8 +129,6 @@ services:
       - /var/log/nginx:uid=101,gid=101
       - /run:uid=101,gid=101
       - /etc/nginx/conf.d:uid=101,gid=101
-    security_opt:
-      - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:

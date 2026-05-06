@@ -1,0 +1,178 @@
+# ─────────────────────────────────────────────────────────────────────
+# docker-compose.dmz-edge.yml — DMZ-host edge stack.
+#
+# Runs on the PUBLIC-FACING DMZ host of a two-host split-topology
+# deployment. Brings up two containers:
+#
+#   1. strata-dmz   — the mTLS+PSK relay. Listens on :8444 for the
+#                     backend's outbound link, and on :8443 for the
+#                     frontend's loopback API proxy.
+#   2. frontend     — nginx serving the SPA assets to the public, with
+#                     /api/* and /ws reverse-proxied to strata-dmz over
+#                     a private docker network. This is what gives
+#                     external users the FULL Strata UI on :443 without
+#                     ever exposing the backend.
+#
+# Network model
+#
+#   Internet ─ :443 ─▶ frontend ─ /api,/ws ─▶ strata-dmz:8443 ──┐
+#                                                  ▲           │
+#                                                  │ link      │
+#                                              :8444 (mTLS+PSK)│
+#                                                  │           │
+#                              Internal host's backend ────────┘
+#                              (initiates outbound, no public IP)
+#
+# This overlay does NOT bring up the backend, guacd, postgres, or
+# vault — those live on the internal host (use the standard
+# docker-compose.yml there + STRATA_DMZ_ENDPOINTS in the backend env).
+#
+# Prerequisites
+#   1. mTLS material under ./certs/dmz/ (run scripts/dmz/gen-test-certs.sh
+#      once on a trusted machine, distribute ca.crt + server.{crt,key}
+#      + public.{crt,key} to this host, and keep client.{crt,key}
+#      bundled for the internal host).
+#   2. Public TLS cert at ./certs/public/{cert,key}.pem for the
+#      frontend's :443 listener (LetsEncrypt, internal CA, etc.).
+#   3. A populated .env.dmz with STRATA_DMZ_OPERATOR_TOKEN,
+#      STRATA_DMZ_LINK_PSKS, STRATA_DMZ_EDGE_HMAC_KEY.
+#
+# Usage
+#   docker compose --env-file .env.dmz -f docker-compose.dmz-edge.yml \
+#       up -d --build
+#
+#   docker compose -f docker-compose.dmz-edge.yml logs -f strata-dmz frontend
+#
+# Verify (from outside the host)
+#   curl -k https://<dmz-host>/                  → SPA HTML (200)
+#   curl -k https://<dmz-host>/api/auth/login \
+#        -X POST -H 'Content-Type: application/json' \
+#        -d '{"username":"admin","password":"<pw>"}'
+#                                                → JWT JSON (200)
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  # ── strata-dmz ────────────────────────────────────────────────────
+  strata-dmz:
+    build:
+      context: .
+      dockerfile: crates/strata-dmz/Dockerfile
+    image: strata/dmz:latest
+    restart: unless-stopped
+    networks:
+      - dmz-edge
+    ports:
+      # Link listener — internal host dials in here. Firewall this
+      # port so only the internal host's egress IP can reach it.
+      - "${DMZ_LINK_PORT:-8444}:8444"
+      # Operator surface — bound to loopback only.
+      - "127.0.0.1:${DMZ_OPERATOR_PORT:-9444}:9444"
+      # NB: no public 8443 mapping on the host — the frontend
+      # reaches strata-dmz over the docker-internal "dmz-edge"
+      # network and is the only thing the public sees.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65532:65532"
+    volumes:
+      - ./certs/dmz:/certs:ro
+    environment:
+      - RUST_LOG=${DMZ_RUST_LOG:-info,strata_dmz=info}
+      - STRATA_DMZ_PUBLIC_BIND=0.0.0.0:8443
+      # In the edge topology the strata-dmz "public" listener is
+      # actually internal-facing — only the frontend container reaches
+      # it. We therefore present the DMZ CA-signed `server.crt` (SAN:
+      # strata-dmz) instead of the LetsEncrypt-style `public.crt`. The
+      # frontend trusts the DMZ CA via /etc/nginx/ssl/upstream-ca.pem.
+      - STRATA_DMZ_PUBLIC_TLS_CERT=/certs/server.crt
+      - STRATA_DMZ_PUBLIC_TLS_KEY=/certs/server.key
+      - STRATA_DMZ_LINK_BIND=0.0.0.0:8444
+      - STRATA_DMZ_LINK_TLS_CERT=/certs/server.crt
+      - STRATA_DMZ_LINK_TLS_KEY=/certs/server.key
+      - STRATA_DMZ_LINK_CA_BUNDLE=/certs/ca.crt
+      - STRATA_DMZ_OPERATOR_BIND=0.0.0.0:9444
+      - STRATA_DMZ_OPERATOR_TOKEN=${STRATA_DMZ_OPERATOR_TOKEN:?required (>=32 bytes)}
+      - STRATA_DMZ_LINK_PSKS=${STRATA_DMZ_LINK_PSKS:?required, format id:base64[,id:base64]}
+      - STRATA_DMZ_EDGE_HMAC_KEY=${STRATA_DMZ_EDGE_HMAC_KEY:?required (base64)}
+      - STRATA_DMZ_NODE_ID=${STRATA_DMZ_NODE_ID:-dmz-1}
+      - STRATA_DMZ_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-prod}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/strata-dmz", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+
+  # ── frontend (public edge) ────────────────────────────────────────
+  # Same image as the internal-host frontend, but pointed at strata-dmz
+  # instead of the backend. ssl-init.sh templates STRATA_API_UPSTREAM
+  # and STRATA_API_SCHEME into common.fragment at boot, and emits an
+  # api-proxy-ssl.conf that validates strata-dmz's TLS chain.
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: strata/frontend:latest
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:uid=101,gid=101
+      - /var/cache/nginx:uid=101,gid=101
+      - /var/log/nginx:uid=101,gid=101
+      - /run:uid=101,gid=101
+      - /etc/nginx/conf.d:uid=101,gid=101
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      - dmz-edge
+    ports:
+      # The ONLY publicly-exposed port. Users land here.
+      - "${DMZ_EDGE_HTTP_PORT:-80}:80"
+      - "${DMZ_EDGE_HTTPS_PORT:-443}:443"
+    volumes:
+      # Public TLS cert chain + key for the frontend's :443 listener.
+      # Distinct from the DMZ relay's own cert under ./certs/dmz.
+      - ./certs/public:/etc/nginx/ssl:ro
+      # The DMZ relay's CA so nginx can verify the strata-dmz TLS
+      # chain when proxying /api/* and /ws upstream. Mounted as a
+      # *directory* (not a single file) at a fresh path because
+      # docker can't add a file-bind inside an already-bound dir on
+      # a read_only rootfs.
+      - ./certs/dmz:/etc/strata-upstream-ca:ro
+    environment:
+      # Point /api/* and /ws at the DMZ relay over the docker network.
+      # The relay's `server.crt` is issued for "strata-dmz" (the
+      # service name), so SNI / cert hostname match by default.
+      - STRATA_API_UPSTREAM=strata-dmz:8443
+      - STRATA_API_SCHEME=https
+      - STRATA_API_UPSTREAM_SNI=strata-dmz
+      - STRATA_API_UPSTREAM_CA=/etc/strata-upstream-ca/ca.crt
+    depends_on:
+      strata-dmz:
+        # Use service_started, not service_healthy: the strata-dmz
+        # healthcheck currently re-execs the whole binary which
+        # double-binds its own port and reports unhealthy. nginx's
+        # /api/ proxy uses Docker's embedded DNS resolver with a
+        # short TTL (see common.fragment) so it recovers when the
+        # upstream becomes reachable on the next request — no
+        # healthcheck dependency needed.
+        condition: service_started
+
+networks:
+  # Private bridge between the public frontend and the DMZ relay.
+  # Nothing else lives on it; the frontend never reaches the backend
+  # directly because the backend isn't on this host.
+  dmz-edge:
+    driver: bridge

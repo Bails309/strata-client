@@ -1018,8 +1018,13 @@ This walkthrough takes you from a clean checkout to a live
 split-topology deployment running on **one host** (everything in
 Docker on the same machine). It is the fastest way to evaluate the
 DMZ mode end-to-end. For a true two-host production deployment, see
-[Walkthrough A.5 — Two-host bare-metal](#walkthrough-a5--two-host-bare-metal-no-helm)
+[Walkthrough A.6 — Two-host bare-metal with public SPA](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended)
 or [Walkthrough B — Kubernetes](#walkthrough-b--kubernetes-helm-chart).
+
+> **Choose your topology.** Three patterns are supported:
+> - **A. Single-host eval** — everything in one docker compose. Tests the link, **does not** put a public UI in front of it.
+> - **A.5. Two-host, API-only public exposure** — DMZ host serves only `/api/*` over the relay. SPA hosted elsewhere (CDN, internal-only browser).
+> - **A.6. Two-host with public SPA (recommended)** — the DMZ host runs both `strata-dmz` and an nginx that serves the SPA *and* reverse-proxies `/api/*` over the relay. Public users get the full UI on `https://dmz.example.com/`. Backend remains unreachable from the internet.
 
 > **What the overlay does for you.** The compose overlay
 > [docker-compose.dmz.yml](../docker-compose.dmz.yml) brings up
@@ -1029,6 +1034,15 @@ or [Walkthrough B — Kubernetes](#walkthrough-b--kubernetes-helm-chart).
 > internal host** to configure manually — the overlay injects the
 > right `STRATA_DMZ_*` env vars into the backend container directly
 > from `.env.dmz`. Steps A.1–A.3 below are everything you need.
+>
+> **What this overlay does NOT include.** A user-facing SPA on the
+> DMZ port. `strata-dmz` is a reverse proxy for the backend, not a
+> static-asset server. Hitting `https://localhost:${DMZ_PUBLIC_PORT}/`
+> in a browser returns the backend's JSON `401`/`405` responses,
+> which is correct (it proves the link works) but not a UI. The
+> existing nginx frontend at `https://localhost:8443` continues to
+> serve the SPA against the backend directly. To put the SPA behind
+> the DMZ in production, use [Walkthrough A.6](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended).
 
 ### A.1  Issue mTLS material
 
@@ -1160,12 +1174,19 @@ and confirms the management API rejects unauthenticated requests.
 
 ---
 
-## Walkthrough A.5 — Two-host bare-metal (no Helm)
+## Walkthrough A.5 — Two-host bare-metal, API-only public exposure
+
+> **For most production deployments, prefer
+> [Walkthrough A.6](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended)
+> instead.** A.5 is the right choice only if the SPA is hosted
+> elsewhere (CDN, internal-only browser bookmarks, mobile app
+> consuming the API, …). It exposes `/api/*` and `/ws` on the DMZ
+> host but does not serve the SPA.
 
 For a real production deployment, the DMZ runs on a separate host
 from the backend, with a one-way firewall rule between them. The
-overlay is **not** suitable here because it expects both services on
-the same docker network. Use this walkthrough instead.
+single-host overlay is **not** suitable here because it expects both
+services on the same docker network. Use this walkthrough instead.
 
 ### A.5.1  On `dmz-host` — issue mTLS material
 
@@ -1252,6 +1273,151 @@ From an external machine:
 curl https://strata.example.com/api/health
 # → 200 OK, served via the link tunnel
 ```
+
+---
+
+## Walkthrough A.6 — Two-host bare-metal with public SPA (recommended)
+
+This is the production pattern most operators want: the DMZ host
+serves the **full Strata UI** to the public internet, transparently
+proxying API and websocket traffic over the mTLS+PSK relay to a
+backend on a private network. The backend never opens an inbound
+public port.
+
+```
+                  Internet
+                     │
+                     ▼ :443
+   ┌──────────────────────────────────────────────┐
+   │ DMZ host                                     │
+   │  ┌────────────────────┐   ┌────────────────┐ │
+   │  │ frontend (nginx)   │   │ strata-dmz     │ │
+   │  │ /        → SPA     │   │                │ │
+   │  │ /api/*   ─proxy──▶ │──▶│ :8443 (proxy)  │ │
+   │  │ /ws      ─proxy──▶ │   │                │ │
+   │  └────────────────────┘   └───────┬────────┘ │
+   │                                   │ link     │
+   │                                :8444 (mTLS)  │
+   │                                   │          │
+   └─────────────────────────────────── │ ────────┘
+                                        │ (initiated by backend)
+                                        ▼
+   ┌──────────────────────────────────────────────┐
+   │ Internal host (no public IP)                 │
+   │  backend ─ outbound only                     │
+   │  postgres, guacd, vault, …                   │
+   └──────────────────────────────────────────────┘
+```
+
+The DMZ host runs the standalone overlay
+[docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml). The
+internal host runs the regular [docker-compose.yml](../docker-compose.yml)
+plus [docker-compose.internal.yml](../docker-compose.internal.yml)
+exactly as in [§A.5.4](#a54-on-internal-host--wire-the-backend-env).
+
+### A.6.1  On `dmz-host` — issue mTLS material
+
+Identical to [A.1](#a1--issue-mtls-material). Place files under
+`./certs/dmz/`:
+
+```
+./certs/dmz/
+├── ca.crt           # link-CA root
+├── server.crt       # link cert (SAN: strata-dmz)
+├── server.key
+├── client.crt       # bundled here for distribution to internal host
+├── client.key
+└── (public.crt + public.key are unused in this topology — see below)
+```
+
+> **Why `public.crt` is unused here.** In topologies A and A.5 the
+> strata-dmz public listener is the public face, so `public.crt`
+> is a real public-CA-signed cert. In A.6 the public face is the
+> frontend nginx (which gets its own LetsEncrypt-style cert under
+> `./certs/public/`). The strata-dmz public listener is reached only
+> over the docker-internal network by the frontend, so it can reuse
+> `server.crt` (already SAN-valid for `strata-dmz` and signed by the
+> DMZ CA the frontend trusts). The overlay sets this automatically.
+
+### A.6.2  On `dmz-host` — provision the public TLS cert
+
+Get a real public-CA-signed cert for the public hostname (e.g.
+`strata.example.com`) and place the chain + key at:
+
+```
+./certs/public/
+├── cert.pem    # full chain (leaf + intermediates)
+└── key.pem     # private key
+```
+
+This is what users see in their browser.
+
+### A.6.3  On `dmz-host` — populate `.env.dmz`
+
+Same as [A.2](#a2--populate-envdmz). Generate `STRATA_DMZ_OPERATOR_TOKEN`,
+`STRATA_DMZ_LINK_PSKS`, `STRATA_DMZ_EDGE_HMAC_KEY` (all base64) and
+record them in `.env.dmz`.
+
+### A.6.4  On `dmz-host` — bring up the edge stack
+
+```bash
+docker compose --env-file .env.dmz \
+    -f docker-compose.dmz-edge.yml \
+    up -d --build
+
+docker compose -f docker-compose.dmz-edge.yml ps
+docker compose -f docker-compose.dmz-edge.yml logs -f strata-dmz frontend
+```
+
+Expected:
+
+- `strata-dmz`: `link listener up`, `public listener up`.
+- `frontend`: nginx boots cleanly. The `ssl-init` step logs
+  `Templating /api/ upstream: https://strata-dmz:8443` and
+  `Wrote /etc/nginx/conf.d/api-proxy-ssl.conf`.
+
+The DMZ host now exposes:
+
+| Port | Origin | Reachability |
+|------|--------|--------------|
+| 443  | frontend (nginx, public TLS cert) | **Internet** — users land here |
+| 8444 | strata-dmz link listener | **Internal network only** (firewall: allow `internal-host` → :8444) |
+| 9444 | strata-dmz operator API | **Loopback only** (default) |
+
+### A.6.5  On `internal-host` — wire the backend
+
+Follow [A.5.3](#a53--on-internal-host--distribute-the-link-material)
+and [A.5.4](#a54-on-internal-host--wire-the-backend-env) verbatim,
+with `STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444` in the
+internal `.env`. The internal host runs no `frontend` and no
+`strata-dmz`; just the regular `docker compose` stack plus the
+internal overlay.
+
+### A.6.6  Verify end-to-end
+
+From any browser on the public internet:
+
+```
+https://strata.example.com/
+```
+
+You should see the full Strata login UI. Authenticate, then exercise
+RDP/SSH/VNC — every request flows public → frontend → strata-dmz →
+link → backend. Confirm with:
+
+```bash
+# On dmz-host
+docker compose -f docker-compose.dmz-edge.yml logs strata-dmz | grep -i 'authenticated'
+# → "DMZ link authenticated peer=… node_id=internal-1"
+
+curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN" | jq
+# → {"links_up": 1, ...}
+```
+
+If `links_up` is `0`, the backend hasn't dialed in — check the
+internal host's firewall rule (must allow outbound to
+`dmz-host:8444`) and the internal host's backend logs for
+`DMZ link authenticated`.
 
 ---
 

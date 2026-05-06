@@ -154,10 +154,7 @@ impl LinkRegistry {
     /// (i.e. the link was past the dial phase).
     pub fn kick(&self, endpoint: &str) -> bool {
         let cancelled = {
-            let g = self
-                .active_tokens
-                .read()
-                .expect("LinkRegistry poisoned");
+            let g = self.active_tokens.read().expect("LinkRegistry poisoned");
             if let Some(tok) = g.get(endpoint) {
                 tok.cancel();
                 true

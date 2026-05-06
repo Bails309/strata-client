@@ -168,10 +168,7 @@ async fn run_endpoint(
         // an immediate redial.
         if registry.take_kicked(&url) {
             tracing::info!(endpoint = %url, "DMZ link admin-requested reconnect");
-            registry.set_backoff_without_failure(
-                &url,
-                "admin-requested reconnect".into(),
-            );
+            registry.set_backoff_without_failure(&url, "admin-requested reconnect".into());
             backoff.reset();
             continue;
         }

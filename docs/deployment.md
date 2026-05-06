@@ -1018,7 +1018,7 @@ store all three in the same file.
 
 ### Choosing a topology
 
-Strata ships **three** docker-compose overlays that cover every
+Strata ships **four** docker-compose overlays that cover every
 supported DMZ deployment shape. Pick one before you start; mixing
 overlays on the same host is unsupported.
 
@@ -1027,13 +1027,17 @@ overlays on the same host is unsupported.
 | [**A**](#walkthrough-a--docker-compose-single-host-evaluation) | [docker-compose.dmz.yml](../docker-compose.dmz.yml) | 1 | `${DMZ_PUBLIC_PORT}` (default 8443), 8444 | Relay only — no SPA | Local eval / smoke-testing the link |
 | [**A.5**](#walkthrough-a5--two-host-bare-metal-api-only-public-exposure) | [docker-compose.dmz-only.yml](../docker-compose.dmz-only.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal) | 2 | 8443, 8444 on DMZ host | Relay only — clients must already speak Strata's API | SPA hosted on a CDN / mobile app / API-only consumers |
 | [**A.6**](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended) ⭐ | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal) | 2 | 80/443 on DMZ host | **Full Strata SPA** + API + WS | Standard production — most operators want this |
+| [**A.7**](#walkthrough-a7--split-brain-corporate-lan--public-dmz) | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.yml](../docker-compose.yml) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal, full stack) | 2 | 80/443 on DMZ host **and** 80/443 on internal host | **Full SPA on both hosts** — corp LAN users hit the internal one, public users hit the DMZ one | Enterprises that want zero-DMZ-hop latency for staff while still publishing externally |
 
 > **Picking the right overlay matters.** If you choose A.5 when you
 > meant A.6, end-users won't get a UI when they navigate to your
 > public hostname; they'll see a JSON `401`. If you choose A when you
 > meant A.5/A.6, the backend's database, Vault, and AD sit on the
 > public host alongside the relay — the whole point of the split
-> topology is lost.
+> topology is lost. A.7 is A.6 plus a second front door on the
+> internal host: pick it only if internal-LAN performance for staff
+> is a hard requirement; otherwise A.6 with corporate users dialling
+> the public hostname is simpler and sufficient.
 
 ---
 
@@ -1533,6 +1537,264 @@ internal host's firewall rule (must allow outbound to
 
 ---
 
+## Walkthrough A.7 — Split-brain (corporate LAN + public DMZ)
+
+This walkthrough composes A.6 with a **second, independent front
+door** running on the internal host. The same backend serves both
+populations:
+
+- **Corporate users** on the internal LAN reach a frontend nginx
+  *also* running on the internal host. The request goes
+  `corp-user → internal-frontend → backend:8080` — entirely on the
+  corporate network, no DMZ hop.
+- **Public users** off-LAN reach the DMZ host exactly as in A.6:
+  `internet → dmz-frontend → strata-dmz → mTLS link → backend`.
+
+Both paths terminate in the same axum router. The backend's
+[`verify_edge_headers`](../backend/src/services/edge_header.rs)
+middleware enforces the trust boundary cryptographically:
+
+- Requests arriving over the **link** carry HMAC-stamped
+  `x-strata-edge-*` headers; the middleware verifies them and
+  attaches a `TrustedEdgeContext` so audit rows are tagged with
+  the originating DMZ `link_id` and the real public client IP.
+- Requests arriving on the **public listener** (port 8080) have no
+  signed edge headers; if a malicious client tries to forge them
+  the middleware strips them and the request runs as a normal
+  direct connection. There's no way for a corp-LAN client to
+  impersonate a DMZ-relayed request.
+
+```mermaid
+flowchart LR
+    Corp([Corp user<br/>on LAN])
+    Net([Internet user])
+
+    subgraph InternalHost["Internal host (no public IP)"]
+        IFE["frontend (nginx)<br/><sub>:443 — SPA assets<br/>/api/* + /ws → backend:8080</sub>"]
+        BE["backend<br/><sub>:8080 (LAN-only listener)<br/>+ outbound mTLS link to DMZ</sub>"]
+        PG[("postgres")]
+        VA["vault"]
+        GD["guacd"]
+        IFE -->|"HTTP/HTTPS<br/>over docker net"| BE
+        BE --- PG
+        BE --- VA
+        BE --- GD
+    end
+
+    subgraph DMZHost["DMZ host"]
+        DFE["frontend (nginx)<br/><sub>:443 public — SPA assets<br/>/api/* + /ws → strata-dmz</sub>"]
+        SDMZ["strata-dmz<br/><sub>:8443 internal proxy<br/>:8444 mTLS link listener</sub>"]
+        DFE -->|"HTTPS over private<br/>docker network"| SDMZ
+    end
+
+    Corp -->|"corp DNS:<br/>strata.corp.example.com<br/>→ internal-host LAN IP"| IFE
+    Net -->|"public DNS:<br/>strata.example.com<br/>→ dmz-host public IP"| DFE
+    BE -.->|"mTLS link<br/>(outbound only,<br/>internal → DMZ:8444)"| SDMZ
+```
+
+> **Trust model invariant.** The two ingress paths land in the same
+> axum router and share the **same** auth/CSRF/session/RBAC
+> enforcement, the same database, the same Vault, the same guacd
+> pool. There is exactly ONE enforcement point — the backend's
+> middleware stack — regardless of which ingress a request arrived
+> on. The `x-strata-edge-*` headers only **enrich** trusted
+> requests with the public client IP and link provenance; they
+> never grant additional privilege.
+
+> **Pre-requisite.** A.7 layers on top of A.6, so you should be
+> familiar with the cert/PSK/HMAC distribution from
+> [§A.6.1](#a61--on-dmz-host--issue-mtls-material) before
+> continuing. The internal host runs the **full** Strata stack
+> (`docker-compose.yml`) plus the link overlay
+> (`docker-compose.internal.yml`); the DMZ host runs the edge
+> stack (`docker-compose.dmz-edge.yml`) exactly as in A.6.
+
+### A.7.1  On `dmz-host` — bring up the edge stack
+
+Follow [§A.6.1](#a61--on-dmz-host--issue-mtls-material) through
+[§A.6.4](#a64--on-dmz-host--bring-up-the-edge-stack) verbatim. The
+DMZ host's configuration is **identical** to A.6 — it doesn't know
+or care that there will be a second frontend on the internal host.
+
+By the end of A.6.4 you should have:
+
+- `dmz-host:443` serving the SPA to the public internet
+- `dmz-host:8444` listening for the mTLS link (closed to the public)
+- `dmz-host:9444` operator API on loopback only
+
+### A.7.2  On `internal-host` — distribute link material
+
+Follow [§A.6.5](#a65--on-internal-host--distribute-link-material-and-wire-the-backend)
+to copy `ca.crt`, `client.crt`, `client.key` into
+`./certs/dmz/`, and to populate `.env` with:
+
+```env
+# Same values as A.6:
+STRATA_DMZ_ENDPOINTS=dmz-host.example.com:8444
+STRATA_DMZ_LINK_PSK_CURRENT=<same base64 as DMZ's current: value>
+STRATA_DMZ_EDGE_HMAC_KEYS=<same base64 as STRATA_DMZ_EDGE_HMAC_KEY>
+STRATA_CLUSTER_ID=strata-cluster-prod   # MUST match DMZ's STRATA_DMZ_CLUSTER_ID
+
+# A.7-specific: both hostnames must be on STRATA_ALLOWED_ORIGINS so
+# the backend's CSRF/CORS layer accepts SPA fetch requests from
+# either origin.
+STRATA_ALLOWED_ORIGINS=https://strata.example.com,https://strata.corp.example.com
+```
+
+Then drop the **internal-side** TLS material into `./certs/`
+(separate from `./certs/dmz/`, which is the link mTLS bundle):
+
+```text
+./certs/
+├── cert.pem        ← TLS cert for strata.corp.example.com (corp CA OK,
+├── key.pem         ←  public CA not required — corp users never traverse
+│                       the internet to reach this listener)
+└── dmz/
+    ├── ca.crt      ← link mTLS material from §A.6.5
+    ├── client.crt
+    └── client.key
+```
+
+The frontend nginx baked into [docker-compose.yml](../docker-compose.yml)
+picks up `cert.pem` / `key.pem` automatically via the
+`./certs:/etc/nginx/ssl:ro` mount.
+
+### A.7.3  On `internal-host` — bring up the full stack
+
+```bash
+# Note: NO --env-file .env.dmz here. The internal host doesn't run
+# strata-dmz, so the DMZ-only secrets (operator token, link PSKs as
+# the *server* side) aren't needed. Only the link-CLIENT side is.
+
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+This brings up the **full** internal stack:
+
+- `frontend` — nginx serving the SPA on `:443` to the corp LAN
+- `backend` — axum router, public listener on `:8080` AND outbound
+  mTLS link to the DMZ
+- `postgres-local`, `vault`, `guacd` — unchanged from a
+  non-DMZ deployment
+
+> **What about [docker-compose.internal.yml](../docker-compose.internal.yml)?**
+> That overlay only adds the `STRATA_DMZ_ENDPOINTS` block + cert
+> mounts to the backend; it does NOT remove the public listener.
+> When the link supervisor is enabled the backend runs **both**
+> ingress paths concurrently — the public listener for the corp
+> frontend and the link supervisor for DMZ-relayed traffic.
+
+### A.7.4  Configure split-horizon DNS (or two distinct hostnames)
+
+Two equivalent options — pick one:
+
+**Option A (recommended): two distinct hostnames.** Simpler to
+reason about, simpler TLS cert management.
+
+| Hostname | DNS view | Resolves to | TLS cert |
+|---|---|---|---|
+| `strata.corp.example.com` | corporate DNS only | `internal-host` LAN IP | corporate CA |
+| `strata.example.com` | public DNS only | `dmz-host` public IP | public CA (Let's Encrypt etc.) |
+
+**Option B: split-horizon DNS, one hostname.** A single
+`strata.example.com` resolves differently depending on the
+resolver. Requires the same cert chain to validate from both
+networks (or different certs served by SNI on the matching IP).
+
+| DNS view | `strata.example.com` resolves to |
+|---|---|
+| Corporate | `internal-host` LAN IP |
+| Public internet | `dmz-host` public IP |
+
+If your enterprise already runs split-horizon DNS for other
+services, this is friction-free. If not, Option A is less work.
+
+### A.7.5  Verify both ingress paths
+
+**From a corp-LAN workstation:**
+
+```
+https://strata.corp.example.com/
+```
+
+You should see the SPA. After login, run any session — it should
+work with sub-millisecond LAN latency. Confirm in the audit log
+that the row has **no** `link_id` (it's a direct request):
+
+```sql
+SELECT actor, action, link_id, source_ip, created_at
+FROM audit_logs
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+The `link_id` column should be `NULL` for the corp-LAN request,
+and `source_ip` should be the corp workstation's LAN address.
+
+**From a public workstation (or your phone on cellular):**
+
+```
+https://strata.example.com/
+```
+
+You should see the same SPA. After login, the audit log row will
+have:
+
+- `link_id` = the DMZ's link UUID (visible in `Admin → DMZ Links`)
+- `source_ip` = the public client's real IP (extracted from the
+  HMAC-stamped edge header, not the docker network's NAT address)
+
+This is the proof that the trust model is working: corp traffic
+runs as a normal direct request; public traffic is enriched with
+verified provenance from the DMZ.
+
+### A.7.6  Firewall posture
+
+A.7 is the strictest of the four topologies because there are now
+two front doors:
+
+| Source | Destination | Port | Action | Why |
+|---|---|---|---|---|
+| Corp LAN | `internal-host:443` | 443/tcp | ALLOW | Corp users reach the internal SPA |
+| Internet | `internal-host:*` | * | **DENY** | Internal host MUST NOT be reachable from the internet |
+| Internet | `dmz-host:443` | 443/tcp | ALLOW | Public users reach the DMZ SPA |
+| Internet | `dmz-host:8444` | 8444/tcp | **DENY** | Link listener is for the internal host only |
+| Internet | `dmz-host:9444` | 9444/tcp | **DENY** | Operator API is loopback-only |
+| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW | Backend dials out to establish the link |
+| `dmz-host` | corp LAN | * | **DENY** | DMZ MUST NOT initiate connections into corp |
+
+The two critical rules are `Internet → internal-host: DENY` (which
+keeps the corp frontend off the public internet) and
+`dmz-host → corp: DENY` (which preserves the security guarantee
+that a compromised DMZ cannot reach Vault / DB / AD).
+
+### A.7.7  When NOT to use A.7
+
+A.7 doubles the operational surface (two nginxes, two TLS certs,
+two firewall rule sets, two ingress paths to monitor). Don't pick
+it unless you actually need:
+
+- **Latency-sensitive corp use** — e.g. interactive RDP/SSH
+  sessions where the extra ~5–20 ms of the corp → DMZ → backend
+  hop is disruptive. For typical web-app traffic A.6 is fine.
+- **Corp-only emergency access** — if your public DNS is broken,
+  your CDN is down, or your DMZ host is rebooting, corp staff
+  retain access via the internal frontend. (A.6 has a single
+  point of failure at the DMZ host.)
+- **Tight IDS/firewall on outbound corp traffic** — if your
+  corporate egress filter blocks staff from reaching the
+  *public* hostname (because it leaves and re-enters the
+  perimeter), an internal hostname avoids the loop.
+
+If none of those apply, run A.6 and have corp users hit
+`strata.example.com` like everyone else. The operational
+simplicity is worth it.
+
+---
+
 ## Walkthrough B — Kubernetes (Helm chart)
 
 This walkthrough provisions the DMZ side of the split using the
@@ -1793,21 +2055,25 @@ kubectl -n strata-dmz delete secret strata-dmz-secrets strata-dmz-link-tls strat
 
 The DMZ split is only as strong as the firewall rules that enforce it.
 Recommended (rule set varies slightly by topology — the table below
-covers all three):
+covers all four):
 
-| Source | Destination | Port | Action | A | A.5 | A.6 |
-|--------|-------------|------|--------|---|-----|-----|
-| Internet | `dmz-host:443` | 443/tcp | ALLOW | — | — | ✅ |
-| Internet | `dmz-host:${DMZ_PUBLIC_PORT}` (default 8443) | 8443/tcp | ALLOW | ✅ (eval) | ✅ | — |
-| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW | — | ✅ | ✅ |
-| `dmz-host` | anywhere on the internal network | * | **DENY** | — | ✅ | ✅ |
-| Internet | `dmz-host:8444` | 8444/tcp | **DENY** | ✅ | ✅ | ✅ |
-| Internet | `dmz-host:9444` | 9444/tcp | **DENY** | ✅ | ✅ | ✅ |
+| Source | Destination | Port | Action | A | A.5 | A.6 | A.7 |
+|--------|-------------|------|--------|---|-----|-----|-----|
+| Internet | `dmz-host:443` | 443/tcp | ALLOW | — | — | ✅ | ✅ |
+| Internet | `dmz-host:${DMZ_PUBLIC_PORT}` (default 8443) | 8443/tcp | ALLOW | ✅ (eval) | ✅ | — | — |
+| Corp LAN | `internal-host:443` | 443/tcp | ALLOW | — | — | — | ✅ |
+| Internet | `internal-host:*` | * | **DENY** | — | ✅ | ✅ | ✅ |
+| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW | — | ✅ | ✅ | ✅ |
+| `dmz-host` | anywhere on the internal network | * | **DENY** | — | ✅ | ✅ | ✅ |
+| Internet | `dmz-host:8444` | 8444/tcp | **DENY** | ✅ | ✅ | ✅ | ✅ |
+| Internet | `dmz-host:9444` | 9444/tcp | **DENY** | ✅ | ✅ | ✅ | ✅ |
 
 The `dmz-host → internal *` deny rule is the heart of the design — it
 is what makes a full RCE on the DMZ unable to reach Vault / DB / AD.
 It does not apply to single-host eval (Walkthrough A) because there
-is only one host.
+is only one host. A.7 additionally requires
+`Internet → internal-host: DENY` so the corporate frontend cannot be
+reached directly from the public internet.
 
 ## Production checklist
 

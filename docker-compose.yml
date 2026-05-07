@@ -107,6 +107,11 @@ services:
       # directory is harmless if no `web` connection references a
       # login_script.
       - ${WEB_LOGIN_SCRIPTS_DIR:-./web-login-scripts}:/var/lib/strata/web-login-scripts:ro
+      # Read-only view of the deployment's TLS certificate material so
+      # the admin Health page can surface validity windows (public TLS,
+      # DMZ link mTLS, CAs, etc). Backend never reads private keys —
+      # only PEM `CERTIFICATE` blocks are parsed.
+      - ./certs:/etc/strata/certs:ro
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-strata}:${POSTGRES_PASSWORD:-strata_default}@postgres-local:5432/${POSTGRES_DB:-strata}}

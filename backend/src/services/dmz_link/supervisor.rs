@@ -41,7 +41,10 @@ pub fn spawn_link_supervisors(
             let registry = registry.clone();
             let shutdown = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                run_endpoint(cfg, endpoint, connector, handler, upgrade, registry, shutdown).await
+                run_endpoint(
+                    cfg, endpoint, connector, handler, upgrade, registry, shutdown,
+                )
+                .await
             }));
         }
         for h in handles {

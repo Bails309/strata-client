@@ -10,7 +10,7 @@ import DisplayTab from "../pages/admin/DisplayTab";
 import { updateSettings } from "../api";
 
 beforeEach(() => {
-  vi.mocked(updateSettings).mockResolvedValue(undefined as unknown as void);
+  vi.mocked(updateSettings).mockResolvedValue({ status: "ok" });
 });
 
 afterEach(() => {

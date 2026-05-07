@@ -49,7 +49,7 @@ beforeEach(() => {
   vi.mocked(getAdminTagsAdmin).mockResolvedValue([]);
   vi.mocked(getAdminConnectionTagsAdmin).mockResolvedValue({});
   vi.mocked(createAdminTag).mockResolvedValue(tag());
-  vi.mocked(deleteAdminTag).mockResolvedValue(undefined as never);
+  vi.mocked(deleteAdminTag).mockResolvedValue({ ok: true });
 });
 
 describe("TagsTab", () => {

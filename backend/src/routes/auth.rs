@@ -1042,8 +1042,7 @@ pub async fn refresh(
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        let expires_at =
-            chrono::Utc::now() + chrono::Duration::seconds(ACCESS_TOKEN_TTL as i64);
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ACCESS_TOKEN_TTL as i64);
         let _ = crate::services::active_sessions::record(
             &db.pool,
             _jti,

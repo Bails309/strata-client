@@ -169,8 +169,7 @@ where
                 // above the slowest legitimate REST call this link
                 // carries, while still well under the public
                 // gateway's idle timeout.
-                const PER_STREAM_TIMEOUT: std::time::Duration =
-                    std::time::Duration::from_secs(120);
+                const PER_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
                 match tokio::time::timeout(
                     PER_STREAM_TIMEOUT,
                     serve_one_stream(request, respond, handler),

@@ -181,7 +181,9 @@ async fn bridge(
     // accidentally turn the request line into an absolute-form URI
     // pointing at a different host.
     if !path_and_query.starts_with('/')
-        || path_and_query.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0)
+        || path_and_query
+            .bytes()
+            .any(|b| b == b'\r' || b == b'\n' || b == 0)
     {
         let _ = respond.send_response(
             Response::builder()
@@ -202,7 +204,10 @@ async fn bridge(
         .unwrap_or("internal.local");
     // Same defence applied to the Host header — it is also
     // concatenated into the request line/headers verbatim.
-    if host_header.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+    if host_header
+        .bytes()
+        .any(|b| b == b'\r' || b == b'\n' || b == 0)
+    {
         let _ = respond.send_response(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)

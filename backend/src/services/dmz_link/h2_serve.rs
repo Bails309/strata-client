@@ -32,6 +32,8 @@ use http::{Request, Response, StatusCode};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
+use super::upgrade_handler::{is_websocket_extended_connect, UpgradeHandler};
+
 /// Maximum size of an inbound request body the multiplexer will buffer
 /// before invoking the handler. Anything larger is rejected with 413.
 pub const MAX_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -92,6 +94,7 @@ impl RequestHandler for RejectHandler {
 pub async fn serve_h2<S, R>(
     stream: S,
     handler: Arc<dyn RequestHandler>,
+    upgrade: Arc<dyn UpgradeHandler>,
     shutdown: CancellationToken,
     on_ready: R,
 ) -> anyhow::Result<()>
@@ -99,8 +102,14 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     R: FnOnce() + Send + 'static,
 {
-    let mut conn = h2::server::Builder::new()
-        .max_concurrent_streams(MAX_CONCURRENT_STREAMS)
+    let mut builder = h2::server::Builder::new();
+    builder.max_concurrent_streams(MAX_CONCURRENT_STREAMS);
+    // RFC 8441 Extended CONNECT — required so the DMZ side can
+    // multiplex WebSocket upgrades over the same h2 link as REST
+    // traffic. Without this, the peer is told `:protocol` is
+    // unsupported and websocket forwarding falls back to a 503.
+    builder.enable_connect_protocol();
+    let mut conn = builder
         .handshake::<_, Bytes>(stream)
         .await
         .map_err(|e| anyhow::anyhow!("h2 server handshake failed: {e}"))?;
@@ -142,8 +151,13 @@ where
         };
 
         let handler = handler.clone();
+        let upgrade = upgrade.clone();
         stream_tasks.push(tokio::spawn(async move {
-            if let Err(e) = serve_one_stream(request, respond, handler).await {
+            if is_websocket_extended_connect(&request) {
+                if let Err(e) = upgrade.handle(request, respond).await {
+                    tracing::warn!(error = %e, "DMZ link h2 upgrade stream errored");
+                }
+            } else if let Err(e) = serve_one_stream(request, respond, handler).await {
                 tracing::warn!(error = %e, "DMZ link h2 stream errored");
             }
         }));
@@ -224,6 +238,7 @@ async fn serve_one_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::dmz_link::upgrade_handler::RejectUpgradeHandler;
     use std::time::Duration;
     use tokio::io::duplex;
 
@@ -291,6 +306,7 @@ mod tests {
         let server = tokio::spawn(serve_h2(
             server_io,
             Arc::new(EchoHandler),
+            Arc::new(RejectUpgradeHandler),
             shutdown.clone(),
             || {},
         ));
@@ -320,6 +336,7 @@ mod tests {
         let server = tokio::spawn(serve_h2(
             server_io,
             Arc::new(EchoHandler),
+            Arc::new(RejectUpgradeHandler),
             shutdown.clone(),
             || {},
         ));
@@ -364,6 +381,7 @@ mod tests {
         let server = tokio::spawn(serve_h2(
             server_io,
             Arc::new(PoisonHandler),
+            Arc::new(RejectUpgradeHandler),
             shutdown.clone(),
             || {},
         ));
@@ -394,6 +412,7 @@ mod tests {
         let server = tokio::spawn(serve_h2(
             server_io,
             Arc::new(EchoHandler),
+            Arc::new(RejectUpgradeHandler),
             shutdown.clone(),
             || {},
         ));

@@ -27,14 +27,15 @@ flowchart LR
 
 ### 1. Custom guacd
 
-| Item | Value |
-|---|---|
-| Base image | Alpine 3.19 (multi-stage) |
-| Source | `guacd/Dockerfile` |
-| Network | `guac-internal` (internal only) |
-| Port | 4822 (not exposed externally) |
+| Item       | Value                           |
+| ---------- | ------------------------------- |
+| Base image | Alpine 3.19 (multi-stage)       |
+| Source     | `guacd/Dockerfile`              |
+| Network    | `guac-internal` (internal only) |
+| Port       | 4822 (not exposed externally)   |
 
 The official Apache Guacamole server daemon, custom-compiled with:
+
 - **FreeRDP 3** (`ARG FREERDP_VERSION=3`) for modern RDP support. The
   custom guacd builds against whichever FreeRDP 3.x ships with the
   base image (Alpine 3.23 community + edge currently resolves to
@@ -59,13 +60,13 @@ The patches are applied in lexicographic order via the loop in
 [`guacd/Dockerfile`](../guacd/Dockerfile), with `git apply`
 preferred and a `patch -p1 -F3` fallback for fuzz tolerance:
 
-| Patch | Purpose |
-|---|---|
-| `001-freerdp3-debian13.patch` | Build fixes for FreeRDP 3 on Debian 13 / Trixie. |
-| `002-kerberos-nla.patch` | Routes Kerberos credential prompts through guacd's auth callback so SSO + NLA actually work. |
-| `003-null-guard-and-config-h.patch` | Hardening: NULL guards on a handful of hot paths and consistent `config.h` inclusion. |
-| `004-h264-display-worker.patch` | Hooks FreeRDP's RDPGFX `SurfaceCommand` callback and emits the custom `4.h264` Guacamole instruction (see "[H.264 GFX passthrough]" below). |
-| `005-refresh-rect-on-resize.patch` | Marks the entire layer dirty after `gdi_resize` and asks the RDP server to re-send pixels for the full new desktop area, eliminating black "ghost regions" along the edge of the canvas after a server-driven RDP resize (v1.3.2). |
+| Patch                                  | Purpose                                                                                                                                                                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `001-freerdp3-debian13.patch`          | Build fixes for FreeRDP 3 on Debian 13 / Trixie.                                                                                                                                                                                                         |
+| `002-kerberos-nla.patch`               | Routes Kerberos credential prompts through guacd's auth callback so SSO + NLA actually work.                                                                                                                                                             |
+| `003-null-guard-and-config-h.patch`    | Hardening: NULL guards on a handful of hot paths and consistent `config.h` inclusion.                                                                                                                                                                    |
+| `004-h264-display-worker.patch`        | Hooks FreeRDP's RDPGFX `SurfaceCommand` callback and emits the custom `4.h264` Guacamole instruction (see "[H.264 GFX passthrough]" below).                                                                                                              |
+| `005-refresh-rect-on-resize.patch`     | Marks the entire layer dirty after `gdi_resize` and asks the RDP server to re-send pixels for the full new desktop area, eliminating black "ghost regions" along the edge of the canvas after a server-driven RDP resize (v1.3.2).                       |
 | `006-freerdp325-authenticate-ex.patch` | Selects between the legacy `Authenticate` callback and the new `AuthenticateEx` callback on `struct rdp_freerdp` based on `FREERDP_VERSION_MAJOR`/`FREERDP_VERSION_MINOR`, restoring the build on FreeRDP 3.25+ while keeping it green on 3.24 (v1.3.2). |
 
 After the loop, the Dockerfile runs two `grep -q` assertions on
@@ -83,6 +84,7 @@ sneaks in via `core.autocrlf=true` on Windows.
 Multiple guacd instances can be deployed using the `--profile scale` Docker Compose profile (e.g. `guacd-2`). The backend distributes connections across instances using a round-robin `GuacdPool`.
 
 Volumes:
+
 - `guac-recordings` → `/var/lib/guacamole/recordings` — session recording storage
 - `krb5-config` → `/etc/krb5` — dynamically generated `krb5.conf`
 - `backend-config` → `/app/config` (read-only) — custom `resolv.conf` written by the backend for DNS configuration
@@ -93,12 +95,12 @@ Volumes:
 
 ### 2. Rust Backend
 
-| Item | Value |
-|---|---|
-| Language | Rust (2021 edition) |
-| Framework | Axum 0.8 + Tokio |
-| Source | `backend/` |
-| Port | 8080 |
+| Item      | Value               |
+| --------- | ------------------- |
+| Language  | Rust (2021 edition) |
+| Framework | Axum 0.8 + Tokio    |
+| Source    | `backend/`          |
+| Port      | 8080                |
 
 The central orchestrator. Responsibilities:
 
@@ -123,16 +125,17 @@ The central orchestrator. Responsibilities:
 
 ### 3. Frontend SPA
 
-| Item | Value |
-|---|---|
-| Language | TypeScript |
-| Framework | React 19 + Vite |
-| Styling | Tailwind CSS v4 |
-| Runtime | nginx (production) |
-| Source | `frontend/` |
-| Ports | 80 (HTTP), 443 (HTTPS when certs mounted) |
+| Item      | Value                                     |
+| --------- | ----------------------------------------- |
+| Language  | TypeScript                                |
+| Framework | React 19 + Vite                           |
+| Styling   | Tailwind CSS v4                           |
+| Runtime   | nginx (production)                        |
+| Source    | `frontend/`                               |
+| Ports     | 80 (HTTP), 443 (HTTPS when certs mounted) |
 
 The frontend nginx container serves as the primary gateway for all external traffic. It handles:
+
 - **Reverse proxying** — routes `/api/*` to the Rust backend (including WebSocket upgrades for tunnel connections). The shared `common.fragment` declares `resolver 127.0.0.11 valid=10s ipv6=off;` (Docker's embedded DNS) and uses a `set $backend_upstream "backend:8080";` variable as the `proxy_pass` target so the upstream is re-resolved per request rather than cached at process start. **(v1.3.0+)** This avoids the historical `[emerg] host not found in upstream "backend"` boot failure when the backend container was briefly unreachable during `docker compose up -d --build`; nginx now stays up and returns `502 Bad Gateway` for the duration of any backend outage, recovering automatically when the upstream comes back
 - **SSL termination** — when TLS certificates are mounted at `/etc/nginx/ssl/`, nginx serves HTTPS on port 443 with Mozilla Intermediate cipher configuration, HSTS, and automatic HTTP→HTTPS redirection
 - **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`, and `Permissions-Policy` on every response
@@ -140,14 +143,15 @@ The frontend nginx container serves as the primary gateway for all external traf
 - **SPA fallback** — `try_files` to `index.html` for client-side routing
 
 Pages:
+
 - **Setup Wizard** — first-boot database and Vault configuration with bundled/external/skip vault mode selector
 - **Dashboard** — user's connections with connect/credential vault, multi-select for tiled view, last-accessed tracking, favorites filter, group view toggle (flat list or collapsible group headers), and connection health status indicators (green/red/gray dots showing online/offline/unknown from background TCP probes)
-- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval` render loop (avoids `requestAnimationFrame` throttling when popups have focus), `MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen` auto-maximize on secondary popups, live `screenschange` detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture `getScreenDetails()` for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy `forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
+- **Session Client** — HTML5 Canvas via `guacamole-common-js` (vendored 1.6.0 bundle with H.264 GFX passthrough; v0.28.0+) with clipboard sync (including pop-out windows), file transfer, a unified **Session Bar** dock consolidating all tools (Sharing, Quick Share, Keyboard, etc.) into a sleek right-side overlay, **Command Palette** (`Ctrl+K`) for instant connection search and launch from any session, **keyboard shortcut proxy** (Right Ctrl → Win key, `Ctrl+Alt+\`` → Win+Tab), **Keyboard Lock API** for capturing OS-level shortcuts in fullscreen over HTTPS, **display tags** (optional per-connection colored badge on session thumbnails, user-assignable via a tag picker dropdown), **dynamic browser tab title** (shows the active session's server name, e.g. "SERVER01 — Strata"), pop-out windows that persist across navigation with automatic screen-change detection and re-scaling, browser-based multi-monitor support via canvas slicing (Chromium Window Management API) with ~30 fps `setInterval`render loop (avoids`requestAnimationFrame`throttling when popups have focus),`MutationObserver`-based cursor sync across all secondary windows, horizontal-only layout (all monitors arranged left-to-right regardless of physical vertical position — best supported configuration is all landscape monitors side by side; monitors above or below appear as slices to the right), aggregate height capped to primary monitor height for taskbar visibility, `moveTo`/`resizeTo`/`requestFullscreen`auto-maximize on secondary popups, live`screenschange`detection for hot-plugged monitors, screen count detection shown in the toolbar tooltip, Chrome popup-blocker bypass via in-gesture`getScreenDetails()`for 3+ monitors, and Brave/privacy-browser compatibility, Quick Share panel (conditional on file transfer enabled) with drag-and-drop upload and one-click copy-to-clipboard download URLs, expired credential renewal at connect time, and automatic redirect to the next active session when one ends. (The legacy`forceDisplayRepaint()` ghost-pixel mitigation and the manual **Refresh display** button from v0.25.1–v0.27.x have been retired — H.264 passthrough eliminates the underlying ghost class.)
 - **Tiled View** — multi-connection grid layout with per-tile focus, keyboard broadcast, and inline credential prompts
 - **NVR Player** — admin-only read-only session observer with 5-minute rewind buffer, replay→live transition, and timeline controls
 - **Sessions** — unified role-based page with Live Sessions and Recording History tabs; users see their own sessions, admins see all with kill/observe/rewind controls
 - **Login** — unified login portal supporting local credentials and OIDC Single Sign-On; dynamically adjusts based on enabled authentication methods
-- **Admin Settings** — tabbed UI for health, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, network (DNS configuration), access control, connection group management, AD sync sources (with inline password management configuration: enable toggle, credential source, target filter with preview, password policy, auto-rotation), password management (approval roles with explicit account scoping via searchable dropdown and chip tags, account mappings, checkout requests with decided-by column and self-approval detection), session analytics and metrics
+- **Admin Settings** — left-sidebar nav (v1.5.3+) grouped into five sections — **Overview** (Health, Sessions), **Identity & Access** (Access, AD Sync, SSO / OIDC, Kerberos, Password Mgmt), **Connectivity** (Network, DMZ Links, Trusted CAs, VDI), **Workspace** (Display, Tags, Notifications, Recordings), and **Secrets & Security** (Vault, Security). Sections are permission-aware and collapse out of the nav entirely when the current user has no item visible inside them; on screens narrower than the Tailwind `lg` breakpoint the sidebar wraps inline above the content as a horizontal flex row of buttons. The 17 underlying tab panes provide health monitoring, SSO, auth method toggles, Kerberos (multi-realm), vault, recordings, network (DNS configuration), access control, connection group management, AD sync sources (with inline password management configuration: enable toggle, credential source, target filter with preview, password policy, auto-rotation), password management (approval roles with explicit account scoping via searchable dropdown and chip tags, account mappings, checkout requests with decided-by column and self-approval detection), session analytics and metrics, DMZ link health, trusted CAs, and VDI image management.
 - **Approvals** — dedicated page for pending password checkout approval decisions, visible only to users assigned to approval roles. Premium card layout with requester avatar, CN-from-DN display, labeled duration and justification sections, and approve/deny action buttons
 - **Audit Logs** — paginated, hash-chained log viewer
 - **Theme Toggle** — sidebar button cycling System → Light → Dark themes with localStorage persistence
@@ -155,25 +159,26 @@ Pages:
 
 ### 4. PostgreSQL
 
-| Item | Value |
-|---|---|
-| Image | `postgres:16-alpine` |
-| Port | 5432 (internal only) |
-| Volume | `postgres-data` |
+| Item   | Value                |
+| ------ | -------------------- |
+| Image  | `postgres:16-alpine` |
+| Port   | 5432 (internal only) |
+| Volume | `postgres-data`      |
 
 Bundled for zero-configuration first boot. Can be replaced with an external database at any time through the Admin UI.
 
 ### 5. HashiCorp Vault
 
-| Item | Value |
-|---|---|
-| Image | `hashicorp/vault:1.19` |
-| Storage | File backend (`/vault/data`) |
-| Port | 8200 (internal only) |
-| Volume | `vault-data` |
-| Mode | Bundled (auto-provisioned) or External (user-provided) |
+| Item    | Value                                                  |
+| ------- | ------------------------------------------------------ |
+| Image   | `hashicorp/vault:1.19`                                 |
+| Storage | File backend (`/vault/data`)                           |
+| Port    | 8200 (internal only)                                   |
+| Volume  | `vault-data`                                           |
+| Mode    | Bundled (auto-provisioned) or External (user-provided) |
 
 Bundled in Docker Compose for zero-configuration credential encryption. On first boot, the backend automatically:
+
 1. Initializes the Vault (single unseal key, single key share)
 2. Unseals the Vault
 3. Enables the Transit Secrets Engine
@@ -210,8 +215,8 @@ does not drive the `axum::WebSocket` directly from the main
 to the input path: when guacd floods bitmap updates (e.g. the Windows
 Win+Arrow window-snap animation, which emits a burst of draw
 instructions in ~200 ms), the browser's WebSocket receive buffer
-fills, `ws.send().await` inside the `tcp_read` arm blocks, and *while
-it is blocked* the `ws.recv()` arm cannot run. Mouse/keyboard events
+fills, `ws.send().await` inside the `tcp_read` arm blocks, and _while
+it is blocked_ the `ws.recv()` arm cannot run. Mouse/keyboard events
 from the browser then queue up in the kernel TCP buffer and arrive at
 guacd in bursts — users perceive this as rendering freezes, mouse
 "acceleration," and keyboard lag.
@@ -267,7 +272,7 @@ Additional tunnel details:
   `web.session.end` audit row with `reason: "tunnel_disconnect"` is
   written so the lifecycle event is visible. Before v1.3.0 only the
   idle reaper and process-death paths ran in production, so closing a
-  browser tab without first hitting *Disconnect* leaked the kiosk
+  browser tab without first hitting _Disconnect_ leaked the kiosk
   until the reaper caught up.
 
 - Guacamole instructions are delimited by `;` and can be split across
@@ -277,7 +282,7 @@ Additional tunnel details:
   reallocation on large bitmap floods).
 - The pending buffer is hard-capped at 16 MiB. Exceeding the cap emits
   a Guacamole `error "Protocol error: instruction exceeds pending
-  buffer" "521"` instruction to the browser and closes the tunnel.
+buffer" "521"` instruction to the browser and closes the tunnel.
   The old behaviour of silently calling `pending.clear()` is unsafe
   because the stream would resume mid-token.
 - The tunnel ingests non-ASCII WS frames via `str::from_utf8` before
@@ -354,10 +359,10 @@ The four cooperating components:
    hosts.
 4. **Connection-form GFX/H.264 interlock (v1.1.0+)** — the RDP
    Codecs panel of `frontend/src/pages/admin/connectionForm.tsx`
-   renders the *Enable graphics pipeline (GFX)* checkbox as ticked
+   renders the _Enable graphics pipeline (GFX)_ checkbox as ticked
    only when `disable-gfx === "false"` (i.e. it reflects what the
    backend will actually negotiate, not the absence of a value).
-   The companion *Enable H.264 (AVC444)* checkbox is rendered
+   The companion _Enable H.264 (AVC444)_ checkbox is rendered
    disabled whenever GFX is off — the `video/h264` mimetype cannot
    be negotiated without GFX. Ticking H.264 forces
    `disable-gfx="false"` for you, and unticking GFX clears any
@@ -385,16 +390,16 @@ connections so a brand-new SSH connection behaves identically to
 the upstream [sol1/rustguac](https://github.com/sol1/rustguac)
 baseline:
 
-| Parameter               | Default                | Why                                                                                                  |
-| ----------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `terminal-type`         | `xterm-256color`       | Exported as `TERM` on the remote PTY. Without it OpenSSH defaults to `TERM=linux`, which does not advertise `smcup`/`rmcup` and breaks `nano` / `less` alt-screen restore. |
-| `color-scheme`          | `gray-black`           | Rustguac-default SGR palette; without it guacd falls back to `black-white` and inverts most users' expectations. |
-| `scrollback`            | `1000`                 | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000.                         |
-| `font-name`             | `monospace`            | Rustguac parity.                                                                                     |
-| `font-size`             | `12`                   | Rustguac parity.                                                                                     |
-| `backspace`             | `127`                  | DEL — what every modern Linux distro ships as the SSH default; stops `^?` characters appearing on Backspace. |
-| `locale`                | `en_US.UTF-8`          | Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars.                       |
-| `server-alive-interval` | `0`                    | Disables guacd-side keepalives — Guacamole's own keep-alive instructions already provide liveness.   |
+| Parameter               | Default          | Why                                                                                                                                                                        |
+| ----------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terminal-type`         | `xterm-256color` | Exported as `TERM` on the remote PTY. Without it OpenSSH defaults to `TERM=linux`, which does not advertise `smcup`/`rmcup` and breaks `nano` / `less` alt-screen restore. |
+| `color-scheme`          | `gray-black`     | Rustguac-default SGR palette; without it guacd falls back to `black-white` and inverts most users' expectations.                                                           |
+| `scrollback`            | `1000`           | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000.                                                                                               |
+| `font-name`             | `monospace`      | Rustguac parity.                                                                                                                                                           |
+| `font-size`             | `12`             | Rustguac parity.                                                                                                                                                           |
+| `backspace`             | `127`            | DEL — what every modern Linux distro ships as the SSH default; stops `^?` characters appearing on Backspace.                                                               |
+| `locale`                | `en_US.UTF-8`    | Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars.                                                                                             |
+| `server-alive-interval` | `0`              | Disables guacd-side keepalives — Guacamole's own keep-alive instructions already provide liveness.                                                                         |
 
 The corresponding three keys (`color-scheme`, `locale`,
 `server-alive-interval`) have been added to
@@ -407,7 +412,7 @@ Verification flows in priority order:
 
 1. **Authoritative** — Windows Event Viewer →
    `Applications and Services Logs > Microsoft > Windows >
-   RemoteDesktopServices-RdpCoreTS > Operational`:
+RemoteDesktopServices-RdpCoreTS > Operational`:
    - Event ID **162** = AVC444 mode active
    - Event ID **170** = hardware encoding active
 2. guacd logs include `H.264 passthrough enabled for RDPGFX channel`
@@ -570,12 +575,12 @@ password to disk in plaintext.
 **Dispatcher hooks.** Four call sites in `routes/user.rs` invoke
 `notifications::spawn_dispatch`:
 
-| Call site | Event |
-|---|---|
-| `request_checkout` (Pending branch) | `CheckoutEvent::Pending` → all approvers for the target account |
+| Call site                                | Event                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------- |
+| `request_checkout` (Pending branch)      | `CheckoutEvent::Pending` → all approvers for the target account     |
 | `request_checkout` (SelfApproved branch) | `CheckoutEvent::SelfApproved` → audit recipients (bypasses opt-out) |
-| `decide_checkout` (Approved branch) | `CheckoutEvent::Approved` → original requester |
-| `decide_checkout` (Rejected branch) | `CheckoutEvent::Rejected` → original requester |
+| `decide_checkout` (Approved branch)      | `CheckoutEvent::Approved` → original requester                      |
+| `decide_checkout` (Rejected branch)      | `CheckoutEvent::Rejected` → original requester                      |
 
 `spawn_dispatch` is fire-and-forget — it returns immediately so the
 user-facing checkout request is never blocked by mail delivery. All
@@ -597,7 +602,7 @@ leading colon). The command surface is composed of two registries:
    how the action is invoked. Built-in names are reserved — user
    mappings cannot collide with them.
 2. **User mappings** — sourced from `user_preferences.preferences ->
-   commandMappings` (JSONB array, max 50 entries per user). Each
+commandMappings` (JSONB array, max 50 entries per user). Each
    mapping is a discriminated union with `trigger`, `action`, and
    `args`. The six allowed actions are `open-connection`, `open-folder`,
    `open-tag`, `open-page`, `paste-text`, and `open-path`; the
@@ -675,7 +680,10 @@ realm and cookies — no second auth round-trip) and posts the chosen
 connection back to the opener as a same-origin `postMessage`:
 
 ```js
-opener.postMessage({ type: "strata:open-connection", id }, opener.location.origin);
+opener.postMessage(
+  { type: "strata:open-connection", id },
+  opener.location.origin,
+);
 ```
 
 The opener's [`CommandPaletteProvider`](../frontend/src/components/CommandPaletteProvider.tsx)
@@ -864,6 +872,36 @@ host's link port.
   `h2,http/1.1`. Custom framing is intentionally minimal — every
   user request is one HTTP/2 stream, WebSockets ride RFC 8441
   Extended CONNECT, and per-stream flow control comes for free.
+
+  **WebSocket-over-HTTP/2 (v1.5.2+)** — both ends negotiate the
+  `SETTINGS_ENABLE_CONNECT_PROTOCOL` extension (h2 server side calls
+  `enable_connect_protocol()`; the DMZ client side sends per-request
+  `h2::ext::Protocol::from_static("websocket")`). The DMZ proxy
+  detects RFC 6455 WebSocket upgrades on the public listener,
+  captures `hyper::upgrade::on(&mut req)` before the request is
+  consumed, opens an Extended CONNECT stream
+  (`:method=CONNECT, :protocol=websocket, :path=<original>`) on a
+  registered link sender, awaits `:status=200`, then returns
+  `101 Switching Protocols` to the public client with a correctly-
+  computed `Sec-WebSocket-Accept` (RFC 6455 §1.3 SHA-1 + base64).
+  A bidirectional byte-pump copies WebSocket frames between the
+  public TCP socket and the h2 stream; masking, ping/pong,
+  fragmentation and close frames flow through unmodified. The
+  internal-side `LoopbackUpgradeHandler`
+  (`backend/src/services/dmz_link/upgrade_handler.rs`) accepts the
+  inbound Extended CONNECT and bridges it to a regular HTTP/1.1
+  WebSocket upgrade against `127.0.0.1:8080` (overridable via
+  `STRATA_DMZ_LOOPBACK_ADDR`), so the existing
+  `/api/tunnel/{connection_id}` axum handler runs unchanged. The
+  guacd connection therefore originates from the **internal node's**
+  IP, not the DMZ node's IP — exactly as a single-node deployment
+  behaves. WebSocket streams cannot be sized by the
+  `MAX_REQUEST_BODY_BYTES` / `MAX_PROXY_BODY_BYTES` buffers used on
+  the REST path because they are long-lived; instead we cap
+  individual h2 frame sizes at 8 MiB on the DMZ→public direction
+  so a misbehaving internal node cannot make the DMZ buffer
+  arbitrary memory before the public socket drains.
+
 - **Edge attribution**: the DMZ node stamps a signed bundle of
   request metadata (`x-strata-edge-*` headers — client IP, TLS
   version/cipher/JA3, user-agent, request ID, link ID, timestamp)
@@ -879,18 +917,18 @@ host's link port.
 
 ### Authoritative references
 
-| Topic | Location |
-|---|---|
-| Decision + alternatives | [adr/ADR-0009-dmz-deployment-mode.md](adr/ADR-0009-dmz-deployment-mode.md) |
-| Implementation plan (canonical) | [dmz-implementation-plan.md](dmz-implementation-plan.md) |
-| Threat model (STRIDE per component) | [threat-model.md](threat-model.md) §6 |
-| Operator deployment guide | [deployment.md](deployment.md#dmz-deployment-mode) |
-| On-call runbook | [runbooks/dmz-incident.md](runbooks/dmz-incident.md) |
-| Grafana dashboard | [grafana/strata-dmz-dashboard.json](grafana/strata-dmz-dashboard.json) |
-| Compose overlay | [`docker-compose.dmz.yml`](../docker-compose.dmz.yml) |
-| Helm chart | [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/) |
-| Wire protocol crate | [`crates/strata-protocol/`](../crates/strata-protocol/) |
-| DMZ binary crate | [`crates/strata-dmz/`](../crates/strata-dmz/) |
+| Topic                               | Location                                                                   |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| Decision + alternatives             | [adr/ADR-0009-dmz-deployment-mode.md](adr/ADR-0009-dmz-deployment-mode.md) |
+| Implementation plan (canonical)     | [dmz-implementation-plan.md](dmz-implementation-plan.md)                   |
+| Threat model (STRIDE per component) | [threat-model.md](threat-model.md) §6                                      |
+| Operator deployment guide           | [deployment.md](deployment.md#dmz-deployment-mode)                         |
+| On-call runbook                     | [runbooks/dmz-incident.md](runbooks/dmz-incident.md)                       |
+| Grafana dashboard                   | [grafana/strata-dmz-dashboard.json](grafana/strata-dmz-dashboard.json)     |
+| Compose overlay                     | [`docker-compose.dmz.yml`](../docker-compose.dmz.yml)                      |
+| Helm chart                          | [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/)                    |
+| Wire protocol crate                 | [`crates/strata-protocol/`](../crates/strata-protocol/)                    |
+| DMZ binary crate                    | [`crates/strata-dmz/`](../crates/strata-dmz/)                              |
 
 ### Naming
 
@@ -924,7 +962,7 @@ which hits two endpoints:
 
 - `GET /api/admin/dmz-links` returns
   `{ configured: bool, links: [{ endpoint, state, connects, failures,
-  since_unix_secs, last_error }, …] }`. Auto-refreshed every 15 s.
+since_unix_secs, last_error }, …] }`. Auto-refreshed every 15 s.
 - `POST /api/admin/dmz-links/reconnect` drops every link's TCP
   connection and lets the supervisor's back-off loop redial. Used
   during scheduled DMZ restarts and as the first step in the
@@ -939,32 +977,32 @@ Both endpoints require `can_manage_system` and the standard
 Design decisions whose rationale outlives any single commit live as
 numbered ADRs under [adr/](adr/):
 
-| ADR | Topic |
-|---|---|
-| [ADR-0001](adr/ADR-0001-rate-limit-single-instance.md) | Rate-limit state: single-instance constraint with promotion criteria |
-| [ADR-0002](adr/ADR-0002-csrf-samesite-strict.md) | CSRF strategy: `SameSite=Strict` as the compensating control |
-| [ADR-0003](adr/ADR-0003-feature-flags-deferred.md) | Feature flags: boolean `settings` keys instead of a dedicated table |
-| [ADR-0004](adr/ADR-0004-guacd-connection-model.md) | guacd connection model, protocol-parameter allow-list, and trust boundaries |
-| [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) | JWT + refresh-token TTLs, single-use rotation, forced-logout lever |
-| [ADR-0006](adr/ADR-0006-vault-transit-envelope.md) | Vault Transit envelope (`vault:<base64>`), rotate + rewrap path |
-| [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts |
-| [ADR-0008](adr/ADR-0008-notification-pipeline.md) | Transactional-email subsystem: MJML/mrml renderer, Vault-sealed SMTP password, opt-out semantics, retry worker |
-| [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md) | DMZ deployment mode: public-facing dumb-proxy, reverse-tunnel link, signed edge headers |
+| ADR                                                    | Topic                                                                                                          |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| [ADR-0001](adr/ADR-0001-rate-limit-single-instance.md) | Rate-limit state: single-instance constraint with promotion criteria                                           |
+| [ADR-0002](adr/ADR-0002-csrf-samesite-strict.md)       | CSRF strategy: `SameSite=Strict` as the compensating control                                                   |
+| [ADR-0003](adr/ADR-0003-feature-flags-deferred.md)     | Feature flags: boolean `settings` keys instead of a dedicated table                                            |
+| [ADR-0004](adr/ADR-0004-guacd-connection-model.md)     | guacd connection model, protocol-parameter allow-list, and trust boundaries                                    |
+| [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) | JWT + refresh-token TTLs, single-use rotation, forced-logout lever                                             |
+| [ADR-0006](adr/ADR-0006-vault-transit-envelope.md)     | Vault Transit envelope (`vault:<base64>`), rotate + rewrap path                                                |
+| [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts                                                        |
+| [ADR-0008](adr/ADR-0008-notification-pipeline.md)      | Transactional-email subsystem: MJML/mrml renderer, Vault-sealed SMTP password, opt-out semantics, retry worker |
+| [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md)        | DMZ deployment mode: public-facing dumb-proxy, reverse-tunnel link, signed edge headers                        |
 
 ## Operational Runbooks
 
 Step-by-step procedures for on-call engineers live under
 [runbooks/](runbooks/):
 
-| Runbook | When to use |
-|---|---|
-| [disaster-recovery.md](runbooks/disaster-recovery.md) | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h) |
-| [security-incident.md](runbooks/security-incident.md) | Credential exposure, token replay, unauthorised config change |
-| [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA) |
-| [vault-operations.md](runbooks/vault-operations.md) | Vault unseal, Transit key rotate + rewrap, Shamir rekey |
-| [database-operations.md](runbooks/database-operations.md) | Replica promotion, migration rollback, panic-boot recovery |
+| Runbook                                                     | When to use                                                                                       |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [disaster-recovery.md](runbooks/disaster-recovery.md)       | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h)                                              |
+| [security-incident.md](runbooks/security-incident.md)       | Credential exposure, token replay, unauthorised config change                                     |
+| [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA)                                           |
+| [vault-operations.md](runbooks/vault-operations.md)         | Vault unseal, Transit key rotate + rewrap, Shamir rekey                                           |
+| [database-operations.md](runbooks/database-operations.md)   | Replica promotion, migration rollback, panic-boot recovery                                        |
 | [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config |
-| [dmz-incident.md](runbooks/dmz-incident.md) | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise |
+| [dmz-incident.md](runbooks/dmz-incident.md)                 | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                  |
 
 ## Extended protocols
 
@@ -1034,12 +1072,12 @@ a friendly name; any `web` connection can attach a bundle via
 `extra.trusted_ca_id`. The runtime path is:
 
 1. `routes/tunnel.rs` resolves `cfg.trusted_ca_id` to the PEM bytes
-   via `services::trusted_ca::get(&pool, id)` *before* constructing
+   via `services::trusted_ca::get(&pool, id)` _before_ constructing
    the `WebSpawnSpec`.
 2. `WebSpawnSpec.trusted_ca_pem` and `trusted_ca_label` flow into the
    spawn worker.
 3. The worker calls `services::trusted_ca::import_pem_into_nss_db(
-   &pem, profile_dir, label)` which executes
+&pem, profile_dir, label)` which executes
    `certutil -N --empty-password -d sql:<profile>/.pki/nssdb` followed
    by `certutil -A -d sql:<profile>/.pki/nssdb -n <label> -t "C,," -i <tmp.pem>`.
 4. Chromium reads the NSS DB at startup and trusts the supplied roots
@@ -1053,7 +1091,7 @@ with `rustls_pki_types::CertificateDer::pem_slice_iter` + `x509_parser::parse_x5
 and the parsed `subject` / `not_after` / `fingerprint` (SHA-256 hex,
 colon-separated) are cached on the row so list views never re-parse.
 The PEM column is treated as **public material** (signatures over
-public keys) and is *not* envelope-encrypted via Vault — see the
+public keys) and is _not_ envelope-encrypted via Vault — see the
 [Security](security.md) document for the rationale.
 
 ### VDI runtime (shipped v0.30.0)
@@ -1097,14 +1135,13 @@ of the stack.
 Socket permission handling: `entrypoint.sh` either creates a
 `docker-host` group at the socket's GID (Linux distros) or `chgrp` +
 `chmod g+rw` the bind-mount in place (Docker Desktop GID 0). See
-[`vdi.md`](vdi.md) § *Docker socket permissions* for the exact
+[`vdi.md`](vdi.md) § _Docker socket permissions_ for the exact
 script.
 
 VDI-specific tunnel parameter overrides:
 
-| Param           | Forced for VDI   | Reason                                                |
-| --------------- | ---------------- | ----------------------------------------------------- |
-| `ignore-cert`   | `true`           | Per-container self-signed cert; both ends Strata-controlled. |
-| `security`      | `any`            | xrdp negotiates whatever it can.                     |
-| `resize-method` | `""`             | xrdp's display-update channel drops on resize storms. |
-
+| Param           | Forced for VDI | Reason                                                       |
+| --------------- | -------------- | ------------------------------------------------------------ |
+| `ignore-cert`   | `true`         | Per-container self-signed cert; both ends Strata-controlled. |
+| `security`      | `any`          | xrdp negotiates whatever it can.                             |
+| `resize-method` | `""`           | xrdp's display-update channel drops on resize storms.        |

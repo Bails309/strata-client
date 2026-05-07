@@ -5,6 +5,204 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] — 2026-05-08
+
+### Admin Settings — grouped sidebar navigation
+
+v1.5.3 is a focused, **UX-only** patch release. There are no API
+changes, no database migrations, no protocol changes, no security
+changes, and no behavioural changes to any session, audit, or
+deployment code path. Operators upgrading from v1.5.2 only need to
+roll the **frontend** image; the backend, DMZ edge, and guacd
+images are bit-identical to v1.5.2.
+
+#### What changed
+
+The Admin Settings page accumulated 17 horizontal tabs as features
+were added across the v1.4.x → v1.5.x line (Health, Display,
+Network, SSO / OIDC, Kerberos, Vault, Recordings, Access, Tags,
+AD Sync, Password Mgmt, Notifications, Sessions, VDI, Trusted CAs,
+DMZ Links, Security). On a 1080p monitor the row no longer fit in a
+single line on common DPI / zoom settings; on operator laptops it
+overflowed horizontally and required scrolling to reach the
+right-hand tabs.
+
+v1.5.3 replaces the single horizontal row with a **left sidebar**
+grouped into five sections, modelled on the navigation patterns used
+by AWS Console, Azure Portal, and GitHub Settings:
+
+- **Overview** — Health, Sessions
+- **Identity & Access** — Access, AD Sync, SSO / OIDC, Kerberos, Password Mgmt
+- **Connectivity** — Network, DMZ Links, Trusted CAs, VDI
+- **Workspace** — Display, Tags, Notifications, Recordings
+- **Secrets & Security** — Vault, Security
+
+#### Behaviour
+
+- **Permission-aware section collapse** — sections become hidden
+  from the nav entirely when the current user has no permission to
+  see any item inside them, so a non-system-admin who can only
+  manage tags or view sessions sees a much smaller sidebar than a
+  full system administrator. The per-item permission predicates
+  (`can_manage_system`, `can_manage_users`, `can_manage_connections`,
+  `can_create_*`, `can_view_audit_logs`, `can_manage_system ||
+can_view_audit_logs` for Sessions, etc.) are unchanged from v1.5.2;
+  only the grouping and rendering changed.
+- **Responsive layout** — on screens narrower than the Tailwind
+  `lg` breakpoint (1024 px) the sidebar wraps inline above the
+  content as a horizontal flex row of buttons, so mobile and tablet
+  operators get the same content without a forced two-pane layout.
+- **Sticky sidebar** on `lg+` screens so the section list stays in
+  view while scrolling long settings panels (the Recordings tab,
+  the Notifications SMTP section, and the Access Control role
+  editor are all longer than a typical viewport).
+- **Accessibility** — the nav element has `aria-label="Admin
+sections"` and section headings render as visually-distinct
+  uppercase tracking-wider labels rather than `<h*>` elements (so
+  the page heading hierarchy is unchanged from v1.5.2 and screen
+  readers still see one `<h1>` for the page).
+
+#### What did **not** change
+
+- All 17 tab labels are byte-identical to v1.5.2 (Sessions, DMZ
+  Links, Trusted CAs, Password Mgmt, etc.).
+- The `.tab-active` CSS class is still applied to the currently-
+  selected button, so existing styling, themes, and the 220-test
+  AdminSettings unit-test suite continue to pass unchanged.
+- The `Tab` union type, the per-tab `<TabPane>` components, the
+  in-page `flash()` toast, the `getSettings()` / `getRoles()` /
+  `getConnections()` / `getConnectionFolders()` / `getUsers()` /
+  `getAdSyncConfigs()` initial-load logic, and the per-tab
+  `onSave={() => flash(…)}` wiring are all unchanged.
+- The default-tab heuristic (system admins land on Health, RBAC
+  admins on Access, audit-only viewers on Sessions) is unchanged.
+
+#### Tests
+
+All 1329 frontend tests continue to pass (`npm run test -- --run`).
+220 of those tests are in `src/__tests__/AdminSettings.test.tsx`
+and exercise tab-switching by clicking the visible tab labels —
+because the labels and the `.tab-active` class are preserved, no
+test changes were required.
+
+#### Upgrade
+
+Drop-in. Pull `ghcr.io/bails309/strata-client/frontend:1.5.3`,
+roll the frontend container. The backend, DMZ, and guacd images
+do not need to be touched — this is a static-asset change only.
+
+```bash
+export STRATA_VERSION=1.5.3
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull frontend
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d frontend
+```
+
+If you build from source, the unified `docker compose up -d --build`
+will rebuild the frontend layer only (the Cargo dep tree is
+unchanged from v1.5.2 so the backend / DMZ stages hit the cargo
+cache). The `__APP_VERSION__` Vite define automatically picks up
+the new version from `frontend/package.json`, which drives both the
+Admin → Health version banner and the **What's New** modal trigger
+(operators will see the modal pop up once on next login).
+
+## [1.5.2] — 2026-05-08
+
+### DMZ link — WebSocket forwarding (RFC 8441 Extended CONNECT)
+
+v1.5.2 ships the missing piece of the **dual-node DMZ deployment**
+that was promised in v1.5.0's design notes but never landed in code:
+the DMZ proxy can now forward WebSocket upgrades end-to-end through
+the reverse-tunnel link, which means `/api/tunnel/{connection_id}`
+finally works when users connect through a DMZ node.
+
+Until this release, the DMZ proxy only handled buffered HTTP
+request/response pairs — the public listener stripped the `Upgrade`
+header on its way through, the inner h2 multiplexer had no
+upgrade-aware code path, and any user who connected to the DMZ node
+and tried to launch a session saw the WebSocket fail mid-handshake.
+REST traffic (admin UI, OIDC, login) was unaffected, which is why
+the regression slipped through internal smoke tests.
+
+### What changed
+
+- **DMZ side (`crates/strata-dmz`)** — new `ws_proxy` module detects
+  RFC 6455 WebSocket upgrades (`Upgrade: websocket` + `Connection:
+Upgrade` + `Sec-WebSocket-Key`) on the public listener and routes
+  them down a separate code path. Instead of buffering the request
+  body, the DMZ:
+  1. Captures the `hyper::upgrade::on(&mut req)` future.
+  2. Opens an Extended CONNECT (RFC 8441) stream on a registered
+     link sender with `:method=CONNECT`, `:protocol=websocket`,
+     `:path=<original>`, the signed edge-header bundle, and every
+     non-hop-by-hop header from the original request.
+  3. Waits for `:status=200` from the internal node before
+     acknowledging the upgrade publicly.
+  4. Returns `101 Switching Protocols` with a correctly-computed
+     `Sec-WebSocket-Accept` (RFC 6455 §1.3 SHA-1 + base64 of
+     `Sec-WebSocket-Key` + magic GUID).
+  5. Spawns a bidirectional byte-pump that copies frames between
+     the public TCP socket and the h2 stream — frame masking,
+     ping/pong, fragmentation, and close frames all flow through
+     unmodified.
+
+- **Internal side (`backend/src/services/dmz_link`)** — h2 server
+  now calls `enable_connect_protocol()` so the DMZ peer is told the
+  Extended CONNECT settings extension is supported. New
+  `UpgradeHandler` trait + `LoopbackUpgradeHandler` accept inbound
+  Extended CONNECT streams and bridge them to a regular HTTP/1.1
+  WebSocket upgrade against `127.0.0.1:8080` (overridable via the
+  new `STRATA_DMZ_LOOPBACK_ADDR` env var). The loopback target is
+  the same axum router that serves direct connections, so the
+  existing `verify_edge_headers` middleware promotes the forwarded
+  `x-strata-edge-client-ip` to the real client IP for audit / RBAC
+  exactly as on a direct connection — no separate auth code path
+  to keep in sync.
+
+- **Resource limits** — Extended CONNECT streams cannot be size-
+  capped by the existing `MAX_REQUEST_BODY_BYTES` / `MAX_PROXY_BODY_BYTES`
+  buffers (they're long-lived). Instead we cap _individual_ h2 frame
+  sizes at 8 MiB on the DMZ→public direction so a misbehaving
+  internal node cannot make the DMZ buffer arbitrary memory before
+  flushing to the public socket.
+
+- **Connection origin (operator-visible)** — when a session is
+  launched through the DMZ, the guacd connection still originates
+  from the **internal node's** IP, not the DMZ node's IP, exactly
+  as a single-node deployment behaves. The DMZ never speaks guacd,
+  never holds Strata business secrets, and never sees decrypted
+  credentials. This is a deliberate architectural property that
+  v1.5.2 finally makes user-visible (rather than only true on
+  paper).
+
+### Upgrade
+
+This is a drop-in upgrade for both the standalone deployment and
+the dual-node DMZ deployment. No database migration; no config
+changes required for existing operators. New optional env var:
+
+- `STRATA_DMZ_LOOPBACK_ADDR` (default `127.0.0.1:8080`) — only set
+  this if the internal node listens on a non-default address.
+
+Operators running a DMZ deployment **must** rebuild and redeploy
+_both_ the `strata-dmz` and `strata-backend` images for WebSocket
+forwarding to work — both ends of the link need to negotiate the
+RFC 8441 settings extension.
+
+### Tests
+
+- DMZ side: 7 new unit tests covering `is_websocket_upgrade`
+  detection (canonical, multi-token Connection, case-insensitive,
+  rejection paths) and `compute_accept` against the RFC 6455 §1.3
+  worked example (`dGhlIHNhbXBsZSBub25jZQ==` →
+  `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`).
+- Internal side: 10 new unit tests for the upgrade-handler module
+  covering Extended CONNECT detection, response-line parsing,
+  CRLFCRLF scanning, header-forwarding allowlist, and
+  oversized-line rejection.
+- Existing h2_serve and supervisor tests updated to thread a
+  `RejectUpgradeHandler` through the new signature; all pre-existing
+  test coverage continues to pass.
+
 ## [1.5.1] — 2026-05-07
 
 ### Pop-out window correctness fix release
@@ -166,8 +364,8 @@ traffic directly. Drop-in upgrade from v1.4.1.
     (`{configured, links: [{endpoint, state, connects, failures, since_unix_secs, last_error}, ...]}`).
   - `POST /api/admin/dmz-links/reconnect` — kick every link
     (`{nudged: <count>}`).
-  Both require `can_manage_system` and the standard `X-CSRF-Token`
-  double-submit cookie.
+    Both require `can_manage_system` and the standard `X-CSRF-Token`
+    double-submit cookie.
 - **Operator-grade documentation**
   - [`docs/architecture.md`](docs/architecture.md) — new chapter on
     the DMZ split, sequence diagrams, secret-overlap matrix.
@@ -218,9 +416,9 @@ traffic directly. Drop-in upgrade from v1.4.1.
    HMAC key (see [`docs/deployment.md`](docs/deployment.md#dmz-deployment-mode)),
    stand up the `strata-dmz` container on its public-facing host,
    set `STRATA_DMZ_ENDPOINTS` + `STRATA_CLUSTER_ID` + `STRATA_NODE_ID`
-   + the matching `STRATA_DMZ_LINK_PSK_<id>` and
-   `STRATA_DMZ_EDGE_HMAC_KEYS` on the internal node, restart it,
-   verify the link comes up green in **Admin → DMZ Links**.
+   - the matching `STRATA_DMZ_LINK_PSK_<id>` and
+     `STRATA_DMZ_EDGE_HMAC_KEYS` on the internal node, restart it,
+     verify the link comes up green in **Admin → DMZ Links**.
 
 ## [1.4.1] — 2026-05-05
 
@@ -239,7 +437,7 @@ frontend's `SessionTimeoutWarning` rotates them via
 `POST /api/auth/refresh` on user activity (proactive refresh after
 ~10 minutes of activity). The already-open WebSocket has no mechanism
 to learn about that rotation, so the watchdog held on to the
-*original* token's `exp` and reaped the session at T+20m regardless of
+_original_ token's `exp` and reaped the session at T+20m regardless of
 how active the user was.
 
 **Fix.** The dead `jsonwebtoken::decode` block at upgrade time and
@@ -272,8 +470,8 @@ The guacd image build was briefly broken on `origin/main` between
 commits `de0ba24` and `1064a8e` while we attempted to drop our local
 patch [`guacd/patches/006-freerdp325-authenticate-ex.patch`](guacd/patches/006-freerdp325-authenticate-ex.patch).
 The hypothesis — that GUACAMOLE-2273 (upstream commit `7696572`,
-*"Implement FreeRDP AuthenticateEx callback and handle deprecation
-of Authenticate callback"*) had landed on `staging/1.6.1` and
+_"Implement FreeRDP AuthenticateEx callback and handle deprecation
+of Authenticate callback"_) had landed on `staging/1.6.1` and
 rendered our patch redundant — was wrong: at this writing GUACAMOLE-2273
 exists only as an unmerged PR commit, not on the staging branch
 HEAD. Rebuilding `guacd` against the new pin (`4163ead`) without
@@ -296,14 +494,14 @@ function)
 `AUTH_FIDO_PIN` is part of the FreeRDP `rdp_auth_reason` enum
 introduced after FreeRDP 3.25, and Alpine edge currently ships
 `freerdp-libs 3.25.0-r0` / `freerdp-dev 3.25.0-r0`. Net result:
-neither *"drop patch 006"* nor *"pin to the unmerged PR"* works
+neither _"drop patch 006"_ nor _"pin to the unmerged PR"_ works
 today. v1.4.1 keeps the working v1.4.0 combination — pin
 `4163ead8be54baa35ef5f7ad8897a57497649112` (`staging/1.6.1` HEAD)
 plus patch 006 plus the two grep guards in
 [`guacd/Dockerfile`](guacd/Dockerfile) — and updates the Dockerfile
 comment block to record the reasoning so the next maintainer does
 not re-walk the same path. Functionally a no-op vs. v1.4.0; only
-the pin/patch *story* changed.
+the pin/patch _story_ changed.
 
 ### Crypto crate refresh
 
@@ -313,12 +511,12 @@ v10 prefix, used by the Chromium-export ingestion path under VDI /
 web sessions) — gets a refresh of the underlying RustCrypto crates
 to the current major lines:
 
-| Crate    | Old   | New   | Notes                                           |
-| -------- | ----- | ----- | ----------------------------------------------- |
-| `aes`    | 0.8   | 0.9   | API: `KeyInit::new` is now panicking-only       |
-| `cbc`    | 0.1   | 0.2   | feature `std` → `alloc`                         |
-| `pbkdf2` | 0.12  | 0.13  | `pbkdf2_hmac::<Sha1>(...)` signature unchanged  |
-| `sha1`   | 0.10  | 0.11  | re-export hygiene                               |
+| Crate    | Old  | New  | Notes                                          |
+| -------- | ---- | ---- | ---------------------------------------------- |
+| `aes`    | 0.8  | 0.9  | API: `KeyInit::new` is now panicking-only      |
+| `cbc`    | 0.1  | 0.2  | feature `std` → `alloc`                        |
+| `pbkdf2` | 0.12 | 0.13 | `pbkdf2_hmac::<Sha1>(...)` signature unchanged |
+| `sha1`   | 0.10 | 0.11 | re-export hygiene                              |
 
 The decrypted secret is never written to disk by the backend; this
 path lives entirely behind the autofill-import feature toggle that
@@ -375,12 +573,12 @@ E2E:
 
 ### Documentation
 
-- [`docs/security.md`](docs/security.md) — *WebSocket-tunnel auth
-  watchdog* section revised with v1.4.1 semantics
+- [`docs/security.md`](docs/security.md) — _WebSocket-tunnel auth
+  watchdog_ section revised with v1.4.1 semantics
   (`MAX_TUNNEL_DURATION = 8h`, removal of `exp` enforcement, new
   `max_duration` audit reason).
-- [`docs/architecture.md`](docs/architecture.md) — *Connection
-  Tunnel* prose updated to match the watchdog v1.4.1 contract.
+- [`docs/architecture.md`](docs/architecture.md) — _Connection
+  Tunnel_ prose updated to match the watchdog v1.4.1 contract.
 - [`docs/api-reference.md`](docs/api-reference.md) — `tunnel.terminated`
   audit `reason` enum updated.
 - This changelog and [`WHATSNEW.md`](WHATSNEW.md) — the v1.4.1
@@ -499,7 +697,7 @@ the `e2e/tests/rbac.spec.ts` no-auth/wrong-role assertions.
 ### Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — new "Kubernetes
-  Pod Console" entry under *Extended protocols*.
+  Pod Console" entry under _Extended protocols_.
 - [`docs/security.md`](docs/security.md) — Kubernetes client-key
   handling note in the credential-resolution section.
 - [`docs/api-reference.md`](docs/api-reference.md) — `kubernetes`
@@ -574,7 +772,7 @@ old tag is not enough.
     of `rdp.c` so the `FREERDP_VERSION_MAJOR` /
     `FREERDP_VERSION_MINOR` preprocessor macros are visible at
     every conditional that follows. (Without this, the macros are
-    *not* transitively defined inside `rdp.c` despite
+    _not_ transitively defined inside `rdp.c` despite
     `<freerdp/freerdp.h>` being included — a fact that wasted an
     embarrassing amount of debugging time.)
   - Wraps the `static BOOL rdp_freerdp_authenticate(...)` function
@@ -597,7 +795,7 @@ old tag is not enough.
 - **Defence-in-depth grep verification in `guacd/Dockerfile`.**
   Immediately after the patch loop, the Dockerfile now runs two
   `grep -q` assertions that fail the build with a clear error
-  message if the post-patch source tree does *not* contain
+  message if the post-patch source tree does _not_ contain
   `#include <freerdp/version.h>` and `rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;`.
   The first iteration of the patch applied silently but selected
   the `#else` (legacy) branch at every conditional because
@@ -672,6 +870,7 @@ old tag is not enough.
   on `freerdp-dev=3.24.2-r0` are not regressed. The pinned
   upstream `apache/guacamole-server` commit (`2980cf0`) is
   unchanged.
+
 - **Black "ghost regions" after RDP desktop resize.** Patch 005
   (above) adds a post-`gdi_resize` repaint kick so the full new
   desktop area is marked dirty and a `RefreshRect` is sent to the
@@ -690,7 +889,7 @@ old tag is not enough.
   set of sessions.
 - **Logout left tunnels streaming until the tab closed.**
   `App.tsx`'s `handleLogout` now calls `closeAllSessionsExternal()`
-  *before* flipping React auth state and then issues a
+  _before_ flipping React auth state and then issues a
   fire-and-forget `apiLogout()` to invalidate the refresh token
   and clear the auth cookies. Idle-timeout logout takes the same
   path. The backend now sees clean WebSocket closes the moment
@@ -774,10 +973,10 @@ remove user-facing failure modes that were never supposed to occur.
   - **`terminal-type=xterm-256color`** is exported as the `TERM`
     environment variable on the remote PTY. Without it, guacd sends
     the empty default which `OpenSSH` translates to `TERM=linux` on
-    most distros — a 16-colour profile that does *not* advertise
+    most distros — a 16-colour profile that does _not_ advertise
     `smcup`/`rmcup`, so `nano` and `less` cannot save and restore
-    the alternate screen. That was the user-visible *"after I close
-    nano my SSH window still shows the file"* bug. With the new
+    the alternate screen. That was the user-visible _"after I close
+    nano my SSH window still shows the file"_ bug. With the new
     default, the remote shell sees `TERM=xterm-256color` and the
     alt-screen save/restore works.
   - **`color-scheme=gray-black`** is the rustguac-default colour
@@ -809,13 +1008,13 @@ remove user-facing failure modes that were never supposed to occur.
   on the window. When fired, it inspects the live `mouse.currentState`
   and, if any of `left` / `middle` / `right` is still set, emits a
   cleared `Guacamole.Mouse.State` via `client.sendMouseState(s, true)`.
-  This closes the long-running *"phantom text selection extends
+  This closes the long-running _"phantom text selection extends
   across the SSH terminal as I move my cursor toward the browser
-  tab strip"* bug. Root cause: when the user clicks inside the
+  tab strip"_ bug. Root cause: when the user clicks inside the
   Guacamole canvas and the matching `mouseup` lands outside the
   document (browser chrome, devtools window, popped-out Strata
   window, another tab during a drag), the page never receives the
-  `mouseup` and guacd's terminal stays in *"left button held"*
+  `mouseup` and guacd's terminal stays in _"left button held"_
   state; the next `mousemove` is then interpreted as a
   drag-extend-selection. The fix sends an explicit
   buttons-released state on the two events that actually catch
@@ -833,7 +1032,7 @@ remove user-facing failure modes that were never supposed to occur.
   yet contain a `?`, producing a malformed path like
   `…/stream&seek=3114&speed=2` that the WebSocket upgrader on the
   backend correctly rejected as an unknown route. The frontend
-  rendered this as the red *"Tunnel error"* badge over the player
+  rendered this as the red _"Tunnel error"_ badge over the player
   the moment the user clicked any seek button (`30S`, `1M`, `3M`,
   `5M` in either direction) or any speed button (`2x`, `4x`, `8x`).
   Fixed by collecting the parameters into a list and prepending
@@ -844,7 +1043,7 @@ remove user-facing failure modes that were never supposed to occur.
   connect-protocol args (which is what the backend route already
   reads them as) rather than as URL query string.
 - **Phantom text selection in SSH terminals when the cursor leaves
-  the Guacamole canvas mid-drag.** See the *Added* section above.
+  the Guacamole canvas mid-drag.** See the _Added_ section above.
   Symptom: clicking inside the SSH terminal then moving the mouse
   toward the browser tab strip (or any other element outside the
   canvas, including a popped-out devtools window) without
@@ -854,14 +1053,14 @@ remove user-facing failure modes that were never supposed to occur.
   only protocol path that uses left-mouse-drag for region
   selection; RDP / VNC / web kiosks were never affected.
 - **Missing 256-colour ANSI rendering and broken `nano` /
-  `less` alt-screen restore on SSH.** See the *Added* section
+  `less` alt-screen restore on SSH.** See the _Added_ section
   above. Symptom: closing `nano` left the file contents on the
   terminal viewport instead of restoring the previous prompt;
   `vim`'s syntax highlighting and `ls --color` rendered in the
   reduced 16-colour palette; bold colours often rendered as the
   same colour as plain text.
 - **`docker compose build guacd` failing with `error: patch does
-  not apply` when a patch hunk's surrounding context has drifted
+not apply` when a patch hunk's surrounding context has drifted
   by even a single whitespace line.** [`guacd/Dockerfile`](guacd/Dockerfile)
   previously applied each patch with `git apply` only — which is
   strict about hunk context. The patch step now installs `patch`
@@ -896,7 +1095,7 @@ remove user-facing failure modes that were never supposed to occur.
   terminal then moving the cursor to the browser tab strip without
   releasing no longer extends a phantom selection. Clicking any
   seek or speed button on a recording playback page no longer
-  shows *"Tunnel error"* — the player reconnects with the new
+  shows _"Tunnel error"_ — the player reconnects with the new
   `seek` / `speed` Guacamole args and resumes playback.
 
 ### Upgrade notes
@@ -906,7 +1105,7 @@ remove user-facing failure modes that were never supposed to occur.
   Dockerfile patch step — all three are baked into their
   respective images. Run `docker compose up -d --build` (or pull
   freshly published CI tags). A `docker compose pull` of an old
-  tag is *not* enough.
+  tag is _not_ enough.
 - **No database migrations.** v1.3.1 is schema-stable relative to
   v1.3.0 and v1.2.0.
 - **No `/api/*` contract changes.** The recording-playback
@@ -927,7 +1126,7 @@ remove user-facing failure modes that were never supposed to occur.
 
 A focused follow-up to the v1.2.0 Trusted-CA work. Three production
 incidents on the in-house deployment surfaced four orthogonal bugs
-that all combined to make Trusted CAs *appear* not to work even when
+that all combined to make Trusted CAs _appear_ not to work even when
 they were configured correctly: (1) the kiosk's NSS database was
 materialised at `<user-data-dir>/.pki/nssdb` but Chromium reads NSS
 from `$HOME/.pki/nssdb`, so the imported roots were silently ignored
@@ -935,7 +1134,7 @@ and every site signed by an internal CA tripped
 `NET::ERR_CERT_AUTHORITY_INVALID` despite a successful `certutil -A`;
 (2) the kiosk handle was never evicted from the in-memory registry on
 WebSocket disconnect, so closing the browser tab left Chromium + Xvnc
-running and the *next* reopen returned the stale handle (= a closed
+running and the _next_ reopen returned the stale handle (= a closed
 tab) instead of spawning a fresh kiosk; (3) Chromium's "You are using
 an unsupported command-line flag: --no-sandbox" yellow infobar was
 permanently stuck across the top of every kiosk; (4) on the
@@ -997,8 +1196,8 @@ URL that only made sense for a browser-based kiosk.
   [`backend/src/services/web_session.rs`](backend/src/services/web_session.rs)
   now adds `--test-type` whenever it adds `--no-sandbox` (i.e. only
   when running as root, which is the default in the container). This
-  suppresses the yellow *"You are using an unsupported command-line
-  flag: --no-sandbox. Stability and security will suffer."* banner
+  suppresses the yellow _"You are using an unsupported command-line
+  flag: --no-sandbox. Stability and security will suffer."_ banner
   that Chromium otherwise paints across the top of every kiosk tab.
   `--test-type` does **not** disable the sandbox — it only suppresses
   the warning chrome and a handful of other end-user prompts (default-
@@ -1028,13 +1227,13 @@ URL that only made sense for a browser-based kiosk.
   sets `HOME=<user_data_dir>` in the `Command` env block alongside
   `DISPLAY`. Chromium's NSS-based cert verifier on Linux resolves the
   trust-store path relative to `$HOME` (always
-  `$HOME/.pki/nssdb`) — *not* relative to `--user-data-dir`. The
+  `$HOME/.pki/nssdb`) — _not_ relative to `--user-data-dir`. The
   `--user-data-dir` flag controls Chromium's own profile (cookies,
   cache, prefs); it has no effect on NSS. Without this override the
   backend correctly created the NSS DB at
   `<user_data_dir>/.pki/nssdb` and ran `certutil -A`, but Chromium
   was looking at the strata user's actual home (`/home/strata/.pki/
-  nssdb` or wherever) which never had the imported cert. Pointing
+nssdb` or wherever) which never had the imported cert. Pointing
   `HOME` at the user-data-dir aligns NSS's resolution with where the
   bundle is materialised. Fixes the symptom from v1.2.0 where uploading
   and selecting a Trusted CA still produced
@@ -1061,7 +1260,7 @@ URL that only made sense for a browser-based kiosk.
   container exits before `gosu strata strata-backend` ever runs.
   Symptom on production was a backend container in a permanent
   `Restarting (141)` state with empty `docker compose logs`. Wrapped
-  *just that one pipeline* with `set +o pipefail` / `set -o pipefail`
+  _just that one pipeline_ with `set +o pipefail` / `set -o pipefail`
   so the (harmless) SIGPIPE on `find` no longer kills the script,
   while preserving strict-mode safety everywhere else in the
   entrypoint.
@@ -1076,7 +1275,7 @@ URL that only made sense for a browser-based kiosk.
   in-component retry-with-backoff and a "couldn't reach server"
   fallback button.)
 - **Web kiosk reuses stale state after browser-tab close.** Closing
-  the browser tab without first hitting *Disconnect* on the Session
+  the browser tab without first hitting _Disconnect_ on the Session
   Bar used to leave the Chromium + Xvnc pair running; the next time
   the user opened the same connection, `WebRuntimeRegistry::ensure()`
   hit the fast-path and returned the abandoned handle (often a closed
@@ -1094,7 +1293,7 @@ URL that only made sense for a browser-based kiosk.
 
 ### Security
 
-- **`--test-type` is *not* a sandbox-disable flag.** It is paired
+- **`--test-type` is _not_ a sandbox-disable flag.** It is paired
   exclusively with the existing `--no-sandbox` (which we already had
   to set because the kiosk runs as root inside the container) and
   only suppresses chrome-level UI infobars and end-user prompts.
@@ -1108,7 +1307,7 @@ URL that only made sense for a browser-based kiosk.
   and CDP ports `9222..=9321`, eventually triggering
   `WebRuntimeError::DisplayExhausted` for legitimate users. Eviction
   releases both allocators on every disconnect, capping per-user
-  resource pressure at the count of *concurrently open* tabs.
+  resource pressure at the count of _concurrently open_ tabs.
 - **Backend entrypoint hardening.** The `pipefail` fix is defence-in-
   depth against a `find` invocation that exits non-zero — no security
   property changed, but the failure is now diagnosable instead of an
@@ -1125,7 +1324,7 @@ URL that only made sense for a browser-based kiosk.
 - `npm test -- --run` clean.
 - `docker-compose up -d --build` succeeds on the in-house
   production host with the new entrypoint; backend reaches `Up
-  (healthy)` instead of `Restarting (141)`; nginx logs no longer
+(healthy)` instead of `Restarting (141)`; nginx logs no longer
   contain `host not found in upstream`.
 
 ### Upgrade notes
@@ -1134,7 +1333,7 @@ URL that only made sense for a browser-based kiosk.
   `entrypoint.sh`, the backend Rust binary, and the frontend nginx
   config — all three are baked into their respective images. Run
   `docker compose up -d --build` (or pull a newly published tag
-  from CI). A `docker compose pull` of an old tag is *not* enough.
+  from CI). A `docker compose pull` of an old tag is _not_ enough.
 - **No database migrations.** v1.3.0 is schema-stable relative to
   v1.2.0.
 - **No `/api/*` contract changes.** All existing endpoints behave
@@ -1142,7 +1341,7 @@ URL that only made sense for a browser-based kiosk.
   use the existing format (now with `reason: "tunnel_disconnect"`
   populated for the new code path).
 - **Operator action — none required.** Existing Trusted CA bundles
-  uploaded under v1.2.0 will *start working* on the first kiosk
+  uploaded under v1.2.0 will _start working_ on the first kiosk
   spawn under v1.3.0; no re-upload is needed.
 
 ## [1.2.0] — 2026-04-29
@@ -1155,12 +1354,12 @@ operators upload a PEM bundle once and attach it to any number of
 `web` connections via a dropdown (no more re-pasting certificates
 into every kiosk row), a complete cleanup of the four checkout
 notification emails so that timestamps render in the tenant's
-configured timezone, the *target account* line shows the friendly
+configured timezone, the _target account_ line shows the friendly
 name an operator actually sees in the Credentials UI, the
 `cid:strata-logo` banner is no longer a broken image, and the
 **SMTP TLS = none** mode finally hides authentication fields and
 clears any stored credentials on save. The admin Sessions page also
-gets a UX polish on the *LIVE* / *Rewind* action buttons with a
+gets a UX polish on the _LIVE_ / _Rewind_ action buttons with a
 gradient-on-hover treatment plus a dual-keyframe pulsing-dot motion
 that respects `prefers-reduced-motion`.
 
@@ -1193,7 +1392,7 @@ that respects `prefers-reduced-motion`.
   - New auth-only endpoint `GET /api/user/trusted-cas` returning the
     slim `{ id, name, subject }[]` shape used by the connection-editor
     dropdown — so users with **Create Connections** permission but
-    *not* **Manage System** can still pick from the curated list.
+    _not_ **Manage System** can still pick from the curated list.
   - New admin tab **Admin → Trusted CAs** with table view + upload
     form (file picker accepts `.pem` / `.crt` / `.cer`, plus a
     paste-as-text fallback), surfacing parsed subject / expiry /
@@ -1225,14 +1424,14 @@ that respects `prefers-reduced-motion`.
   `cn_from_dn(distinguished_name)` → raw DN.
 - **Inline `cid:strata-logo` attachment.** New
   [`backend/src/services/email/templates/strata-logo.png`](backend/src/services/email/templates/strata-logo.png)
-  + helpers `LOGO_CONTENT_ID`, `LOGO_BYTES`, `logo_attachment()` in
-  `email/templates.rs`. The dispatcher
-  ([`services/notifications.rs`](backend/src/services/notifications.rs)),
-  the retry worker ([`services/email/worker.rs`](backend/src/services/email/worker.rs)),
-  and the test-send route
-  ([`routes/notifications.rs`](backend/src/routes/notifications.rs))
-  all now attach the inline part on every send.
-- **Premium *LIVE* / *Rewind* buttons in the admin Sessions table.**
+  - helpers `LOGO_CONTENT_ID`, `LOGO_BYTES`, `logo_attachment()` in
+    `email/templates.rs`. The dispatcher
+    ([`services/notifications.rs`](backend/src/services/notifications.rs)),
+    the retry worker ([`services/email/worker.rs`](backend/src/services/email/worker.rs)),
+    and the test-send route
+    ([`routes/notifications.rs`](backend/src/routes/notifications.rs))
+    all now attach the inline part on every send.
+- **Premium _LIVE_ / _Rewind_ buttons in the admin Sessions table.**
   New CSS classes `.btn-live`, `.btn-rewind`, and `.live-dot` in
   [`frontend/src/index.css`](frontend/src/index.css) with a
   dual-keyframe animation (1.1 s scaled core dot + an expanding halo
@@ -1253,7 +1452,7 @@ that respects `prefers-reduced-motion`.
   variant is added to `WebRuntimeError`.
 - **Tunnel route** ([`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs))
   resolves the configured `trusted_ca_id` to a PEM via
-  `services::trusted_ca::get()` *before* constructing the spawn spec,
+  `services::trusted_ca::get()` _before_ constructing the spawn spec,
   threading the bytes + label into `WebSpawnSpec`.
 - **`AdminSettings.tsx` `Tab` union** gains the `"trusted-cas"`
   variant; the new tab renders below VDI in the tab list.
@@ -1272,7 +1471,7 @@ that respects `prefers-reduced-motion`.
 - **Wrong "Target account" name in checkout emails.** Emails
   previously displayed `mapping.distinguished_name` verbatim, which
   for accounts whose CN contains an escaped comma (e.g.
-  `CN=Smith\, John,OU=Service Accounts,DC=corp`) showed the *entire*
+  `CN=Smith\, John,OU=Service Accounts,DC=corp`) showed the _entire_
   DN. Now displays the friendly name when set, otherwise an
   RFC 4514-aware extracted CN.
 - **Wrong expiry timezone in checkout emails.** Expiry timestamps
@@ -1283,7 +1482,7 @@ that respects `prefers-reduced-motion`.
 ### Security
 
 - **Trusted CA bundles are treated as public material.** PEMs hold
-  certificate chains (signatures over public keys) — they are *not*
+  certificate chains (signatures over public keys) — they are _not_
   envelope-encrypted via Vault. A row's PEM is readable by any
   operator with **Manage System**; the picker endpoint
   (`/api/user/trusted-cas`) returns only `{id, name, subject}` and
@@ -1340,7 +1539,7 @@ The first feature release on the 1.x SemVer line. The headline change
 is a deliberate UX-and-defaults rework of the RDP graphics-pipeline
 controls so that fresh connections behave identically to the upstream baseline that
 Strata's custom guacd is patched against — `disable-gfx=true` and
-`enable-h264=false` are now the *visible* defaults in the connection
+`enable-h264=false` are now the _visible_ defaults in the connection
 form (previously the UI rendered as if GFX were on while the backend
 silently disabled it), with a tightly-interlocked checkbox pair that
 mirrors how the underlying guacd negotiation actually works. A
@@ -1366,12 +1565,12 @@ the recording-playback fix to apply.
 
 - **GFX / H.264 toggle interlock in the connection form.** The RDP
   Codecs panel of `frontend/src/pages/admin/connectionForm.tsx`
-  is reworked so the *Enable graphics pipeline (GFX)* checkbox is
+  is reworked so the _Enable graphics pipeline (GFX)_ checkbox is
   ticked only when `disable-gfx === "false"` — i.e. it reflects the
   actual wire state rather than the absence of a value. Toggling
   it writes the explicit string `"false"` or `"true"` to the
   parameter map so backend and frontend never disagree about the
-  default. The companion *Enable H.264 (AVC444)* checkbox is
+  default. The companion _Enable H.264 (AVC444)_ checkbox is
   rendered disabled whenever GFX is off (because guacd's H.264
   path requires GFX to negotiate the `video/h264` mimetype),
   ticking it forces `disable-gfx="false"` for you, and unticking
@@ -1385,7 +1584,7 @@ the recording-playback fix to apply.
   rendered the GFX row using a generic boolean mapper that applied
   the old "Disable GFX" semantics inverted from the new connection
   form. The map is now special-cased so the `disable-gfx` row
-  carries the same positive *"Enable graphics pipeline (GFX)"*
+  carries the same positive _"Enable graphics pipeline (GFX)"_
   label, the same `cdMap["disable-gfx"] === "false"` checked
   predicate, and the same H.264 interlock as the connection form;
   every other AD-synced default-parameter row keeps the original
@@ -1405,7 +1604,7 @@ the recording-playback fix to apply.
   `beforeEach` is hardened to dismiss the `DisclaimerModal` so a
   fresh-database admin (whose `terms_accepted_version` is
   `null`) does not block the palette mount — App.tsx renders the
-  modal *instead of* `CommandPaletteProvider` until terms are
+  modal _instead of_ `CommandPaletteProvider` until terms are
   accepted, so without the dismissal the Ctrl+K listener never
   attaches and both tests would fail under CI's clean-state
   fixtures.
@@ -1445,9 +1644,9 @@ the recording-playback fix to apply.
   `strata:strata` (uid/gid 996/996) so the file open returned
   `EACCES`, which the WS handler at
   [`backend/src/routes/admin/recordings.rs`](backend/src/routes/admin/recordings.rs#L240)
-  logged as *"Failed to open recording file: Permission denied
-  (os error 13)"* and surfaced to the UI as a generic
-  *"Tunnel error"*. Resolved by adding a runtime
+  logged as _"Failed to open recording file: Permission denied
+  (os error 13)"_ and surfaced to the UI as a generic
+  _"Tunnel error"_. Resolved by adding a runtime
   supplementary-group bootstrap in
   [`backend/entrypoint.sh`](backend/entrypoint.sh) that reads the
   gid off whichever guacd-written file is present in the volume
@@ -1464,7 +1663,7 @@ the recording-playback fix to apply.
 - **CommandPalette / RBAC e2e tests previously failing in CI.**
   Two failures in the Playwright suite (`command-palette.spec.ts`)
   were traced to a fresh-database admin whose `users.terms_
-  accepted_version` was `NULL`, causing `App.tsx` to mount the
+accepted_version` was `NULL`, causing `App.tsx` to mount the
   `DisclaimerModal` instead of `CommandPaletteProvider`. The
   `beforeEach` now dismisses the modal — see Added.
 - **CodeQL alert #88 — unused `pwRequest` import.** The
@@ -1490,7 +1689,7 @@ the recording-playback fix to apply.
   is now an explicit security invariant in
   [`docs/security.md`](docs/security.md) and
   [`docs/architecture.md`](docs/architecture.md). The backend's
-  `DAC_OVERRIDE` capability is *not* used for this read path:
+  `DAC_OVERRIDE` capability is _not_ used for this read path:
   the supplementary-group lookup means standard POSIX
   group-read suffices, so the principle of least privilege is
   preserved.
@@ -1529,12 +1728,12 @@ the recording-playback fix to apply.
 - **No database migrations.**
 - **No `/api/*` contract changes.**
 - **Existing connections preserve their saved GFX/H.264 state.**
-  The connection-form rework changes how *unset* values are
+  The connection-form rework changes how _unset_ values are
   rendered (previously the UI lied; now the UI shows the
   rustguac-parity defaults that the backend has always
   applied). Connections with explicit `disable-gfx=false` saved
   by an operator pre-1.1.0 continue to render as
-  *GFX enabled* with no behaviour change.
+  _GFX enabled_ with no behaviour change.
 - **Image tags.** The release pipeline now publishes
   `ghcr.io/<org>/strata-backend:1.1.0` and
   `ghcr.io/<org>/strata-frontend:1.1.0` alongside the rolling
@@ -1611,14 +1810,14 @@ No `/api/*` breaking changes; one additive route
 - **Built-in commands.** Six commands ship by default and cannot be
   overridden by user mappings:
 
-  | Command                | Action                                                                                                                                                            | Validity                                  |
-  | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-  | `:reload`              | Re-establish the active session (same flow as the SessionBar reconnect button — closes + recreates the tunnel so an IDR keyframe is forced and stale GFX clears) | Disabled when no active session            |
-  | `:disconnect`          | Close the active session and return to the dashboard                                                                                                              | Disabled when no active session            |
-  | `:close`               | Friendlier alias for `:disconnect` — closes the current server page (active session)                                                                              | Disabled when no active session            |
-  | `:fullscreen`          | Toggle browser fullscreen with Keyboard Lock (uses `requestFullscreenWithLock` / `exitFullscreenWithUnlock` from `utils/keyboardLock`)                              | Always available                           |
-  | `:commands`            | List every available command (built-ins + user mappings) inline in the palette body                                                                                | Always available                           |
-  | `:explorer <arg>`      | Drives the Windows Run dialog on the active session (Win+R → paste arg → Enter). Accepts anything `start` accepts: `cmd`, `powershell`, `notepad`, `\\server\share`, `C:\Users\Public`, `shell:startup`, `https://example.com`. Argument is validated like an `open-path` mapping: ≤ 1024 chars, no control characters. Audit log records only `{ arg_length: N }` — never the literal argument. | Disabled when no active session, no argument supplied, argument exceeds 1024 chars, or argument contains control characters |
+  | Command           | Action                                                                                                                                                                                                                                                                                                                                                                                           | Validity                                                                                                                    |
+  | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+  | `:reload`         | Re-establish the active session (same flow as the SessionBar reconnect button — closes + recreates the tunnel so an IDR keyframe is forced and stale GFX clears)                                                                                                                                                                                                                                 | Disabled when no active session                                                                                             |
+  | `:disconnect`     | Close the active session and return to the dashboard                                                                                                                                                                                                                                                                                                                                             | Disabled when no active session                                                                                             |
+  | `:close`          | Friendlier alias for `:disconnect` — closes the current server page (active session)                                                                                                                                                                                                                                                                                                             | Disabled when no active session                                                                                             |
+  | `:fullscreen`     | Toggle browser fullscreen with Keyboard Lock (uses `requestFullscreenWithLock` / `exitFullscreenWithUnlock` from `utils/keyboardLock`)                                                                                                                                                                                                                                                           | Always available                                                                                                            |
+  | `:commands`       | List every available command (built-ins + user mappings) inline in the palette body                                                                                                                                                                                                                                                                                                              | Always available                                                                                                            |
+  | `:explorer <arg>` | Drives the Windows Run dialog on the active session (Win+R → paste arg → Enter). Accepts anything `start` accepts: `cmd`, `powershell`, `notepad`, `\\server\share`, `C:\Users\Public`, `shell:startup`, `https://example.com`. Argument is validated like an `open-path` mapping: ≤ 1024 chars, no control characters. Audit log records only `{ arg_length: N }` — never the literal argument. | Disabled when no active session, no argument supplied, argument exceeds 1024 chars, or argument contains control characters |
 
   Built-in handlers live in [`frontend/src/components/CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx)
   and reuse the same primitives as the SessionBar buttons so behaviour
@@ -1631,22 +1830,22 @@ No `/api/*` breaking changes; one additive route
 
   ```jsonc
   {
-    "trigger": "prod",                             // [a-z0-9_-]{1,32}, no built-in collision
-    "action":  "open-connection",                  // enum (see below)
-    "args":    { "connection_id": "<uuid>" }      // shape determined by `action`
+    "trigger": "prod", // [a-z0-9_-]{1,32}, no built-in collision
+    "action": "open-connection", // enum (see below)
+    "args": { "connection_id": "<uuid>" }, // shape determined by `action`
   }
   ```
 
   The six allowed actions and their `args` schemas:
 
-  | `action`           | `args` shape                                  | Resolves to                                                                              |
-  | ------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-  | `open-connection`  | `{ "connection_id": "<uuid>" }`               | `navigate(`/session/${id}`)`                                                              |
-  | `open-folder`      | `{ "folder_id": "<uuid>" }`                   | `navigate(`/dashboard?folder=${id}`)`                                                     |
-  | `open-tag`         | `{ "tag_id": "<uuid>" }`                      | `navigate(`/dashboard?tag=${id}`)`                                                        |
-  | `open-page`        | `{ "path": "/dashboard" \| "/profile" \| ... }` | `navigate(path)` — path must be in the server allow-list                                 |
-  | `paste-text`       | `{ "text": "<1..4096 chars>" }`                | Pushes `text` onto the active session's remote clipboard via `Guacamole.Client.createClipboardStream`, then fires a Ctrl+V keystroke so the focused remote application receives the paste |
-  | `open-path`        | `{ "path": "<1..1024 chars, no ctrl chars>" }`  | Drives the Windows Run dialog on the active session: Win+R (keysyms `0xffeb`+`0x72`) → paste path via clipboard → Enter (`0xff0d`). Resolves UNC shares, local folders, and `shell:` URIs in Explorer on the remote target. The flagship example: `:comp1` → `\\computer456\share`. |
+  | `action`          | `args` shape                                    | Resolves to                                                                                                                                                                                                                                                                         |
+  | ----------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `open-connection` | `{ "connection_id": "<uuid>" }`                 | `navigate(`/session/${id}`)`                                                                                                                                                                                                                                                        |
+  | `open-folder`     | `{ "folder_id": "<uuid>" }`                     | `navigate(`/dashboard?folder=${id}`)`                                                                                                                                                                                                                                               |
+  | `open-tag`        | `{ "tag_id": "<uuid>" }`                        | `navigate(`/dashboard?tag=${id}`)`                                                                                                                                                                                                                                                  |
+  | `open-page`       | `{ "path": "/dashboard" \| "/profile" \| ... }` | `navigate(path)` — path must be in the server allow-list                                                                                                                                                                                                                            |
+  | `paste-text`      | `{ "text": "<1..4096 chars>" }`                 | Pushes `text` onto the active session's remote clipboard via `Guacamole.Client.createClipboardStream`, then fires a Ctrl+V keystroke so the focused remote application receives the paste                                                                                           |
+  | `open-path`       | `{ "path": "<1..1024 chars, no ctrl chars>" }`  | Drives the Windows Run dialog on the active session: Win+R (keysyms `0xffeb`+`0x72`) → paste path via clipboard → Enter (`0xff0d`). Resolves UNC shares, local folders, and `shell:` URIs in Explorer on the remote target. The flagship example: `:comp1` → `\\computer456\share`. |
 
   The `open-page` path enum is locked server-side to
   `/dashboard | /profile | /credentials | /settings | /admin | /audit | /recordings`
@@ -1698,10 +1897,12 @@ No `/api/*` breaking changes; one additive route
 
   ```jsonc
   {
-    "trigger":   ":reload",                       // :?[a-z0-9_-]{1,64}
-    "action":    "reload",                        // server allow-list
-    "args":      { /* opaque, action-specific */ },
-    "target_id": "<uuid> | null"                  // resolved target where applicable
+    "trigger": ":reload", // :?[a-z0-9_-]{1,64}
+    "action": "reload", // server allow-list
+    "args": {
+      /* opaque, action-specific */
+    },
+    "target_id": "<uuid> | null", // resolved target where applicable
   }
   ```
 
@@ -1723,7 +1924,6 @@ No `/api/*` breaking changes; one additive route
   New `validate_command_mappings()` helper in
   [`backend/src/services/user_preferences.rs`](backend/src/services/user_preferences.rs)
   enforces, before the UPSERT lands:
-
   - `commandMappings` is absent, `null`, or an array of objects.
   - Array length ≤ 50.
   - Each `trigger` matches `^[a-z0-9_-]{1,32}$`.

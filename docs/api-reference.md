@@ -15,6 +15,7 @@ These endpoints require no authentication.
 Health check.
 
 **Response** `200 OK`
+
 ```json
 { "status": "ok" }
 ```
@@ -24,6 +25,7 @@ Health check.
 System boot phase and database connectivity.
 
 **Response** `200 OK`
+
 ```json
 {
   "phase": "running",
@@ -40,6 +42,7 @@ System boot phase and database connectivity.
 First-boot initialization. Only available when `phase == "setup"`.
 
 **Request Body**
+
 ```json
 {
   "database_mode": "local",
@@ -51,16 +54,17 @@ First-boot initialization. Only available when `phase == "setup"`.
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `database_mode` | `"local"` \| `"external"` | Yes | Use bundled DB or provide a URL |
-| `database_url` | string | If external | PostgreSQL connection string |
-| `vault_mode` | `"local"` \| `"external"` | No | `"local"` uses the bundled Vault; `"external"` connects to a user-provided instance; omit to skip |
-| `vault_address` | string | If external | Vault server URL |
-| `vault_token` | string | If external | Vault authentication token |
-| `vault_transit_key` | string | No | Transit engine key name (default: `guac-master-key`) |
+| Field               | Type                      | Required    | Description                                                                                       |
+| ------------------- | ------------------------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `database_mode`     | `"local"` \| `"external"` | Yes         | Use bundled DB or provide a URL                                                                   |
+| `database_url`      | string                    | If external | PostgreSQL connection string                                                                      |
+| `vault_mode`        | `"local"` \| `"external"` | No          | `"local"` uses the bundled Vault; `"external"` connects to a user-provided instance; omit to skip |
+| `vault_address`     | string                    | If external | Vault server URL                                                                                  |
+| `vault_token`       | string                    | If external | Vault authentication token                                                                        |
+| `vault_transit_key` | string                    | No          | Transit engine key name (default: `guac-master-key`)                                              |
 
 **Response** `200 OK`
+
 ```json
 { "status": "initialized" }
 ```
@@ -74,6 +78,7 @@ First-boot initialization. Only available when `phase == "setup"`.
 Standard local username/password login. Only available if `local_auth_enabled` is true. Returns an access token in the response body and sets a refresh token as an `HttpOnly` cookie.
 
 **Request Body**
+
 ```json
 {
   "username": "admin",
@@ -82,6 +87,7 @@ Standard local username/password login. Only available if `local_auth_enabled` i
 ```
 
 **Response** `200 OK`
+
 ```json
 {
   "access_token": "eyJ...",
@@ -109,6 +115,7 @@ Initiates the OIDC Single Sign-On flow. Redirects the user to the configured OID
 The handle for the OIDC provider's callback. Exchange the authorization code for an ID token and establishes a session.
 
 **Query Parameters**
+
 - `code`: The authorization code from the issuer.
 - `state`: The CSRF state token.
 
@@ -121,6 +128,7 @@ Exchange a valid refresh cookie for a new access token. The refresh token is sen
 **Request**: No body required. The refresh token cookie is sent automatically by the browser.
 
 **Response** `200 OK`
+
 ```json
 {
   "access_token": "eyJ...",
@@ -135,6 +143,7 @@ Exchange a valid refresh cookie for a new access token. The refresh token is sen
 Change the authenticated user's password. Requires a valid access token. Revokes the current session on success (user must re-login).
 
 **Request Body**
+
 ```json
 {
   "current_password": "old-password",
@@ -142,17 +151,19 @@ Change the authenticated user's password. Requires a valid access token. Revokes
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `current_password` | string | Yes | The user's current password |
-| `new_password` | string | Yes | New password (minimum 12 characters, maximum 1024) |
+| Field              | Type   | Required | Description                                        |
+| ------------------ | ------ | -------- | -------------------------------------------------- |
+| `current_password` | string | Yes      | The user's current password                        |
+| `new_password`     | string | Yes      | New password (minimum 12 characters, maximum 1024) |
 
 **Response** `200 OK`
+
 ```json
 { "status": "password_changed" }
 ```
 
 **Errors:**
+
 - `400` — new password does not meet policy requirements
 - `401` — current password incorrect
 - `404` — user not found or not a local auth user
@@ -164,6 +175,7 @@ Invalidates the current access token and refresh cookie. The access token JTI is
 **Headers**: `Authorization: Bearer <token>`
 
 **Response** `200 OK`
+
 ```json
 { "status": "logged_out" }
 ```
@@ -173,6 +185,7 @@ Invalidates the current access token and refresh cookie. The access token JTI is
 Hydrate the current user's session state. Always returns 200 — unauthenticated requests return `user: null`. This is the primary endpoint the frontend uses on page load to populate user state (not `/api/user/me`).
 
 **Response** `200 OK`
+
 ```json
 {
   "user": {
@@ -205,6 +218,7 @@ All admin endpoints require authentication **and** the `admin` role.
 Returns all system settings as key-value pairs.
 
 **Response** `200 OK`
+
 ```json
 {
   "sso_enabled": "true",
@@ -225,11 +239,10 @@ Returns all system settings as key-value pairs.
 Bulk update settings.
 
 **Request Body**
+
 ```json
 {
-  "settings": [
-    { "key": "recordings_retention_days", "value": "60" }
-  ]
+  "settings": [{ "key": "recordings_retention_days", "value": "60" }]
 }
 ```
 
@@ -238,6 +251,7 @@ Bulk update settings.
 Migrate to an external database.
 
 **Request Body**
+
 ```json
 { "database_url": "postgresql://user:pass@db.example.com:5432/strata" }
 ```
@@ -247,6 +261,7 @@ Migrate to an external database.
 Configure OIDC / SSO.
 
 **Request Body**
+
 ```json
 {
   "issuer_url": "https://keycloak.example.com/realms/strata",
@@ -260,6 +275,7 @@ Configure OIDC / SSO.
 Configure which authentication methods are globally enabled.
 
 **Request Body**
+
 ```json
 {
   "sso_enabled": true,
@@ -275,6 +291,7 @@ Configure which authentication methods are globally enabled.
 Configure Kerberos. Writes `krb5.conf` to the shared volume.
 
 **Request Body**
+
 ```json
 {
   "realm": "EXAMPLE.COM",
@@ -288,6 +305,7 @@ Configure Kerberos. Writes `krb5.conf` to the shared volume.
 Toggle session recording.
 
 **Request Body**
+
 ```json
 {
   "enabled": true,
@@ -300,6 +318,7 @@ Toggle session recording.
 Configure or switch Vault mode.
 
 **Request Body (Bundled)**
+
 ```json
 {
   "mode": "local",
@@ -308,6 +327,7 @@ Configure or switch Vault mode.
 ```
 
 **Request Body (External)**
+
 ```json
 {
   "mode": "external",
@@ -317,18 +337,19 @@ Configure or switch Vault mode.
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `mode` | `"local"` \| `"external"` | Yes | Bundled or external Vault |
-| `address` | string | If external | Vault server URL |
-| `token` | string | If external | Vault authentication token |
-| `transit_key` | string | No | Transit key name (default: `guac-master-key`) |
+| Field         | Type                      | Required    | Description                                   |
+| ------------- | ------------------------- | ----------- | --------------------------------------------- |
+| `mode`        | `"local"` \| `"external"` | Yes         | Bundled or external Vault                     |
+| `address`     | string                    | If external | Vault server URL                              |
+| `token`       | string                    | If external | Vault authentication token                    |
+| `transit_key` | string                    | No          | Transit key name (default: `guac-master-key`) |
 
 #### `PUT /api/admin/settings/dns`
 
 Configure custom DNS servers and search domains for guacd containers. Validated entries are saved to the database and written to a shared Docker volume as `resolv.conf`. Requires a `docker compose restart guacd` to take effect.
 
 **Request Body**
+
 ```json
 {
   "dns_enabled": true,
@@ -337,13 +358,14 @@ Configure custom DNS servers and search domains for guacd containers. Validated 
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `dns_enabled` | boolean | Yes | Enable or disable custom DNS configuration |
-| `dns_servers` | string | Yes | Comma-separated list of IPv4 DNS server addresses |
-| `dns_search_domains` | string | No | Comma-separated list of DNS search domains (max 6). Required for `.local` zones. Equivalent to `Domains=` in `systemd-resolved` or `search` in `resolv.conf` |
+| Field                | Type    | Required | Description                                                                                                                                                  |
+| -------------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dns_enabled`        | boolean | Yes      | Enable or disable custom DNS configuration                                                                                                                   |
+| `dns_servers`        | string  | Yes      | Comma-separated list of IPv4 DNS server addresses                                                                                                            |
+| `dns_search_domains` | string  | No       | Comma-separated list of DNS search domains (max 6). Required for `.local` zones. Equivalent to `Domains=` in `systemd-resolved` or `search` in `resolv.conf` |
 
 **Response** `200 OK`
+
 ```json
 {
   "status": "ok",
@@ -353,6 +375,7 @@ Configure custom DNS servers and search domains for guacd containers. Validated 
 ```
 
 **Errors:**
+
 - `400 Bad Request` — invalid IPv4 address or invalid domain name
 - `500 Internal Server Error` — failed to write `resolv.conf` to the shared volume
 
@@ -363,6 +386,7 @@ Configure custom DNS servers and search domains for guacd containers. Validated 
 Detailed service health status.
 
 **Response** `200 OK`
+
 ```json
 {
   "database": {
@@ -390,6 +414,7 @@ Detailed service health status.
 List all roles with their full permission matrix.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -409,24 +434,25 @@ List all roles with their full permission matrix.
 ]
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `can_manage_system` | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks |
-| `can_manage_users` | boolean | User CRUD, role assignment, password resets |
-| `can_manage_connections` | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos |
-| `can_view_audit_logs` | boolean | Audit log listing and export |
-| `can_create_users` | boolean | Provision new user accounts |
-| `can_create_user_groups` | boolean | Role CRUD |
-| `can_create_connections` | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0) |
-| `can_use_quick_share` | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin) |
-| `can_create_sharing_profiles` | boolean | Generate live session share links |
-| `can_view_sessions` | boolean | NVR observation, active session listing, kill session |
+| Field                         | Type    | Description                                                                              |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `can_manage_system`           | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks                    |
+| `can_manage_users`            | boolean | User CRUD, role assignment, password resets                                              |
+| `can_manage_connections`      | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos                            |
+| `can_view_audit_logs`         | boolean | Audit log listing and export                                                             |
+| `can_create_users`            | boolean | Provision new user accounts                                                              |
+| `can_create_user_groups`      | boolean | Role CRUD                                                                                |
+| `can_create_connections`      | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0)         |
+| `can_use_quick_share`         | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin) |
+| `can_create_sharing_profiles` | boolean | Generate live session share links                                                        |
+| `can_view_sessions`           | boolean | NVR observation, active session listing, kill session                                    |
 
 #### `POST /api/admin/roles`
 
 Create a new role. All permission fields are optional and default to `false`.
 
 **Request Body**
+
 ```json
 {
   "name": "operators",
@@ -442,6 +468,7 @@ Create a new role. All permission fields are optional and default to `false`.
 List all remote connections.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -467,6 +494,7 @@ List all remote connections.
 Create a new connection.
 
 **Request Body**
+
 ```json
 {
   "name": "Production Server",
@@ -479,21 +507,22 @@ Create a new connection.
 }
 ```
 
-| Field | Type | Required | Default |
-|---|---|---|---|
-| `name` | string | Yes | — |
-| `protocol` | `"rdp"` \| `"ssh"` \| `"vnc"` \| `"web"` \| `"vdi"` \| `"kubernetes"` | Yes | — |
-| `hostname` | string | Yes | — |
-| `port` | integer | No | 3389 |
-| `domain` | string | No | null |
-| `description` | string | No | `""` |
-| `group_id` | UUID | No | null |
+| Field         | Type                                                                  | Required | Default |
+| ------------- | --------------------------------------------------------------------- | -------- | ------- |
+| `name`        | string                                                                | Yes      | —       |
+| `protocol`    | `"rdp"` \| `"ssh"` \| `"vnc"` \| `"web"` \| `"vdi"` \| `"kubernetes"` | Yes      | —       |
+| `hostname`    | string                                                                | Yes      | —       |
+| `port`        | integer                                                               | No       | 3389    |
+| `domain`      | string                                                                | No       | null    |
+| `description` | string                                                                | No       | `""`    |
+| `group_id`    | UUID                                                                  | No       | null    |
 
 #### `PUT /api/admin/role-connections`
 
 Map a role to a set of connections (replaces existing mappings).
 
 **Request Body**
+
 ```json
 {
   "role_id": "uuid",
@@ -508,6 +537,7 @@ Map a role to a set of connections (replaces existing mappings).
 List all connection groups.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -528,6 +558,7 @@ List all connection groups.
 Create a new connection group.
 
 **Request Body**
+
 ```json
 {
   "name": "Production Servers",
@@ -535,16 +566,17 @@ Create a new connection group.
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | Yes | Group display name |
-| `parent_id` | UUID | No | Parent group for nesting (null = top-level) |
+| Field       | Type   | Required | Description                                 |
+| ----------- | ------ | -------- | ------------------------------------------- |
+| `name`      | string | Yes      | Group display name                          |
+| `parent_id` | UUID   | No       | Parent group for nesting (null = top-level) |
 
 #### `PUT /api/admin/connection-groups/:id`
 
 Update a connection group.
 
 **Request Body**
+
 ```json
 {
   "name": "Updated Name",
@@ -557,6 +589,7 @@ Update a connection group.
 Delete a connection group. Connections in the group are moved to ungrouped.
 
 **Response** `200 OK`
+
 ```json
 { "status": "deleted" }
 ```
@@ -568,6 +601,7 @@ Delete a connection group. Connections in the group are moved to ungrouped.
 List all users.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -584,6 +618,7 @@ List all users.
 Force-reset a user's password. Generates a new random 16-character password and returns it once.
 
 **Response** `200 OK`
+
 ```json
 {
   "password": "aB3xK9mR2pQ7wZ1v"
@@ -591,6 +626,7 @@ Force-reset a user's password. Generates a new random 16-character password and 
 ```
 
 **Errors:**
+
 - `404` — user not found or not a local auth user
 
 ### Audit Logs
@@ -601,12 +637,13 @@ Paginated audit log entries (newest first).
 
 **Query Parameters**
 
-| Param | Type | Default | Max |
-|---|---|---|---|
-| `page` | integer | 1 | — |
-| `per_page` | integer | 50 | 200 |
+| Param      | Type    | Default | Max |
+| ---------- | ------- | ------- | --- |
+| `page`     | integer | 1       | —   |
+| `per_page` | integer | 50      | 200 |
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -627,6 +664,7 @@ Paginated audit log entries (newest first).
 List all currently active tunnel sessions. Each entry includes the session's ring buffer depth and bandwidth counters.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -652,12 +690,13 @@ Upgrades to a WebSocket connection that replays buffered Guacamole instructions 
 
 **Query Parameters**:
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `token` | string | — | JWT access token (WebSocket auth) |
-| `offset` | integer | 300 | Seconds of buffer to replay (0 = live only, 300 = full 5-minute buffer) |
+| Parameter | Type    | Default | Description                                                             |
+| --------- | ------- | ------- | ----------------------------------------------------------------------- |
+| `token`   | string  | —       | JWT access token (WebSocket auth)                                       |
+| `offset`  | integer | 300     | Seconds of buffer to replay (0 = live only, 300 = full 5-minute buffer) |
 
 **Flow**:
+
 1. Backend injects the last known `size` instruction so the observer's display initialises at the correct dimensions
 2. Replays buffered frames from the requested offset at maximum speed
 3. Switches to real-time broadcast of live frames from the tunnel
@@ -670,6 +709,7 @@ Upgrades to a WebSocket connection that replays buffered Guacamole instructions 
 Aggregate metrics across all active tunnel sessions.
 
 **Response** `200 OK`
+
 ```json
 {
   "active_sessions": 12,
@@ -683,12 +723,12 @@ Aggregate metrics across all active tunnel sessions.
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `active_sessions` | integer | Total number of active tunnel sessions |
-| `total_bytes_from_guacd` | integer | Cumulative bytes received from guacd across all sessions |
-| `total_bytes_to_guacd` | integer | Cumulative bytes sent to guacd across all sessions |
-| `sessions_by_protocol` | object | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
+| Field                    | Type    | Description                                                             |
+| ------------------------ | ------- | ----------------------------------------------------------------------- |
+| `active_sessions`        | integer | Total number of active tunnel sessions                                  |
+| `total_bytes_from_guacd` | integer | Cumulative bytes received from guacd across all sessions                |
+| `total_bytes_to_guacd`   | integer | Cumulative bytes sent to guacd across all sessions                      |
+| `sessions_by_protocol`   | object  | Session count grouped by protocol (rdp, ssh, vnc, web, vdi, kubernetes) |
 
 ---
 
@@ -704,6 +744,7 @@ and the caller is expected to immediately stash it in a credential
 profile (see [security.md](security.md)).
 
 **Request body**
+
 ```json
 {
   "kubeconfig": "apiVersion: v1\nkind: Config\n...",
@@ -711,12 +752,13 @@ profile (see [security.md](security.md)).
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `kubeconfig` | string | Yes | YAML body of the kubeconfig (1 MiB max) |
-| `context`    | string | No  | Override `current-context`. If absent, falls back to `current-context`, then to the only context if exactly one is present |
+| Field        | Type   | Required | Description                                                                                                                |
+| ------------ | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `kubeconfig` | string | Yes      | YAML body of the kubeconfig (1 MiB max)                                                                                    |
+| `context`    | string | No       | Override `current-context`. If absent, falls back to `current-context`, then to the only context if exactly one is present |
 
 **Response** `200 OK`
+
 ```json
 {
   "server": "https://10.0.0.1:6443",
@@ -755,6 +797,7 @@ Returns a snapshot of every link supervisor's current state. Used
 by the **Admin → DMZ Links** tab; auto-refreshed every 15 seconds.
 
 **Response** `200 OK`
+
 ```json
 {
   "configured": true,
@@ -779,15 +822,15 @@ by the **Admin → DMZ Links** tab; auto-refreshed every 15 seconds.
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `configured` | bool | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`. |
-| `links[].endpoint` | string | `host:port` for one DMZ peer. |
-| `links[].state` | enum | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`. |
-| `links[].connects` | int | Successful link establishments since process start. |
-| `links[].failures` | int | Failed handshake or TCP attempts since process start. |
-| `links[].since_unix_secs` | int | Wall-clock instant the link entered its current `state`. |
-| `links[].last_error` | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run. |
+| Field                     | Type           | Description                                                                                                                  |
+| ------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `configured`              | bool           | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`. |
+| `links[].endpoint`        | string         | `host:port` for one DMZ peer.                                                                                                |
+| `links[].state`           | enum           | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`.                                           |
+| `links[].connects`        | int            | Successful link establishments since process start.                                                                          |
+| `links[].failures`        | int            | Failed handshake or TCP attempts since process start.                                                                        |
+| `links[].since_unix_secs` | int            | Wall-clock instant the link entered its current `state`.                                                                     |
+| `links[].last_error`      | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run.   |
 
 `curl` example:
 
@@ -806,13 +849,14 @@ in the [DMZ incident runbook](runbooks/dmz-incident.md).
 **Request body** — none. Standard CSRF double-submit applies.
 
 **Response** `200 OK`
+
 ```json
 { "nudged": 2 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `nudged` | int | Number of supervisor tasks that were signalled to drop and redial. Equals the number of configured endpoints. |
+| Field    | Type | Description                                                                                                   |
+| -------- | ---- | ------------------------------------------------------------------------------------------------------------- |
+| `nudged` | int  | Number of supervisor tasks that were signalled to drop and redial. Equals the number of configured endpoints. |
 
 `curl` example:
 
@@ -825,11 +869,11 @@ curl -sS -X POST \
 
 **Errors**
 
-| Status | When |
-|---|---|
-| `401 Unauthorized` | Missing / expired session. |
-| `403 Forbidden` | Caller lacks `can_manage_system`. |
-| `403 Forbidden` | Missing or mismatched `X-CSRF-Token`. |
+| Status                    | When                                                                                                                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `401 Unauthorized`        | Missing / expired session.                                                                                                                    |
+| `403 Forbidden`           | Caller lacks `can_manage_system`.                                                                                                             |
+| `403 Forbidden`           | Missing or mismatched `X-CSRF-Token`.                                                                                                         |
 | `503 Service Unavailable` | Returned by `GET` when DMZ mode is configured but the supervisor pool failed to start; check backend logs for the `dmz_link.bootstrap` event. |
 
 ---
@@ -843,6 +887,7 @@ These endpoints require authentication (any role).
 Current authenticated user profile, including all role permissions.
 
 **Response** `200 OK`
+
 ```json
 {
   "id": "uuid",
@@ -868,6 +913,7 @@ Current authenticated user profile, including all role permissions.
 Accept the recording disclaimer / terms of service. Sets `terms_accepted_at` to the current timestamp for the authenticated user. Must be called before the frontend will allow access to the application.
 
 **Response** `200 OK`
+
 ```json
 { "ok": true }
 ```
@@ -881,10 +927,10 @@ never visited the Profile page).
 
 Known keys today:
 
-| Key                       | Type     | Default   | Description                                                                                                                                                                  |
-| ------------------------- | -------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `commandPaletteBinding`   | `string` | `"Ctrl+K"` | (v0.30.1) Keybinding for the in-session Command Palette. Empty string disables the shortcut. Format: `"Ctrl+Shift+P"`, `"Alt+Space"`.                                       |
-| `commandMappings`         | `array`  | `[]`       | (v0.31.0) User-defined `:command` palette mappings. See **`commandMappings` shape** below. Validated server-side; max 50 entries; triggers cannot collide with built-ins.   |
+| Key                     | Type     | Default    | Description                                                                                                                                                               |
+| ----------------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `commandPaletteBinding` | `string` | `"Ctrl+K"` | (v0.30.1) Keybinding for the in-session Command Palette. Empty string disables the shortcut. Format: `"Ctrl+Shift+P"`, `"Alt+Space"`.                                     |
+| `commandMappings`       | `array`  | `[]`       | (v0.31.0) User-defined `:command` palette mappings. See **`commandMappings` shape** below. Validated server-side; max 50 entries; triggers cannot collide with built-ins. |
 
 `Ctrl` in a binding matches either `event.ctrlKey` or `event.metaKey` so
 the same stored value works on Windows/Linux and macOS without per-OS
@@ -892,6 +938,7 @@ configuration. Modifier-order is insensitive. `Cmd`, `Meta`, `Win`, and
 `Super` are accepted aliases for the same modifier.
 
 **Response** `200 OK`
+
 ```json
 {
   "commandPaletteBinding": "Ctrl+K"
@@ -911,6 +958,7 @@ endpoint is documented for completeness and for downstream automation
 that may want to provision a default keybinding for managed accounts.
 
 **Request**
+
 ```json
 {
   "commandPaletteBinding": "Ctrl+Shift+P"
@@ -925,20 +973,20 @@ Each element is a discriminated union with three required fields:
 
 ```jsonc
 {
-  "trigger": "prod",                          // ^[a-z0-9_-]{1,32}$, no built-in collision, unique within the array
-  "action":  "open-connection",               // enum: open-connection | open-folder | open-tag | open-page
-  "args":    { "connection_id": "<uuid>" }    // shape determined by `action`
+  "trigger": "prod", // ^[a-z0-9_-]{1,32}$, no built-in collision, unique within the array
+  "action": "open-connection", // enum: open-connection | open-folder | open-tag | open-page
+  "args": { "connection_id": "<uuid>" }, // shape determined by `action`
 }
 ```
 
-| `action`           | `args` shape                                                                                                                                | Resolves to                                                                              |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `open-connection`  | `{ "connection_id": "<uuid>" }`                                                                                                              | `/session/<id>`                                                                          |
-| `open-folder`      | `{ "folder_id": "<uuid>" }`                                                                                                                  | `/dashboard?folder=<id>`                                                                  |
-| `open-tag`         | `{ "tag_id": "<uuid>" }`                                                                                                                     | `/dashboard?tag=<id>`                                                                     |
-| `open-page`        | `{ "path": "/dashboard" \| "/profile" \| "/credentials" \| "/settings" \| "/admin" \| "/audit" \| "/recordings" }`                            | `<path>`                                                                                 |
-| `paste-text`       | `{ "text": "<freeform string, 1..4096 chars>" }`                                                                                              | Pushes `text` onto the active session's remote clipboard, then sends Ctrl+V keystrokes  |
-| `open-path`        | `{ "path": "<freeform string, 1..1024 chars, no control chars>" }`                                                                            | Drives the Windows Run dialog: Win+R → paste path via clipboard → Enter. Useful for UNC shares (`\\server\share`), local folders (`C:\Users\…`), and `shell:` URIs (`shell:startup`). |
+| `action`          | `args` shape                                                                                                       | Resolves to                                                                                                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open-connection` | `{ "connection_id": "<uuid>" }`                                                                                    | `/session/<id>`                                                                                                                                                                       |
+| `open-folder`     | `{ "folder_id": "<uuid>" }`                                                                                        | `/dashboard?folder=<id>`                                                                                                                                                              |
+| `open-tag`        | `{ "tag_id": "<uuid>" }`                                                                                           | `/dashboard?tag=<id>`                                                                                                                                                                 |
+| `open-page`       | `{ "path": "/dashboard" \| "/profile" \| "/credentials" \| "/settings" \| "/admin" \| "/audit" \| "/recordings" }` | `<path>`                                                                                                                                                                              |
+| `paste-text`      | `{ "text": "<freeform string, 1..4096 chars>" }`                                                                   | Pushes `text` onto the active session's remote clipboard, then sends Ctrl+V keystrokes                                                                                                |
+| `open-path`       | `{ "path": "<freeform string, 1..1024 chars, no control chars>" }`                                                 | Drives the Windows Run dialog: Win+R → paste path via clipboard → Enter. Useful for UNC shares (`\\server\share`), local folders (`C:\Users\…`), and `shell:` URIs (`shell:startup`). |
 
 The four reserved built-in command names (`reload`, `disconnect`,
 `fullscreen`, `commands`) cannot be used as a trigger. Validation is
@@ -958,25 +1006,27 @@ operators cannot poison the audit-event taxonomy by passing a fake
 `action_type` through the request body.
 
 **Request**
+
 ```json
 {
-  "trigger":   ":reload",
-  "action":    "reload",
-  "args":      {},
+  "trigger": ":reload",
+  "action": "reload",
+  "args": {},
   "target_id": null
 }
 ```
 
 **Validation**
 
-| Field       | Rule                                                                                                                                          |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `trigger`   | Matches `^:?[a-z0-9_-]{1,64}$` (the leading colon is accepted; the cap is 64 to leave headroom for future UI namespacing)                     |
+| Field       | Rule                                                                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trigger`   | Matches `^:?[a-z0-9_-]{1,64}$` (the leading colon is accepted; the cap is 64 to leave headroom for future UI namespacing)                                          |
 | `action`    | One of `reload \| disconnect \| close \| fullscreen \| commands \| explorer \| open-connection \| open-folder \| open-tag \| open-page \| paste-text \| open-path` |
-| `args`      | Opaque JSON value; persisted verbatim under `details.args`                                                                                   |
-| `target_id` | Optional UUID string; persisted verbatim under `details.target_id` for cross-reference with the resolved target                              |
+| `args`      | Opaque JSON value; persisted verbatim under `details.args`                                                                                                         |
+| `target_id` | Optional UUID string; persisted verbatim under `details.target_id` for cross-reference with the resolved target                                                    |
 
 **Response** `200 OK`
+
 ```json
 { "ok": true }
 ```
@@ -997,6 +1047,7 @@ without a stored override fall back to the default status shipped in the
 client bundle.
 
 **Response** `200 OK`
+
 ```json
 {
   "statuses": {
@@ -1011,6 +1062,7 @@ client bundle.
 Returns the three display-related settings (timezone, time format, date format) without requiring admin privileges. Used by the frontend `SettingsContext` to format timestamps for all users.
 
 **Response** `200 OK`
+
 ```json
 {
   "display_timezone": "Europe/London",
@@ -1024,6 +1076,7 @@ Returns the three display-related settings (timezone, time format, date format) 
 List the calling user's own active tunnel sessions. Returns only sessions where `user_id` matches the authenticated user.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1047,13 +1100,14 @@ List the calling user's own historical recordings. Supports optional filtering a
 
 **Query Parameters**:
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `connection_id` | uuid | — | Filter by connection |
-| `limit` | integer | 50 | Maximum results |
-| `offset` | integer | 0 | Pagination offset |
+| Parameter       | Type    | Default | Description          |
+| --------------- | ------- | ------- | -------------------- |
+| `connection_id` | uuid    | —       | Filter by connection |
+| `limit`         | integer | 50      | Maximum results      |
+| `offset`        | integer | 0       | Pagination offset    |
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1079,26 +1133,26 @@ Stream a recording for playback. Only accessible for recordings owned by the aut
 
 **Query Parameters**:
 
-| Name    | Type    | Default | Description                                                                                                  |
-| ------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------ |
-| `seek`  | integer | `0`     | Position in milliseconds to start playback from. `0` plays from the beginning.                                |
+| Name    | Type    | Default | Description                                                                                                     |
+| ------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `seek`  | integer | `0`     | Position in milliseconds to start playback from. `0` plays from the beginning.                                  |
 | `speed` | number  | `1.0`   | Playback rate clamped server-side to `[0.25, 16.0]`. Frontend players currently surface `1×`, `2×`, `4×`, `8×`. |
 
 **Response**: `101 Switching Protocols` with WebSocket subprotocol `guacamole`. The server emits a Guacamole-style instruction stream paced to wall-clock time. Custom NVR opcodes used by the frontend players (`HistoricalPlayer.tsx`, `NvrPlayer.tsx`):
 
-| Opcode        | Payload                              | Direction          | Meaning                                                                          |
-| ------------- | ------------------------------------ | ------------------ | -------------------------------------------------------------------------------- |
-| `nvrheader`   | `[total_ms]`                         | server → client    | Total duration of the recording in milliseconds, sent as the first instruction.  |
-| `nvrprogress` | `[current_ms]`                       | server → client    | Wall-clock progress within the recording.                                        |
-| `nvrseeked`   | `[position_ms]`                      | server → client    | Acknowledges a `seek` query parameter or in-stream seek request.                 |
-| `nvrend`      | `[]`                                 | server → client    | Sent when playback reaches the end of the recording.                             |
-| `nvrpause`    | `[]`                                 | client → server    | Pause playback timing without closing the WebSocket.                             |
-| `nvrresume`   | `[]`                                 | client → server    | Resume from `nvrpause`.                                                          |
-| `nvrspeed`    | `[multiplier]`                       | client → server    | Change playback rate without reconnecting.                                       |
+| Opcode        | Payload         | Direction       | Meaning                                                                         |
+| ------------- | --------------- | --------------- | ------------------------------------------------------------------------------- |
+| `nvrheader`   | `[total_ms]`    | server → client | Total duration of the recording in milliseconds, sent as the first instruction. |
+| `nvrprogress` | `[current_ms]`  | server → client | Wall-clock progress within the recording.                                       |
+| `nvrseeked`   | `[position_ms]` | server → client | Acknowledges a `seek` query parameter or in-stream seek request.                |
+| `nvrend`      | `[]`            | server → client | Sent when playback reaches the end of the recording.                            |
+| `nvrpause`    | `[]`            | client → server | Pause playback timing without closing the WebSocket.                            |
+| `nvrresume`   | `[]`            | client → server | Resume from `nvrpause`.                                                         |
+| `nvrspeed`    | `[multiplier]`  | client → server | Change playback rate without reconnecting.                                      |
 
 **Storage backends**:
 
-- `storage_type = "local"` — file is read from the shared `guac-recordings` Docker volume at `/var/lib/guacamole/recordings/<storage_path>`. Cross-container POSIX permissions are documented in [security.md — Recordings Volume](./security.md). EACCES on the file open closes the WebSocket immediately and the frontend renders a *"Tunnel error"* badge; check backend logs for *"Failed to open recording file"* to disambiguate from network-level failures.
+- `storage_type = "local"` — file is read from the shared `guac-recordings` Docker volume at `/var/lib/guacamole/recordings/<storage_path>`. Cross-container POSIX permissions are documented in [security.md — Recordings Volume](./security.md). EACCES on the file open closes the WebSocket immediately and the frontend renders a _"Tunnel error"_ badge; check backend logs for _"Failed to open recording file"_ to disambiguate from network-level failures.
 - `storage_type = "azure"` — file is streamed from the configured Azure Storage container over HTTPS via `reqwest`. Auth is via the connection string / managed identity sealed in Vault; POSIX permissions are not involved in this path.
 
 ### `GET /api/user/connections`
@@ -1106,6 +1160,7 @@ Stream a recording for playback. Only accessible for recordings owned by the aut
 Connections accessible to the authenticated user. Admin users see **all** connections; non-admin users see only connections mapped to their role via `role_connections`.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1134,6 +1189,7 @@ Pre-connect information for a specific connection. Used by the session client to
 **Path Parameter**: `id` (UUID) — connection ID
 
 **Response** `200 OK`
+
 ```json
 {
   "protocol": "rdp",
@@ -1153,15 +1209,15 @@ Pre-connect information for a specific connection. Used by the session client to
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `protocol` | string | `rdp`, `vnc`, `ssh`, `web`, `vdi`, or `kubernetes` |
-| `has_credentials` | boolean | `true` if a non-expired vault credential profile is mapped to this user + connection |
-| `ignore_cert` | boolean | Whether the connection's RDP certificate validation is disabled |
-| `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |
-| `watermark` | string | Per-connection watermark setting (`inherit`, `enabled`, `disabled`) |
-| `file_transfer_enabled` | boolean | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings |
-| `expired_profile` | object \| null | Present only when `has_credentials` is `false` and an expired or checked-in profile is mapped. Contains `id`, `label`, `ttl_hours`, and — for managed profiles — the linked `managed_ad_dn`, `ad_sync_config_id`, and `can_self_approve` flag so the UI can render the correct renewal/checkout request form. |
+| Field                   | Type           | Description                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol`              | string         | `rdp`, `vnc`, `ssh`, `web`, `vdi`, or `kubernetes`                                                                                                                                                                                                                                                            |
+| `has_credentials`       | boolean        | `true` if a non-expired vault credential profile is mapped to this user + connection                                                                                                                                                                                                                          |
+| `ignore_cert`           | boolean        | Whether the connection's RDP certificate validation is disabled                                                                                                                                                                                                                                               |
+| `file_transfer_enabled` | boolean        | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings                                                                                                                                                                                                                    |
+| `watermark`             | string         | Per-connection watermark setting (`inherit`, `enabled`, `disabled`)                                                                                                                                                                                                                                           |
+| `file_transfer_enabled` | boolean        | `true` if the connection has `enable-drive` or `enable-sftp` enabled in its extra settings                                                                                                                                                                                                                    |
+| `expired_profile`       | object \| null | Present only when `has_credentials` is `false` and an expired or checked-in profile is mapped. Contains `id`, `label`, `ttl_hours`, and — for managed profiles — the linked `managed_ad_dn`, `ad_sync_config_id`, and `can_self_approve` flag so the UI can render the correct renewal/checkout request form. |
 
 > **Tunnel safety**: Even if a client attempts to bypass the pre-connect prompt, the `/api/ws/tunnel/:id` endpoint will reject the connection with a validation error when the only credential source available is an expired managed credential profile. This prevents stale credentials from being sent to Active Directory (which could contribute to account lockout).
 
@@ -1172,6 +1228,7 @@ Pre-connect information for a specific connection. Used by the session client to
 List IDs of connections the user has favorited.
 
 **Response** `200 OK`
+
 ```json
 ["uuid1", "uuid2"]
 ```
@@ -1181,11 +1238,13 @@ List IDs of connections the user has favorited.
 Toggle a connection as a favorite (add if absent, remove if present).
 
 **Request Body**
+
 ```json
 { "connection_id": "uuid" }
 ```
 
 **Response** `200 OK`
+
 ```json
 { "favorited": true }
 ```
@@ -1195,6 +1254,7 @@ Toggle a connection as a favorite (add if absent, remove if present).
 Store or update an encrypted credential for a connection.
 
 **Request Body**
+
 ```json
 {
   "connection_id": "uuid",
@@ -1205,6 +1265,7 @@ Store or update an encrypted credential for a connection.
 The password is envelope-encrypted via Vault Transit before storage. The plaintext is never persisted.
 
 **Response** `200 OK`
+
 ```json
 { "status": "credential_saved" }
 ```
@@ -1227,21 +1288,23 @@ Upgrades to a WebSocket connection that proxies bidirectional binary frames betw
 
 **Query Parameters** (all optional):
 
-| Parameter | Type | Description |
-|---|---|---|
-| `token` | string | JWT access token (used for WebSocket auth since browsers cannot set headers on WS upgrades) |
-| `username` | string | Override username for this connection (falls back to the JWT username) |
-| `password` | string | Password for the remote connection (used if no Vault-stored credential exists) |
-| `width` | integer | Requested display width in pixels (default: 1920) |
-| `height` | integer | Requested display height in pixels (default: 1080) |
-| `dpi` | integer | Requested display DPI (default: 96) |
+| Parameter  | Type    | Description                                                                                 |
+| ---------- | ------- | ------------------------------------------------------------------------------------------- |
+| `token`    | string  | JWT access token (used for WebSocket auth since browsers cannot set headers on WS upgrades) |
+| `username` | string  | Override username for this connection (falls back to the JWT username)                      |
+| `password` | string  | Password for the remote connection (used if no Vault-stored credential exists)              |
+| `width`    | integer | Requested display width in pixels (default: 1920)                                           |
+| `height`   | integer | Requested display height in pixels (default: 1080)                                          |
+| `dpi`      | integer | Requested display DPI (default: 96)                                                         |
 
 **Credential Resolution Order**:
+
 1. **Vault-stored** — if the user has an encrypted credential saved for this connection (via `PUT /api/user/connections/:id/credential`), it is decrypted and used
 2. **Query parameters** — if `password` is supplied in the query string, it is used (with `username` falling back to the JWT username)
 3. **None** — if neither source provides credentials, the connection is attempted without authentication (SSH connections may trigger an interactive `onrequired` prompt via the Guacamole protocol; RDP connections will fail)
 
 **Flow**:
+
 1. Backend verifies the user's role grants access to the connection
 2. Backend opens a TCP connection to `guacd:4822`
 3. Backend sends Guacamole protocol `select` and `connect` instructions with:
@@ -1251,11 +1314,21 @@ Upgrades to a WebSocket connection that proxies bidirectional binary frames betw
    - Username from the JWT
 4. Binary frames are proxied bidirectionally until either side closes
 
+**DMZ deployment mode (v1.5.2+)**: When a user reaches the backend through a public-facing `strata-dmz` edge node, this WebSocket upgrade is forwarded end-to-end through the reverse-tunnel link using **RFC 8441 Extended CONNECT** over the link's HTTP/2 connection. The DMZ proxy:
+
+1. Detects the WebSocket upgrade on the public listener (`Upgrade: websocket` + `Connection: Upgrade` + `Sec-WebSocket-Key`).
+2. Captures the `hyper::upgrade::on(&mut req)` future and opens an Extended CONNECT stream on the link with `:method=CONNECT`, `:protocol=websocket`, `:path=/api/tunnel/<connection_id>?<query>`, the signed `x-strata-edge-*` header bundle, and every non-hop-by-hop header from the original request.
+3. Awaits `:status=200` from the internal node before returning `101 Switching Protocols` to the public client with a correctly-computed `Sec-WebSocket-Accept` (RFC 6455 §1.3).
+4. Spawns a transparent byte-pump that copies WebSocket frames between the public TCP socket and the h2 stream — masking, ping/pong, fragmentation, and close frames flow through unmodified.
+
+On the internal side the new `LoopbackUpgradeHandler` accepts the inbound Extended CONNECT and bridges it to a regular HTTP/1.1 WebSocket upgrade against `127.0.0.1:8080` (overridable via `STRATA_DMZ_LOOPBACK_ADDR`), so the same axum router and the same `verify_edge_headers` middleware promote the forwarded `x-strata-edge-client-ip` to the real client IP for audit / RBAC. The guacd connection always originates from the **internal** node's IP, never the DMZ node's IP. Individual h2 frames on the DMZ→public direction are capped at 8 MiB to prevent memory amplification by a misbehaving internal node; h2 flow-control windows are honoured in both directions so back-pressure from a slow public client transparently slows the upstream guacd traffic. See [security.md](security.md#dmz-deployment-mode-v150) for the full trust-boundary analysis.
+
 ### `POST /api/tunnel/ticket`
 
 Obtain a one-time tunnel ticket for a specific connection. This ticket is then used to authenticate the WebSocket upgrade.
 
 **Request Body**
+
 ```json
 {
   "connection_id": "uuid",
@@ -1266,20 +1339,21 @@ Obtain a one-time tunnel ticket for a specific connection. This ticket is then u
 }
 ```
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `connection_id` | UUID | Yes | — | Target connection ID |
-| `username` | string | No | — | One-time username for this session |
-| `password` | string | No | — | One-time password for this session |
-| `credential_profile_id` | UUID | No | — | Vault credential profile to use for this session (one-off, no permanent mapping required) |
-| `width` | integer | No | 1920 | Display width |
-| `height` | integer | No | 1080 | Display height |
-| `dpi` | integer | No | 96 | Display DPI |
-| `ignore_cert` | boolean | No | false | Override the connection's ignore-cert setting |
+| Field                   | Type    | Required | Default | Description                                                                               |
+| ----------------------- | ------- | -------- | ------- | ----------------------------------------------------------------------------------------- |
+| `connection_id`         | UUID    | Yes      | —       | Target connection ID                                                                      |
+| `username`              | string  | No       | —       | One-time username for this session                                                        |
+| `password`              | string  | No       | —       | One-time password for this session                                                        |
+| `credential_profile_id` | UUID    | No       | —       | Vault credential profile to use for this session (one-off, no permanent mapping required) |
+| `width`                 | integer | No       | 1920    | Display width                                                                             |
+| `height`                | integer | No       | 1080    | Display height                                                                            |
+| `dpi`                   | integer | No       | 96      | Display DPI                                                                               |
+| `ignore_cert`           | boolean | No       | false   | Override the connection's ignore-cert setting                                             |
 
 When `credential_profile_id` is provided, the backend decrypts the vault profile directly for this session. The credential resolution priority is: **one-off vault profile > permanently mapped vault profile > ticket credentials > query string fallback**.
 
 **Response** `200 OK`
+
 ```json
 {
   "ticket": "uuid-ticket-string"
@@ -1295,6 +1369,7 @@ Public WebSocket tunnel for shared sessions. No authentication required.
 **Path Parameter**: `share_token` (string) — a valid, non-expired, non-revoked share token.
 
 The backend looks up the share token, finds the owner's **active session** in the in-memory session registry, and subscribes the shared viewer to the owner's NVR broadcast channel:
+
 - **View mode** — the shared viewer receives the owner's live display frames (read-only). Mouse and keyboard input from the viewer is discarded.
 - **Control mode** — the shared viewer receives live display frames and can send keyboard and mouse input, which is injected into the owner's guacd TCP stream via an mpsc channel.
 
@@ -1313,17 +1388,19 @@ Generate a temporary share link for a connection the user has access to.
 **Path Parameter**: `connection_id` (UUID)
 
 **Request Body**
+
 ```json
 {
   "mode": "view"
 }
 ```
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `mode` | `"view"` \| `"control"` | No | `"view"` | `"view"` = read-only, `"control"` = full keyboard & mouse input |
+| Field  | Type                    | Required | Default  | Description                                                     |
+| ------ | ----------------------- | -------- | -------- | --------------------------------------------------------------- |
+| `mode` | `"view"` \| `"control"` | No       | `"view"` | `"view"` = read-only, `"control"` = full keyboard & mouse input |
 
 **Response** `200 OK`
+
 ```json
 {
   "share_token": "abc123def456",
@@ -1341,6 +1418,7 @@ Revoke a previously created share link.
 **Path Parameter**: `share_id` (UUID)
 
 **Response** `200 OK`
+
 ```json
 { "status": "revoked" }
 ```
@@ -1359,12 +1437,13 @@ Upload a file via multipart form data. Requires authentication **and** the `can_
 
 **Content-Type**: `multipart/form-data`
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `session_id` | text | Yes | Active session ID to associate the file with |
-| `file` | file | Yes | Binary file payload |
+| Field        | Type | Required | Description                                  |
+| ------------ | ---- | -------- | -------------------------------------------- |
+| `session_id` | text | Yes      | Active session ID to associate the file with |
+| `file`       | file | Yes      | Binary file payload                          |
 
 **Response** `200 OK`
+
 ```json
 {
   "token": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
@@ -1392,6 +1471,7 @@ List all files for a session. Requires authentication.
 **Path Parameter**: `session_id` (string)
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1457,9 +1537,9 @@ existing routed-launch flow.
 { "type": "strata:open-connection", "id": "<connection-uuid>" }
 ```
 
-| Field  | Rule                                                                                                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------- |
-| `type` | Must equal the literal string `strata:open-connection`. Any other value is dropped silently.                        |
+| Field  | Rule                                                                                                                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `type` | Must equal the literal string `strata:open-connection`. Any other value is dropped silently.                                                                                                     |
 | `id`   | `typeof === "string"`, length 1–255 inclusive. Wrapped in `encodeURIComponent` before being interpolated into `/session/${id}` so reserved URL characters cannot break out of the route segment. |
 
 The opener does **not** trust the id — `getConnection(id)` and the
@@ -1479,15 +1559,15 @@ All errors follow this format:
 { "error": "Human-readable error message" }
 ```
 
-| Status | Meaning |
-|---|---|
-| 400 | Invalid request body |
-| 401 | Missing/invalid token or SSO not configured |
-| 403 | Insufficient role permissions |
-| 404 | Resource not found |
-| 500 | Internal server error |
-| 502 | Vault communication failure |
-| 503 | System not initialized (setup required) |
+| Status | Meaning                                     |
+| ------ | ------------------------------------------- |
+| 400    | Invalid request body                        |
+| 401    | Missing/invalid token or SSO not configured |
+| 403    | Insufficient role permissions               |
+| 404    | Resource not found                          |
+| 500    | Internal server error                       |
+| 502    | Vault communication failure                 |
+| 503    | System not initialized (setup required)     |
 
 ---
 
@@ -1500,6 +1580,7 @@ All four endpoints require `can_manage_system` and reject requests during the **
 Return the current SMTP configuration. The password itself is **never** returned; the `password_set` boolean indicates whether a sealed value exists in Vault so the UI can render a `•••• (set)` placeholder.
 
 **Response** `200 OK`
+
 ```json
 {
   "enabled": true,
@@ -1523,6 +1604,7 @@ Upsert the SMTP configuration. The password is sealed via Vault Transit (`crate:
 - `port` is `0`
 
 **Request Body**
+
 ```json
 {
   "enabled": true,
@@ -1537,18 +1619,19 @@ Upsert the SMTP configuration. The password is sealed via Vault Transit (`crate:
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `enabled` | bool | Yes | Master switch; `false` causes the dispatcher to short-circuit |
-| `host` / `port` | string / u16 | Yes | SMTP relay endpoint |
-| `username` | string | No | Plaintext SMTP username (stored in `system_settings`) |
-| `password` | string | No | `null` = leave existing sealed value; `""` = clear; non-empty = seal as new value |
-| `tls_mode` | enum | Yes | `starttls` (port 587), `implicit` (port 465), `none` (internal-only relays) |
-| `from_address` | string | Yes | Empty value blocks dispatch entirely (audit `notifications.misconfigured`) |
-| `from_name` | string | No | Display name in the `From` header |
-| `branding_accent_color` | hex string | No | Used by future templates; currently surfaced in test-send body |
+| Field                   | Type         | Required | Description                                                                       |
+| ----------------------- | ------------ | -------- | --------------------------------------------------------------------------------- |
+| `enabled`               | bool         | Yes      | Master switch; `false` causes the dispatcher to short-circuit                     |
+| `host` / `port`         | string / u16 | Yes      | SMTP relay endpoint                                                               |
+| `username`              | string       | No       | Plaintext SMTP username (stored in `system_settings`)                             |
+| `password`              | string       | No       | `null` = leave existing sealed value; `""` = clear; non-empty = seal as new value |
+| `tls_mode`              | enum         | Yes      | `starttls` (port 587), `implicit` (port 465), `none` (internal-only relays)       |
+| `from_address`          | string       | Yes      | Empty value blocks dispatch entirely (audit `notifications.misconfigured`)        |
+| `from_name`             | string       | No       | Display name in the `From` header                                                 |
+| `branding_accent_color` | hex string   | No       | Used by future templates; currently surfaced in test-send body                    |
 
 **Response** `200 OK`
+
 ```json
 { "status": "saved" }
 ```
@@ -1558,6 +1641,7 @@ Upsert the SMTP configuration. The password is sealed via Vault Transit (`crate:
 Render a small probe message and dispatch it through the live `SmtpTransport`. The actual SMTP response (or error) is surfaced verbatim so administrators can debug auth/TLS failures without grepping container logs.
 
 **Request Body**
+
 ```json
 {
   "recipient": "ops@contoso.com",
@@ -1565,17 +1649,19 @@ Render a small probe message and dispatch it through the live `SmtpTransport`. T
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `recipient` | string | Yes | Destination address (must contain `@`) |
-| `template_key` | string | No | When omitted, a generic "SMTP probe" body is sent. When set, the endpoint renders the named template with fixture data so the operator can preview exactly what a real `checkout_pending` (etc.) email looks like end-to-end — including the sealed `branding_accent_color` and `From` name. Unknown keys return `400 Bad Request`. Added in v0.26.0. |
+| Field          | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                           |
+| -------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recipient`    | string | Yes      | Destination address (must contain `@`)                                                                                                                                                                                                                                                                                                                |
+| `template_key` | string | No       | When omitted, a generic "SMTP probe" body is sent. When set, the endpoint renders the named template with fixture data so the operator can preview exactly what a real `checkout_pending` (etc.) email looks like end-to-end — including the sealed `branding_accent_color` and `From` name. Unknown keys return `400 Bad Request`. Added in v0.26.0. |
 
 **Response** `200 OK`
+
 ```json
 { "status": "sent", "message_id": "<uuid@strata-client>" }
 ```
 
 **Errors**
+
 - `400` — recipient is empty or lacks `@`
 - `400` — SMTP settings invalid (returned as `Validation` error from `SmtpTransport::from_settings`)
 - `502` — SMTP relay rejected the message (the rejection text is included in the error body)
@@ -1585,10 +1671,12 @@ Render a small probe message and dispatch it through the live `SmtpTransport`. T
 Return rows from `email_deliveries`, newest first. Use the `status` query parameter to filter to a single status; `limit` is clamped to `[1, 200]` (default 50).
 
 **Query parameters**
+
 - `status` — optional; one of `queued`, `sent`, `failed`, `bounced`, `suppressed`
 - `limit` — optional integer, default 50, max 200
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1629,6 +1717,7 @@ returns only `{id, name, subject}` — never the PEM bytes.
 Required permission: `can_manage_system`.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1651,6 +1740,7 @@ Upload a new bundle.
 Required permission: `can_manage_system`.
 
 **Request Body**
+
 ```json
 {
   "name": "Corporate Root 2024",
@@ -1662,6 +1752,7 @@ Required permission: `can_manage_system`.
 **Response** `200 OK` returns the parsed summary as above.
 
 **Errors**
+
 - `400 Bad Request` — `name` empty, blank PEM, malformed PEM, or no certificate found in the input.
 - `400 Bad Request` — `name` collides (case-insensitive UNIQUE on `LOWER(name)`).
 
@@ -1675,6 +1766,7 @@ the existing PEM untouched.
 Required permission: `can_manage_system`.
 
 **Request Body**
+
 ```json
 {
   "name": "Corporate Root 2024 (rotated)",
@@ -1692,11 +1784,13 @@ Writes a `trusted_ca.updated` audit event.
 Required permission: `can_manage_system`.
 
 **Response** `200 OK`
+
 ```json
 { "status": "deleted" }
 ```
 
 **Errors**
+
 - `400 Bad Request` — at least one row in `connections` (with
   `protocol = 'web'`) still references this bundle via
   `extra->>'trusted_ca_id'`. Detach the bundle from those connections
@@ -1712,9 +1806,14 @@ Authenticated read-only picker used by the connection editor's
 required, but the response intentionally omits the PEM bytes.
 
 **Response** `200 OK`
+
 ```json
 [
-  { "id": "f1e2d3c4-...", "name": "Corporate Root 2024", "subject": "CN=Corp Root CA, O=Example, C=GB" }
+  {
+    "id": "f1e2d3c4-...",
+    "name": "Corporate Root 2024",
+    "subject": "CN=Corp Root CA, O=Example, C=GB"
+  }
 ]
 ```
 
@@ -1722,58 +1821,58 @@ required, but the response intentionally omits the PEM bytes.
 
 ## Audit Event Types
 
-| Action Type | Trigger |
-|---|---|
-| `settings.updated` | Admin updates system settings |
-| `sso.configured` | SSO settings saved |
-| `kerberos.configured` | Kerberos settings saved |
-| `recordings.configured` | Recording settings toggled |
-| `vault.configured` | Vault settings updated or mode changed |
-| `role.created` | New role created |
-| `connection.created` | New connection created |
-| `connection.updated` | Connection settings changed |
-| `connection.deleted` | Connection removed |
-| `connection_group.created` | New connection group created |
-| `connection_group.deleted` | Connection group removed |
-| `role_connections.updated` | Role-connection mapping changed |
-| `credential.updated` | User saves encrypted credential |
-| `tunnel.connected` | User opens a remote session |
-| `tunnel.terminated` | WebSocket tunnel closed by the in-band auth watchdog. `details`: `{ connection_id, reason }`. The `reason` field takes one of: `revoked` (the access token used at upgrade time appeared in the in-memory revocation set after a `/api/auth/logout` call), `max_duration` (`MAX_TUNNEL_DURATION = 8h` wall-clock cap exceeded — added in v1.4.1, replaces the v1.3.2 `expired` reason). Added in v1.3.2; revised in v1.4.1.
-| `connection.shared` | User generates a connection share link (includes mode) |
-| `notifications.skipped_opt_out` | Recipient opted out via `users.notifications_opt_out`; suppression recorded in `email_deliveries` (`status='suppressed'`) |
-| `notifications.misconfigured` | Dispatcher refused to send (empty `smtp_from_address` or `smtp_enabled = false`) |
-| `notifications.abandoned` | Retry worker abandoned a delivery row after 3 failed attempts |
-| `connection.share_accessed` | External viewer opens a share link (includes client IP) |
-| `connection.share_rate_limited` | Share-tunnel request rejected by per-token rate limit (payload: 8-char SHA-256 prefix + client IP). Added in v0.26.0 |
-| `connection.share_invalid_token` | Share-tunnel request for an unknown, revoked, or soft-deleted share. Added in v0.26.0 |
-| `share.revoked` | User revokes a connection share link |
-| `user.terms_accepted` | User accepted the Terms / recording-consent modal. Added in v0.26.0 |
-| `user.credential_mapping_set` | User mapped a credential profile to a connection. Added in v0.26.0 |
-| `user.credential_mapping_removed` | User cleared a credential-profile mapping. Added in v0.26.0 |
-| `checkout.retry_activation` | User re-triggered activation on an `Approved` checkout after a first activation failure. Added in v0.26.0 |
-| `checkout.checkin` | User voluntarily checked a live checkout in before expiry. Added in v0.26.0 |
-| `ad_sync.config_created` | AD sync source config created |
-| `ad_sync.config_updated` | AD sync source config updated |
-| `ad_sync.config_deleted` | AD sync source config deleted |
-| `ad_sync.completed` | AD sync run finished (includes created/updated/deleted counts) |
-| `checkout.requested` | User requested a password checkout for an AD-managed account |
-| `checkout.approved` | Approver approved a password checkout request |
-| `checkout.denied` | Approver denied a password checkout request |
-| `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
-| `checkout.expired` | Password checkout expired (automatic or manual) |
-| `checkout.checked_in` | User voluntarily checked-in (returned) an active checkout early |
-| `checkout.scheduled` | User created a password checkout with a future `scheduled_start_at`; no credential material exists yet |
-| `checkout.emergency_bypass` | User invoked break-glass approval bypass; checkout activated immediately without approver review (requires `pm_allow_emergency_bypass`) |
-| `rotation.completed` | Automatic service account password rotation completed |
-| `web.session.start` | Chromium kiosk has been spawned, Xvnc is reachable, and guacd is about to attach. `details`: `{ connection_id, display, cdp_port }`. Added in v0.30.0 |
-| `web.session.end` | Web Session closed for any reason. `details`: `{ connection_id, display, reason }`. Added in v0.30.0. **(v1.3.0+)** The WebSocket-tunnel route now writes this with `reason: "tunnel_disconnect"` after the proxy loop returns, so closing a browser tab is now visibly audited as a session-end event. |
-| `web.autofill.write` | Login Data SQLite was provisioned for the session. `details`: `{ connection_id, credential_id }`. Added in v0.30.0 |
-| `vdi.container.ensure` | `DockerVdiDriver::ensure_container()` succeeded (spawn or reuse). `details`: `{ connection_id, container_name, image }`. Added in v0.30.0 |
-| `vdi.container.destroy` | Reaper destroyed a VDI container. `details`: `{ connection_id, container_name, reason }` where `reason` is one of `Logout`, `IdleTimeout`, or `Other`. Added in v0.30.0 |
-| `vdi.image.rejected` | A VDI tunnel attempt referenced an image not present in the operator whitelist. `details`: `{ connection_id, image }`. Added in v0.30.0 |
-| `trusted_ca.created` | Admin uploaded a new Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0 |
-| `trusted_ca.updated` | Admin edited a Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0 |
-| `trusted_ca.deleted` | Admin deleted a Trusted CA bundle. `details`: `{ id, name }`. Added in v1.2.0 |
+| Action Type                       | Trigger                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `settings.updated`                | Admin updates system settings                                                                                                                                                                                                                                                                                                                                                                                               |
+| `sso.configured`                  | SSO settings saved                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `kerberos.configured`             | Kerberos settings saved                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `recordings.configured`           | Recording settings toggled                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `vault.configured`                | Vault settings updated or mode changed                                                                                                                                                                                                                                                                                                                                                                                      |
+| `role.created`                    | New role created                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `connection.created`              | New connection created                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `connection.updated`              | Connection settings changed                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `connection.deleted`              | Connection removed                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `connection_group.created`        | New connection group created                                                                                                                                                                                                                                                                                                                                                                                                |
+| `connection_group.deleted`        | Connection group removed                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `role_connections.updated`        | Role-connection mapping changed                                                                                                                                                                                                                                                                                                                                                                                             |
+| `credential.updated`              | User saves encrypted credential                                                                                                                                                                                                                                                                                                                                                                                             |
+| `tunnel.connected`                | User opens a remote session                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `tunnel.terminated`               | WebSocket tunnel closed by the in-band auth watchdog. `details`: `{ connection_id, reason }`. The `reason` field takes one of: `revoked` (the access token used at upgrade time appeared in the in-memory revocation set after a `/api/auth/logout` call), `max_duration` (`MAX_TUNNEL_DURATION = 8h` wall-clock cap exceeded — added in v1.4.1, replaces the v1.3.2 `expired` reason). Added in v1.3.2; revised in v1.4.1. |
+| `connection.shared`               | User generates a connection share link (includes mode)                                                                                                                                                                                                                                                                                                                                                                      |
+| `notifications.skipped_opt_out`   | Recipient opted out via `users.notifications_opt_out`; suppression recorded in `email_deliveries` (`status='suppressed'`)                                                                                                                                                                                                                                                                                                   |
+| `notifications.misconfigured`     | Dispatcher refused to send (empty `smtp_from_address` or `smtp_enabled = false`)                                                                                                                                                                                                                                                                                                                                            |
+| `notifications.abandoned`         | Retry worker abandoned a delivery row after 3 failed attempts                                                                                                                                                                                                                                                                                                                                                               |
+| `connection.share_accessed`       | External viewer opens a share link (includes client IP)                                                                                                                                                                                                                                                                                                                                                                     |
+| `connection.share_rate_limited`   | Share-tunnel request rejected by per-token rate limit (payload: 8-char SHA-256 prefix + client IP). Added in v0.26.0                                                                                                                                                                                                                                                                                                        |
+| `connection.share_invalid_token`  | Share-tunnel request for an unknown, revoked, or soft-deleted share. Added in v0.26.0                                                                                                                                                                                                                                                                                                                                       |
+| `share.revoked`                   | User revokes a connection share link                                                                                                                                                                                                                                                                                                                                                                                        |
+| `user.terms_accepted`             | User accepted the Terms / recording-consent modal. Added in v0.26.0                                                                                                                                                                                                                                                                                                                                                         |
+| `user.credential_mapping_set`     | User mapped a credential profile to a connection. Added in v0.26.0                                                                                                                                                                                                                                                                                                                                                          |
+| `user.credential_mapping_removed` | User cleared a credential-profile mapping. Added in v0.26.0                                                                                                                                                                                                                                                                                                                                                                 |
+| `checkout.retry_activation`       | User re-triggered activation on an `Approved` checkout after a first activation failure. Added in v0.26.0                                                                                                                                                                                                                                                                                                                   |
+| `checkout.checkin`                | User voluntarily checked a live checkout in before expiry. Added in v0.26.0                                                                                                                                                                                                                                                                                                                                                 |
+| `ad_sync.config_created`          | AD sync source config created                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ad_sync.config_updated`          | AD sync source config updated                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ad_sync.config_deleted`          | AD sync source config deleted                                                                                                                                                                                                                                                                                                                                                                                               |
+| `ad_sync.completed`               | AD sync run finished (includes created/updated/deleted counts)                                                                                                                                                                                                                                                                                                                                                              |
+| `checkout.requested`              | User requested a password checkout for an AD-managed account                                                                                                                                                                                                                                                                                                                                                                |
+| `checkout.approved`               | Approver approved a password checkout request                                                                                                                                                                                                                                                                                                                                                                               |
+| `checkout.denied`                 | Approver denied a password checkout request                                                                                                                                                                                                                                                                                                                                                                                 |
+| `checkout.activated`              | Password checkout activated — password generated, LDAP reset, sealed in Vault                                                                                                                                                                                                                                                                                                                                               |
+| `checkout.expired`                | Password checkout expired (automatic or manual)                                                                                                                                                                                                                                                                                                                                                                             |
+| `checkout.checked_in`             | User voluntarily checked-in (returned) an active checkout early                                                                                                                                                                                                                                                                                                                                                             |
+| `checkout.scheduled`              | User created a password checkout with a future `scheduled_start_at`; no credential material exists yet                                                                                                                                                                                                                                                                                                                      |
+| `checkout.emergency_bypass`       | User invoked break-glass approval bypass; checkout activated immediately without approver review (requires `pm_allow_emergency_bypass`)                                                                                                                                                                                                                                                                                     |
+| `rotation.completed`              | Automatic service account password rotation completed                                                                                                                                                                                                                                                                                                                                                                       |
+| `web.session.start`               | Chromium kiosk has been spawned, Xvnc is reachable, and guacd is about to attach. `details`: `{ connection_id, display, cdp_port }`. Added in v0.30.0                                                                                                                                                                                                                                                                       |
+| `web.session.end`                 | Web Session closed for any reason. `details`: `{ connection_id, display, reason }`. Added in v0.30.0. **(v1.3.0+)** The WebSocket-tunnel route now writes this with `reason: "tunnel_disconnect"` after the proxy loop returns, so closing a browser tab is now visibly audited as a session-end event.                                                                                                                     |
+| `web.autofill.write`              | Login Data SQLite was provisioned for the session. `details`: `{ connection_id, credential_id }`. Added in v0.30.0                                                                                                                                                                                                                                                                                                          |
+| `vdi.container.ensure`            | `DockerVdiDriver::ensure_container()` succeeded (spawn or reuse). `details`: `{ connection_id, container_name, image }`. Added in v0.30.0                                                                                                                                                                                                                                                                                   |
+| `vdi.container.destroy`           | Reaper destroyed a VDI container. `details`: `{ connection_id, container_name, reason }` where `reason` is one of `Logout`, `IdleTimeout`, or `Other`. Added in v0.30.0                                                                                                                                                                                                                                                     |
+| `vdi.image.rejected`              | A VDI tunnel attempt referenced an image not present in the operator whitelist. `details`: `{ connection_id, image }`. Added in v0.30.0                                                                                                                                                                                                                                                                                     |
+| `trusted_ca.created`              | Admin uploaded a new Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                             |
+| `trusted_ca.updated`              | Admin edited a Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                                   |
+| `trusted_ca.deleted`              | Admin deleted a Trusted CA bundle. `details`: `{ id, name }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                                               |
 
 ---
 
@@ -1786,6 +1885,7 @@ All AD sync endpoints require authentication and the `admin` role.
 List all AD sync source configurations.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1793,7 +1893,10 @@ List all AD sync source configurations.
     "label": "Production AD",
     "ldap_url": "ldaps://dc1.contoso.com:636",
     "bind_dn": "CN=svc-strata,OU=Service Accounts,DC=contoso,DC=com",
-    "search_bases": ["OU=Servers,DC=contoso,DC=com", "OU=Workstations,DC=contoso,DC=com"],
+    "search_bases": [
+      "OU=Servers,DC=contoso,DC=com",
+      "OU=Workstations,DC=contoso,DC=com"
+    ],
     "search_filter": "(&(objectClass=computer)(!(objectClass=msDS-GroupManagedServiceAccount))(!(objectClass=msDS-ManagedServiceAccount)))",
     "search_scope": "subtree",
     "protocol": "rdp",
@@ -1822,6 +1925,7 @@ List all AD sync source configurations.
 Create a new AD sync source.
 
 **Request Body**
+
 ```json
 {
   "label": "Production AD",
@@ -1846,57 +1950,57 @@ Create a new AD sync source.
 }
 ```
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `label` | string | Yes | — | Display name for this source |
-| `ldap_url` | string | Yes | — | LDAP/LDAPS URL (e.g. `ldaps://dc1:636`) |
-| `bind_dn` | string | No | `""` | Bind DN for simple auth |
-| `bind_password` | string | No | `""` | Bind password for simple auth |
-| `search_bases` | string[] | Yes | — | OU scopes to search (multiple supported) |
-| `search_filter` | string | No | All computers (excluding gMSA/MSA) | LDAP search filter |
-| `search_scope` | `"subtree"` \| `"onelevel"` \| `"base"` | No | `"subtree"` | LDAP search scope |
-| `protocol` | `"rdp"` \| `"ssh"` \| `"vnc"` | No | `"rdp"` | Protocol for imported connections |
-| `default_port` | integer | No | 3389 | Default port for imported connections |
-| `auth_method` | `"simple"` \| `"kerberos"` | No | `"simple"` | LDAP authentication method |
-| `keytab_path` | string | No | — | Path to keytab file (kerberos auth) |
-| `krb5_principal` | string | No | — | Kerberos principal (kerberos auth) |
-| `group_id` | UUID | No | null | Connection group for imported connections |
-| `domain_override` | string | No | null | Force domain on imported connections |
-| `tls_skip_verify` | boolean | No | false | Skip TLS certificate verification |
-| `ca_cert_pem` | string | No | null | Custom CA certificate in PEM format |
-| `connection_defaults` | object | No | `{}` | Guacamole connection parameters applied to all synced connections (see below) |
-| `sync_interval_minutes` | integer | No | 60 | Background sync interval (minimum 5) |
-| `enabled` | boolean | No | true | Enable/disable this source |
-| `pm_search_bases` | string[] | No | `[]` | OU scopes specifically for user discovery. If empty, falls back to `search_bases`. |
-| `pm_allow_emergency_bypass` | boolean | No | false | Enable the break-glass "⚡ Emergency Bypass" option on checkout requests for accounts governed by this config. When true, users can self-activate a checkout with a ≥ 10-character justification, skipping approver review. Each event is audit-logged as `checkout.emergency_bypass`. |
+| Field                       | Type                                    | Required | Default                            | Description                                                                                                                                                                                                                                                                            |
+| --------------------------- | --------------------------------------- | -------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `label`                     | string                                  | Yes      | —                                  | Display name for this source                                                                                                                                                                                                                                                           |
+| `ldap_url`                  | string                                  | Yes      | —                                  | LDAP/LDAPS URL (e.g. `ldaps://dc1:636`)                                                                                                                                                                                                                                                |
+| `bind_dn`                   | string                                  | No       | `""`                               | Bind DN for simple auth                                                                                                                                                                                                                                                                |
+| `bind_password`             | string                                  | No       | `""`                               | Bind password for simple auth                                                                                                                                                                                                                                                          |
+| `search_bases`              | string[]                                | Yes      | —                                  | OU scopes to search (multiple supported)                                                                                                                                                                                                                                               |
+| `search_filter`             | string                                  | No       | All computers (excluding gMSA/MSA) | LDAP search filter                                                                                                                                                                                                                                                                     |
+| `search_scope`              | `"subtree"` \| `"onelevel"` \| `"base"` | No       | `"subtree"`                        | LDAP search scope                                                                                                                                                                                                                                                                      |
+| `protocol`                  | `"rdp"` \| `"ssh"` \| `"vnc"`           | No       | `"rdp"`                            | Protocol for imported connections                                                                                                                                                                                                                                                      |
+| `default_port`              | integer                                 | No       | 3389                               | Default port for imported connections                                                                                                                                                                                                                                                  |
+| `auth_method`               | `"simple"` \| `"kerberos"`              | No       | `"simple"`                         | LDAP authentication method                                                                                                                                                                                                                                                             |
+| `keytab_path`               | string                                  | No       | —                                  | Path to keytab file (kerberos auth)                                                                                                                                                                                                                                                    |
+| `krb5_principal`            | string                                  | No       | —                                  | Kerberos principal (kerberos auth)                                                                                                                                                                                                                                                     |
+| `group_id`                  | UUID                                    | No       | null                               | Connection group for imported connections                                                                                                                                                                                                                                              |
+| `domain_override`           | string                                  | No       | null                               | Force domain on imported connections                                                                                                                                                                                                                                                   |
+| `tls_skip_verify`           | boolean                                 | No       | false                              | Skip TLS certificate verification                                                                                                                                                                                                                                                      |
+| `ca_cert_pem`               | string                                  | No       | null                               | Custom CA certificate in PEM format                                                                                                                                                                                                                                                    |
+| `connection_defaults`       | object                                  | No       | `{}`                               | Guacamole connection parameters applied to all synced connections (see below)                                                                                                                                                                                                          |
+| `sync_interval_minutes`     | integer                                 | No       | 60                                 | Background sync interval (minimum 5)                                                                                                                                                                                                                                                   |
+| `enabled`                   | boolean                                 | No       | true                               | Enable/disable this source                                                                                                                                                                                                                                                             |
+| `pm_search_bases`           | string[]                                | No       | `[]`                               | OU scopes specifically for user discovery. If empty, falls back to `search_bases`.                                                                                                                                                                                                     |
+| `pm_allow_emergency_bypass` | boolean                                 | No       | false                              | Enable the break-glass "⚡ Emergency Bypass" option on checkout requests for accounts governed by this config. When true, users can self-activate a checkout with a ≥ 10-character justification, skipping approver review. Each event is audit-logged as `checkout.emergency_bypass`. |
 
 #### Connection Defaults
 
 The `connection_defaults` field accepts a JSON object of Guacamole parameter key-value pairs that are applied as the `extra` JSONB on every connection created or updated by this sync source. Supported RDP parameters include:
 
-| Parameter | Description |
-|---|---|
-| `ignore-cert` | Skip RDP server certificate validation |
-| `enable-wallpaper` | Render desktop wallpaper |
-| `enable-font-smoothing` | Enable ClearType font smoothing |
-| `enable-desktop-composition` | Allow Aero/transparent window effects |
-| `enable-theming` | Enable window theming |
-| `enable-full-window-drag` | Show window contents while dragging |
-| `enable-menu-animations` | Allow menu open/close animations |
-| `disable-bitmap-caching` | Disable RDP bitmap cache |
-| `disable-glyph-caching` | Disable glyph (font symbol) cache |
-| `disable-offscreen-caching` | Disable off-screen region cache |
-| `disable-gfx` | Disable the Graphics Pipeline Extension (GFX) |
-| `enable-h264` | Enable H.264 GFX passthrough (v0.28.0+). Requires `disable-gfx=false`, `color-depth=32`, and AVC444 configured on the RDP host. When `false`, the session falls back to the bitmap path. The legacy parameter name `enable-gfx-h264` is **not** recognised by guacd and was a documented bug prior to v0.28.0 |
-| `force-lossless` | Force lossless encoding (disables H.264; falls back to RemoteFX). Use only for screens where colour fidelity is critical (e.g. medical imaging) |
-| `color-depth` | Colour depth in bits per pixel. **Must be `32` for H.264 GFX**; lower values silently disable H.264 and fall back to RemoteFX. The backend defaults this to `32` when empty (v0.28.0+) |
-| `recording-path` | Directory for screen recording files |
-| `recording-name` | Filename for recordings (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens) |
-| `create-recording-path` | Auto-create the recording directory |
-| `recording-include-keys` | Include key events in recordings |
-| `recording-exclude-mouse` | Exclude mouse events from recordings |
-| `recording-exclude-touch` | Exclude touch events from recordings |
-| `recording-exclude-output` | Exclude graphical output from recordings |
+| Parameter                    | Description                                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ignore-cert`                | Skip RDP server certificate validation                                                                                                                                                                                                                                                                        |
+| `enable-wallpaper`           | Render desktop wallpaper                                                                                                                                                                                                                                                                                      |
+| `enable-font-smoothing`      | Enable ClearType font smoothing                                                                                                                                                                                                                                                                               |
+| `enable-desktop-composition` | Allow Aero/transparent window effects                                                                                                                                                                                                                                                                         |
+| `enable-theming`             | Enable window theming                                                                                                                                                                                                                                                                                         |
+| `enable-full-window-drag`    | Show window contents while dragging                                                                                                                                                                                                                                                                           |
+| `enable-menu-animations`     | Allow menu open/close animations                                                                                                                                                                                                                                                                              |
+| `disable-bitmap-caching`     | Disable RDP bitmap cache                                                                                                                                                                                                                                                                                      |
+| `disable-glyph-caching`      | Disable glyph (font symbol) cache                                                                                                                                                                                                                                                                             |
+| `disable-offscreen-caching`  | Disable off-screen region cache                                                                                                                                                                                                                                                                               |
+| `disable-gfx`                | Disable the Graphics Pipeline Extension (GFX)                                                                                                                                                                                                                                                                 |
+| `enable-h264`                | Enable H.264 GFX passthrough (v0.28.0+). Requires `disable-gfx=false`, `color-depth=32`, and AVC444 configured on the RDP host. When `false`, the session falls back to the bitmap path. The legacy parameter name `enable-gfx-h264` is **not** recognised by guacd and was a documented bug prior to v0.28.0 |
+| `force-lossless`             | Force lossless encoding (disables H.264; falls back to RemoteFX). Use only for screens where colour fidelity is critical (e.g. medical imaging)                                                                                                                                                               |
+| `color-depth`                | Colour depth in bits per pixel. **Must be `32` for H.264 GFX**; lower values silently disable H.264 and fall back to RemoteFX. The backend defaults this to `32` when empty (v0.28.0+)                                                                                                                        |
+| `recording-path`             | Directory for screen recording files                                                                                                                                                                                                                                                                          |
+| `recording-name`             | Filename for recordings (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens)                                                                                                                                                                                                                  |
+| `create-recording-path`      | Auto-create the recording directory                                                                                                                                                                                                                                                                           |
+| `recording-include-keys`     | Include key events in recordings                                                                                                                                                                                                                                                                              |
+| `recording-exclude-mouse`    | Exclude mouse events from recordings                                                                                                                                                                                                                                                                          |
+| `recording-exclude-touch`    | Exclude touch events from recordings                                                                                                                                                                                                                                                                          |
+| `recording-exclude-output`   | Exclude graphical output from recordings                                                                                                                                                                                                                                                                      |
 
 ### `PUT /api/admin/ad-sync-configs/:id`
 
@@ -1913,6 +2017,7 @@ Test an AD sync connection without persisting. Validates connectivity, bind, and
 **Request Body**: Same as the create endpoint.
 
 **Response** `200 OK`
+
 ```json
 {
   "status": "success",
@@ -1932,14 +2037,23 @@ Test the PM target account filter against Active Directory without persisting. U
 **Request Body**: Same as the create endpoint (uses `pm_target_filter`, `pm_bind_user`, `pm_bind_password` fields).
 
 **Response** `200 OK`
+
 ```json
 {
   "status": "success",
   "message": "Filter matched 156 account(s)",
   "count": 156,
   "sample": [
-    { "dn": "CN=John Smith,OU=Users,DC=contoso,DC=com", "name": "jsmith", "description": "IT Department" },
-    { "dn": "CN=Jane Doe,OU=Users,DC=contoso,DC=com", "name": "jdoe", "description": null }
+    {
+      "dn": "CN=John Smith,OU=Users,DC=contoso,DC=com",
+      "name": "jsmith",
+      "description": "IT Department"
+    },
+    {
+      "dn": "CN=Jane Doe,OU=Users,DC=contoso,DC=com",
+      "name": "jdoe",
+      "description": null
+    }
   ]
 }
 ```
@@ -1951,6 +2065,7 @@ Test the PM target account filter against Active Directory without persisting. U
 Trigger an immediate sync for a specific source.
 
 **Response** `200 OK`
+
 ```json
 { "run_id": "uuid", "status": "started" }
 ```
@@ -1960,6 +2075,7 @@ Trigger an immediate sync for a specific source.
 List sync run history for a source (newest first, limit 50).
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -1984,6 +2100,7 @@ List sync run history for a source (newest first, limit 50).
 List all Kerberos realm configurations.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -2003,6 +2120,7 @@ List all Kerberos realm configurations.
 Create a Kerberos realm. Triggers `krb5.conf` regeneration.
 
 **Request Body**
+
 ```json
 {
   "realm": "CONTOSO.COM",
@@ -2033,6 +2151,7 @@ Users can pin a single tag per connection to display on session thumbnails in th
 Returns all display tag assignments for the current user.
 
 **Response**
+
 ```json
 {
   "conn-uuid-1": { "id": "tag-uuid", "name": "Production", "color": "#ef4444" },
@@ -2047,6 +2166,7 @@ Each key is a connection ID. The value contains the pinned tag's `id`, `name`, a
 Set or replace the display tag for a connection. Only one tag can be pinned per connection per user.
 
 **Request Body**
+
 ```json
 {
   "connection_id": "uuid",
@@ -2054,12 +2174,13 @@ Set or replace the display tag for a connection. Only one tag can be pinned per 
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `connection_id` | string (UUID) | The connection to assign the display tag to |
-| `tag_id` | string (UUID) | The user tag to pin. Must belong to the current user |
+| Field           | Type          | Description                                          |
+| --------------- | ------------- | ---------------------------------------------------- |
+| `connection_id` | string (UUID) | The connection to assign the display tag to          |
+| `tag_id`        | string (UUID) | The user tag to pin. Must belong to the current user |
 
 **Response**
+
 ```json
 { "ok": true }
 ```
@@ -2071,6 +2192,7 @@ Returns `404` if the tag does not exist or does not belong to the user.
 Remove the display tag for a connection.
 
 **Response**
+
 ```json
 { "ok": true }
 ```
@@ -2091,10 +2213,10 @@ List all approval roles.
 
 Create an approval role.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Role name (1-255 characters) |
-| `description` | string | No | Role description |
+| Field         | Type   | Required | Description                  |
+| ------------- | ------ | -------- | ---------------------------- |
+| `name`        | string | Yes      | Role name (1-255 characters) |
+| `description` | string | No       | Role description             |
 
 #### `PUT /api/admin/approval-roles/:id`
 
@@ -2117,6 +2239,7 @@ Replace role assignments. Body: `{ "user_ids": ["uuid", ...] }`
 List managed AD accounts scoped to this approval role. Each entry maps the role to a specific managed account DN.
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -2144,12 +2267,12 @@ List all user-to-managed-account mappings.
 
 Create a user-to-managed-account mapping.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `user_id` | string (UUID) | Yes | Strata user |
-| `managed_ad_dn` | string | Yes | AD distinguished name of managed account |
-| `can_self_approve` | boolean | No | Allow user to self-approve checkouts (default false) |
-| `ad_sync_config_id` | string (UUID) | No | Link to AD sync config for password policy |
+| Field               | Type          | Required | Description                                          |
+| ------------------- | ------------- | -------- | ---------------------------------------------------- |
+| `user_id`           | string (UUID) | Yes      | Strata user                                          |
+| `managed_ad_dn`     | string        | Yes      | AD distinguished name of managed account             |
+| `can_self_approve`  | boolean       | No       | Allow user to self-approve checkouts (default false) |
+| `ad_sync_config_id` | string (UUID) | No       | Link to AD sync config for password policy           |
 
 #### `DELETE /api/admin/account-mappings/:id`
 
@@ -2163,10 +2286,10 @@ Partially update an existing user → managed-account mapping. Any field omitted
 from the request body is left unchanged (`COALESCE`-semantics). Requires
 `can_manage_system`.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `can_self_approve` | boolean | No | Toggle whether the user can self-approve checkouts against this mapping. |
-| `friendly_name` | string | No | Human-readable label for the managed account. |
+| Field              | Type    | Required | Description                                                              |
+| ------------------ | ------- | -------- | ------------------------------------------------------------------------ |
+| `can_self_approve` | boolean | No       | Toggle whether the user can self-approve checkouts against this mapping. |
+| `friendly_name`    | string  | No       | Human-readable label for the managed account.                            |
 
 Returns `404` if the mapping id does not exist. Writes an
 `account_mapping.updated` audit log entry with the requested changes.
@@ -2191,9 +2314,13 @@ Phase 3). Backed by the `vdi_image_whitelist` row in
 `#` are treated as comments.
 
 **Response** `200 OK`
+
 ```json
 {
-  "images": ["strata/vdi-ubuntu:24.04-2026.04.01", "strata/vdi-rocky:9-2026.04.01"],
+  "images": [
+    "strata/vdi-ubuntu:24.04-2026.04.01",
+    "strata/vdi-rocky:9-2026.04.01"
+  ],
   "count": 2
 }
 ```
@@ -2209,11 +2336,13 @@ Overrides are stored as a single JSON blob under the
 `roadmap_statuses` key of `system_settings`.
 
 **Body**
+
 ```json
 { "status": "In Progress" }
 ```
 
 **Response** `200 OK`
+
 ```json
 { "ok": true, "item_id": "recording-screenshots", "status": "In Progress" }
 ```
@@ -2228,16 +2357,17 @@ List managed AD accounts assigned to the current user.
 
 Request a password checkout.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `managed_ad_dn` | string | Yes | DN of the managed account |
-| `ad_sync_config_id` | string (UUID) | No | AD sync config |
-| `requested_duration_mins` | number | No | Duration in minutes (1-720, default 60). **Hard-clamped to 30 when `emergency_bypass = true`** — any larger value is silently reduced server-side. |
-| `justification_comment` | string | Conditional | **Required (≥ 10 characters)** whenever the caller does not have self-approval on the mapping — i.e. for any approval-required checkout, including Emergency Bypass. Optional for self-approving users. |
-| `emergency_bypass` | boolean | No | Break-glass flag. Only accepted when the account's AD sync config has `pm_allow_emergency_bypass = true`. Activates the checkout immediately without approver review, caps `requested_duration_mins` at 30, and writes a `checkout.emergency_bypass` audit event. Cannot be combined with `scheduled_start_at`. |
-| `scheduled_start_at` | string (ISO 8601, UTC) | No | Schedules the release for a future moment. Must be strictly in the future (> now + 30 s) and ≤ 14 days from now. The checkout is created with status `Scheduled` — no password is generated, no LDAP mutation occurs, and no Vault material is written until the scheduled moment. A 60-second background worker activates due rows. |
+| Field                     | Type                   | Required    | Description                                                                                                                                                                                                                                                                                                                          |
+| ------------------------- | ---------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `managed_ad_dn`           | string                 | Yes         | DN of the managed account                                                                                                                                                                                                                                                                                                            |
+| `ad_sync_config_id`       | string (UUID)          | No          | AD sync config                                                                                                                                                                                                                                                                                                                       |
+| `requested_duration_mins` | number                 | No          | Duration in minutes (1-720, default 60). **Hard-clamped to 30 when `emergency_bypass = true`** — any larger value is silently reduced server-side.                                                                                                                                                                                   |
+| `justification_comment`   | string                 | Conditional | **Required (≥ 10 characters)** whenever the caller does not have self-approval on the mapping — i.e. for any approval-required checkout, including Emergency Bypass. Optional for self-approving users.                                                                                                                              |
+| `emergency_bypass`        | boolean                | No          | Break-glass flag. Only accepted when the account's AD sync config has `pm_allow_emergency_bypass = true`. Activates the checkout immediately without approver review, caps `requested_duration_mins` at 30, and writes a `checkout.emergency_bypass` audit event. Cannot be combined with `scheduled_start_at`.                      |
+| `scheduled_start_at`      | string (ISO 8601, UTC) | No          | Schedules the release for a future moment. Must be strictly in the future (> now + 30 s) and ≤ 14 days from now. The checkout is created with status `Scheduled` — no password is generated, no LDAP mutation occurs, and no Vault material is written until the scheduled moment. A 60-second background worker activates due rows. |
 
 **Response** `200 OK`
+
 ```json
 { "id": "uuid", "status": "Pending", "scheduled_start_at": null }
 ```
@@ -2245,6 +2375,7 @@ Request a password checkout.
 `status` is one of `Pending`, `Approved`, `Scheduled`, or `Active`. Self-approving users (or emergency-bypass callers) receive `Approved` and the checkout is activated synchronously; scheduled requests return `Scheduled` with the echo of `scheduled_start_at`; approval-required requests return `Pending`.
 
 **Errors:**
+
 - `400 Validation` — `scheduled_start_at` is in the past / too close / more than 14 days out, or `emergency_bypass` was combined with `scheduled_start_at`
 - `400 Validation` — `emergency_bypass = true` but `justification_comment` is shorter than 10 characters
 - `403 Forbidden` — `emergency_bypass = true` but the AD sync config does not have `pm_allow_emergency_bypass` enabled
@@ -2259,6 +2390,7 @@ List the current user's checkout requests (up to 100, most recent first).
 List pending checkout requests that the current user can approve. Returns only requests for managed accounts explicitly assigned to the user's approval roles via `approval_role_accounts`. Includes the requester's username (resolved via LEFT JOIN).
 
 **Response** `200 OK`
+
 ```json
 [
   {
@@ -2283,6 +2415,7 @@ Approve or deny a pending checkout. The approver must have the managed account i
 Reveal the active checkout password. Only the requester can call this.
 
 **Response** `200 OK`
+
 ```json
 { "password": "...", "expires_at": "2025-01-01T12:00:00Z" }
 ```
@@ -2294,11 +2427,13 @@ Voluntarily check-in (return) an active checkout before its expiry. Only the req
 **Path Parameter**: `id` (UUID) — checkout request ID
 
 **Response** `200 OK`
+
 ```json
 { "status": "checked_in" }
 ```
 
 **Errors:**
+
 - `403` — not the requester
 - `404` — checkout not found
 - `409` — checkout is not in `Active` state (already expired, denied, or checked in)

@@ -15,6 +15,7 @@ use super::config::{LinkConfig, LinkEndpoint};
 use super::connector::{BoxedStream, Connector};
 use super::h2_serve::{serve_h2, RequestHandler};
 use super::registry::{LinkRegistry, LinkState};
+use super::upgrade_handler::UpgradeHandler;
 
 /// Spawn one supervisor task per configured endpoint.
 ///
@@ -24,6 +25,7 @@ pub fn spawn_link_supervisors(
     cfg: Arc<LinkConfig>,
     connector: Arc<dyn Connector>,
     handler: Arc<dyn RequestHandler>,
+    upgrade: Arc<dyn UpgradeHandler>,
     registry: LinkRegistry,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
@@ -35,10 +37,14 @@ pub fn spawn_link_supervisors(
             let cfg = cfg.clone();
             let connector = connector.clone();
             let handler = handler.clone();
+            let upgrade = upgrade.clone();
             let registry = registry.clone();
             let shutdown = shutdown.clone();
             handles.push(tokio::spawn(async move {
-                run_endpoint(cfg, endpoint, connector, handler, registry, shutdown).await
+                run_endpoint(
+                    cfg, endpoint, connector, handler, upgrade, registry, shutdown,
+                )
+                .await
             }));
         }
         for h in handles {
@@ -52,6 +58,7 @@ async fn run_endpoint(
     endpoint: LinkEndpoint,
     connector: Arc<dyn Connector>,
     handler: Arc<dyn RequestHandler>,
+    upgrade: Arc<dyn UpgradeHandler>,
     registry: LinkRegistry,
     shutdown: CancellationToken,
 ) {
@@ -150,9 +157,15 @@ async fn run_endpoint(
         // works because cycle_tok is a child of `shutdown`.
         let url_for_ready = url.clone();
         let registry_for_ready = registry.clone();
-        let serve_result = serve_h2(stream, handler.clone(), cycle_tok.clone(), move || {
-            registry_for_ready.set_state(&url_for_ready, LinkState::Up, None);
-        })
+        let serve_result = serve_h2(
+            stream,
+            handler.clone(),
+            upgrade.clone(),
+            cycle_tok.clone(),
+            move || {
+                registry_for_ready.set_state(&url_for_ready, LinkState::Up, None);
+            },
+        )
         .await;
 
         registry.clear_active_token(&url);
@@ -367,6 +380,7 @@ mod tests {
             cfg(),
             connector,
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );
@@ -390,6 +404,7 @@ mod tests {
             cfg(),
             connector,
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );
@@ -420,6 +435,7 @@ mod tests {
             cfg(),
             connector,
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );
@@ -451,6 +467,7 @@ mod tests {
             cfg(),
             connector,
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );
@@ -489,6 +506,7 @@ mod tests {
             cfg(),
             Arc::new(AlwaysFail),
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );

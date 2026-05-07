@@ -117,35 +117,37 @@ For the full per-version history of how these capabilities were built and the bu
 
 ## 🆕 What's new
 
-| Version | Date       | Highlight                                                                                                                                                |
-| ------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.5.1   | 2026-05-07 | Pop-out window correctness fix — F11 / F12, popup-local **Ctrl+K** Command Palette via vanilla-DOM overlay + same-origin `postMessage`, clean teardown when the opener navigates away. ([details](CHANGELOG.md#151--2026-05-07)) |
-| 1.5.0   | 2026-05-05 | **DMZ deployment mode** — split-topology release with a separate `strata-dmz` edge binary, HTTP/2-over-mTLS reverse tunnel, zero-secret-overlap with the internal node, and a new admin DMZ Links tab. ([details](CHANGELOG.md#150--2026-05-05)) |
-| 1.4.1   | 2026-05-05 | Tunnel watchdog regression fixed — active sessions no longer reaped at the access-token TTL. RustCrypto refresh, ESLint sweep. ([details](CHANGELOG.md#141--2026-05-05)) |
-| 1.4.0   | 2026-05-01 | Kubernetes pod console as a first-class connection protocol, end-to-end through the existing tunnel/recording/audit pipeline. ([details](CHANGELOG.md#140--2026-05-01)) |
-| 1.3.2   | 2026-05-01 | guacd FreeRDP 3.25 callback ABI fix, RDP resize ghost-region fix, WebSocket-tunnel auth watchdog, immediate logout teardown. ([details](CHANGELOG.md#132--2026-05-01))  |
-| 1.3.1   | 2026-04-30 | SSH terminal defaults matching `rustguac`, phantom-selection mouse hygiene, recording-playback URL fix. ([details](CHANGELOG.md#131--2026-04-30))                       |
-| 1.3.0   | 2026-04-30 | Web-kiosk lifecycle correctness, Trusted-CA NSS DB resolution, suppressed Chromium infobar, protocol-aware Quick Share, nginx upstream resilience. ([details](CHANGELOG.md#130--2026-04-30)) |
+| Version | Date       | Highlight                                                                                                                                                                                                                                                                         |
+| ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.5.3   | 2026-05-08 | **Admin Settings — grouped sidebar nav** replaces the 17-tab horizontal row that no longer fit on a single line. Permission-aware section collapse, sticky on `lg+`, wraps inline on tablets / phones. Frontend-only roll. ([details](CHANGELOG.md#153--2026-05-08))              |
+| 1.5.2   | 2026-05-08 | **DMZ link WebSocket forwarding** — RFC 8441 Extended CONNECT on the link, RFC 6455 acknowledgement on the public side, loopback bridge to the existing `tunnel.rs` handler. Sessions launched through a DMZ node now actually connect. ([details](CHANGELOG.md#152--2026-05-08)) |
+| 1.5.1   | 2026-05-07 | Pop-out window correctness fix — F11 / F12, popup-local **Ctrl+K** Command Palette via vanilla-DOM overlay + same-origin `postMessage`, clean teardown when the opener navigates away. ([details](CHANGELOG.md#151--2026-05-07))                                                  |
+| 1.5.0   | 2026-05-05 | **DMZ deployment mode** — split-topology release with a separate `strata-dmz` edge binary, HTTP/2-over-mTLS reverse tunnel, zero-secret-overlap with the internal node, and a new admin DMZ Links tab. ([details](CHANGELOG.md#150--2026-05-05))                                  |
+| 1.4.1   | 2026-05-05 | Tunnel watchdog regression fixed — active sessions no longer reaped at the access-token TTL. RustCrypto refresh, ESLint sweep. ([details](CHANGELOG.md#141--2026-05-05))                                                                                                          |
+| 1.4.0   | 2026-05-01 | Kubernetes pod console as a first-class connection protocol, end-to-end through the existing tunnel/recording/audit pipeline. ([details](CHANGELOG.md#140--2026-05-01))                                                                                                           |
+| 1.3.2   | 2026-05-01 | guacd FreeRDP 3.25 callback ABI fix, RDP resize ghost-region fix, WebSocket-tunnel auth watchdog, immediate logout teardown. ([details](CHANGELOG.md#132--2026-05-01))                                                                                                            |
+| 1.3.1   | 2026-04-30 | SSH terminal defaults matching `rustguac`, phantom-selection mouse hygiene, recording-playback URL fix. ([details](CHANGELOG.md#131--2026-04-30))                                                                                                                                 |
+| 1.3.0   | 2026-04-30 | Web-kiosk lifecycle correctness, Trusted-CA NSS DB resolution, suppressed Chromium infobar, protocol-aware Quick Share, nginx upstream resilience. ([details](CHANGELOG.md#130--2026-04-30))                                                                                      |
 
 ## vs. vanilla Apache Guacamole
 
 Apache Guacamole's reference web app is a fantastic protocol gateway. Strata is what you'd build on top of it for an enterprise privileged-access deployment — without forking guacd.
 
-| Capability                                | Apache Guacamole reference webapp | **Strata Client**                                                                                  |
-| ----------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Protocols                                 | RDP, VNC, SSH, Telnet, Kubernetes | **Same plus Web kiosk + VDI desktop containers**, all through one tunnel/recording/audit pipeline  |
-| Authentication                            | Built-in users, LDAP, SAML, etc.  | **OIDC / SSO with dynamic JWKS**, local auth, refresh-token rotation aligned with OWASP guidance   |
-| Authorisation                             | User/group permission model       | **10-permission RBAC** enforced at every admin endpoint, share-token mode, scoped checkout approvers |
-| Credential storage                        | XML / JDBC, encrypted-at-rest     | **HashiCorp Vault Transit envelope encryption** (bundled & auto-unsealed, or external)             |
-| Privileged-account workflow               | Not included                      | **Built-in PAM**: checkout / approval / rotation, LDAP `unicodePwd` reset, dedicated Approvals UI  |
-| Audit log                                 | Application log                   | **Append-only, SHA-256 hash-chained** `audit_logs` covering every privileged action                |
-| Live session observation                  | Not included                      | **NVR-style live observe** with 5-minute rewind buffer, share links (view/control), kill controls  |
-| Recording playback                        | Server-side render to video       | **In-browser playback** with seek/speed; optional Azure Blob Storage offload                       |
-| H.264 GFX                                 | Server-side transcode             | **End-to-end passthrough** to the browser's WebCodecs decoder — no proxy-side decode               |
-| Web / VDI sessions                        | Not supported                     | **First-class** kiosk Chromium-in-Xvnc and Strata-managed `xrdp` Docker containers                 |
-| Multi-monitor                             | Limited                           | **Window Management API** spans a session across physical monitors                                 |
-| Operator UX                               | JSP web app                       | **React 19 SPA** with setup wizard, scriptable Command Palette, Quick Share file CDN              |
-| Deployment                                | Tomcat + guacd + DB               | **`docker compose up -d` zero-config first boot** with bundled Postgres + Vault                    |
+| Capability                  | Apache Guacamole reference webapp | **Strata Client**                                                                                    |
+| --------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Protocols                   | RDP, VNC, SSH, Telnet, Kubernetes | **Same plus Web kiosk + VDI desktop containers**, all through one tunnel/recording/audit pipeline    |
+| Authentication              | Built-in users, LDAP, SAML, etc.  | **OIDC / SSO with dynamic JWKS**, local auth, refresh-token rotation aligned with OWASP guidance     |
+| Authorisation               | User/group permission model       | **10-permission RBAC** enforced at every admin endpoint, share-token mode, scoped checkout approvers |
+| Credential storage          | XML / JDBC, encrypted-at-rest     | **HashiCorp Vault Transit envelope encryption** (bundled & auto-unsealed, or external)               |
+| Privileged-account workflow | Not included                      | **Built-in PAM**: checkout / approval / rotation, LDAP `unicodePwd` reset, dedicated Approvals UI    |
+| Audit log                   | Application log                   | **Append-only, SHA-256 hash-chained** `audit_logs` covering every privileged action                  |
+| Live session observation    | Not included                      | **NVR-style live observe** with 5-minute rewind buffer, share links (view/control), kill controls    |
+| Recording playback          | Server-side render to video       | **In-browser playback** with seek/speed; optional Azure Blob Storage offload                         |
+| H.264 GFX                   | Server-side transcode             | **End-to-end passthrough** to the browser's WebCodecs decoder — no proxy-side decode                 |
+| Web / VDI sessions          | Not supported                     | **First-class** kiosk Chromium-in-Xvnc and Strata-managed `xrdp` Docker containers                   |
+| Multi-monitor               | Limited                           | **Window Management API** spans a session across physical monitors                                   |
+| Operator UX                 | JSP web app                       | **React 19 SPA** with setup wizard, scriptable Command Palette, Quick Share file CDN                 |
+| Deployment                  | Tomcat + guacd + DB               | **`docker compose up -d` zero-config first boot** with bundled Postgres + Vault                      |
 
 ## 🏗️ Architecture
 
@@ -217,23 +219,23 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.5.1                                  # or "latest"
+export STRATA_VERSION=1.5.3                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
 Images:
 
-| Image                                                              | What it is                            |
-| ------------------------------------------------------------------ | ------------------------------------- |
-| `ghcr.io/bails309/strata-client/backend:<version>`                 | Rust backend (Axum + Tokio)           |
-| `ghcr.io/bails309/strata-client/frontend:<version>`                | Frontend SPA (nginx + static React)   |
-| `ghcr.io/bails309/strata-client/custom-guacd:<version>`            | Custom guacd (FreeRDP 3 + Kerberos + H.264) |
+| Image                                                   | What it is                                  |
+| ------------------------------------------------------- | ------------------------------------------- |
+| `ghcr.io/bails309/strata-client/backend:<version>`      | Rust backend (Axum + Tokio)                 |
+| `ghcr.io/bails309/strata-client/frontend:<version>`     | Frontend SPA (nginx + static React)         |
+| `ghcr.io/bails309/strata-client/custom-guacd:<version>` | Custom guacd (FreeRDP 3 + Kerberos + H.264) |
 
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.5.1 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.5.3 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -241,7 +243,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.5.1 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.5.1 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.5.3 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

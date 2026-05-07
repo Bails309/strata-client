@@ -121,6 +121,16 @@ pub async fn proxy_handler(
     axum::extract::State(state): axum::extract::State<ProxyState>,
     req: AxumRequest,
 ) -> Response {
+    // RFC 8441 / RFC 6455: WebSocket upgrades cannot be buffered like
+    // regular requests — they need a long-lived bidirectional bytes
+    // pipe over the link. Dispatch to the WS-specific path before
+    // touching the body.
+    if crate::ws_proxy::is_websocket_upgrade(req.headers()) {
+        return match crate::ws_proxy::proxy_websocket(state, req).await {
+            Ok(resp) => resp,
+            Err(e) => e.into_response(),
+        };
+    }
     match proxy(state, req).await {
         Ok(resp) => resp,
         Err(e) => e.into_response(),

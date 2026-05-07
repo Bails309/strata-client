@@ -354,16 +354,38 @@ async fn main() -> anyhow::Result<()> {
         // keep in sync.
         let handler: std::sync::Arc<dyn services::dmz_link::RequestHandler> =
             std::sync::Arc::new(services::dmz_link::RouterHandler::new(app.clone()));
+        // Phase 7c: route Extended CONNECT (RFC 8441) WebSocket
+        // streams pushed through the link to a loopback WebSocket
+        // upgrade against this same axum router on `127.0.0.1:8080`
+        // (overridable via STRATA_DMZ_LOOPBACK_ADDR for testing /
+        // exotic deployments). This is what makes
+        // `/api/tunnel/{id}` actually work through the DMZ — without
+        // it the DMZ proxy would have nowhere to send the upgraded
+        // socket because the inner h2 RouterHandler can only carry
+        // buffered requests.
+        let loopback_addr: std::net::SocketAddr = std::env::var("STRATA_DMZ_LOOPBACK_ADDR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| {
+                "127.0.0.1:8080"
+                    .parse()
+                    .expect("hard-coded loopback addr is valid")
+            });
+        let upgrade: std::sync::Arc<dyn services::dmz_link::UpgradeHandler> = std::sync::Arc::new(
+            services::dmz_link::LoopbackUpgradeHandler::new(loopback_addr),
+        );
         tracing::info!(
             cluster_id = %link_cfg.cluster_id,
             node_id = %link_cfg.node_id,
             endpoints = link_cfg.endpoints.len(),
+            loopback = %loopback_addr,
             "spawning DMZ link supervisors",
         );
         worker_handles.push(services::dmz_link::spawn_link_supervisors(
             std::sync::Arc::new(link_cfg),
             connector,
             handler,
+            upgrade,
             registry,
             shutdown.clone(),
         ));

@@ -29,6 +29,70 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.5.3",
+    subtitle:
+      "Admin Settings — grouped sidebar navigation replaces the 17-tab horizontal row that no longer fit on a single line",
+    sections: [
+      {
+        title: "From a 17-tab horizontal row to a five-section sidebar",
+        description:
+          "The Admin Settings page accumulated 17 tabs across the v1.4.x → v1.5.x line (Health, Display, Network, SSO / OIDC, Kerberos, Vault, Recordings, Access, Tags, AD Sync, Password Mgmt, Notifications, Sessions, VDI, Trusted CAs, DMZ Links, Security) and on common DPI / zoom settings the row no longer fit on a single line — operator laptops were forced to scroll horizontally to reach the right-hand tabs. v1.5.3 replaces that single row with a left sidebar grouped into five sections (Overview, Identity & Access, Connectivity, Workspace, Secrets & Security) modelled on the navigation patterns used by AWS Console, Azure Portal, and GitHub Settings.",
+      },
+      {
+        title: "Permission-aware section collapse — non-admins see a smaller sidebar",
+        description:
+          "Sections become hidden from the nav entirely when the current user has no permission to see any item inside them, so a tag-only operator or an audit-only viewer sees a much smaller sidebar than a full system administrator. The per-item permission predicates (can_manage_system, can_manage_users, can_manage_connections, can_create_*, can_view_audit_logs, etc.) are unchanged from v1.5.2 — only the grouping and rendering moved. The default-tab heuristic (system admins land on Health, RBAC admins on Access, audit-only viewers on Sessions) is also unchanged.",
+      },
+      {
+        title: "Responsive — wraps inline above content on tablets and phones",
+        description:
+          "On screens narrower than the Tailwind lg breakpoint (1024 px) the sidebar wraps inline above the content as a horizontal flex row of buttons, so mobile and tablet operators get the same content without a forced two-pane layout. On lg+ screens the sidebar is sticky to the top of the viewport so the section list stays in view while scrolling the long settings panels (Recordings, Notifications SMTP, the Access Control role editor are all longer than a typical viewport).",
+      },
+      {
+        title: "Drop-in upgrade — frontend image only",
+        description:
+          "v1.5.3 is a UX-only patch release. There are no API changes, no database migrations, no protocol changes, no security changes, and no behavioural changes to any session, audit, or deployment code path. The backend, DMZ edge, and guacd images are bit-identical to v1.5.2 — operators only need to roll the frontend container. All 1329 frontend tests continue to pass, including the 220 AdminSettings unit tests, because the tab labels and the .tab-active CSS class were preserved verbatim.",
+      },
+    ],
+  },
+  {
+    version: "1.5.2",
+    subtitle:
+      "DMZ link WebSocket forwarding — RFC 8441 Extended CONNECT brings end-to-end /api/tunnel through the public edge",
+    sections: [
+      {
+        title: "Sessions launched through the DMZ now actually connect",
+        description:
+          "Until v1.5.2 the dual-node DMZ deployment forwarded REST traffic correctly (admin UI, OIDC, login) but silently dropped WebSocket upgrades — the public listener stripped the Upgrade header and the inner h2 multiplexer had no upgrade-aware code path, so any user who connected to the DMZ node and tried to launch a session saw the WebSocket fail mid-handshake. v1.5.2 closes the loop: the DMZ now negotiates an RFC 8441 Extended CONNECT stream on the link for every WebSocket upgrade, the internal node accepts it via a new UpgradeHandler trait, and a transparent byte-pump forwards frames in both directions for the lifetime of the session. WebSocket masking, ping/pong, fragmentation and close frames all flow through unmodified.",
+      },
+      {
+        title: "RFC 8441 Extended CONNECT on the link, RFC 6455 on the public side",
+        description:
+          'On the link, the DMZ sends :method=CONNECT, :protocol=websocket, :path=<original> with the signed x-strata-edge-* bundle and every non-hop-by-hop header from the original request, then waits for :status=200 from the internal node before acknowledging the upgrade publicly. On the public side the DMZ returns 101 Switching Protocols with a correctly-computed Sec-WebSocket-Accept (RFC 6455 §1.3 — SHA-1 of the client Sec-WebSocket-Key concatenated with the magic GUID 258EAFA5-E914-47DA-95CA-C5AB0DC85B11, base64-encoded). Both ends use the h2 crate\'s enable_connect_protocol() / Protocol::from_static("websocket") plumbing so the wire is exactly what RFC-conformant peers expect.',
+      },
+      {
+        title: "Loopback bridge keeps the existing tunnel.rs / RBAC / audit story intact",
+        description:
+          "On the internal side, the new LoopbackUpgradeHandler accepts the inbound Extended CONNECT stream and bridges it to a regular HTTP/1.1 WebSocket upgrade against 127.0.0.1:8080 (overridable via the new STRATA_DMZ_LOOPBACK_ADDR env var). The loopback target is the same axum router that serves direct connections — the existing verify_edge_headers middleware promotes the forwarded x-strata-edge-client-ip to the real client IP for audit / RBAC, the existing tunnel.rs ws_tunnel handler runs unchanged, and the guacd connection still originates from the internal node's IP, exactly as a single-node deployment behaves. No separate auth code path to keep in sync, no decrypted secrets ever touch the DMZ node.",
+      },
+      {
+        title: "Streaming-aware resource caps",
+        description:
+          "WebSocket streams cannot be size-capped by the existing MAX_REQUEST_BODY_BYTES / MAX_PROXY_BODY_BYTES buffers because they are long-lived. Instead v1.5.2 caps individual h2 frame sizes at 8 MiB on the DMZ→public direction so a misbehaving internal node cannot make the DMZ buffer arbitrary memory before flushing to the public socket. h2 flow-control windows are honoured in both directions; back-pressure from a slow public client transparently slows the upstream guacd traffic via the link's RecvStream::release_capacity calls.",
+      },
+      {
+        title: "Drop-in upgrade — both DMZ and internal images must roll together",
+        description:
+          "No database migration, no /api/* contract changes, no config.toml or environment-variable changes for existing operators. Optional new env var STRATA_DMZ_LOOPBACK_ADDR (default 127.0.0.1:8080) only matters if the internal node listens on a non-default address. Operators running a DMZ deployment must rebuild and redeploy both the strata-dmz and strata-backend images for WebSocket forwarding to work — both ends of the link need to negotiate the RFC 8441 settings extension. Single-node deployments (STRATA_DMZ_ENDPOINTS unset) are unaffected: the internal node continues serving public traffic directly with no link supervisor spawned.",
+      },
+      {
+        title: "Test coverage holds",
+        description:
+          "DMZ side gains 7 unit tests covering is_websocket_upgrade detection (canonical, multi-token Connection, case-insensitive, rejection paths) and compute_accept against the RFC 6455 §1.3 worked example (dGhlIHNhbXBsZSBub25jZQ== → s3pPLMBiTxaQ9kYGzzhZRbK+xOo=). Internal side gains 10 unit tests covering Extended CONNECT detection, response-line parsing, CRLFCRLF scanning, header-forwarding allowlist, and oversized-line rejection. Existing h2_serve and supervisor tests were updated to thread a RejectUpgradeHandler through the new signature; all pre-existing test coverage continues to pass.",
+      },
+    ],
+  },
+  {
     version: "1.5.1",
     subtitle:
       "Pop-out window correctness fix release — F11 / F12, popup-local Ctrl+K Command Palette, clean teardown when the opener navigates away",

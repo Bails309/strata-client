@@ -1,0 +1,39 @@
+# Strata gitleaks configuration.
+#
+# Extends the upstream default ruleset and layers a small allowlist on
+# top for well-known public test vectors that look like high-entropy
+# secrets but are intentionally hard-coded into source.
+#
+# Anything added here MUST be either:
+#   1. A value published in an IETF / W3C RFC as an example (and so
+#      already public), or
+#   2. A test fixture that cannot be used to authenticate against any
+#      Strata deployment.
+# Every entry must be justified inline.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Strata public test vectors and false-positive fixtures."
+
+# Files that contain only test code; the per-line regex set below
+# narrows further so genuine accidentally-committed credentials in
+# these files would still be reported.
+paths = [
+  '''crates/strata-dmz/src/ws_proxy\.rs''',
+  '''backend/src/services/dmz_link/upgrade_handler\.rs''',
+]
+
+# Public RFC 6455 §1.3 worked-example values — the client key
+# "dGhlIHNhbXBsZSBub25jZQ==" (base64 of "the sample nonce") and the
+# matching server accept "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" are normative
+# test vectors copied verbatim into our unit tests so a faulty SHA-1 /
+# base64 implementation cannot ship silently. They are published in
+# https://datatracker.ietf.org/doc/html/rfc6455#section-1.3 and so are
+# already public; they cannot be used to authenticate against any
+# Strata deployment.
+regexes = [
+  '''dGhlIHNhbXBsZSBub25jZQ==''',
+  '''s3pPLMBiTxaQ9kYGzzhZRbK\+xOo=''',
+]

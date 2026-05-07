@@ -31,6 +31,7 @@ mod resume;
 mod router_adapter;
 mod supervisor;
 mod tls;
+mod upgrade_handler;
 
 // `LinkEndpoint`, `BoxedStream`, `Connector`, and the body-cap
 // constants are re-exported so tests and downstream code can name
@@ -60,3 +61,5 @@ pub use resume::{spawn_sweeper, ResumeError, ResumeRegistry};
 pub use router_adapter::{RouterHandler, MAX_RESPONSE_BODY_BYTES};
 pub use supervisor::spawn_link_supervisors;
 pub use tls::TlsLinkConnector;
+#[allow(unused_imports)]
+pub use upgrade_handler::{LoopbackUpgradeHandler, RejectUpgradeHandler, UpgradeHandler};

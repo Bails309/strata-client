@@ -38,3 +38,43 @@ pub enum ProtocolError {
     #[error("invalid or expired resume token")]
     InvalidResumeToken,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_messages_are_stable() {
+        // These strings appear in operator-facing logs and dashboards;
+        // changing them silently would break log-based alerting.
+        assert_eq!(
+            ProtocolError::Malformed("x".into()).to_string(),
+            "malformed message: x"
+        );
+        assert_eq!(ProtocolError::BadMac.to_string(), "hmac verification failed");
+        assert_eq!(
+            ProtocolError::AuthFailed("bad psk".into()).to_string(),
+            "authentication failed: bad psk"
+        );
+        assert_eq!(
+            ProtocolError::Skew.to_string(),
+            "timestamp outside accepted skew window"
+        );
+        assert_eq!(ProtocolError::Replay.to_string(), "replayed nonce");
+        assert_eq!(
+            ProtocolError::InvalidResumeToken.to_string(),
+            "invalid or expired resume token"
+        );
+    }
+
+    #[test]
+    fn version_mismatch_includes_both_sides() {
+        let s = ProtocolError::VersionMismatch {
+            peer: "2.0".into(),
+            ours: "1.0".into(),
+        }
+        .to_string();
+        assert!(s.contains("peer=2.0"));
+        assert!(s.contains("ours=1.0"));
+    }
+}

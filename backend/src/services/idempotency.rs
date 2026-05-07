@@ -95,3 +95,68 @@ pub async fn store(
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+
+    fn hdr(k: &str, v: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(k, v.parse().unwrap());
+        h
+    }
+
+    #[test]
+    fn extract_key_absent_returns_none() {
+        let h = HeaderMap::new();
+        assert!(extract_key(&h).unwrap().is_none());
+    }
+
+    #[test]
+    fn extract_key_blank_treated_as_absent() {
+        let h = hdr("Idempotency-Key", "   ");
+        assert!(extract_key(&h).unwrap().is_none());
+    }
+
+    #[test]
+    fn extract_key_trims_whitespace() {
+        let h = hdr("Idempotency-Key", "  abc-123  ");
+        assert_eq!(extract_key(&h).unwrap().as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn extract_key_at_max_len_accepted() {
+        let v = "a".repeat(MAX_KEY_LEN);
+        let h = hdr("Idempotency-Key", &v);
+        let k = extract_key(&h).unwrap().unwrap();
+        assert_eq!(k.len(), MAX_KEY_LEN);
+    }
+
+    #[test]
+    fn extract_key_over_max_len_rejected() {
+        let v = "a".repeat(MAX_KEY_LEN + 1);
+        let h = hdr("Idempotency-Key", &v);
+        let err = extract_key(&h).unwrap_err();
+        assert!(format!("{err}").contains("exceeds"));
+    }
+
+    #[test]
+    fn extract_key_non_ascii_rejected() {
+        // Construct a header value with a non-ASCII byte that bypasses
+        // the safe parser; HeaderValue::from_bytes accepts opaque bytes.
+        let mut h = HeaderMap::new();
+        let v = axum::http::HeaderValue::from_bytes(&[0xC3, 0xA9]).unwrap(); // "é" UTF-8
+        h.insert("Idempotency-Key", v);
+        let err = extract_key(&h).unwrap_err();
+        assert!(format!("{err}").contains("ASCII"));
+    }
+
+    #[test]
+    fn ttl_hours_constant_is_24h() {
+        // Production retention window is locked to 24 hours; bumping it
+        // requires a migration to keep the cleanup job in sync.
+        assert_eq!(IDEMPOTENCY_TTL_HOURS, 24);
+    }
+}
+

@@ -143,3 +143,129 @@ async fn sleep_with_jitter(base: Duration, shutdown: &CancellationToken) {
         _ = shutdown.cancelled() => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn every_60s_defaults_are_sane() {
+        let cfg = PeriodicConfig::every_60s("test");
+        assert_eq!(cfg.label, "test");
+        assert_eq!(cfg.interval, Duration::from_secs(60));
+        // iteration_timeout must be < interval so a stuck iteration
+        // can't backlog the next tick indefinitely.
+        assert!(cfg.iteration_timeout < cfg.interval);
+        assert!(cfg.error_backoff_base > Duration::ZERO);
+        // Initial delay must be smaller than the interval so workers
+        // don't take 2x the interval to fire for the first time.
+        assert!(cfg.initial_delay < cfg.interval);
+    }
+
+    #[tokio::test]
+    async fn shutdown_before_first_tick_exits_cleanly() {
+        let shutdown = CancellationToken::new();
+        let counter = Arc::new(AtomicU32::new(0));
+        let c = counter.clone();
+        let handle = spawn_periodic(
+            PeriodicConfig {
+                label: "early-shutdown",
+                initial_delay: Duration::from_secs(10),
+                interval: Duration::from_secs(60),
+                iteration_timeout: Duration::from_secs(1),
+                error_backoff_base: Duration::from_millis(0),
+            },
+            shutdown.clone(),
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok::<(), &'static str>(())
+                }
+            },
+        );
+        // Cancel immediately; the worker is parked in initial_delay.
+        shutdown.cancel();
+        // Should join quickly without ever invoking the closure.
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("worker did not exit on shutdown")
+            .expect("join failed");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn iteration_runs_then_shutdown_drains() {
+        let shutdown = CancellationToken::new();
+        let counter = Arc::new(AtomicU32::new(0));
+        let c = counter.clone();
+        let handle = spawn_periodic(
+            PeriodicConfig {
+                label: "happy-path",
+                initial_delay: Duration::from_millis(10),
+                interval: Duration::from_millis(50),
+                iteration_timeout: Duration::from_secs(1),
+                error_backoff_base: Duration::from_millis(0),
+            },
+            shutdown.clone(),
+            move || {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok::<(), &'static str>(())
+                }
+            },
+        );
+        // Let several iterations run.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("worker did not exit on shutdown")
+            .expect("join failed");
+        assert!(counter.load(Ordering::SeqCst) >= 1, "closure never ran");
+    }
+
+    #[tokio::test]
+    async fn iteration_timeout_does_not_kill_worker() {
+        let shutdown = CancellationToken::new();
+        let starts = Arc::new(AtomicU32::new(0));
+        let s = starts.clone();
+        let handle = spawn_periodic(
+            PeriodicConfig {
+                label: "slow-iter",
+                initial_delay: Duration::from_millis(10),
+                interval: Duration::from_millis(50),
+                iteration_timeout: Duration::from_millis(20),
+                error_backoff_base: Duration::from_millis(0),
+            },
+            shutdown.clone(),
+            move || {
+                let s = s.clone();
+                async move {
+                    s.fetch_add(1, Ordering::SeqCst);
+                    // Always exceed iteration_timeout (20ms) so the
+                    // worker drops the iteration and continues.
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Ok::<(), &'static str>(())
+                }
+            },
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("worker did not exit on shutdown")
+            .expect("join failed");
+        // The worker must have started at least 2 iterations despite
+        // each one timing out, proving the timeout did not abort the
+        // outer loop.
+        assert!(
+            starts.load(Ordering::SeqCst) >= 2,
+            "worker stopped scheduling after the first timeout"
+        );
+    }
+}
+

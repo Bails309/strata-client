@@ -156,3 +156,66 @@ pub async fn count(pool: &Pool<Postgres>) -> i64 {
         .await
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn create_request_accepts_minimum_payload() {
+        let body: CreateKerberosRealmRequest = serde_json::from_value(json!({
+            "realm": "EXAMPLE.COM",
+            "kdc_servers": ["kdc1.example.com", "kdc2.example.com"],
+            "admin_server": "kadmin.example.com",
+        }))
+        .unwrap();
+        assert_eq!(body.realm, "EXAMPLE.COM");
+        assert_eq!(body.kdc_servers.len(), 2);
+        assert_eq!(body.admin_server, "kadmin.example.com");
+        // Optional fields default to None.
+        assert!(body.ticket_lifetime.is_none());
+        assert!(body.renew_lifetime.is_none());
+        assert!(body.is_default.is_none());
+    }
+
+    #[test]
+    fn create_request_rejects_missing_required_fields() {
+        // realm + kdc_servers + admin_server are all required.
+        let err = serde_json::from_value::<CreateKerberosRealmRequest>(json!({
+            "realm": "EXAMPLE.COM",
+        }))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("kdc_servers") || msg.contains("admin_server"));
+    }
+
+    #[test]
+    fn update_request_partial_update() {
+        let body: UpdateKerberosRealmRequest = serde_json::from_value(json!({
+            "is_default": true,
+        }))
+        .unwrap();
+        assert_eq!(body.is_default, Some(true));
+        assert!(body.realm.is_none());
+        assert!(body.kdc_servers.is_none());
+    }
+
+    #[test]
+    fn select_columns_lists_every_realm_row_field() {
+        for col in [
+            "id",
+            "realm",
+            "kdc_servers",
+            "admin_server",
+            "ticket_lifetime",
+            "renew_lifetime",
+            "is_default",
+            "created_at",
+            "updated_at",
+        ] {
+            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+        }
+    }
+}
+

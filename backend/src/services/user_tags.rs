@@ -238,3 +238,63 @@ pub async fn list_admin_tags(pool: &Pool<Postgres>) -> Result<Vec<UserTag>, AppE
         .await?;
     Ok(tags)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn user_tag_round_trips_through_json() {
+        let id = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+        let t = UserTag {
+            id,
+            name: "prod".into(),
+            color: "#ff0000".into(),
+        };
+        let v = serde_json::to_value(&t).unwrap();
+        assert_eq!(v["id"], json!(id.to_string()));
+        assert_eq!(v["name"], json!("prod"));
+        assert_eq!(v["color"], json!("#ff0000"));
+    }
+
+    #[test]
+    fn create_tag_request_accepts_optional_color() {
+        let body: CreateTagRequest =
+            serde_json::from_value(json!({ "name": "qa" })).unwrap();
+        assert_eq!(body.name, "qa");
+        assert!(body.color.is_none());
+
+        let body: CreateTagRequest =
+            serde_json::from_value(json!({ "name": "qa", "color": "#00ff00" })).unwrap();
+        assert_eq!(body.color.as_deref(), Some("#00ff00"));
+    }
+
+    #[test]
+    fn update_tag_request_allows_renaming_only() {
+        let body: UpdateTagRequest =
+            serde_json::from_value(json!({ "name": "renamed" })).unwrap();
+        assert_eq!(body.name.as_deref(), Some("renamed"));
+        assert!(body.color.is_none());
+    }
+
+    #[test]
+    fn set_connection_tags_request_can_clear_all_tags() {
+        let body: SetConnectionTagsRequest = serde_json::from_value(json!({
+            "connection_id": "33333333-3333-3333-3333-333333333333",
+            "tag_ids": [],
+        }))
+        .unwrap();
+        assert!(body.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn set_display_tag_request_requires_both_ids() {
+        let err = serde_json::from_value::<SetDisplayTagRequest>(json!({
+            "connection_id": "33333333-3333-3333-3333-333333333333",
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("tag_id"));
+    }
+}
+

@@ -169,6 +169,15 @@ jobs:
         working-directory: .
         run: cargo test -p strata-protocol
 
+      - name: Run strata-dmz unit tests
+        # The DMZ edge crate is a separate process at runtime but it
+        # ships in the same workspace; run its unit tests on the PR
+        # critical path so regressions in ws_proxy / link_server /
+        # edge_signer / public_tls fail the gate immediately rather
+        # than slipping through to release builds.
+        working-directory: .
+        run: cargo test -p strata-dmz
+
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
 

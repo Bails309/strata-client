@@ -373,3 +373,100 @@ pub async fn link_sso_subject(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn create_user_request_minimum_payload() {
+        let body: CreateUserRequest = serde_json::from_value(json!({
+            "username": "alice",
+            "email": "Alice@Example.com",
+            "role_id": "00000000-0000-0000-0000-000000000001",
+            "auth_type": "local",
+        }))
+        .unwrap();
+        assert_eq!(body.username, "alice");
+        // Email casing is preserved at the type level — the route handler
+        // is responsible for lower-casing before persisting.
+        assert_eq!(body.email, "Alice@Example.com");
+        assert_eq!(body.auth_type, "local");
+        assert!(body.full_name.is_none());
+    }
+
+    #[test]
+    fn create_user_request_rejects_missing_required_fields() {
+        // role_id and auth_type are required; missing them must yield an
+        // error so the handler returns 422 instead of inserting bogus
+        // rows.
+        let err = serde_json::from_value::<CreateUserRequest>(json!({
+            "username": "bob",
+            "email": "bob@x"
+        }))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("role_id") || msg.contains("auth_type"), "got: {msg}");
+    }
+
+    #[test]
+    fn user_list_query_include_deleted_default_none() {
+        let q: UserListQuery = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(q.include_deleted, None);
+
+        let q: UserListQuery =
+            serde_json::from_value(json!({ "include_deleted": true })).unwrap();
+        assert_eq!(q.include_deleted, Some(true));
+    }
+
+    #[test]
+    fn update_user_request_only_role_id() {
+        // The PATCH-style update endpoint only allows changing the role.
+        let body: UpdateUserRequest = serde_json::from_value(json!({
+            "role_id": "11111111-1111-1111-1111-111111111111"
+        }))
+        .unwrap();
+        assert_eq!(
+            body.role_id,
+            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap()
+        );
+    }
+
+    #[test]
+    fn user_row_serialize_omits_password_hash() {
+        // Defensive: UserRow must never serialise a password_hash field
+        // because it's the type returned by GET /admin/users.
+        let row = UserRow {
+            id: Uuid::nil(),
+            username: "alice".to_string(),
+            email: "a@b".to_string(),
+            full_name: Some("Alice".to_string()),
+            auth_type: "local".to_string(),
+            sub: None,
+            role_name: "admin".to_string(),
+            deleted_at: None,
+        };
+        let v = serde_json::to_value(&row).unwrap();
+        assert!(v.get("password_hash").is_none(), "leaked password_hash");
+        assert_eq!(v["username"], json!("alice"));
+        assert_eq!(v["role_name"], json!("admin"));
+    }
+
+    #[test]
+    fn select_columns_lists_every_user_row_field() {
+        // SELECT_COLUMNS must stay in lock-step with UserRow.
+        for col in [
+            "u.id",
+            "u.username",
+            "u.email",
+            "u.full_name",
+            "u.auth_type",
+            "u.sub",
+            "r.name as role_name",
+            "u.deleted_at",
+        ] {
+            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+        }
+    }
+}

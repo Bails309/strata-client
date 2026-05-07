@@ -344,3 +344,129 @@ pub async fn touch_user_access(
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn normalize_extra_null_becomes_empty_object() {
+        let out = normalize_extra(&serde_json::Value::Null);
+        assert_eq!(out, json!({}));
+    }
+
+    #[test]
+    fn normalize_extra_passes_through_object() {
+        let input = json!({ "ignore-cert": true, "security": "nla" });
+        let out = normalize_extra(&input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn normalize_extra_passes_through_array() {
+        // Schema-wise extra is expected to be an object, but the helper
+        // intentionally only special-cases null. Anything non-null is
+        // passed through verbatim so the caller can validate elsewhere.
+        let input = json!([1, 2, 3]);
+        let out = normalize_extra(&input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn create_connection_request_defaults() {
+        let body: CreateConnectionRequest = serde_json::from_value(json!({
+            "name": "prod-rdp",
+            "protocol": "rdp",
+            "hostname": "host.example.com",
+        }))
+        .unwrap();
+        assert_eq!(body.name, "prod-rdp");
+        assert_eq!(body.protocol, "rdp");
+        assert_eq!(body.hostname, "host.example.com");
+        assert!(body.port.is_none());
+        // #[serde(default)] fields populate without being in the payload
+        assert_eq!(body.description, "");
+        assert!(body.extra.is_null());
+        // default_watermark()
+        assert_eq!(body.watermark, "inherit");
+    }
+
+    #[test]
+    fn create_connection_request_explicit_watermark() {
+        let body: CreateConnectionRequest = serde_json::from_value(json!({
+            "name": "x",
+            "protocol": "ssh",
+            "hostname": "h",
+            "watermark": "always",
+        }))
+        .unwrap();
+        assert_eq!(body.watermark, "always");
+    }
+
+    #[test]
+    fn create_connection_request_extra_can_be_object() {
+        let body: CreateConnectionRequest = serde_json::from_value(json!({
+            "name": "x",
+            "protocol": "vnc",
+            "hostname": "h",
+            "extra": { "ignore-cert": true },
+        }))
+        .unwrap();
+        assert_eq!(body.extra, json!({ "ignore-cert": true }));
+    }
+
+    #[test]
+    fn folder_request_root_folder_has_null_parent() {
+        let body: FolderRequest =
+            serde_json::from_value(json!({ "name": "Production" })).unwrap();
+        assert_eq!(body.name, "Production");
+        assert!(body.parent_id.is_none());
+    }
+
+    #[test]
+    fn select_columns_lists_every_connection_row_field() {
+        // SELECT_COLUMNS must stay in lock-step with ConnectionRow.
+        for col in [
+            "id",
+            "name",
+            "protocol",
+            "hostname",
+            "port",
+            "domain",
+            "description",
+            "folder_id",
+            "extra",
+            "last_accessed",
+            "watermark",
+            "health_status",
+            "health_checked_at",
+        ] {
+            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+        }
+    }
+
+    #[test]
+    fn connection_row_serialize_shape() {
+        let row = ConnectionRow {
+            id: Uuid::nil(),
+            name: "prod".into(),
+            protocol: "rdp".into(),
+            hostname: "h".into(),
+            port: 3389,
+            domain: Some("CORP".into()),
+            description: "".into(),
+            folder_id: None,
+            extra: json!({}),
+            last_accessed: None,
+            watermark: "inherit".into(),
+            health_status: "unknown".into(),
+            health_checked_at: None,
+        };
+        let v = serde_json::to_value(&row).unwrap();
+        assert_eq!(v["protocol"], json!("rdp"));
+        assert_eq!(v["port"], json!(3389));
+        assert_eq!(v["domain"], json!("CORP"));
+        assert!(v.get("soft_deleted_at").is_none(), "leaked tombstone field");
+    }
+}

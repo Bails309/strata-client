@@ -461,7 +461,10 @@ mod tests {
                 ErrorCode::Internal,
             ),
             (AppError::Config("x".into()), ErrorCode::Internal),
-            (AppError::Vault("x".into()), ErrorCode::DependencyUnavailable),
+            (
+                AppError::Vault("x".into()),
+                ErrorCode::DependencyUnavailable,
+            ),
             (AppError::Auth("x".into()), ErrorCode::Unauthenticated),
             (AppError::Validation("x".into()), ErrorCode::InvalidRequest),
             (AppError::NotFound("x".into()), ErrorCode::NotFound),

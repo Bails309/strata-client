@@ -367,10 +367,10 @@ export default function QuickShare({
           />
           <label
             htmlFor="quick-share-insecure"
-            className="text-[0.65rem] text-txt-secondary cursor-pointer leading-tight"
+            className="min-w-0 flex-1 text-[0.65rem] text-txt-secondary cursor-pointer leading-tight"
             title="Adds -k / --no-check-certificate / ServicePointManager bypass so the snippet works against a Strata server with a self-signed or internal-CA TLS cert."
           >
-            Skip TLS verification (self-signed / internal CA)
+            Skip TLS verification
           </label>
         </div>
       )}

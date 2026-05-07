@@ -60,7 +60,19 @@ openssl req -x509 -newkey rsa:2048 -nodes -days "$DAYS" \
     -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
 
 chmod 0644 *.crt
-chmod 0600 *.key
+# Test-cert keys are world-readable (0644) on purpose. The same
+# `certs/dmz/` directory has to be readable by TWO containers running
+# as DIFFERENT non-root UIDs on different hosts:
+#
+#   * strata-dmz on the DMZ host  -> distroless nonroot, UID 65532
+#   * backend    on the internal host -> `strata` user, typically UID 999
+#
+# A single owner can't satisfy both, so for these test-only credentials
+# we relax the mode rather than chown. The script header makes the
+# "FOR LOCAL TESTING ONLY" caveat explicit; production deployments
+# should bring their own CA material and chown it to the right UID
+# per host (see docs/deployment.md A.1).
+chmod 0644 *.key
 
 echo "[gen-test-certs] done."
 ls -la "$OUT"

@@ -1080,8 +1080,36 @@ For evaluation, the repo ships a test-cert generator:
 ```bash
 git clone <repo-url> strata-client
 cd strata-client
-./scripts/dmz/gen-test-certs.sh        # writes ./certs/dmz/{ca,server,client,public}.{crt,key}
+./scripts/dmz/gen-test-certs.sh    # writes ./certs/dmz/{ca,server,client,public}.{crt,key}
 ```
+
+> **Container UIDs and key permissions.** The two containers that read
+> `certs/dmz/` run as different non-root users:
+>
+> | Host | Container | User | UID |
+> |------|-----------|------|-----|
+> | DMZ host | `strata-dmz` | distroless `nonroot` | `65532` |
+> | Internal host | `backend` | `strata` (created in the image) | `999` (typical) |
+>
+> The test-cert generator writes keys mode `0644` (world-readable)
+> precisely so the same `certs/dmz/` directory works on both hosts.
+> For **production**, when you replace the test material with your
+> own operator-CA-issued certs, set ownership and mode appropriate
+> to whichever container will read them on that host:
+>
+> ```bash
+> # On the DMZ host
+> sudo chown -R 65532:65532 ./certs/dmz
+> sudo chmod 640 ./certs/dmz/*.key
+>
+> # On the internal host
+> sudo chown -R 999:999 ./certs/dmz
+> sudo chmod 640 ./certs/dmz/*.key
+> ```
+>
+> If you skip this step the affected container crash-loops with
+> `Permission denied (os error 13)` while reading `server.key` (DMZ
+> host) or `client.key` (internal host).
 
 For **production**, replace those files with material from your
 operator-controlled CA. The link server cert MUST have a SAN matching

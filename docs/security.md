@@ -1000,6 +1000,65 @@ The proxy operates entirely in the browser (client-side JavaScript). No keysym r
 
 ---
 
+## Pop-out Window `postMessage` Protocol (v1.5.1)
+
+When a session is detached into its own pop-out window the popup
+runs in a separate `Window` from the main React-rooted SPA. The
+popup-local Command Palette (see
+[architecture.md → Pop-out Command Palette](architecture.md#pop-out-command-palette-v151))
+needs a way to ask the opener to launch a connection without
+duplicating routing / auth / Vault-decryption code into the popup.
+It does so via a **same-origin `postMessage` relay** with a
+strictly-validated payload contract:
+
+```js
+// In the pop-out window:
+opener.postMessage(
+  { type: "strata:open-connection", id: chosenConnection.id },
+  opener.location.origin,           // exact-origin gate, never "*"
+);
+```
+
+**Defence-in-depth on the receiver side**
+([`frontend/src/components/CommandPaletteProvider.tsx`](../frontend/src/components/CommandPaletteProvider.tsx)):
+
+- **Origin check** — the opener's `message` listener rejects every
+  event whose `event.origin !== window.location.origin`. The popup
+  is `about:blank` opened by `window.open()` from the same origin
+  so the gate is exact-match, not a regex / suffix match.
+- **Type discriminator** — the listener accepts only the two known
+  type strings (`strata:open-command-palette` and
+  `strata:open-connection`); anything else is dropped silently.
+- **Id shape validation** — `strata:open-connection` requires
+  `typeof event.data.id === "string"` with `length` between 1 and
+  255 inclusive. The id is then `encodeURIComponent`-wrapped before
+  being interpolated into `/session/${id}`, so even a
+  spec-conformant id containing `/`, `?`, or `#` cannot break out
+  of the route segment.
+- **No privilege escalation** — the `id` is fed through the same
+  `getMyConnections()`-backed routed-launch path the main palette
+  already uses; the backend re-checks the user's RBAC against the
+  connection on `GET /api/connections/{id}` and on the subsequent
+  WebSocket upgrade. A popup that fabricates an id for a connection
+  the user does not have access to fails the existing 403 path; the
+  `postMessage` channel adds **no** new authority.
+- **No secrets in the channel** — only the connection id crosses
+  the bridge. Credentials, JWTs, refresh tokens and `guac-master-
+  key` material never leave the opener; the popup re-uses the
+  opener's cookie jar (it is same-origin) so no auth state is
+  serialised into a `postMessage` payload.
+
+**Why not register a popup-side keydown listener that calls into
+the opener directly?** The popup already runs Guacamole's
+capture-phase keyboard listener on `popup.document` and races would
+cause F11 / F12 to leak into the remote (the v1.5.1 fix that
+prompted this section). Keeping the popup palette's keyboard
+handling delegated through the popup's existing `trapKeyDown` and
+the opener-side action through `postMessage` keeps the trust path
+explicit and the same-origin gate at exactly one place.
+
+---
+
 ## DMZ deployment mode (v1.5.0)
 
 When deployed in DMZ split topology (`STRATA_DMZ_ENDPOINTS` set on

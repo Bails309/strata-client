@@ -10,8 +10,10 @@ import NetworkTab from "../pages/admin/NetworkTab";
 import { updateDns } from "../api";
 
 beforeEach(() => {
-  vi.mocked(updateDns).mockResolvedValue({ restart_required: false } as unknown as {
-    restart_required: boolean;
+  vi.mocked(updateDns).mockResolvedValue({
+    status: "ok",
+    restart_required: false,
+    message: "",
   });
 });
 
@@ -88,8 +90,10 @@ describe("NetworkTab", () => {
   });
 
   it("calls updateDns + onSave with trimmed values, surfaces restart banner", async () => {
-    vi.mocked(updateDns).mockResolvedValueOnce({ restart_required: true } as unknown as {
-      restart_required: boolean;
+    vi.mocked(updateDns).mockResolvedValueOnce({
+      status: "ok",
+      restart_required: true,
+      message: "",
     });
     const onSave = vi.fn();
     render(

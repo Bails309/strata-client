@@ -11,8 +11,8 @@ import SecurityTab from "../pages/admin/SecurityTab";
 import { updateSettings, updateAuthMethods } from "../api";
 
 beforeEach(() => {
-  vi.mocked(updateSettings).mockResolvedValue(undefined as unknown as void);
-  vi.mocked(updateAuthMethods).mockResolvedValue(undefined as unknown as void);
+  vi.mocked(updateSettings).mockResolvedValue({ status: "ok" });
+  vi.mocked(updateAuthMethods).mockResolvedValue({ status: "ok" });
 });
 
 afterEach(() => {

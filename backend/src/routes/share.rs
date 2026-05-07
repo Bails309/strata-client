@@ -153,6 +153,16 @@ pub async fn revoke_share(
         ));
     }
 
+    // Best-effort audit entry; do not fail the user request if audit insert
+    // fails (audit::log already logs on its own errors).
+    let _ = crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection.share_revoked",
+        &serde_json::json!({ "share_id": share_id.to_string() }),
+    )
+    .await;
+
     Ok(Json(serde_json::json!({ "status": "revoked" })))
 }
 

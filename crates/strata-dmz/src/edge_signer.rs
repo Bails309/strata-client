@@ -212,7 +212,10 @@ fn resolve_client_ip(
                     if hop.is_empty() {
                         continue;
                     }
-                    match hop.parse::<IpAddr>() {
+                    // Strip optional IPv6 zone identifier (e.g. `fe80::1%eth0`)
+                    // before parsing; `IpAddr::from_str` rejects them.
+                    let hop_no_zone = hop.split('%').next().unwrap_or(hop);
+                    match hop_no_zone.parse::<IpAddr>() {
                         Ok(ip) if trusted_proxies.contains(&ip) => continue,
                         Ok(ip) => return ip.to_string(),
                         Err(_) => continue,

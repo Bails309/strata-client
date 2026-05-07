@@ -586,7 +586,7 @@ pub async fn list_for_user(
         "SELECT * FROM recordings
          WHERE user_id = $1
            AND ($2::uuid IS NULL OR connection_id = $2)
-         ORDER BY started_at DESC
+         ORDER BY started_at DESC, id DESC
          LIMIT $3 OFFSET $4",
     )
     .bind(user_id)
@@ -815,7 +815,7 @@ pub async fn list_admin(
         "SELECT * FROM recordings
          WHERE ($1::uuid IS NULL OR user_id = $1)
            AND ($2::uuid IS NULL OR connection_id = $2)
-         ORDER BY started_at DESC
+         ORDER BY started_at DESC, id DESC
          LIMIT $3 OFFSET $4",
     )
     .bind(user_id)

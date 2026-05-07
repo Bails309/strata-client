@@ -77,19 +77,19 @@ The v1 plan defined custom `CHANNEL_OPEN` / `CHANNEL_DATA` /
 
 ### 2.2 Zero-secret-overlap matrix
 
-| Secret | Internal | DMZ |
-|---|---|---|
-| Strata JWT signing key | ✓ | ✗ |
-| Vault root / Transit keys | ✓ | ✗ |
-| Database password | ✓ | ✗ |
-| OIDC client secret | ✓ | ✗ |
-| `guac-master-key` | ✓ | ✗ |
-| Recording-storage credentials | ✓ | ✗ |
-| Public TLS server key | ✗ | ✓ |
-| mTLS server cert (link side) | ✗ | ✓ |
-| mTLS client cert (link side) | ✓ | ✗ |
-| Link app-layer PSK | ✓ | ✓ (rotated) |
-| Edge-header HMAC key | ✓ | ✓ (rotated) |
+| Secret                        | Internal | DMZ         |
+| ----------------------------- | -------- | ----------- |
+| Strata JWT signing key        | ✓        | ✗           |
+| Vault root / Transit keys     | ✓        | ✗           |
+| Database password             | ✓        | ✗           |
+| OIDC client secret            | ✓        | ✗           |
+| `guac-master-key`             | ✓        | ✗           |
+| Recording-storage credentials | ✓        | ✗           |
+| Public TLS server key         | ✗        | ✓           |
+| mTLS server cert (link side)  | ✗        | ✓           |
+| mTLS client cert (link side)  | ✓        | ✗           |
+| Link app-layer PSK            | ✓        | ✓ (rotated) |
+| Edge-header HMAC key          | ✓        | ✓ (rotated) |
 
 The OIDC code-for-token exchange happens on **internal** — the DMZ relays
 the callback request through the tunnel and never sees the client secret
@@ -187,7 +187,7 @@ features:
    for DMZ, Debian slim for internal), different sizes, different signing
    keys if desired.
 5. **Visual reviewability.** A reviewer reading `crates/strata-dmz/` sees
-   the *entire* public-facing surface in one tree — there is no hidden
+   the _entire_ public-facing surface in one tree — there is no hidden
    module reachable through some `cfg` permutation.
 6. **Standalone mode preserved.** `strata-backend` keeps serving public
    traffic directly when `STRATA_DMZ_ENDPOINTS` is empty — existing
@@ -197,15 +197,16 @@ features:
 
 ## 4. Phased work plan
 
-| Phase | Scope | Duration |
-|---|---|---|
-| **0** | Workspace scaffold; `strata-protocol` skeleton; `strata-dmz` minimal Axum stub; CI dep-verification job; threat-model draft. | 1.5w |
-| **1** | Internal: outbound link client, request adapter, edge-header verifier, cert hot-reload, resume-token map, Prometheus metrics. | 2w |
-| **2** | DMZ: link server, reverse-proxy adapter, rate limiter, connection caps, body limits, slow-loris timeouts, edge-header signer. | 2w (parallel with Phase 1) |
-| **3** | Frontend admin UI: link status, per-endpoint health, force-reconnect. DMZ operator status endpoint with separate operator credential. | 1w |
-| **4** | Testing: unit, integration (docker-compose), chaos (toxiproxy), security (port scan, fuzzing, replay, header forgery), load (1k WS, 500 guacd). | 2w |
-| **5** | Docs: ADR, threat model (STRIDE), runbook (cert/PSK rotation, link diagnosis, scaling), deployment guide (compose + Helm). | 1w |
-| **6** | Hardening: backend mTLS cert hot-reload (W6-1), audit-log edge enrichment (W6-4), per-public-IP body-cap tuning (W6-2), completion ADR. W6-3 (Ed25519 link auth) recorded as Backlog with rationale; W6-5 (WS resume) deferred to Phase 7. See [ADR-0010](adr/ADR-0010-dmz-phase6-hardening.md). | 1w |
+| Phase  | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Duration                   |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
+| **0**  | Workspace scaffold; `strata-protocol` skeleton; `strata-dmz` minimal Axum stub; CI dep-verification job; threat-model draft.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 1.5w                       |
+| **1**  | Internal: outbound link client, request adapter, edge-header verifier, cert hot-reload, resume-token map, Prometheus metrics.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2w                         |
+| **2**  | DMZ: link server, reverse-proxy adapter, rate limiter, connection caps, body limits, slow-loris timeouts, edge-header signer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 2w (parallel with Phase 1) |
+| **3**  | Frontend admin UI: link status, per-endpoint health, force-reconnect. DMZ operator status endpoint with separate operator credential.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | 1w                         |
+| **4**  | Testing: unit, integration (docker-compose), chaos (toxiproxy), security (port scan, fuzzing, replay, header forgery), load (1k WS, 500 guacd).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 2w                         |
+| **5**  | Docs: ADR, threat model (STRIDE), runbook (cert/PSK rotation, link diagnosis, scaling), deployment guide (compose + Helm).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 1w                         |
+| **6**  | Hardening: backend mTLS cert hot-reload (W6-1), audit-log edge enrichment (W6-4), per-public-IP body-cap tuning (W6-2), completion ADR. W6-3 (Ed25519 link auth) recorded as Backlog with rationale; W6-5 (WS resume) deferred to Phase 7. See [ADR-0010](adr/ADR-0010-dmz-phase6-hardening.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 1w                         |
+| **7a** | **WebSocket forwarding** (RFC 8441 Extended CONNECT) — DMZ-side `ws_proxy` module detects RFC 6455 upgrades on the public listener, captures `hyper::upgrade::on(&mut req)`, opens an Extended CONNECT stream on the link, returns a correctly-computed `Sec-WebSocket-Accept` (RFC 6455 §1.3) on the public side, then runs a transparent byte-pump in both directions. Internal-side `LoopbackUpgradeHandler` accepts the Extended CONNECT and bridges it to a regular HTTP/1.1 WebSocket upgrade against `127.0.0.1:8080` (overridable via `STRATA_DMZ_LOOPBACK_ADDR`) so the existing axum router and `verify_edge_headers` middleware run unchanged. h2 server gains `enable_connect_protocol()`. Per-frame 8 MiB cap on the DMZ→public direction prevents memory amplification. **Shipped in v1.5.2.** | 1w                         |
 
 Realistic single-developer end-to-end: **9–10 weeks**.
 Two-developer (Phase 1 + Phase 2 in parallel): **6–7 weeks**.
@@ -293,16 +294,16 @@ services:
 
 ### 6.2 Network policy
 
-| From | To | Port | Reason |
-|---|---|---|---|
-| Internet | DMZ | 443/tcp | User HTTPS |
-| Internal node | DMZ | 8444/tcp (configurable) | Outbound link |
-| DMZ | Internal node | — | **MUST be denied** |
-| DMZ | IdP (well-known JWKS / authorize endpoint) | 443/tcp | OIDC redirect-only — no token exchange happens here |
-| Internal node | IdP (token / userinfo) | 443/tcp | OIDC token exchange |
-| Internal node | Vault | 8200/tcp | Existing |
-| Internal node | PG | 5432/tcp | Existing |
-| Internal node | guacd | 4822/tcp | Existing |
+| From          | To                                         | Port                    | Reason                                              |
+| ------------- | ------------------------------------------ | ----------------------- | --------------------------------------------------- |
+| Internet      | DMZ                                        | 443/tcp                 | User HTTPS                                          |
+| Internal node | DMZ                                        | 8444/tcp (configurable) | Outbound link                                       |
+| DMZ           | Internal node                              | —                       | **MUST be denied**                                  |
+| DMZ           | IdP (well-known JWKS / authorize endpoint) | 443/tcp                 | OIDC redirect-only — no token exchange happens here |
+| Internal node | IdP (token / userinfo)                     | 443/tcp                 | OIDC token exchange                                 |
+| Internal node | Vault                                      | 8200/tcp                | Existing                                            |
+| Internal node | PG                                         | 5432/tcp                | Existing                                            |
+| Internal node | guacd                                      | 4822/tcp                | Existing                                            |
 
 **Hardening rule:** the DMZ host's outbound firewall must permit only
 the IdP endpoint, and **must** deny any new connection to the internal
@@ -356,17 +357,17 @@ docker compose -f docker-compose.dmz.yml restart strata-dmz
 
 Prometheus metrics exposed by both binaries (separate scrape targets):
 
-| Metric | Where | Type |
-|---|---|---|
-| `strata_dmz_link_state{node_id, state}` | DMZ | gauge |
-| `strata_dmz_link_streams_open{node_id}` | DMZ | gauge |
-| `strata_dmz_link_bytes_total{node_id, dir}` | DMZ | counter |
-| `strata_dmz_rate_limited_total{ip}` | DMZ | counter |
-| `strata_dmz_ws_connections{}` | DMZ | gauge |
-| `strata_internal_link_state{endpoint, state}` | Internal | gauge |
-| `strata_internal_link_reconnects_total{endpoint}` | Internal | counter |
+| Metric                                            | Where    | Type      |
+| ------------------------------------------------- | -------- | --------- |
+| `strata_dmz_link_state{node_id, state}`           | DMZ      | gauge     |
+| `strata_dmz_link_streams_open{node_id}`           | DMZ      | gauge     |
+| `strata_dmz_link_bytes_total{node_id, dir}`       | DMZ      | counter   |
+| `strata_dmz_rate_limited_total{ip}`               | DMZ      | counter   |
+| `strata_dmz_ws_connections{}`                     | DMZ      | gauge     |
+| `strata_internal_link_state{endpoint, state}`     | Internal | gauge     |
+| `strata_internal_link_reconnects_total{endpoint}` | Internal | counter   |
 | `strata_internal_link_heartbeat_rtt_ms{endpoint}` | Internal | histogram |
-| `strata_internal_active_resumes{}` | Internal | gauge |
+| `strata_internal_active_resumes{}`                | Internal | gauge     |
 
 A reference Grafana dashboard ships under
 `docs/grafana/strata-dmz-dashboard.json` (Phase 5).
@@ -378,8 +379,8 @@ A reference Grafana dashboard ships under
 Today the existing crate is `strata-backend`. After Phase 0 lands and
 Phase 1 begins, a separate housekeeping PR renames:
 
-- `backend/`  →  `crates/strata-internal/`
-- `strata-backend`  →  `strata-internal` (Cargo crate name, binary name)
+- `backend/` → `crates/strata-internal/`
+- `strata-backend` → `strata-internal` (Cargo crate name, binary name)
 - All Dockerfile / CI references updated.
 
 This is a mechanical rename, isolated to one PR, scheduled before
@@ -418,16 +419,16 @@ Adversaries considered:
 
 ## 9. Decisions captured
 
-| # | Decision | Rationale |
-|---|---|---|
-| 1 | Cargo workspace, separate binaries | Provable dep isolation; CI-enforceable |
-| 2 | HTTP/2-over-mTLS (h2 crate) | Free flow control, multiplex, WS via Ext-CONNECT; no custom codec to fuzz |
-| 3 | OIDC client secret stays internal | DMZ must not be able to impersonate users to IdP |
-| 4 | Edge-header HMAC (not just IP allow-list) | Defends audit trail against direct-to-internal forgery |
-| 5 | 30s WebSocket resume window | Avoid v1.4.1 watchdog regression UX |
-| 6 | N×M from day one in protocol | Retrofitting HA later is expensive |
-| 7 | PSK + mTLS, defer Vault-token approach | PSK rotation has a clear runbook today; Vault-token requires renewal flow |
-| 8 | Distroless DMZ image | Reduce post-compromise toolchain |
+| #   | Decision                                  | Rationale                                                                 |
+| --- | ----------------------------------------- | ------------------------------------------------------------------------- |
+| 1   | Cargo workspace, separate binaries        | Provable dep isolation; CI-enforceable                                    |
+| 2   | HTTP/2-over-mTLS (h2 crate)               | Free flow control, multiplex, WS via Ext-CONNECT; no custom codec to fuzz |
+| 3   | OIDC client secret stays internal         | DMZ must not be able to impersonate users to IdP                          |
+| 4   | Edge-header HMAC (not just IP allow-list) | Defends audit trail against direct-to-internal forgery                    |
+| 5   | 30s WebSocket resume window               | Avoid v1.4.1 watchdog regression UX                                       |
+| 6   | N×M from day one in protocol              | Retrofitting HA later is expensive                                        |
+| 7   | PSK + mTLS, defer Vault-token approach    | PSK rotation has a clear runbook today; Vault-token requires renewal flow |
+| 8   | Distroless DMZ image                      | Reduce post-compromise toolchain                                          |
 
 ---
 

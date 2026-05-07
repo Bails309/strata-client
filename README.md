@@ -119,6 +119,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date       | Highlight                                                                                                                                                                                                                                                                         |
 | ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.5.3   | 2026-05-08 | **Admin Settings — grouped sidebar nav** replaces the 17-tab horizontal row that no longer fit on a single line. Permission-aware section collapse, sticky on `lg+`, wraps inline on tablets / phones. Frontend-only roll. ([details](CHANGELOG.md#153--2026-05-08))              |
 | 1.5.2   | 2026-05-08 | **DMZ link WebSocket forwarding** — RFC 8441 Extended CONNECT on the link, RFC 6455 acknowledgement on the public side, loopback bridge to the existing `tunnel.rs` handler. Sessions launched through a DMZ node now actually connect. ([details](CHANGELOG.md#152--2026-05-08)) |
 | 1.5.1   | 2026-05-07 | Pop-out window correctness fix — F11 / F12, popup-local **Ctrl+K** Command Palette via vanilla-DOM overlay + same-origin `postMessage`, clean teardown when the opener navigates away. ([details](CHANGELOG.md#151--2026-05-07))                                                  |
 | 1.5.0   | 2026-05-05 | **DMZ deployment mode** — split-topology release with a separate `strata-dmz` edge binary, HTTP/2-over-mTLS reverse tunnel, zero-secret-overlap with the internal node, and a new admin DMZ Links tab. ([details](CHANGELOG.md#150--2026-05-05))                                  |
@@ -218,7 +219,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.5.2                                  # or "latest"
+export STRATA_VERSION=1.5.3                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -234,7 +235,7 @@ Images:
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.5.2 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.5.3 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -242,7 +243,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.5.2 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.5.2 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.5.3 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

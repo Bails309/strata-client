@@ -11,47 +11,48 @@
 
 ### Minimum (up to 5 concurrent sessions)
 
-| Resource | Spec |
-|---|---|
-| CPU | 2 vCPUs |
-| RAM | 4 GB |
-| Disk | 20 GB (OS + Docker images + database) |
-| Network | 10 Mbps per concurrent RDP session |
-| OS | Any Docker-supported Linux, Windows, or macOS |
+| Resource | Spec                                          |
+| -------- | --------------------------------------------- |
+| CPU      | 2 vCPUs                                       |
+| RAM      | 4 GB                                          |
+| Disk     | 20 GB (OS + Docker images + database)         |
+| Network  | 10 Mbps per concurrent RDP session            |
+| OS       | Any Docker-supported Linux, Windows, or macOS |
 
 ### Recommended (10–25 concurrent sessions)
 
-| Resource | Spec |
-|---|---|
-| CPU | 4 vCPUs |
-| RAM | 8 GB |
-| Disk | 50 GB SSD (faster database queries and guacd I/O) |
-| Network | 100 Mbps+ |
-| OS | Linux (Debian/Ubuntu or Alpine-based) for best Docker performance |
+| Resource | Spec                                                              |
+| -------- | ----------------------------------------------------------------- |
+| CPU      | 4 vCPUs                                                           |
+| RAM      | 8 GB                                                              |
+| Disk     | 50 GB SSD (faster database queries and guacd I/O)                 |
+| Network  | 100 Mbps+                                                         |
+| OS       | Linux (Debian/Ubuntu or Alpine-based) for best Docker performance |
 
 ### Large Scale (25+ concurrent sessions)
 
-| Resource | Spec |
-|---|---|
-| CPU | 8+ vCPUs |
-| RAM | 16+ GB |
-| Disk | 100+ GB SSD |
-| Network | 1 Gbps |
+| Resource | Spec        |
+| -------- | ----------- |
+| CPU      | 8+ vCPUs    |
+| RAM      | 16+ GB      |
+| Disk     | 100+ GB SSD |
+| Network  | 1 Gbps      |
 
 For large deployments, consider:
+
 - **guacd scaling** — add sidecar instances via `GUACD_INSTANCES` (each guacd instance handles ~10–15 concurrent RDP sessions with H.264)
 - **External PostgreSQL** — managed database with connection pooling
 - **Session recordings** — allocate additional disk proportional to session count and retention period (~50–200 MB/hour per session depending on activity)
 
 ### Resource Breakdown by Container
 
-| Container | CPU | RAM | Notes |
-|---|---|---|---|
-| `guacd` | High | 200–500 MB | Heaviest consumer — FreeRDP + H.264 encoding per session |
-| `backend` | Low | 100–200 MB | Async Rust — very efficient; NVR buffers add ~50 MB per active session |
-| `frontend` | Minimal | 30 MB | Static file serving + reverse proxy via nginx |
-| `postgres-local` | Low–Medium | 200–500 MB | Depends on audit log volume |
-| `vault` | Minimal | 50 MB | Transit encrypt/decrypt only |
+| Container        | CPU        | RAM        | Notes                                                                  |
+| ---------------- | ---------- | ---------- | ---------------------------------------------------------------------- |
+| `guacd`          | High       | 200–500 MB | Heaviest consumer — FreeRDP + H.264 encoding per session               |
+| `backend`        | Low        | 100–200 MB | Async Rust — very efficient; NVR buffers add ~50 MB per active session |
+| `frontend`       | Minimal    | 30 MB      | Static file serving + reverse proxy via nginx                          |
+| `postgres-local` | Low–Medium | 200–500 MB | Depends on audit log volume                                            |
+| `vault`          | Minimal    | 50 MB      | Transit encrypt/decrypt only                                           |
 
 > **Note:** guacd is the primary bottleneck. Each concurrent RDP session with H.264 GFX uses approximately 1 CPU core at peak. SSH and VNC sessions are significantly lighter.
 
@@ -145,6 +146,7 @@ docker compose up -d
 Access the site at `http://your-server-ip` or `http://127.0.0.1`.
 
 No certificates are needed. This is suitable for:
+
 - Local development
 - Internal networks behind a corporate firewall
 - Environments where TLS is terminated upstream (e.g., a cloud load balancer)
@@ -160,6 +162,7 @@ certs/
 ```
 
 The `frontend` container's entrypoint (`ssl-init.sh`) automatically detects these files on startup:
+
 - **Certificates found** → nginx activates the HTTPS configuration (`https_enabled.conf`): TLS on port 443, HTTP→HTTPS redirect on port 80, HTTP/2, Mozilla Intermediate cipher suite, HSTS headers
 - **Certificates missing** → nginx falls back to HTTP-only (`http_only.conf`)
 
@@ -196,15 +199,16 @@ HTTPS_PORT=8443
 
 #### Nginx Configuration Files
 
-| File | Purpose |
-|---|---|
-| `frontend/common.fragment` | Shared routing rules, timeouts, compression, security headers |
-| `frontend/http_only.conf` | HTTP-only server block (port 80) |
-| `frontend/https_enabled.conf` | HTTPS server block (port 443) + HTTP→HTTPS redirect |
-| `frontend/ssl-init.sh` | Entrypoint script that auto-selects HTTP or HTTPS based on cert presence |
-| `docker-compose.yml` | Frontend service definition, port mappings, cert volume |
+| File                          | Purpose                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `frontend/common.fragment`    | Shared routing rules, timeouts, compression, security headers            |
+| `frontend/http_only.conf`     | HTTP-only server block (port 80)                                         |
+| `frontend/https_enabled.conf` | HTTPS server block (port 443) + HTTP→HTTPS redirect                      |
+| `frontend/ssl-init.sh`        | Entrypoint script that auto-selects HTTP or HTTPS based on cert presence |
+| `docker-compose.yml`          | Frontend service definition, port mappings, cert volume                  |
 
 Key performance settings in `common.fragment`:
+
 - `proxy_read_timeout 3600s` / `proxy_send_timeout 3600s` — keeps WebSocket tunnels alive for long RDP/SSH sessions
 - `proxy_buffering off` — streams tunnel frames immediately with zero buffering
 - `gzip on` — compresses static assets and API responses
@@ -289,12 +293,12 @@ runtime delivery and are documented here for production deployments:
 
 **Decision matrix:**
 
-| Goal | Command |
-|---|---|
-| RDP / SSH / VNC + web (default) | `docker compose up -d --build` |
-| Add bundled PostgreSQL | `docker compose --profile local-db up -d --build` |
-| Add VDI | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d --build` |
-| Everything | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml --profile local-db up -d --build` |
+| Goal                            | Command                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| RDP / SSH / VNC + web (default) | `docker compose up -d --build`                                                                    |
+| Add bundled PostgreSQL          | `docker compose --profile local-db up -d --build`                                                 |
+| Add VDI                         | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml up -d --build`                    |
+| Everything                      | `docker compose -f docker-compose.yml -f docker-compose.vdi.yml --profile local-db up -d --build` |
 
 `-f` flags select which compose files to merge (structural — for
 VDI's host-root mount). `--profile` flags select which optional
@@ -321,6 +325,7 @@ After initial setup with the bundled database, migrate to an external PostgreSQL
 3. Click **Migrate Database**
 
 The backend will:
+
 - Test the connection
 - Run all migrations on the new database
 - Update `config.toml`
@@ -332,10 +337,10 @@ Alternatively, configure the external database during the first-boot setup wizar
 
 To encrypt the connection between the backend and an external PostgreSQL server, set the following environment variables in `.env`:
 
-| Variable | Description |
-|---|---|
+| Variable            | Description                                                                                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_SSL_MODE` | SSL mode for the connection. Overrides any `sslmode` query parameter in `DATABASE_URL`. Valid values: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. |
-| `DATABASE_CA_CERT` | Absolute path (inside the backend container) to a PEM-encoded CA certificate file. Required when `DATABASE_SSL_MODE` is `verify-ca` or `verify-full`. |
+| `DATABASE_CA_CERT`  | Absolute path (inside the backend container) to a PEM-encoded CA certificate file. Required when `DATABASE_SSL_MODE` is `verify-ca` or `verify-full`.                      |
 
 **Example — require encrypted connection without CA verification:**
 
@@ -385,16 +390,19 @@ No manual Vault configuration is required. The bundled Vault uses file storage w
 To use your own Vault instance instead of the bundled container:
 
 1. Enable the Transit Secrets Engine:
+
    ```bash
    vault secrets enable transit
    ```
 
 2. Create an encryption key:
+
    ```bash
    vault write -f transit/keys/guac-master-key
    ```
 
 3. Create a policy for the backend:
+
    ```hcl
    path "transit/encrypt/guac-master-key" {
      capabilities = ["update"]
@@ -471,13 +479,14 @@ To automatically import computer accounts from Active Directory:
    - **Group** — optional connection group for imported connections
    - **CA Certificate** — upload an internal CA cert (PEM) if using LDAPS with self-signed certificates
    - **Connection Defaults** (RDP only) — configure Guacamole parameters applied to all synced connections:
-     - *Display & Performance*: ignore server certificate, enable wallpaper/font smoothing/desktop composition/theming/full-window drag/menu animations, disable bitmap/glyph/offscreen caching, disable GFX pipeline
-     - *Session Recording*: recording path, recording name (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens), auto-create recording path, include key events, exclude mouse/touch/graphical output
+     - _Display & Performance_: ignore server certificate, enable wallpaper/font smoothing/desktop composition/theming/full-window drag/menu animations, disable bitmap/glyph/offscreen caching, disable GFX pipeline
+     - _Session Recording_: recording path, recording name (supports `${GUAC_DATE}`, `${GUAC_TIME}`, `${GUAC_USERNAME}` tokens), auto-create recording path, include key events, exclude mouse/touch/graphical output
 4. Click **⚡ Test Connection** to validate connectivity and preview discovered objects
 5. Click **Save** to create the source
 6. Click **⟳ Sync Now** to trigger the initial import, or wait for the scheduled sync interval
 
 **Sync lifecycle:**
+
 - New objects discovered in AD are created as connections
 - Objects that change hostname or name are updated
 - Objects that disappear from AD are soft-deleted (hidden from users) for 7 days
@@ -485,6 +494,7 @@ To automatically import computer accounts from Active Directory:
 - gMSA and MSA service accounts are excluded from all preset filters
 
 **Authentication methods:**
+
 - **Simple Bind** — provide a bind DN and password with appropriate LDAP read permissions
 - **Kerberos Keytab** — provide a keytab file path (mounted into the backend container) and principal; the backend uses `kinit` + `ldapsearch` with GSSAPI
 
@@ -632,7 +642,7 @@ connection editor will refuse to render `kubernetes`-protocol rows
 on a backend that does not know the protocol, but other connection
 types are unaffected.
 
-#### v1.2.0 → v1.3.0 (mandatory image rebuild — backend *and* frontend)
+#### v1.2.0 → v1.3.0 (mandatory image rebuild — backend _and_ frontend)
 
 v1.3.0 is a focused production-hardening release. It fixes four
 bugs surfaced on the in-house deployment (see
@@ -642,7 +652,7 @@ bugs surfaced on the in-house deployment (see
    (`find … | head -n1` racing under `pipefail` in
    [`backend/entrypoint.sh`](../backend/entrypoint.sh)).
 2. Frontend nginx dying on boot with `[emerg] host not found in
-   upstream "backend"` if the backend was even briefly unreachable
+upstream "backend"` if the backend was even briefly unreachable
    during `docker compose up -d --build`. Fixed via a runtime
    `resolver 127.0.0.11` declaration in `frontend/common.fragment`
    and a variable-target `proxy_pass`.
@@ -675,7 +685,7 @@ sufficient.
 
 No database migrations. No `/api/*` contract changes. No
 configuration-file changes required. Existing Trusted CA bundles
-uploaded under v1.2.0 *start working* on the first kiosk spawn
+uploaded under v1.2.0 _start working_ on the first kiosk spawn
 under v1.3.0 — no re-upload needed.
 
 Verify post-upgrade:
@@ -730,7 +740,7 @@ is untouched until that save event.
 
 v1.1.0 ships a runtime fix for historic-recording playback that
 lives in the `entrypoint.sh` layer of both the `backend` and
-`guacd` images, *not* in the Rust binary or the frontend bundle.
+`guacd` images, _not_ in the Rust binary or the frontend bundle.
 Operators must therefore rebuild both images, not just pull new
 tags:
 
@@ -790,6 +800,7 @@ The backend automatically runs any new SQL migrations on startup using advisory 
 The GitHub Actions workflow at `.github/workflows/build-guacd.yml` runs weekly and pushes to GHCR. To use the pre-built image:
 
 1. Update `docker-compose.yml` to pull from your registry:
+
    ```yaml
    guacd:
      image: ghcr.io/your-org/custom-guacd:latest
@@ -829,6 +840,7 @@ The Rust backend is stateless (session state lives in the WebSocket connection a
 ### Database
 
 Use a managed PostgreSQL service (e.g., AWS RDS, Azure Database for PostgreSQL, Cloud SQL) with:
+
 - Automated backups
 - Read replicas (for audit log queries)
 - Connection pooling (PgBouncer)
@@ -853,36 +865,36 @@ The backend discovers `guacd-2` via the `GUACD_INSTANCES` environment variable a
 To scale beyond 2 instances, duplicate the `guacd-2` service block in `docker-compose.yml` for each additional sidecar:
 
 ```yaml
-  # ── Additional guacd sidecar (copy this block for guacd-4, guacd-5, etc.)
-  guacd-3:
-    build:
-      context: ./guacd
-      dockerfile: Dockerfile
-    image: strata/custom-guacd:latest
-    restart: unless-stopped
-    profiles:
-      - scale
-    networks:
-      - guac-internal
-    volumes:
-      - guac-recordings:/var/lib/guacamole/recordings
-      - guac-drive:/var/lib/guacamole/drive
-      - krb5-config:/etc/krb5
-      - backend-config:/app/config:ro
-    environment:
-      - KRB5_CONFIG=/etc/krb5/krb5.conf
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETGID
-      - SETUID
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
+# ── Additional guacd sidecar (copy this block for guacd-4, guacd-5, etc.)
+guacd-3:
+  build:
+    context: ./guacd
+    dockerfile: Dockerfile
+  image: strata/custom-guacd:latest
+  restart: unless-stopped
+  profiles:
+    - scale
+  networks:
+    - guac-internal
+  volumes:
+    - guac-recordings:/var/lib/guacamole/recordings
+    - guac-drive:/var/lib/guacamole/drive
+    - krb5-config:/etc/krb5
+    - backend-config:/app/config:ro
+  environment:
+    - KRB5_CONFIG=/etc/krb5/krb5.conf
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  cap_add:
+    - SETGID
+    - SETUID
+  healthcheck:
+    test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
+    interval: 15s
+    timeout: 5s
+    retries: 3
 ```
 
 Then list all sidecar hostnames in `GUACD_INSTANCES` (comma-separated):
@@ -907,11 +919,11 @@ docker compose --profile scale up -d
 #### Capacity Planning
 
 | Concurrent sessions | guacd instances | Estimated CPU cores |
-|---|---|---|
-| Up to 15 | 1 (default) | 2 |
-| 15–30 | 2 | 4 |
-| 30–45 | 3 | 6 |
-| 45–60 | 4 | 8 |
+| ------------------- | --------------- | ------------------- |
+| Up to 15            | 1 (default)     | 2                   |
+| 15–30               | 2               | 4                   |
+| 30–45               | 3               | 6                   |
+| 45–60               | 4               | 8                   |
 
 > **Note:** Each concurrent RDP session with H.264 GFX uses approximately 1 CPU core at peak. SSH and VNC sessions are significantly lighter (~0.1 cores each). Adjust instance count based on your protocol mix.
 
@@ -980,7 +992,7 @@ DMZ yields no path to Vault, the database, or AD.
 
 - Two hosts (or two K8s namespaces) on different network segments,
   with a one-way firewall path that permits **only** `internal-host →
-  dmz-host:8444/tcp`. Everything else from `dmz-host` toward the
+dmz-host:8444/tcp`. Everything else from `dmz-host` toward the
   internal network MUST be denied.
 - DNS: a public hostname pointing at `dmz-host` (e.g. `strata.example.com`)
   and a name the internal host can resolve to `dmz-host` over the link
@@ -1005,13 +1017,20 @@ openssl rand -base64 32  # → STRATA_DMZ_LINK_PSKS current  (BOTH halves, base6
 openssl rand -base64 32  # → STRATA_DMZ_EDGE_HMAC_KEY      (BOTH halves, base64)
 ```
 
-| Secret | Purpose | Lives on |
-|---|---|---|
-| `STRATA_DMZ_OPERATOR_TOKEN` | Bearer for the management API on `127.0.0.1:9444` (status, link kick) | DMZ only |
-| `STRATA_DMZ_LINK_PSKS` (`current:BASE64[,previous:BASE64]`) | Internal proves identity to DMZ. The `previous:` slot exists for rotation. | DMZ |
-| `STRATA_DMZ_LINK_PSK_CURRENT` | Same base64 as DMZ's `current:` value (one env var per id) | Internal |
-| `STRATA_DMZ_EDGE_HMAC_KEY` | DMZ signs `x-strata-edge-*` request-attribution headers | DMZ |
-| `STRATA_DMZ_EDGE_HMAC_KEYS` | Internal verifies them; comma-separated multi-key list during rotation | Internal |
+| Secret                                                      | Purpose                                                                    | Lives on |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------- | -------- |
+| `STRATA_DMZ_OPERATOR_TOKEN`                                 | Bearer for the management API on `127.0.0.1:9444` (status, link kick)      | DMZ only |
+| `STRATA_DMZ_LINK_PSKS` (`current:BASE64[,previous:BASE64]`) | Internal proves identity to DMZ. The `previous:` slot exists for rotation. | DMZ      |
+| `STRATA_DMZ_LINK_PSK_CURRENT`                               | Same base64 as DMZ's `current:` value (one env var per id)                 | Internal |
+| `STRATA_DMZ_EDGE_HMAC_KEY`                                  | DMZ signs `x-strata-edge-*` request-attribution headers                    | DMZ      |
+| `STRATA_DMZ_EDGE_HMAC_KEYS`                                 | Internal verifies them; comma-separated multi-key list during rotation     | Internal |
+
+**Optional** — the following env vars have safe defaults but may be
+overridden for non-standard deployments:
+
+| Var                        | Default          | Purpose                                                                                                                                                                                             | Lives on |
+| -------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `STRATA_DMZ_LOOPBACK_ADDR` | `127.0.0.1:8080` | Where `LoopbackUpgradeHandler` (v1.5.2+) bridges inbound RFC 8441 Extended CONNECT WebSocket streams to the local axum router. Override only if the internal node listens on a non-default address. | Internal |
 
 Generate each independently — never derive one from another and never
 store all three in the same file.
@@ -1022,12 +1041,12 @@ Strata ships **four** docker-compose overlays that cover every
 supported DMZ deployment shape. Pick one before you start; mixing
 overlays on the same host is unsupported.
 
-| Walkthrough | Overlay file | Hosts | Public ports | What's exposed publicly | Best for |
-|---|---|---|---|---|---|
-| [**A**](#walkthrough-a--docker-compose-single-host-evaluation) | [docker-compose.dmz.yml](../docker-compose.dmz.yml) | 1 | `${DMZ_PUBLIC_PORT}` (default 8443), 8444 | Relay only — no SPA | Local eval / smoke-testing the link |
-| [**A.5**](#walkthrough-a5--two-host-bare-metal-api-only-public-exposure) | [docker-compose.dmz-only.yml](../docker-compose.dmz-only.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal) | 2 | 8443, 8444 on DMZ host | Relay only — clients must already speak Strata's API | SPA hosted on a CDN / mobile app / API-only consumers |
-| [**A.6**](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended) ⭐ | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal) | 2 | 80/443 on DMZ host | **Full Strata SPA** + API + WS | Standard production — most operators want this |
-| [**A.7**](#walkthrough-a7--split-brain-corporate-lan--public-dmz) | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.yml](../docker-compose.yml) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal, full stack) | 2 | 80/443 on DMZ host **and** 80/443 on internal host | **Full SPA on both hosts** — corp LAN users hit the internal one, public users hit the DMZ one | Enterprises that want zero-DMZ-hop latency for staff while still publishing externally |
+| Walkthrough                                                                    | Overlay file                                                                                                                                                                                                  | Hosts | Public ports                                       | What's exposed publicly                                                                        | Best for                                                                               |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| [**A**](#walkthrough-a--docker-compose-single-host-evaluation)                 | [docker-compose.dmz.yml](../docker-compose.dmz.yml)                                                                                                                                                           | 1     | `${DMZ_PUBLIC_PORT}` (default 8443), 8444          | Relay only — no SPA                                                                            | Local eval / smoke-testing the link                                                    |
+| [**A.5**](#walkthrough-a5--two-host-bare-metal-api-only-public-exposure)       | [docker-compose.dmz-only.yml](../docker-compose.dmz-only.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal)                                                           | 2     | 8443, 8444 on DMZ host                             | Relay only — clients must already speak Strata's API                                           | SPA hosted on a CDN / mobile app / API-only consumers                                  |
+| [**A.6**](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended) ⭐ | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal)                                                           | 2     | 80/443 on DMZ host                                 | **Full Strata SPA** + API + WS                                                                 | Standard production — most operators want this                                         |
+| [**A.7**](#walkthrough-a7--split-brain-corporate-lan--public-dmz)              | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) (DMZ host) + [docker-compose.yml](../docker-compose.yml) + [docker-compose.internal.yml](../docker-compose.internal.yml) (internal, full stack) | 2     | 80/443 on DMZ host **and** 80/443 on internal host | **Full SPA on both hosts** — corp LAN users hit the internal one, public users hit the DMZ one | Enterprises that want zero-DMZ-hop latency for staff while still publishing externally |
 
 > **Picking the right overlay matters.** If you choose A.5 when you
 > meant A.6, end-users won't get a UI when they navigate to your
@@ -1051,13 +1070,14 @@ DMZ mode end-to-end. For a true two-host production deployment, see
 or [Walkthrough B — Kubernetes](#walkthrough-b--kubernetes-helm-chart).
 
 > **Choose your topology.** Three patterns are supported:
+>
 > - **A. Single-host eval** — everything in one docker compose. Tests the link, **does not** put a public UI in front of it.
 > - **A.5. Two-host, API-only public exposure** — DMZ host serves only `/api/*` over the relay. SPA hosted elsewhere (CDN, internal-only browser).
-> - **A.6. Two-host with public SPA (recommended)** — the DMZ host runs both `strata-dmz` and an nginx that serves the SPA *and* reverse-proxies `/api/*` over the relay. Public users get the full UI on `https://dmz.example.com/`. Backend remains unreachable from the internet.
+> - **A.6. Two-host with public SPA (recommended)** — the DMZ host runs both `strata-dmz` and an nginx that serves the SPA _and_ reverse-proxies `/api/*` over the relay. Public users get the full UI on `https://dmz.example.com/`. Backend remains unreachable from the internet.
 
 > **What the overlay does for you.** The compose overlay
 > [docker-compose.dmz.yml](../docker-compose.dmz.yml) brings up
-> *both* halves on the same docker network: a `strata-dmz` service
+> _both_ halves on the same docker network: a `strata-dmz` service
 > on the public side, and the existing `backend` service
 > reconfigured into link-client mode. There is **no separate
 > internal host** to configure manually — the overlay injects the
@@ -1073,7 +1093,7 @@ or [Walkthrough B — Kubernetes](#walkthrough-b--kubernetes-helm-chart).
 > serve the SPA against the backend directly. To put the SPA behind
 > the DMZ in production, use [Walkthrough A.6](#walkthrough-a6--two-host-bare-metal-with-public-spa-recommended).
 
-### A.1  Issue mTLS material
+### A.1 Issue mTLS material
 
 For evaluation, the repo ships a test-cert generator:
 
@@ -1094,10 +1114,10 @@ The script writes `./certs/dmz/{ca,server,client,public}.{crt,key}`.
 > **Container UIDs and key permissions.** The two containers that read
 > `certs/dmz/` run as different non-root users:
 >
-> | Host | Container | User | UID |
-> |------|-----------|------|-----|
-> | DMZ host | `strata-dmz` | distroless `nonroot` | `65532` |
-> | Internal host | `backend` | `strata` (created in the image) | `999` (typical) |
+> | Host          | Container    | User                            | UID             |
+> | ------------- | ------------ | ------------------------------- | --------------- |
+> | DMZ host      | `strata-dmz` | distroless `nonroot`            | `65532`         |
+> | Internal host | `backend`    | `strata` (created in the image) | `999` (typical) |
 >
 > The test-cert generator writes keys mode `0644` (world-readable)
 > precisely so the same `certs/dmz/` directory works on both hosts.
@@ -1152,7 +1172,7 @@ have `extendedKeyUsage = clientAuth`. The public cert (`public.crt`/
 └── public.key
 ```
 
-### A.2  Populate `.env.dmz`
+### A.2 Populate `.env.dmz`
 
 ```bash
 cp scripts/dmz/sample.env.dmz .env.dmz
@@ -1190,7 +1210,7 @@ Lock down the file: `chmod 600 .env.dmz`.
 > free port) in `.env.dmz` to avoid the bind collision; the link and
 > operator ports are unaffected.
 
-### A.3  Bring up the DMZ stack
+### A.3 Bring up the DMZ stack
 
 ```bash
 docker compose --env-file .env.dmz \
@@ -1206,11 +1226,11 @@ docker compose logs -f backend  | grep -iE 'link|dmz'
 
 The DMZ container exposes three ports:
 
-| Port  | Purpose | Reachability |
-|-------|---------|--------------|
-| 8443  | Public HTTPS (mapped to `${DMZ_PUBLIC_PORT}` on the host) | Internet (or CDN edge) |
-| 8444  | Link listener (the internal node dials in here) | **Internal network only** |
-| 9444  | Operator API (status, links, disconnect) | **Loopback or management VLAN only** |
+| Port | Purpose                                                   | Reachability                         |
+| ---- | --------------------------------------------------------- | ------------------------------------ |
+| 8443 | Public HTTPS (mapped to `${DMZ_PUBLIC_PORT}` on the host) | Internet (or CDN edge)               |
+| 8444 | Link listener (the internal node dials in here)           | **Internal network only**            |
+| 9444 | Operator API (status, links, disconnect)                  | **Loopback or management VLAN only** |
 
 Sanity-check that the link listener answers and the operator API
 demands a token:
@@ -1221,7 +1241,7 @@ curl -ks https://127.0.0.1:9444/status                                      # �
 curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"    # → 200, links_up:1
 ```
 
-### A.4  Verify end-to-end
+### A.4 Verify end-to-end
 
 Replace `$TOKEN` with the value of `STRATA_DMZ_OPERATOR_TOKEN`:
 
@@ -1263,7 +1283,7 @@ from the backend, with a one-way firewall rule between them. The
 single-host overlay is **not** suitable here because it expects both
 services on the same docker network. Use this walkthrough instead.
 
-### A.5.1  On `dmz-host` — issue mTLS material
+### A.5.1 On `dmz-host` — issue mTLS material
 
 Identical to [A.1](#a1--issue-mtls-material). Place files under
 `./certs/dmz/`:
@@ -1284,7 +1304,7 @@ Identical to [A.1](#a1--issue-mtls-material). Place files under
 helper produces a self-signed `public.crt` suitable only for local
 testing — replace it with a real cert before production.
 
-### A.5.2  On `dmz-host` — bring up the DMZ-only stack
+### A.5.2 On `dmz-host` — bring up the DMZ-only stack
 
 The repo ships [docker-compose.dmz-only.yml](../docker-compose.dmz-only.yml),
 a thin overlay that runs **only** `strata-dmz` (no backend, no
@@ -1302,13 +1322,13 @@ docker compose --env-file .env.dmz -f docker-compose.dmz-only.yml logs -f strata
 
 The DMZ host now exposes:
 
-| Port | Origin | Reachability |
-|------|--------|--------------|
-| `${DMZ_PUBLIC_PORT}` (default 8443) | strata-dmz public listener (public TLS cert) | **Internet** — API / WebSocket clients land here |
-| 8444 | strata-dmz link listener | **Internal network only** — firewall: allow only `internal-host → dmz-host:8444/tcp` |
-| 9444 | strata-dmz operator API | **Loopback only** by default |
+| Port                                | Origin                                       | Reachability                                                                         |
+| ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `${DMZ_PUBLIC_PORT}` (default 8443) | strata-dmz public listener (public TLS cert) | **Internet** — API / WebSocket clients land here                                     |
+| 8444                                | strata-dmz link listener                     | **Internal network only** — firewall: allow only `internal-host → dmz-host:8444/tcp` |
+| 9444                                | strata-dmz operator API                      | **Loopback only** by default                                                         |
 
-### A.5.3  Distribute the link material to `internal-host`
+### A.5.3 Distribute the link material to `internal-host`
 
 Copy from `dmz-host` to `internal-host` over a secure channel
 (e.g. `scp` over SSH between admin workstations, or a secret manager
@@ -1329,7 +1349,7 @@ On the internal host, place the certs at `./certs/dmz/` (the path
 [docker-compose.internal.yml](../docker-compose.internal.yml) mounts
 into the backend container).
 
-### A.5.4  On `internal-host` — wire the backend env
+### A.5.4 On `internal-host` — wire the backend env
 
 The backend auto-detects link-client mode whenever
 `STRATA_DMZ_ENDPOINTS` is non-empty — there is no separate `_MODE`
@@ -1363,7 +1383,7 @@ compose fails fast if any is missing.
 > `STRATA_CLUSTER_ID=strata-cluster-prod` (the overlay default), the
 > link handshake succeeds but the DMZ immediately drops the
 > connection with `internal node advertised cluster_id "X", expected
-> "Y"`. Set both to the same string before bringing up either side.
+"Y"`. Set both to the same string before bringing up either side.
 
 Restart the backend with both compose files applied:
 
@@ -1378,7 +1398,7 @@ docker compose logs -f backend | grep -iE 'link|dmz'
 > `dmz-host:8444/tcp` only. No inbound rules are required from the
 > DMZ network — that's the whole point of the split topology.
 
-### A.5.5  Verify end-to-end
+### A.5.5 Verify end-to-end
 
 From `dmz-host`:
 
@@ -1428,7 +1448,7 @@ internal host runs the regular [docker-compose.yml](../docker-compose.yml)
 plus [docker-compose.internal.yml](../docker-compose.internal.yml)
 (see [§A.6.5](#a65--on-internal-host--distribute-link-material-and-wire-the-backend) below).
 
-### A.6.1  On `dmz-host` — issue mTLS material
+### A.6.1 On `dmz-host` — issue mTLS material
 
 Identical to [A.1](#a1--issue-mtls-material). Place files under
 `./certs/dmz/`:
@@ -1452,7 +1472,7 @@ Identical to [A.1](#a1--issue-mtls-material). Place files under
 > `server.crt` (already SAN-valid for `strata-dmz` and signed by the
 > DMZ CA the frontend trusts). The overlay sets this automatically.
 
-### A.6.2  On `dmz-host` — provision the public TLS cert
+### A.6.2 On `dmz-host` — provision the public TLS cert
 
 Get a real public-CA-signed cert for the public hostname (e.g.
 `strata.example.com`) and place the chain + key at:
@@ -1465,13 +1485,13 @@ Get a real public-CA-signed cert for the public hostname (e.g.
 
 This is what users see in their browser.
 
-### A.6.3  On `dmz-host` — populate `.env.dmz`
+### A.6.3 On `dmz-host` — populate `.env.dmz`
 
 Same as [A.2](#a2--populate-envdmz). Generate `STRATA_DMZ_OPERATOR_TOKEN`,
 `STRATA_DMZ_LINK_PSKS`, `STRATA_DMZ_EDGE_HMAC_KEY` (all base64) and
 record them in `.env.dmz`.
 
-### A.6.4  On `dmz-host` — bring up the edge stack
+### A.6.4 On `dmz-host` — bring up the edge stack
 
 ```bash
 docker compose --env-file .env.dmz \
@@ -1488,9 +1508,9 @@ docker compose --env-file .env.dmz -f docker-compose.dmz-edge.yml logs -f strata
 > `docker compose -f docker-compose.dmz-edge.yml ps` (or `logs`,
 > `config`, `down`, etc.) without `--env-file .env.dmz` will fail
 > with `required variable STRATA_DMZ_OPERATOR_TOKEN is missing a
-> value`, even when the containers are running fine. Either repeat
+value`, even when the containers are running fine. Either repeat
 > `--env-file .env.dmz` on every invocation, or `export
-> COMPOSE_ENV_FILES=.env.dmz` once in your shell.
+COMPOSE_ENV_FILES=.env.dmz` once in your shell.
 
 Expected:
 
@@ -1501,13 +1521,13 @@ Expected:
 
 The DMZ host now exposes:
 
-| Port | Origin | Reachability |
-|------|--------|--------------|
-| 443  | frontend (nginx, public TLS cert) | **Internet** — users land here |
-| 8444 | strata-dmz link listener | **Internal network only** (firewall: allow `internal-host` → :8444) |
-| 9444 | strata-dmz operator API | **Loopback only** (default) |
+| Port | Origin                            | Reachability                                                        |
+| ---- | --------------------------------- | ------------------------------------------------------------------- |
+| 443  | frontend (nginx, public TLS cert) | **Internet** — users land here                                      |
+| 8444 | strata-dmz link listener          | **Internal network only** (firewall: allow `internal-host` → :8444) |
+| 9444 | strata-dmz operator API           | **Loopback only** (default)                                         |
 
-### A.6.5  On `internal-host` — distribute link material and wire the backend
+### A.6.5 On `internal-host` — distribute link material and wire the backend
 
 Copy from `dmz-host` to `internal-host` over a secure channel:
 
@@ -1565,7 +1585,7 @@ docker compose logs -f backend | grep -iE 'link|dmz'
 > `dmz-host:8444/tcp` only. No inbound rules are required from the
 > DMZ network — that's the whole point of the split topology.
 
-### A.6.6  Verify end-to-end
+### A.6.6 Verify end-to-end
 
 From any browser on the public internet:
 
@@ -1600,7 +1620,7 @@ door** running on the internal host. The same backend serves both
 populations:
 
 - **Corporate users** on the internal LAN reach a frontend nginx
-  *also* running on the internal host. The request goes
+  _also_ running on the internal host. The request goes
   `corp-user → internal-frontend → backend:8080` — entirely on the
   corporate network, no DMZ hop.
 - **Public users** off-LAN reach the DMZ host exactly as in A.6:
@@ -1665,7 +1685,7 @@ flowchart LR
 > (`docker-compose.internal.yml`); the DMZ host runs the edge
 > stack (`docker-compose.dmz-edge.yml`) exactly as in A.6.
 
-### A.7.1  On `dmz-host` — bring up the edge stack
+### A.7.1 On `dmz-host` — bring up the edge stack
 
 Follow [§A.6.1](#a61--on-dmz-host--issue-mtls-material) through
 [§A.6.4](#a64--on-dmz-host--bring-up-the-edge-stack) verbatim. The
@@ -1678,7 +1698,7 @@ By the end of A.6.4 you should have:
 - `dmz-host:8444` listening for the mTLS link (closed to the public)
 - `dmz-host:9444` operator API on loopback only
 
-### A.7.2  On `internal-host` — distribute link material
+### A.7.2 On `internal-host` — distribute link material
 
 Follow [§A.6.5](#a65--on-internal-host--distribute-link-material-and-wire-the-backend)
 to copy `ca.crt`, `client.crt`, `client.key` into
@@ -1715,7 +1735,7 @@ The frontend nginx baked into [docker-compose.yml](../docker-compose.yml)
 picks up `cert.pem` / `key.pem` automatically via the
 `./certs:/etc/nginx/ssl:ro` mount.
 
-### A.7.3  On `internal-host` — bring up the full stack
+### A.7.3 On `internal-host` — bring up the full stack
 
 ```bash
 # Note: NO --env-file .env.dmz here. The internal host doesn't run
@@ -1752,14 +1772,14 @@ in use on the host (a load balancer, another container, IIS, etc.)
 or when the operator wants to deliberately publish on a non-well-
 known port.
 
-| Side | Variable | Default | Set in | Used by |
-|------|----------|---------|--------|---------|
-| Internal-host frontend (HTTPS) | `HTTPS_PORT` | `443` | `.env` | [docker-compose.yml](../docker-compose.yml) |
-| Internal-host frontend (HTTP redirect) | `HTTP_PORT` | `80` | `.env` | [docker-compose.yml](../docker-compose.yml) |
-| DMZ-host frontend (HTTPS) | `DMZ_EDGE_HTTPS_PORT` | `443` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
-| DMZ-host frontend (HTTP redirect) | `DMZ_EDGE_HTTP_PORT` | `80` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
-| DMZ-host link listener | `DMZ_LINK_PORT` | `8444` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
-| DMZ-host operator API (loopback) | `DMZ_OPERATOR_PORT` | `9444` | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| Side                                   | Variable              | Default | Set in     | Used by                                                       |
+| -------------------------------------- | --------------------- | ------- | ---------- | ------------------------------------------------------------- |
+| Internal-host frontend (HTTPS)         | `HTTPS_PORT`          | `443`   | `.env`     | [docker-compose.yml](../docker-compose.yml)                   |
+| Internal-host frontend (HTTP redirect) | `HTTP_PORT`           | `80`    | `.env`     | [docker-compose.yml](../docker-compose.yml)                   |
+| DMZ-host frontend (HTTPS)              | `DMZ_EDGE_HTTPS_PORT` | `443`   | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| DMZ-host frontend (HTTP redirect)      | `DMZ_EDGE_HTTP_PORT`  | `80`    | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| DMZ-host link listener                 | `DMZ_LINK_PORT`       | `8444`  | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
+| DMZ-host operator API (loopback)       | `DMZ_OPERATOR_PORT`   | `9444`  | `.env.dmz` | [docker-compose.dmz-edge.yml](../docker-compose.dmz-edge.yml) |
 
 Example — internal frontend on `:8443`, public DMZ frontend on `:7443`:
 
@@ -1798,32 +1818,32 @@ Remember to update your firewall rules (see
 numbers. The `Internet → dmz-host:443` ALLOW rule becomes
 `Internet → dmz-host:<DMZ_EDGE_HTTPS_PORT>` and so on.
 
-### A.7.4  Configure split-horizon DNS (or two distinct hostnames)
+### A.7.4 Configure split-horizon DNS (or two distinct hostnames)
 
 Two equivalent options — pick one:
 
 **Option A (recommended): two distinct hostnames.** Simpler to
 reason about, simpler TLS cert management.
 
-| Hostname | DNS view | Resolves to | TLS cert |
-|---|---|---|---|
-| `strata.corp.example.com` | corporate DNS only | `internal-host` LAN IP | corporate CA |
-| `strata.example.com` | public DNS only | `dmz-host` public IP | public CA (Let's Encrypt etc.) |
+| Hostname                  | DNS view           | Resolves to            | TLS cert                       |
+| ------------------------- | ------------------ | ---------------------- | ------------------------------ |
+| `strata.corp.example.com` | corporate DNS only | `internal-host` LAN IP | corporate CA                   |
+| `strata.example.com`      | public DNS only    | `dmz-host` public IP   | public CA (Let's Encrypt etc.) |
 
 **Option B: split-horizon DNS, one hostname.** A single
 `strata.example.com` resolves differently depending on the
 resolver. Requires the same cert chain to validate from both
 networks (or different certs served by SNI on the matching IP).
 
-| DNS view | `strata.example.com` resolves to |
-|---|---|
-| Corporate | `internal-host` LAN IP |
-| Public internet | `dmz-host` public IP |
+| DNS view        | `strata.example.com` resolves to |
+| --------------- | -------------------------------- |
+| Corporate       | `internal-host` LAN IP           |
+| Public internet | `dmz-host` public IP             |
 
 If your enterprise already runs split-horizon DNS for other
 services, this is friction-free. If not, Option A is less work.
 
-### A.7.5  Verify both ingress paths
+### A.7.5 Verify both ingress paths
 
 **From a corp-LAN workstation:**
 
@@ -1862,27 +1882,27 @@ This is the proof that the trust model is working: corp traffic
 runs as a normal direct request; public traffic is enriched with
 verified provenance from the DMZ.
 
-### A.7.6  Firewall posture
+### A.7.6 Firewall posture
 
 A.7 is the strictest of the four topologies because there are now
 two front doors:
 
-| Source | Destination | Port | Action | Why |
-|---|---|---|---|---|
-| Corp LAN | `internal-host:443` | 443/tcp | ALLOW | Corp users reach the internal SPA |
-| Internet | `internal-host:*` | * | **DENY** | Internal host MUST NOT be reachable from the internet |
-| Internet | `dmz-host:443` | 443/tcp | ALLOW | Public users reach the DMZ SPA |
-| Internet | `dmz-host:8444` | 8444/tcp | **DENY** | Link listener is for the internal host only |
-| Internet | `dmz-host:9444` | 9444/tcp | **DENY** | Operator API is loopback-only |
-| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW | Backend dials out to establish the link |
-| `dmz-host` | corp LAN | * | **DENY** | DMZ MUST NOT initiate connections into corp |
+| Source          | Destination         | Port     | Action   | Why                                                   |
+| --------------- | ------------------- | -------- | -------- | ----------------------------------------------------- |
+| Corp LAN        | `internal-host:443` | 443/tcp  | ALLOW    | Corp users reach the internal SPA                     |
+| Internet        | `internal-host:*`   | \*       | **DENY** | Internal host MUST NOT be reachable from the internet |
+| Internet        | `dmz-host:443`      | 443/tcp  | ALLOW    | Public users reach the DMZ SPA                        |
+| Internet        | `dmz-host:8444`     | 8444/tcp | **DENY** | Link listener is for the internal host only           |
+| Internet        | `dmz-host:9444`     | 9444/tcp | **DENY** | Operator API is loopback-only                         |
+| `internal-host` | `dmz-host:8444`     | 8444/tcp | ALLOW    | Backend dials out to establish the link               |
+| `dmz-host`      | corp LAN            | \*       | **DENY** | DMZ MUST NOT initiate connections into corp           |
 
 The two critical rules are `Internet → internal-host: DENY` (which
 keeps the corp frontend off the public internet) and
 `dmz-host → corp: DENY` (which preserves the security guarantee
 that a compromised DMZ cannot reach Vault / DB / AD).
 
-### A.7.7  When NOT to use A.7
+### A.7.7 When NOT to use A.7
 
 A.7 doubles the operational surface (two nginxes, two TLS certs,
 two firewall rule sets, two ingress paths to monitor). Don't pick
@@ -1897,7 +1917,7 @@ it unless you actually need:
   point of failure at the DMZ host.)
 - **Tight IDS/firewall on outbound corp traffic** — if your
   corporate egress filter blocks staff from reaching the
-  *public* hostname (because it leaves and re-enters the
+  _public_ hostname (because it leaves and re-enters the
   perimeter), an internal hostname avoids the loop.
 
 If none of those apply, run A.6 and have corp users hit
@@ -1913,7 +1933,7 @@ reference chart at [`deploy/helm/strata-dmz/`](../deploy/helm/strata-dmz/).
 The internal `strata-backend` release uses the existing chart
 unchanged plus the `STRATA_DMZ_*` env vars from §B.7.
 
-### B.1  Pre-flight
+### B.1 Pre-flight
 
 ```bash
 kubectl create namespace strata-dmz
@@ -1930,7 +1950,7 @@ the CRD is installed:
 kubectl get crd servicemonitors.monitoring.coreos.com
 ```
 
-### B.2  Load the three shared secrets into Kubernetes
+### B.2 Load the three shared secrets into Kubernetes
 
 For evaluation, an inline `Secret`. For production prefer
 [external-secrets](https://external-secrets.io/),
@@ -1960,7 +1980,7 @@ kubectl -n strata-internal create secret generic strata-link-secrets \
     --from-literal=edgeHmacKeys="$HMAC"
 ```
 
-### B.3  Load the link mTLS material
+### B.3 Load the link mTLS material
 
 Issue `server.crt`/`server.key`/`ca.crt` from your operator CA (SAN =
 the in-cluster Service DNS or the external link DNS — whichever the
@@ -1978,7 +1998,7 @@ kubectl -n strata-internal create secret generic strata-link-mtls \
     --from-file=ca.crt --from-file=client.crt --from-file=client.key
 ```
 
-### B.4  Load the public TLS certificate
+### B.4 Load the public TLS certificate
 
 Cert-manager (recommended):
 
@@ -2002,7 +2022,7 @@ kubectl -n strata-dmz create secret tls strata-dmz-public-tls \
     --cert=public.crt --key=public.key
 ```
 
-### B.5  Tune `values.yaml` for your cluster
+### B.5 Tune `values.yaml` for your cluster
 
 Two settings you almost always need to override:
 
@@ -2045,11 +2065,11 @@ networkPolicy:
 
 > **Critical:** the default `internalBackendSelector` will not match
 > if your backend release prefixes pod labels. Run `kubectl get pods
-> -n strata-internal --show-labels` and copy the labels verbatim — if
+-n strata-internal --show-labels` and copy the labels verbatim — if
 > the NetworkPolicy doesn't match, the internal node cannot dial the
 > link.
 
-### B.6  Install the chart
+### B.6 Install the chart
 
 ```bash
 helm install strata-dmz ./deploy/helm/strata-dmz \
@@ -2075,7 +2095,7 @@ curl -ks https://127.0.0.1:9444/status                                       # �
 curl -ks https://127.0.0.1:9444/status -H "Authorization: Bearer $TOKEN"     # → 200, links_up:0
 ```
 
-### B.7  Wire the internal release to the DMZ
+### B.7 Wire the internal release to the DMZ
 
 In your existing `strata-backend` Helm release, add to its values.
 The backend auto-detects link-client mode whenever
@@ -2086,7 +2106,7 @@ side byte-for-byte.
 ```yaml
 extraEnv:
   - name: STRATA_DMZ_ENDPOINTS
-    value: strata-dmz.strata-dmz.svc.cluster.local:8444   # if same cluster
+    value: strata-dmz.strata-dmz.svc.cluster.local:8444 # if same cluster
     # …or the externally-resolvable DMZ DNS if cross-cluster
   - name: STRATA_DMZ_LINK_CA
     value: /link/ca.crt
@@ -2125,7 +2145,7 @@ kubectl -n strata-internal logs -l app.kubernetes.io/name=strata-backend -f \
 # expect: "DMZ link authenticated", per-endpoint "h2 serve ready"
 ```
 
-### B.8  Verify end-to-end
+### B.8 Verify end-to-end
 
 ```bash
 # Re-fetch /status — links_up should now be 1 (or N for HA).
@@ -2140,7 +2160,7 @@ Import the dashboard at
 into Grafana to track `strata_dmz_links_up`, request rate, p95
 latency, and reconnect counts.
 
-### B.9  Upgrades & rollbacks
+### B.9 Upgrades & rollbacks
 
 The DMZ is stateless and replicated; `helm upgrade` performs a rolling
 restart honouring the `PodDisruptionBudget` (default `minAvailable: 1`).
@@ -2152,7 +2172,7 @@ helm history strata-dmz -n strata-dmz
 helm rollback strata-dmz <REV> -n strata-dmz
 ```
 
-### B.10  Uninstall
+### B.10 Uninstall
 
 ```bash
 helm uninstall strata-dmz -n strata-dmz
@@ -2168,16 +2188,16 @@ The DMZ split is only as strong as the firewall rules that enforce it.
 Recommended (rule set varies slightly by topology — the table below
 covers all four):
 
-| Source | Destination | Port | Action | A | A.5 | A.6 | A.7 |
-|--------|-------------|------|--------|---|-----|-----|-----|
-| Internet | `dmz-host:443` | 443/tcp | ALLOW | — | — | ✅ | ✅ |
-| Internet | `dmz-host:${DMZ_PUBLIC_PORT}` (default 8443) | 8443/tcp | ALLOW | ✅ (eval) | ✅ | — | — |
-| Corp LAN | `internal-host:443` | 443/tcp | ALLOW | — | — | — | ✅ |
-| Internet | `internal-host:*` | * | **DENY** | — | ✅ | ✅ | ✅ |
-| `internal-host` | `dmz-host:8444` | 8444/tcp | ALLOW | — | ✅ | ✅ | ✅ |
-| `dmz-host` | anywhere on the internal network | * | **DENY** | — | ✅ | ✅ | ✅ |
-| Internet | `dmz-host:8444` | 8444/tcp | **DENY** | ✅ | ✅ | ✅ | ✅ |
-| Internet | `dmz-host:9444` | 9444/tcp | **DENY** | ✅ | ✅ | ✅ | ✅ |
+| Source          | Destination                                  | Port     | Action   | A         | A.5 | A.6 | A.7 |
+| --------------- | -------------------------------------------- | -------- | -------- | --------- | --- | --- | --- |
+| Internet        | `dmz-host:443`                               | 443/tcp  | ALLOW    | —         | —   | ✅  | ✅  |
+| Internet        | `dmz-host:${DMZ_PUBLIC_PORT}` (default 8443) | 8443/tcp | ALLOW    | ✅ (eval) | ✅  | —   | —   |
+| Corp LAN        | `internal-host:443`                          | 443/tcp  | ALLOW    | —         | —   | —   | ✅  |
+| Internet        | `internal-host:*`                            | \*       | **DENY** | —         | ✅  | ✅  | ✅  |
+| `internal-host` | `dmz-host:8444`                              | 8444/tcp | ALLOW    | —         | ✅  | ✅  | ✅  |
+| `dmz-host`      | anywhere on the internal network             | \*       | **DENY** | —         | ✅  | ✅  | ✅  |
+| Internet        | `dmz-host:8444`                              | 8444/tcp | **DENY** | ✅        | ✅  | ✅  | ✅  |
+| Internet        | `dmz-host:9444`                              | 9444/tcp | **DENY** | ✅        | ✅  | ✅  | ✅  |
 
 The `dmz-host → internal *` deny rule is the heart of the design — it
 is what makes a full RCE on the DMZ unable to reach Vault / DB / AD.
@@ -2237,12 +2257,12 @@ docker run --rm -v strata-client_guac-recordings:/data -v $(pwd):/backup \
 
 Configure via **Admin → Recordings** in the web UI:
 
-| Setting | Description |
-|---|---|
-| **Storage Backend** | Select "Azure Blob Storage" |
-| **Account Name** | Your Azure Storage account name |
-| **Container Name** | Blob container for recordings (default: `recordings`) |
-| **Access Key** | Base64-encoded storage account access key |
+| Setting             | Description                                           |
+| ------------------- | ----------------------------------------------------- |
+| **Storage Backend** | Select "Azure Blob Storage"                           |
+| **Account Name**    | Your Azure Storage account name                       |
+| **Container Name**  | Blob container for recordings (default: `recordings`) |
+| **Access Key**      | Base64-encoded storage account access key             |
 
 Once configured, a background task syncs completed recording files to Azure Blob every 60 seconds. Recordings are always written locally first (guacd requirement), then uploaded. The download endpoint checks local storage first and falls back to Azure Blob, so recordings remain accessible even after local cleanup.
 
@@ -2256,11 +2276,11 @@ The `config.toml` file is stored in the `backend-config` Docker volume. Back it 
 
 ## Health Monitoring
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/health` | Returns `{"status":"ok"}` if the backend is running |
-| `GET /api/status` | Returns boot phase, database connectivity, and vault configuration status |
-| `GET /api/admin/health` | Returns detailed health for database, guacd, and vault (including mode) |
+| Endpoint                | Purpose                                                                   |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `GET /api/health`       | Returns `{"status":"ok"}` if the backend is running                       |
+| `GET /api/status`       | Returns boot phase, database connectivity, and vault configuration status |
+| `GET /api/admin/health` | Returns detailed health for database, guacd, and vault (including mode)   |
 
 Docker health checks are configured for `guacd` (TCP 4822), `postgres-local` (`pg_isready`), and `vault` (sys/health endpoint).
 
@@ -2272,20 +2292,20 @@ Strata Client works in any modern browser (Chrome, Edge, Firefox, Safari). Some 
 
 ### Multi-Monitor
 
-| Requirement | Details |
-|---|---|
-| **Browser** | Chromium 100+ (Chrome, Edge, Brave, Opera). Firefox and Safari do not support the Window Management API. |
-| **Permission** | The browser prompts for "Window Management" permission on first use. Grant it to allow screen detection. |
-| **Popups** | When using **3 or more screens**, Chrome's popup blocker may block the additional windows on the first attempt. Click the blocked-popup icon in the address bar and select "Always allow pop-ups from this site", then retry. This is a one-time setting per origin. |
-| **Brave / Privacy browsers** | Supported — screen dimensions automatically fall back to `window.screen` values when the Window Management API returns zeroed coordinates. |
-| **Screen detection** | The multi-monitor button tooltip shows the number of detected screens in real time (e.g. "Multi-monitor (3 screens detected)"). Plugging in or removing a monitor updates the count automatically via the `screenschange` event. |
+| Requirement                  | Details                                                                                                                                                                                                                                                              |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Browser**                  | Chromium 100+ (Chrome, Edge, Brave, Opera). Firefox and Safari do not support the Window Management API.                                                                                                                                                             |
+| **Permission**               | The browser prompts for "Window Management" permission on first use. Grant it to allow screen detection.                                                                                                                                                             |
+| **Popups**                   | When using **3 or more screens**, Chrome's popup blocker may block the additional windows on the first attempt. Click the blocked-popup icon in the address bar and select "Always allow pop-ups from this site", then retry. This is a one-time setting per origin. |
+| **Brave / Privacy browsers** | Supported — screen dimensions automatically fall back to `window.screen` values when the Window Management API returns zeroed coordinates.                                                                                                                           |
+| **Screen detection**         | The multi-monitor button tooltip shows the number of detected screens in real time (e.g. "Multi-monitor (3 screens detected)"). Plugging in or removing a monitor updates the count automatically via the `screenschange` event.                                     |
 
 ### Quick Share
 
-| Requirement | Details |
-|---|---|
-| **File size** | Up to 500 MB per file, 20 files per session. Both the nginx reverse proxy and Axum backend enforce this limit. |
-| **Upload timeout** | Large uploads have up to 300 seconds (5 minutes) before the nginx proxy times out the request body transfer. |
+| Requirement        | Details                                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- |
+| **File size**      | Up to 500 MB per file, 20 files per session. Both the nginx reverse proxy and Axum backend enforce this limit. |
+| **Upload timeout** | Large uploads have up to 300 seconds (5 minutes) before the nginx proxy times out the request body transfer.   |
 
 ### Clipboard
 
@@ -2397,13 +2417,13 @@ You can share a live session with another user by generating a temporary read-on
 
 Press **Ctrl+K** while connected to any session to open the command palette — an instant search overlay for finding and launching connections without leaving the current session.
 
-| Feature | Details |
-|---|---|
-| **Open** | `Ctrl+K` (also works from pop-out and multi-monitor windows) |
-| **Search** | Filters connections by name, protocol, hostname, description, or folder |
-| **Navigate** | `↑` / `↓` arrow keys to move, `Enter` to launch, `Esc` to close |
-| **Active badge** | Connections you're already connected to show a green "Active" badge |
-| **Mouse** | Click any result to launch it directly |
+| Feature          | Details                                                                 |
+| ---------------- | ----------------------------------------------------------------------- |
+| **Open**         | `Ctrl+K` (also works from pop-out and multi-monitor windows)            |
+| **Search**       | Filters connections by name, protocol, hostname, description, or folder |
+| **Navigate**     | `↑` / `↓` arrow keys to move, `Enter` to launch, `Esc` to close         |
+| **Active badge** | Connections you're already connected to show a green "Active" badge     |
+| **Mouse**        | Click any result to launch it directly                                  |
 
 The command palette fetches your available connections from the server each time it opens, so newly added connections appear immediately.
 
@@ -2411,14 +2431,14 @@ The command palette fetches your available connections from the server each time
 
 When connected to a remote session, the following keyboard shortcuts are available:
 
-| Shortcut | Action | Notes |
-|---|---|---|
-| `Right Ctrl` (tap) | Send Win key (open Start menu) | Right Ctrl is remapped to Super/Win for the remote session |
-| `Right Ctrl + key` | Send Win+key combo | e.g. `Right Ctrl + E` → Win+E (File Explorer) |
-| `Ctrl+Alt+\`` | Send Win+Tab (Task View) | The only reliable browser-level proxy — Windows intercepts `Ctrl+Alt+Tab` |
-| `Ctrl+K` | Open Command Palette | Search and launch connections from keyboard |
-| `F12` | Browser DevTools | Passed through to the browser (not sent to remote) |
-| `Ctrl+Shift+I/J` | Browser DevTools | Passed through to the browser (not sent to remote) |
+| Shortcut           | Action                         | Notes                                                                     |
+| ------------------ | ------------------------------ | ------------------------------------------------------------------------- |
+| `Right Ctrl` (tap) | Send Win key (open Start menu) | Right Ctrl is remapped to Super/Win for the remote session                |
+| `Right Ctrl + key` | Send Win+key combo             | e.g. `Right Ctrl + E` → Win+E (File Explorer)                             |
+| `Ctrl+Alt+\``      | Send Win+Tab (Task View)       | The only reliable browser-level proxy — Windows intercepts `Ctrl+Alt+Tab` |
+| `Ctrl+K`           | Open Command Palette           | Search and launch connections from keyboard                               |
+| `F12`              | Browser DevTools               | Passed through to the browser (not sent to remote)                        |
+| `Ctrl+Shift+I/J`   | Browser DevTools               | Passed through to the browser (not sent to remote)                        |
 
 #### Keyboard Lock (Fullscreen + HTTPS)
 
@@ -2436,13 +2456,13 @@ This eliminates the need for proxy shortcuts like Right Ctrl or Ctrl+Alt+\`. Key
 
 Users can optionally pin a single tag per connection to show as a colored badge on session thumbnails in the Active Sessions sidebar.
 
-| Feature | Details |
-|---|---|
-| **Assign** | Click the tag icon (top-left of any session thumbnail) to open the tag picker |
-| **Choose** | Select from your existing user tags — each shown with its color swatch |
-| **Clear** | Select "None" to remove the display tag from that connection |
-| **Per-user** | Each user's display tag choices are independent — your assignments don't affect other users |
-| **Persistent** | Display tags are stored on the server and persist across sessions and devices |
+| Feature        | Details                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| **Assign**     | Click the tag icon (top-left of any session thumbnail) to open the tag picker               |
+| **Choose**     | Select from your existing user tags — each shown with its color swatch                      |
+| **Clear**      | Select "None" to remove the display tag from that connection                                |
+| **Per-user**   | Each user's display tag choices are independent — your assignments don't affect other users |
+| **Persistent** | Display tags are stored on the server and persist across sessions and devices               |
 
 Display tags use your existing user tags (created from the Dashboard tag manager). If you haven't created any tags yet, the picker will show "No tags created yet."
 
@@ -2450,11 +2470,11 @@ Display tags use your existing user tags (created from the Dashboard tag manager
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Setup wizard keeps appearing | `config.toml` not persisted | Check `backend-config` volume is mounted |
-| 503 on all API calls | Backend in setup mode | Complete the first-boot wizard |
-| 401 on authenticated routes | SSO not configured | Configure OIDC in Admin → SSO |
+| Symptom                         | Cause                            | Fix                                      |
+| ------------------------------- | -------------------------------- | ---------------------------------------- |
+| Setup wizard keeps appearing    | `config.toml` not persisted      | Check `backend-config` volume is mounted |
+| 503 on all API calls            | Backend in setup mode            | Complete the first-boot wizard           |
+| 401 on authenticated routes     | SSO not configured               | Configure OIDC in Admin → SSO            |
 | Vault errors on credential save | Vault unreachable or key missing | Verify Vault URL, token, and transit key |
-| Sessions drop on guacd restart | Expected — guacd is stateful | Schedule restarts during maintenance |
-| Database migration race | Multiple backends starting | Advisory locks handle this automatically |
+| Sessions drop on guacd restart  | Expected — guacd is stateful     | Schedule restarts during maintenance     |
+| Database migration race         | Multiple backends starting       | Advisory locks handle this automatically |

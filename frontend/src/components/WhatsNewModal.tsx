@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.5.3",
+    subtitle:
+      "Admin Settings — grouped sidebar navigation replaces the 17-tab horizontal row that no longer fit on a single line",
+    sections: [
+      {
+        title: "From a 17-tab horizontal row to a five-section sidebar",
+        description:
+          "The Admin Settings page accumulated 17 tabs across the v1.4.x → v1.5.x line (Health, Display, Network, SSO / OIDC, Kerberos, Vault, Recordings, Access, Tags, AD Sync, Password Mgmt, Notifications, Sessions, VDI, Trusted CAs, DMZ Links, Security) and on common DPI / zoom settings the row no longer fit on a single line — operator laptops were forced to scroll horizontally to reach the right-hand tabs. v1.5.3 replaces that single row with a left sidebar grouped into five sections (Overview, Identity & Access, Connectivity, Workspace, Secrets & Security) modelled on the navigation patterns used by AWS Console, Azure Portal, and GitHub Settings.",
+      },
+      {
+        title: "Permission-aware section collapse — non-admins see a smaller sidebar",
+        description:
+          "Sections become hidden from the nav entirely when the current user has no permission to see any item inside them, so a tag-only operator or an audit-only viewer sees a much smaller sidebar than a full system administrator. The per-item permission predicates (can_manage_system, can_manage_users, can_manage_connections, can_create_*, can_view_audit_logs, etc.) are unchanged from v1.5.2 — only the grouping and rendering moved. The default-tab heuristic (system admins land on Health, RBAC admins on Access, audit-only viewers on Sessions) is also unchanged.",
+      },
+      {
+        title: "Responsive — wraps inline above content on tablets and phones",
+        description:
+          "On screens narrower than the Tailwind lg breakpoint (1024 px) the sidebar wraps inline above the content as a horizontal flex row of buttons, so mobile and tablet operators get the same content without a forced two-pane layout. On lg+ screens the sidebar is sticky to the top of the viewport so the section list stays in view while scrolling the long settings panels (Recordings, Notifications SMTP, the Access Control role editor are all longer than a typical viewport).",
+      },
+      {
+        title: "Drop-in upgrade — frontend image only",
+        description:
+          "v1.5.3 is a UX-only patch release. There are no API changes, no database migrations, no protocol changes, no security changes, and no behavioural changes to any session, audit, or deployment code path. The backend, DMZ edge, and guacd images are bit-identical to v1.5.2 — operators only need to roll the frontend container. All 1329 frontend tests continue to pass, including the 220 AdminSettings unit tests, because the tab labels and the .tab-active CSS class were preserved verbatim.",
+      },
+    ],
+  },
+  {
     version: "1.5.2",
     subtitle:
       "DMZ link WebSocket forwarding — RFC 8441 Extended CONNECT brings end-to-end /api/tunnel through the public edge",

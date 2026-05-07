@@ -29,6 +29,7 @@ Strata Client supports standard OpenID Connect for user authentication. The iden
 For environments without an OIDC provider, Strata Client supports built-in username/password authentication. Passwords are hashed using Argon2id before storage. Local authentication can be globally disabled via the Admin Settings; when disabled, the backend strictly rejects all local login attempts with a 401.
 
 **Password Policy:**
+
 - Minimum 12 characters enforced on user creation and password change
 - Maximum 1024 characters to prevent abuse
 - Argon2id hashing with cryptographically random salts
@@ -39,12 +40,13 @@ For environments without an OIDC provider, Strata Client supports built-in usern
 
 Authentication uses a **dual-token architecture** aligned with OWASP session timeout recommendations:
 
-| Token | TTL | Storage | Purpose |
-|---|---|---|---|
-| Access token | 20 minutes | `localStorage` (Bearer header) | API authentication |
-| Refresh token | 8 hours | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | Silent access token renewal |
+| Token         | TTL        | Storage                                        | Purpose                     |
+| ------------- | ---------- | ---------------------------------------------- | --------------------------- |
+| Access token  | 20 minutes | `localStorage` (Bearer header)                 | API authentication          |
+| Refresh token | 8 hours    | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | Silent access token renewal |
 
 **Flow:**
+
 1. On login, the backend issues both an access token (in the JSON response) and a refresh token (as an `HttpOnly` cookie scoped to `/api/auth/refresh`)
 2. The frontend uses the access token for all API requests via `Authorization: Bearer`
 3. When the access token expires (401 response), the frontend silently calls `POST /api/auth/refresh` with the cookie
@@ -60,7 +62,7 @@ Authentication uses a **dual-token architecture** aligned with OWASP session tim
 
 ### WebSocket-tunnel auth watchdog (v1.3.2; revised v1.4.1)
 
-A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is *revoked* during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.
+A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is _revoked_ during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.
 
 `backend/src/routes/tunnel.rs` `ws_tunnel` mitigates this with an in-band auth watchdog:
 
@@ -75,15 +77,15 @@ The 30 s cadence detects revocation in ≤ 30 s even on an aggressive 1-minute a
 
 #### v1.4.1: removal of `exp`-claim enforcement
 
-The original v1.3.2 watchdog also decoded the access token's `exp` claim once at upgrade time and reaped the tunnel when wall-clock `Utc::now()` reached that timestamp. This **looked** correct but was wrong in practice: access tokens carry a 20-minute TTL, and the frontend's `SessionTimeoutWarning` proactively rotates them via `POST /api/auth/refresh` after roughly ten minutes of UI activity. The already-open WebSocket has no mechanism to learn about that rotation, so the watchdog held on to the *original* token's `exp` and reaped the session at T+20m even when the user was actively driving the UI. From the operator's point of view this was *"my session keeps disconnecting every 20 minutes"*; from the audit log it surfaced as `tunnel.terminated reason: "expired"`.
+The original v1.3.2 watchdog also decoded the access token's `exp` claim once at upgrade time and reaped the tunnel when wall-clock `Utc::now()` reached that timestamp. This **looked** correct but was wrong in practice: access tokens carry a 20-minute TTL, and the frontend's `SessionTimeoutWarning` proactively rotates them via `POST /api/auth/refresh` after roughly ten minutes of UI activity. The already-open WebSocket has no mechanism to learn about that rotation, so the watchdog held on to the _original_ token's `exp` and reaped the session at T+20m even when the user was actively driving the UI. From the operator's point of view this was _"my session keeps disconnecting every 20 minutes"_; from the audit log it surfaced as `tunnel.terminated reason: "expired"`.
 
-The fix in v1.4.1 removes the `exp` decode and the `watchdog_exp: Option<u64>` cache entirely. The 8-hour `MAX_TUNNEL_DURATION` hard cap is the new long-tail backstop and is *deliberately measured against `upgraded_at`* (an `Instant`, not a token claim), so token rotation cannot move the deadline. The `tunnel.terminated` audit `reason` enum gained `"max_duration"` and lost `"expired"`; consumers that filtered on `expired` should also accept `max_duration` — they refer to the same defence-in-depth backstop, just measured differently.
+The fix in v1.4.1 removes the `exp` decode and the `watchdog_exp: Option<u64>` cache entirely. The 8-hour `MAX_TUNNEL_DURATION` hard cap is the new long-tail backstop and is _deliberately measured against `upgraded_at`_ (an `Instant`, not a token claim), so token rotation cannot move the deadline. The `tunnel.terminated` audit `reason` enum gained `"max_duration"` and lost `"expired"`; consumers that filtered on `expired` should also accept `max_duration` — they refer to the same defence-in-depth backstop, just measured differently.
 
-| Teardown trigger                          | Mechanism                                                                | Audit `reason`    | Latency      |
-| ----------------------------------------- | ------------------------------------------------------------------------ | ----------------- | ------------ |
-| Manual logout / 20-min idle logout        | Frontend calls `/api/auth/logout` → both tokens revoked → watchdog tick  | `revoked`         | ≤ 30 s       |
-| Browser closed / network died             | TCP-level WebSocket close → `tunnel::proxy(...)` returns                 | (TCP close, not watchdog) | immediate    |
-| Long-lived idle session                   | Watchdog tick observes `Instant::now() - upgraded_at >= 8h`              | `max_duration`    | ≤ 30 s past 8h |
+| Teardown trigger                   | Mechanism                                                               | Audit `reason`            | Latency        |
+| ---------------------------------- | ----------------------------------------------------------------------- | ------------------------- | -------------- |
+| Manual logout / 20-min idle logout | Frontend calls `/api/auth/logout` → both tokens revoked → watchdog tick | `revoked`                 | ≤ 30 s         |
+| Browser closed / network died      | TCP-level WebSocket close → `tunnel::proxy(...)` returns                | (TCP close, not watchdog) | immediate      |
+| Long-lived idle session            | Watchdog tick observes `Instant::now() - upgraded_at >= 8h`             | `max_duration`            | ≤ 30 s past 8h |
 
 ### Logout closes tunnels immediately (v1.3.2)
 
@@ -92,6 +94,7 @@ Manual logout (and idle-timeout logout) used to flip React auth state without fi
 ### Authentication Method Enforcement
 
 Administrators can toggle `local_auth_enabled` and `sso_enabled` independently.
+
 - **Local Auth Disabled**: The `/api/auth/login` endpoint returns `401 Unauthorized` immediately.
 - **SSO Disabled**: The `/api/auth/sso/login` and `/api/auth/sso/callback` endpoints are deactivated.
 - **Safety Guard**: The system prevents disabling both methods simultaneously to ensure administrative access is maintained.
@@ -102,20 +105,20 @@ After token validation, the backend looks up the user in the local database by O
 
 ### Route Protection
 
-| Route Group | Middleware |
-|---|---|
-| `/api/health`, `/api/status`, `/api/setup/*` | None (public) |
-| `/api/auth/login`, `/api/auth/sso/*` | None (public, rate-limited) |
-| `/api/auth/refresh` | None (public, validates `HttpOnly` refresh cookie) |
-| `/api/shared/tunnel/:token` | None (public, share-token validated; observes owner's live session via NVR broadcast; mode determines input forwarding) |
-| `/api/files/:token` (GET) | None (public, capability-based — the random UUID token is the authorization) |
-| `/api/auth/password` | `require_auth` |
-| `/api/admin/*` | `require_auth` + `require_admin` + granular permission checks |
-| `/api/admin/users/:id/reset-password` | `require_auth` + `require_admin` + `can_manage_users` |
-| `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*` | `require_auth` |
-| `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` + `can_use_quick_share` (POST only; `can_manage_system` bypass); delete = owner-only |
-| `/api/user/sessions` | `require_auth` (filtered to own sessions) |
-| `/api/user/recordings` | `require_auth` (filtered to own recordings) |
+| Route Group                                                                            | Middleware                                                                                                              |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `/api/health`, `/api/status`, `/api/setup/*`                                           | None (public)                                                                                                           |
+| `/api/auth/login`, `/api/auth/sso/*`                                                   | None (public, rate-limited)                                                                                             |
+| `/api/auth/refresh`                                                                    | None (public, validates `HttpOnly` refresh cookie)                                                                      |
+| `/api/shared/tunnel/:token`                                                            | None (public, share-token validated; observes owner's live session via NVR broadcast; mode determines input forwarding) |
+| `/api/files/:token` (GET)                                                              | None (public, capability-based — the random UUID token is the authorization)                                            |
+| `/api/auth/password`                                                                   | `require_auth`                                                                                                          |
+| `/api/admin/*`                                                                         | `require_auth` + `require_admin` + granular permission checks                                                           |
+| `/api/admin/users/:id/reset-password`                                                  | `require_auth` + `require_admin` + `can_manage_users`                                                                   |
+| `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*`                                    | `require_auth`                                                                                                          |
+| `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` + `can_use_quick_share` (POST only; `can_manage_system` bypass); delete = owner-only                     |
+| `/api/user/sessions`                                                                   | `require_auth` (filtered to own sessions)                                                                               |
+| `/api/user/recordings`                                                                 | `require_auth` (filtered to own recordings)                                                                             |
 
 **Permission validation:** Both `/api/tunnel/:connection_id` (WebSocket upgrade) and `/api/tunnel/ticket` (ticket issuance) strictly validate that the authenticated user matches the ticket's `user_id` and that their role grants access to the target connection, including mappings via connection folders (`role_folders`).
 
@@ -125,22 +128,22 @@ After token validation, the backend looks up the user in the local database by O
 
 All admin API endpoints enforce fine-grained permission checks beyond the `require_admin` middleware:
 
-| Permission | Endpoints Protected |
-|---|---|
-| `can_manage_system` | System settings, Vault config, SSO/OIDC config, global toggles. Also acts as super-admin bypass for all other permissions. |
-| `can_manage_users` | User CRUD, role assignment, password resets, user tags |
-| `can_manage_connections` | Connection CRUD, connection folders, sharing profiles, admin tags, AD sync config, Kerberos realms |
-| `can_view_audit_logs` | Audit log listing and export |
-| `can_view_sessions` | Active session listing, session observation (NVR), session kill, recording stats |
-| `can_create_users` | Provisioning new user accounts |
-| `can_create_user_groups` | Role (user-group) create / update / delete |
-| `can_create_connections` | Create and manage connections **and** their folder hierarchy (unified as of v0.24.0) |
-| `can_create_sharing_profiles` | Generate live session share links |
+| Permission                    | Endpoints Protected                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `can_manage_system`           | System settings, Vault config, SSO/OIDC config, global toggles. Also acts as super-admin bypass for all other permissions. |
+| `can_manage_users`            | User CRUD, role assignment, password resets, user tags                                                                     |
+| `can_manage_connections`      | Connection CRUD, connection folders, sharing profiles, admin tags, AD sync config, Kerberos realms                         |
+| `can_view_audit_logs`         | Audit log listing and export                                                                                               |
+| `can_view_sessions`           | Active session listing, session observation (NVR), session kill, recording stats                                           |
+| `can_create_users`            | Provisioning new user accounts                                                                                             |
+| `can_create_user_groups`      | Role (user-group) create / update / delete                                                                                 |
+| `can_create_connections`      | Create and manage connections **and** their folder hierarchy (unified as of v0.24.0)                                       |
+| `can_create_sharing_profiles` | Generate live session share links                                                                                          |
 
 **User-facing permissions** (non-administrative, explicitly excluded from `has_any_admin_permission()`):
 
-| Permission | Runtime Effect |
-|---|---|
+| Permission            | Runtime Effect                                                                                                                                                                      |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `can_use_quick_share` | Permits `POST /api/files/upload` (ephemeral in-session file CDN). Gate enforced by `services::middleware::check_quick_share_permission()`. `can_manage_system` bypasses this check. |
 
 Endpoints that do not match a specific permission category (e.g. role CRUD) require `can_manage_system`.
@@ -163,6 +166,7 @@ flowchart TB
 ```
 
 **Write path:**
+
 1. Generate a cryptographically random 32-byte DEK (`rand::OsRng`)
 2. Encrypt the password with the DEK using AES-256-GCM (produces ciphertext + 12-byte nonce)
 3. Send the DEK to Vault `POST /v1/transit/encrypt/<key>` — Vault wraps it with the master key (KEK)
@@ -170,6 +174,7 @@ flowchart TB
 5. Zeroize the plaintext DEK from Rust memory (`zeroize` crate)
 
 **Read path:**
+
 1. Fetch `(ciphertext, vault_wrapped_dek, nonce)` from PostgreSQL
 2. Send the wrapped DEK to Vault `POST /v1/transit/decrypt/<key>` — Vault returns the plaintext DEK
 3. Decrypt the password with the DEK using AES-256-GCM
@@ -177,6 +182,7 @@ flowchart TB
 5. Zeroize the DEK and plaintext password from memory
 
 **Key properties:**
+
 - The master key (KEK) **never leaves Vault** — it exists only inside the Transit engine
 - Each credential gets a **unique, random DEK** — compromising one DEK cannot decrypt other credentials
 - DEKs are only held in memory for the duration of the encrypt/decrypt operation
@@ -214,50 +220,50 @@ The `audit_logs` table is designed as an append-only, tamper-evident log:
 
 ### Logged Events
 
-| Event | Description |
-|---|---|
-| `settings.updated` | Admin changed system settings |
-| `sso.configured` | OIDC provider configured |
-| `kerberos.configured` | Kerberos settings updated |
-| `recordings.configured` | Session recording toggled |
-| `vault.configured` | Vault settings updated or mode changed |
-| `role.created` | New role created |
-| `connection.created` | New connection target added |
-| `connection.updated` | Connection settings changed |
-| `connection.deleted` | Connection removed |
-| `connection_group.created` | New connection group created |
-| `connection_group.deleted` | Connection group removed |
-| `role_connections.updated` | Role permission mapping changed |
-| `credential.updated` | User saved/updated an encrypted credential |
-| `tunnel.connected` | User opened a remote desktop session |
-| `share.created` | User generated a session share link |
-| `connection.share_rate_limited` | A share-tunnel request was rejected by the per-token rate limit. Payload includes a SHA-256 8-char prefix of the token (the raw token is never persisted) and the client IP. Useful for spotting share-link brute-forcing (v0.26.0+) |
-| `connection.share_invalid_token` | A share-tunnel request was for a token that does not resolve to an active share (deleted, expired, never existed, or belonging to a soft-deleted connection). Payload includes token-prefix + client IP (v0.26.0+) |
-| `user.terms_accepted` | User accepted the Terms of Service / recording-consent modal (v0.26.0+) |
-| `user.credential_mapping_set` | User mapped a credential profile to a connection (v0.26.0+) |
-| `user.credential_mapping_removed` | User cleared a credential-profile mapping (v0.26.0+) |
-| `checkout.retry_activation` | User re-triggered activation on an `Approved` checkout after an initial activation failure (v0.26.0+) |
-| `checkout.checkin` | User voluntarily checked a live checkout in before its natural expiry (v0.26.0+) |
-| `ad_sync.config_created` | AD sync source configuration created |
-| `ad_sync.config_updated` | AD sync source configuration updated |
-| `ad_sync.config_deleted` | AD sync source configuration deleted |
-| `ad_sync.completed` | AD sync run finished (includes created/updated/deleted counts) |
-| `checkout.requested` | User requested a password checkout for an AD-managed account |
-| `checkout.approved` | Approver approved a password checkout request |
-| `checkout.denied` | Approver denied a password checkout request |
-| `checkout.activated` | Password checkout activated — password generated, LDAP reset, sealed in Vault |
-| `checkout.expired` | Password checkout expired (automatic or manual) |
-| `checkout.scheduled` | User created a future-dated checkout (no credential material exists yet) |
-| `notifications.skipped_opt_out` | Transactional email suppressed because the recipient has `users.notifications_opt_out = true` (audit-only events bypass the flag) |
-| `notifications.misconfigured` | Dispatcher refused to send because `smtp_from_address` is empty or `smtp_enabled` is false |
-| `notifications.abandoned` | Retry worker gave up on a delivery row after 3 failed attempts |
-| `checkout.emergency_bypass` | User invoked break-glass bypass; checkout activated without approver review |
-| `rotation.completed` | Automatic service account password rotation completed |
-| `kerberos_realm.created` | Kerberos realm added |
-| `kerberos_realm.updated` | Kerberos realm settings changed |
-| `kerberos_realm.deleted` | Kerberos realm removed |
-| `dns.updated` | Admin updated DNS configuration (Network tab) |
-| `command.executed` | (v0.31.0) User invoked a Command Palette command (built-in or user-defined `:command` mapping). Payload: `{ trigger, action, args, target_id }`. The endpoint hard-codes `action_type` server-side so a malicious client cannot poison the audit-event taxonomy. Validation rejects `action` values outside the twelve-value allow-list (`reload \| disconnect \| close \| fullscreen \| commands \| explorer \| open-connection \| open-folder \| open-tag \| open-page \| paste-text \| open-path`) and `trigger` values outside `^:?[a-z0-9_-]{1,64}$`. Mappings themselves are validated by `services::user_preferences::validate_command_mappings` before persistence — array length ≤ 50, trigger regex `^[a-z0-9_-]{1,32}$`, no built-in collision, unique-within-list, UUID-parseable target IDs, `open-page` paths in the seven-value page allow-list, `paste-text` `args.text` non-empty and ≤ 4096 chars, `open-path` `args.path` non-empty, ≤ 1024 chars, and free of control characters (newline injection would let a stored mapping execute follow-up commands through the Run dialog). **`paste-text` and `open-path` audit details deliberately omit the literal payload** — only `{ text_length: N }` or `{ path_length: N }` is logged. The mapping content is recoverable by an admin from `user_preferences` if needed, but the audit stream itself never persists potentially sensitive payloads (UNC paths, internal command snippets, etc.). |
+| Event                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `settings.updated`                | Admin changed system settings                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `sso.configured`                  | OIDC provider configured                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `kerberos.configured`             | Kerberos settings updated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `recordings.configured`           | Session recording toggled                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `vault.configured`                | Vault settings updated or mode changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `role.created`                    | New role created                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `connection.created`              | New connection target added                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `connection.updated`              | Connection settings changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `connection.deleted`              | Connection removed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `connection_group.created`        | New connection group created                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `connection_group.deleted`        | Connection group removed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `role_connections.updated`        | Role permission mapping changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `credential.updated`              | User saved/updated an encrypted credential                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `tunnel.connected`                | User opened a remote desktop session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `share.created`                   | User generated a session share link                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `connection.share_rate_limited`   | A share-tunnel request was rejected by the per-token rate limit. Payload includes a SHA-256 8-char prefix of the token (the raw token is never persisted) and the client IP. Useful for spotting share-link brute-forcing (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `connection.share_invalid_token`  | A share-tunnel request was for a token that does not resolve to an active share (deleted, expired, never existed, or belonging to a soft-deleted connection). Payload includes token-prefix + client IP (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `user.terms_accepted`             | User accepted the Terms of Service / recording-consent modal (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `user.credential_mapping_set`     | User mapped a credential profile to a connection (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `user.credential_mapping_removed` | User cleared a credential-profile mapping (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `checkout.retry_activation`       | User re-triggered activation on an `Approved` checkout after an initial activation failure (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `checkout.checkin`                | User voluntarily checked a live checkout in before its natural expiry (v0.26.0+)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ad_sync.config_created`          | AD sync source configuration created                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ad_sync.config_updated`          | AD sync source configuration updated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ad_sync.config_deleted`          | AD sync source configuration deleted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ad_sync.completed`               | AD sync run finished (includes created/updated/deleted counts)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `checkout.requested`              | User requested a password checkout for an AD-managed account                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `checkout.approved`               | Approver approved a password checkout request                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `checkout.denied`                 | Approver denied a password checkout request                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `checkout.activated`              | Password checkout activated — password generated, LDAP reset, sealed in Vault                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `checkout.expired`                | Password checkout expired (automatic or manual)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `checkout.scheduled`              | User created a future-dated checkout (no credential material exists yet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `notifications.skipped_opt_out`   | Transactional email suppressed because the recipient has `users.notifications_opt_out = true` (audit-only events bypass the flag)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `notifications.misconfigured`     | Dispatcher refused to send because `smtp_from_address` is empty or `smtp_enabled` is false                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `notifications.abandoned`         | Retry worker gave up on a delivery row after 3 failed attempts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `checkout.emergency_bypass`       | User invoked break-glass bypass; checkout activated without approver review                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `rotation.completed`              | Automatic service account password rotation completed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `kerberos_realm.created`          | Kerberos realm added                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `kerberos_realm.updated`          | Kerberos realm settings changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `kerberos_realm.deleted`          | Kerberos realm removed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `dns.updated`                     | Admin updated DNS configuration (Network tab)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `command.executed`                | (v0.31.0) User invoked a Command Palette command (built-in or user-defined `:command` mapping). Payload: `{ trigger, action, args, target_id }`. The endpoint hard-codes `action_type` server-side so a malicious client cannot poison the audit-event taxonomy. Validation rejects `action` values outside the twelve-value allow-list (`reload \| disconnect \| close \| fullscreen \| commands \| explorer \| open-connection \| open-folder \| open-tag \| open-page \| paste-text \| open-path`) and `trigger` values outside `^:?[a-z0-9_-]{1,64}$`. Mappings themselves are validated by `services::user_preferences::validate_command_mappings` before persistence — array length ≤ 50, trigger regex `^[a-z0-9_-]{1,32}$`, no built-in collision, unique-within-list, UUID-parseable target IDs, `open-page` paths in the seven-value page allow-list, `paste-text` `args.text` non-empty and ≤ 4096 chars, `open-path` `args.path` non-empty, ≤ 1024 chars, and free of control characters (newline injection would let a stored mapping execute follow-up commands through the Run dialog). **`paste-text` and `open-path` audit details deliberately omit the literal payload** — only `{ text_length: N }` or `{ path_length: N }` is logged. The mapping content is recoverable by an admin from `user_preferences` if needed, but the audit stream itself never persists potentially sensitive payloads (UNC paths, internal command snippets, etc.). |
 
 ---
 
@@ -300,6 +306,7 @@ AD sync `connection_defaults` are applied as the `extra` JSONB on synced connect
 ### Credential Isolation
 
 Password management supports separate bind credentials for PM operations (`pm_bind_user` / `pm_bind_password`) and **separate Search Base OUs for discovery** (`pm_search_bases`). This decoupling allows administrators to:
+
 1. Use a dedicated service account with password-reset permissions on a specific user subtree.
 2. Restrict the "discovery perimeter" for privileged accounts to only the necessary Organizational Units, preventing the system from identifying or interacting with accounts in other areas of the directory (e.g., standard users or system accounts).
 
@@ -312,6 +319,7 @@ Generated passwords use a cryptographically secure random number generator (`ran
 ### Checkout Lifecycle
 
 Password checkouts follow a strict lifecycle:
+
 1. **Request** — user requests a checkout; the request is recorded in `password_checkout_requests` with `status = 'pending'`
 2. **Scheduled (optional)** — if the request specifies `scheduled_start_at` (between now + 30 s and now + 14 days), the row is created with `status = 'Scheduled'`. No password is generated, no LDAP mutation is performed, and no Vault material is written. The row sits idle until the worker's next tick after the scheduled moment
 3. **Approval** — an authorized approver reviews and approves/denies the request. Approvers can only see and act on requests for managed accounts explicitly assigned to their approval role via the `approval_role_accounts` table. The approver's user ID is recorded as `approved_by_user_id` on the request, and the `requester_username` is resolved via JOIN for display. **Every approval-required request must carry a `justification_comment` of at least 10 characters** — the backend rejects approval-required submissions with a shorter or empty comment so approvers always have a written business reason on file
@@ -369,13 +377,13 @@ The Password Management service account (either the AD Sync bind account or the 
 
 #### Required Permissions
 
-| Permission | Type | Purpose |
-|---|---|---|
-| **Reset Password** | General | Reset the `unicodePwd` attribute on managed accounts |
-| **Read Account Restrictions** | Property-specific | Read `userAccountControl`, password policy flags |
-| **Write Account Restrictions** | Property-specific | Update account restrictions after password reset |
-| **Read lockoutTime** | Property-specific | Detect locked-out accounts before attempting reset |
-| **Write lockoutTime** | Property-specific | Unlock accounts if needed during password rotation |
+| Permission                     | Type              | Purpose                                              |
+| ------------------------------ | ----------------- | ---------------------------------------------------- |
+| **Reset Password**             | General           | Reset the `unicodePwd` attribute on managed accounts |
+| **Read Account Restrictions**  | Property-specific | Read `userAccountControl`, password policy flags     |
+| **Write Account Restrictions** | Property-specific | Update account restrictions after password reset     |
+| **Read lockoutTime**           | Property-specific | Detect locked-out accounts before attempting reset   |
+| **Write lockoutTime**          | Property-specific | Unlock accounts if needed during password rotation   |
 
 #### Delegating Permissions for Standard & Protected Accounts
 
@@ -481,8 +489,8 @@ If any permission is missing, the service account will receive an LDAP error whe
 
 **Status:** invariant from v1.1.0 onwards. Documented after the
 v1.1.0 EACCES playback regression (see `CHANGELOG.md` 1.1.0
-*"Recording playback Tunnel error caused by EACCES on the shared
-recordings volume"*).
+_"Recording playback Tunnel error caused by EACCES on the shared
+recordings volume"_).
 
 Session `.guac` recordings are stored on the shared `guac-recordings`
 Docker volume, mounted into both the `guacd` and `backend`
@@ -500,7 +508,7 @@ without elevating either side's privileges.
   `recording.c` `open()` call and is not affected by the
   in-container `umask`.
 - Directory mode: `0750` (set at image build by `chmod 0750
-  /var/lib/guacamole/recordings`).
+/var/lib/guacamole/recordings`).
 - The guacd entrypoint sets `umask 0027` defensively so any
   non-recording artefacts (e.g. sidecar metadata) also stay
   group-readable.
@@ -523,7 +531,7 @@ without elevating either side's privileges.
   group-read on the `0640` recording files is sufficient — no
   capabilities required at read time.
 
-**What we deliberately do *not* do:**
+**What we deliberately do _not_ do:**
 
 - We do not use `DAC_OVERRIDE`. The backend's Linux capability
   set keeps `DAC_OVERRIDE` for the directory-management ops
@@ -572,8 +580,8 @@ string / managed identity sealed in Vault, not POSIX uid/gid.
 When an operator navigates away from an active session — whether
 by clicking a sidebar entry, using the Command Palette, or
 closing the session manager tab — the `SessionClient.tsx`
-keyboard-effect cleanup path performs three operations *in this
-order*:
+keyboard-effect cleanup path performs three operations _in this
+order_:
 
 1. Set `kb.onkeydown = null` and `kb.onkeyup = null` so any
    in-flight DOM keyboard event no longer reaches the tunnel.
@@ -613,7 +621,7 @@ user clicks inside the Guacamole canvas and the matching
 `mouseup` event lands outside the page's document (browser
 chrome, devtools, popped-out windows, the OS desktop after an
 alt-tab-out), the page never receives the `mouseup` and
-guacd's terminal stays in *"left button held"* state. Without a
+guacd's terminal stays in _"left button held"_ state. Without a
 reset event:
 
 - **SSH** would continue building a text selection across
@@ -622,7 +630,7 @@ reset event:
   did not initiate.
 - **RDP / VNC** would not extend a selection (the remote OS
   doesn't have that semantic) but would forward a stale
-  *"left button held"* state to the remote desktop on the next
+  _"left button held"_ state to the remote desktop on the next
   `mousemove`, potentially triggering a drag-drop on icons the
   cursor crossed.
 - An attacker exploiting a click-jacking flow on a sibling
@@ -632,19 +640,18 @@ reset event:
   `mousemove` against the operator's awareness.
 
 The `mouseleave` + `blur` reset closes that window: the moment
-the cursor leaves the canvas *or* the tab loses focus (which
+the cursor leaves the canvas _or_ the tab loses focus (which
 covers every alt-tab and popped-out-devtools case), held buttons
 are released. The release is a **no-op when no buttons are
 held**, so it costs zero round-trips during normal interaction.
 The pattern intentionally mirrors the keyboard `kb.reset()`
-discipline — both are defensive *"send a clean state on every
-opportunity for input to escape our event handlers"* hooks.
+discipline — both are defensive _"send a clean state on every
+opportunity for input to escape our event handlers"_ hooks.
 
 ---
 
-
-
 **Security properties:**
+
 - Health checks use TCP connect only — no authentication data is transmitted during probes
 - Results are exposed only to authenticated users who already have access to the connection via their role mapping
 - The background worker runs within the backend process and cannot be triggered externally
@@ -657,6 +664,7 @@ opportunity for input to escape our event handlers"* hooks.
 ### Input Validation
 
 The `PUT /api/admin/settings/dns` endpoint validates all DNS entries before writing:
+
 - Each DNS server entry must be a valid IPv4 address (four octets, 0–255, no leading zeros)
 - Each search domain must be a valid DNS domain name (alphanumeric labels, hyphens allowed, no leading/trailing hyphens, max 253 characters total, max 6 domains)
 - Empty or whitespace-only entries are rejected
@@ -665,6 +673,7 @@ The `PUT /api/admin/settings/dns` endpoint validates all DNS entries before writ
 ### File System Isolation
 
 The `resolv.conf` file is written to the `backend-config` Docker volume, which is mounted read-only (`ro`) into guacd containers. The guacd `entrypoint.sh` copies the file to `/etc/resolv.conf` before dropping privileges via `su-exec`. This ensures:
+
 - The backend controls DNS configuration via the shared volume
 - guacd cannot modify the source file (read-only mount)
 - The entrypoint runs as root only long enough to copy the file, then drops to the `guacd` user
@@ -737,11 +746,11 @@ The background retry worker (`services::email::worker`) operates under three saf
 
 ### Audit Events
 
-| Event | Trigger |
-|---|---|
-| `notifications.skipped_opt_out` | Recipient has `users.notifications_opt_out = true` and the template honours the flag |
-| `notifications.misconfigured` | Dispatcher refused to send because `smtp_from_address` is empty or `smtp_enabled = false` |
-| `notifications.abandoned` | Retry worker gave up on a delivery row after 3 failed attempts |
+| Event                           | Trigger                                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `notifications.skipped_opt_out` | Recipient has `users.notifications_opt_out = true` and the template honours the flag      |
+| `notifications.misconfigured`   | Dispatcher refused to send because `smtp_from_address` is empty or `smtp_enabled = false` |
+| `notifications.abandoned`       | Retry worker gave up on a delivery row after 3 failed attempts                            |
 
 ---
 
@@ -751,14 +760,14 @@ The background retry worker (`services::email::worker`) operates under three saf
 
 When connecting to an external PostgreSQL instance, the backend supports TLS encryption via `DATABASE_SSL_MODE` and `DATABASE_CA_CERT` environment variables:
 
-| Mode | Behaviour |
-|---|---|
-| `disable` | No TLS — plaintext only |
-| `allow` | Try non-TLS first, fall back to TLS |
-| `prefer` | Try TLS first, fall back to non-TLS (default for most drivers) |
-| `require` | TLS required — reject if the server does not support it. Does **not** verify the server certificate. |
-| `verify-ca` | TLS required + verify the server certificate against the CA in `DATABASE_CA_CERT` |
-| `verify-full` | Same as `verify-ca` plus hostname verification against the certificate CN/SAN |
+| Mode          | Behaviour                                                                                            |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| `disable`     | No TLS — plaintext only                                                                              |
+| `allow`       | Try non-TLS first, fall back to TLS                                                                  |
+| `prefer`      | Try TLS first, fall back to non-TLS (default for most drivers)                                       |
+| `require`     | TLS required — reject if the server does not support it. Does **not** verify the server certificate. |
+| `verify-ca`   | TLS required + verify the server certificate against the CA in `DATABASE_CA_CERT`                    |
+| `verify-full` | Same as `verify-ca` plus hostname verification against the certificate CN/SAN                        |
 
 For production external databases, use `require` at minimum. Use `verify-full` with a `DATABASE_CA_CERT` for full protection against man-in-the-middle attacks. The bundled local PostgreSQL container communicates over the internal Docker network and does not require TLS.
 
@@ -800,13 +809,13 @@ The bundled Vault container runs on the internal Docker bridge network and is **
 
 The backend applies in-memory rate limiting at multiple layers to prevent abuse:
 
-| Endpoint | Key | Limit | Window |
-|---|---|---|---|
-| `/api/auth/login` | Username | 5 attempts | 60 s |
-| `/api/auth/login` | Client IP | 20 attempts | 300 s |
-| `/api/shared/tunnel/:token` | Share token | 10 attempts | 60 s |
-| `/api/tunnel/:id` (WebSocket) | User ID | 30 connections | 60 s |
-| `/api/tunnel/ticket` | User ID | 30 tickets | 60 s |
+| Endpoint                      | Key         | Limit          | Window |
+| ----------------------------- | ----------- | -------------- | ------ |
+| `/api/auth/login`             | Username    | 5 attempts     | 60 s   |
+| `/api/auth/login`             | Client IP   | 20 attempts    | 300 s  |
+| `/api/shared/tunnel/:token`   | Share token | 10 attempts    | 60 s   |
+| `/api/tunnel/:id` (WebSocket) | User ID     | 30 connections | 60 s   |
+| `/api/tunnel/ticket`          | User ID     | 30 tickets     | 60 s   |
 
 All rate limiters use a sliding window with automatic OOM protection — entries are pruned when the map exceeds 50,000 (10,000 for share tokens), and cleared entirely if pruning is insufficient.
 
@@ -857,13 +866,13 @@ This prevents transient Vault hiccups (container restarts, brief network partiti
 
 All services in the Docker Compose stack apply security constraints:
 
-| Measure | Applied to |
-|---|---|
-| `security_opt: no-new-privileges:true` | All services |
-| `cap_drop: ALL` | All services |
-| `cap_add` (minimal) | `frontend` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
-| `read_only: true` + `tmpfs` | `frontend` |
-| Resource limits (`cpus`, `memory`) | `guacd`, `backend`, `postgres-local` |
+| Measure                                | Applied to                                                                                                                                                                                         |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `security_opt: no-new-privileges:true` | All services                                                                                                                                                                                       |
+| `cap_drop: ALL`                        | All services                                                                                                                                                                                       |
+| `cap_add` (minimal)                    | `frontend` (`NET_BIND_SERVICE`), `backend` / `postgres-local` (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`), `vault` (`IPC_LOCK`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`) |
+| `read_only: true` + `tmpfs`            | `frontend`                                                                                                                                                                                         |
+| Resource limits (`cpus`, `memory`)     | `guacd`, `backend`, `postgres-local`                                                                                                                                                               |
 
 ---
 
@@ -980,10 +989,10 @@ Browsers cannot capture the physical Windows key — the operating system interc
 
 Strata remaps **Right Ctrl** (keysym `0xFFE4`) as a Windows key proxy, following the same "host key" convention used by VMware Workstation and VirtualBox:
 
-| User action | Keysyms sent to guacd |
-|---|---|
-| Hold Right Ctrl + another key | `Super_L` down → key down … key up → `Super_L` up |
-| Tap Right Ctrl alone | `Super_L` down → `Super_L` up |
+| User action                                    | Keysyms sent to guacd                               |
+| ---------------------------------------------- | --------------------------------------------------- |
+| Hold Right Ctrl + another key                  | `Super_L` down → key down … key up → `Super_L` up   |
+| Tap Right Ctrl alone                           | `Super_L` down → `Super_L` up                       |
 | Multi-key combo (e.g., Right Ctrl + Shift + S) | `Super_L` down → `Shift` down → `S` down … releases |
 
 **Key properties:**
@@ -1015,7 +1024,7 @@ strictly-validated payload contract:
 // In the pop-out window:
 opener.postMessage(
   { type: "strata:open-connection", id: chosenConnection.id },
-  opener.location.origin,           // exact-origin gate, never "*"
+  opener.location.origin, // exact-origin gate, never "*"
 );
 ```
 
@@ -1044,7 +1053,7 @@ opener.postMessage(
   `postMessage` channel adds **no** new authority.
 - **No secrets in the channel** — only the connection id crosses
   the bridge. Credentials, JWTs, refresh tokens and `guac-master-
-  key` material never leave the opener; the popup re-uses the
+key` material never leave the opener; the popup re-uses the
   opener's cookie jar (it is same-origin) so no auth state is
   serialised into a `postMessage` payload.
 
@@ -1071,19 +1080,19 @@ This section is the security-side companion to
 
 ### Trust boundaries
 
-| Asset | DMZ node | Internal node |
-| --- | --- | --- |
-| Public TLS material | ✓ | ✗ |
-| Link-mTLS material | ✓ (DMZ side) | ✓ (internal side) |
-| Link-PSK keys | ✓ | ✓ |
-| Edge-HMAC keys | ✓ (active key only) | ✓ (active + rotation set) |
-| Strata JWT signing key | ✗ | ✓ |
-| Vault root / Transit keys | ✗ | ✓ |
-| Database credentials | ✗ | ✓ |
-| OIDC client secret | ✗ | ✓ |
-| `guac-master-key` | ✗ | ✓ |
-| Recording-storage credentials | ✗ | ✓ |
-| AD bind credentials | ✗ | ✓ |
+| Asset                         | DMZ node            | Internal node             |
+| ----------------------------- | ------------------- | ------------------------- |
+| Public TLS material           | ✓                   | ✗                         |
+| Link-mTLS material            | ✓ (DMZ side)        | ✓ (internal side)         |
+| Link-PSK keys                 | ✓                   | ✓                         |
+| Edge-HMAC keys                | ✓ (active key only) | ✓ (active + rotation set) |
+| Strata JWT signing key        | ✗                   | ✓                         |
+| Vault root / Transit keys     | ✗                   | ✓                         |
+| Database credentials          | ✗                   | ✓                         |
+| OIDC client secret            | ✗                   | ✓                         |
+| `guac-master-key`             | ✗                   | ✓                         |
+| Recording-storage credentials | ✗                   | ✓                         |
+| AD bind credentials           | ✗                   | ✓                         |
 
 A Cargo deny rule rejects any DMZ-side dependency on the
 internal-only secret-handling crates so the matrix above is
@@ -1102,10 +1111,9 @@ accepted as a valid internal-node link:
    link.
 2. **Application-level PSK challenge–response.** The DMZ sends a
    32-byte random nonce; the internal node returns
-   HMAC-SHA-256(psk_key, nonce ‖ cluster_id ‖ node_id) plus an
+   HMAC-SHA-256(psk*key, nonce ‖ cluster_id ‖ node_id) plus an
    `AuthHello` frame. PSKs are configured per-id
-   (`STRATA_DMZ_LINK_PSK_<id>=<base64>` on the internal node;
-   `STRATA_DMZ_LINK_PSKS=id:b64,id2:b64` on the DMZ — first active,
+   (`STRATA_DMZ_LINK_PSK*<id>=<base64>`on the internal node;`STRATA_DMZ_LINK_PSKS=id:b64,id2:b64` on the DMZ — first active,
    rest accepted). A stolen mTLS cert without the matching PSK fails
    the handshake.
 3. **Cluster-id pinning.** The DMZ rejects internal-node handshakes
@@ -1138,13 +1146,13 @@ Properties:
 
 ### Threat model (W6 series)
 
-| ID | Threat | Mitigation |
-| --- | --- | --- |
-| **W6-1** | RCE on the DMZ host. | DMZ holds no Strata business secrets (matrix above). Attacker can drop / observe transit traffic but cannot read or forge sessions; sessions remain bound to the internal node's JWT signing key. |
-| **W6-2** | Stolen public-internet TLS cert. | Public cert is valuable only for impersonating the public surface; it does **not** authenticate on the link path. The link path requires the link-mTLS cert + PSK. |
+| ID       | Threat                                              | Mitigation                                                                                                                                                                                                                                                                                                                                                   |
+| -------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **W6-1** | RCE on the DMZ host.                                | DMZ holds no Strata business secrets (matrix above). Attacker can drop / observe transit traffic but cannot read or forge sessions; sessions remain bound to the internal node's JWT signing key.                                                                                                                                                            |
+| **W6-2** | Stolen public-internet TLS cert.                    | Public cert is valuable only for impersonating the public surface; it does **not** authenticate on the link path. The link path requires the link-mTLS cert + PSK.                                                                                                                                                                                           |
 | **W6-3** | Compromised DMZ floods backend with bogus requests. | Internal-side admin can `POST /api/admin/dmz-links/reconnect` to drop every link; if a single DMZ peer is hostile its mTLS cert can be removed from the trust list and the link refused on next connect. Per-IP rate limit + inflight cap on the DMZ side limit the public-surface amplification. (Backlog: per-link request-rate cap on the internal side.) |
-| **W6-4** | Replay of edge-HMAC headers. | ±60 s timestamp window, request-id is unique-per-request and enters the audit log; replay attempts are visible in `audit_logs`. |
-| **W6-5** | Stolen PSK / edge-HMAC key. | Both are rotation-aware. PSKs are per-id so multiple keys can be active simultaneously; HMAC keys are a comma-separated list with first active and rest accepted. Rotation runbook: `docs/runbooks/dmz-incident.md`. |
+| **W6-4** | Replay of edge-HMAC headers.                        | ±60 s timestamp window, request-id is unique-per-request and enters the audit log; replay attempts are visible in `audit_logs`.                                                                                                                                                                                                                              |
+| **W6-5** | Stolen PSK / edge-HMAC key.                         | Both are rotation-aware. PSKs are per-id so multiple keys can be active simultaneously; HMAC keys are a comma-separated list with first active and rest accepted. Rotation runbook: `docs/runbooks/dmz-incident.md`.                                                                                                                                         |
 
 ### Auditable surface
 
@@ -1180,6 +1188,62 @@ Both binaries fail closed on missing or malformed link material:
 - Both PSK and HMAC keys are validated to be base64 ≥ 32 bytes
   on parse; shorter keys produce `Malformed` config errors at startup
   rather than weak runtime crypto.
+
+### WebSocket forwarding via Extended CONNECT (v1.5.2+)
+
+In v1.5.0 and v1.5.1 the DMZ proxy buffered REST request/response
+pairs only — `Upgrade` headers were stripped on the public listener
+and the inner h2 multiplexer had no upgrade-aware code path. Any
+user who connected to the DMZ node and tried to launch a session
+saw the WebSocket fail mid-handshake. v1.5.2 closes that gap with
+**RFC 8441 Extended CONNECT** over the link's HTTP/2 connection.
+The trust-boundary properties of this WebSocket forwarding path
+deliberately mirror the REST path so the DMZ matrix above continues
+to hold:
+
+- **No new secrets on the DMZ.** The h2 link is the same mTLS-plus-PSK
+  channel used for REST. The WebSocket upgrade adds no new key
+  material on the DMZ side and does not require any change to
+  `STRATA_DMZ_LINK_*` configuration.
+- **`x-strata-edge-*` re-verified on the inner request.** The
+  loopback HTTP/1.1 GET emitted by `LoopbackUpgradeHandler` carries
+  the same signed edge-header bundle as the original public request.
+  The internal node's `verify_edge_headers` middleware runs
+  unchanged on the inner request and **strips any
+  `x-strata-edge-*` headers without a valid HMAC** — the audit-log
+  client IP for a DMZ-routed session is therefore still the value
+  the DMZ asserted under HMAC, identical to the REST path.
+- **Bytes-transparent on the DMZ.** The DMZ never inspects WebSocket
+  frame payloads, never parses Guacamole protocol, never decrypts
+  credentials, and never sees the `guac-master-key`. A bidirectional
+  byte-pump copies frames between the public TCP socket and the h2
+  stream; masking, ping/pong, fragmentation, and close frames flow
+  through unmodified. RCE on the DMZ host yields the ability to
+  drop or observe ciphertext-on-the-wire, never the ability to read
+  or forge sessions.
+- **No new internal egress.** The `LoopbackUpgradeHandler` connects
+  only to `127.0.0.1:8080` (configurable via `STRATA_DMZ_LOOPBACK_ADDR`
+  for non-default deployments). The DMZ never originates outbound
+  TCP to anything other than the link itself.
+- **Memory amplification cap.** WebSocket streams are long-lived and
+  cannot be size-capped by the existing `MAX_REQUEST_BODY_BYTES` /
+  `MAX_PROXY_BODY_BYTES` buffers used on the REST path. Instead the
+  DMZ→public direction caps individual h2 frames at 8 MiB so a
+  misbehaving (or RCE'd) internal node cannot make the DMZ buffer
+  arbitrary memory before flushing to the public socket. h2
+  flow-control windows are honoured in both directions; back-pressure
+  from a slow public client transparently slows upstream guacd
+  traffic via `RecvStream::release_capacity()` calls on the link.
+- **guacd connection origin unchanged.** The TCP connection to
+  `guacd:4822` is initiated by the **internal** node, exactly as in
+  a single-node deployment. Target hosts see the internal node's IP,
+  never the DMZ node's IP. This is a deliberate architectural
+  property that v1.5.2 makes user-visible (rather than only true on
+  paper).
+- **Test coverage.** The `compute_accept` helper is unit-tested
+  against the RFC 6455 §1.3 worked example
+  (`dGhlIHNhbXBsZSBub25jZQ==` → `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`) so
+  a faulty SHA-1 / base64 implementation cannot ship silently.
 
 ---
 
@@ -1233,7 +1297,7 @@ operator-facing documentation.
   At spawn time the backend writes the PEM into a per-session NSS
   database under `<user-data-dir>/.pki/nssdb` via
   `certutil -N --empty-password` + `certutil -A -d sql:<dir> -n <label>
-  -t "C,," -i <pem>` (provided by the `libnss3-tools` apt package,
+-t "C,," -i <pem>` (provided by the `libnss3-tools` apt package,
   baked into the backend image). **As of v1.3.0** the kiosk spawner
   also sets `HOME=<user_data_dir>` on the Chromium child process
   because Chromium on Linux resolves the NSS trust-store path relative
@@ -1246,7 +1310,7 @@ operator-facing documentation.
   DB lives inside the ephemeral profile dir and is destroyed with it
   by the eviction-on-disconnect path (see "Kiosk lifecycle" below).
   The PEM holds certificate chains (signatures over public keys), so
-  it is treated as **public material** and is *not* envelope-encrypted
+  it is treated as **public material** and is _not_ envelope-encrypted
   via Vault — read access to the PEM column requires
   `can_manage_system`. The dropdown for non-admin users
   (`GET /api/user/trusted-cas`) returns only `{id, name, subject}`
@@ -1259,8 +1323,8 @@ operator-facing documentation.
 - **Sandbox semantics — `--no-sandbox` + `--test-type` (v1.3.0).**
   The kiosk runs as root inside the backend container, so the
   spawner has always had to pass `--no-sandbox`; v1.3.0 also passes
-  `--test-type` to suppress the resulting *"You are using an
-  unsupported command-line flag…"* yellow infobar (and a handful of
+  `--test-type` to suppress the resulting _"You are using an
+  unsupported command-line flag…"_ yellow infobar (and a handful of
   other end-user prompts that have no meaning inside a single-tab
   kiosk). **`--test-type` does not disable the sandbox.** Rendering,
   network stack, mojo IPC, JIT, and origin isolation are unchanged.

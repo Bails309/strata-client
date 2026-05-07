@@ -5,6 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] — 2026-05-08
+
+### Admin Settings — grouped sidebar navigation
+
+v1.5.3 is a focused, **UX-only** patch release. There are no API
+changes, no database migrations, no protocol changes, no security
+changes, and no behavioural changes to any session, audit, or
+deployment code path. Operators upgrading from v1.5.2 only need to
+roll the **frontend** image; the backend, DMZ edge, and guacd
+images are bit-identical to v1.5.2.
+
+#### What changed
+
+The Admin Settings page accumulated 17 horizontal tabs as features
+were added across the v1.4.x → v1.5.x line (Health, Display,
+Network, SSO / OIDC, Kerberos, Vault, Recordings, Access, Tags,
+AD Sync, Password Mgmt, Notifications, Sessions, VDI, Trusted CAs,
+DMZ Links, Security). On a 1080p monitor the row no longer fit in a
+single line on common DPI / zoom settings; on operator laptops it
+overflowed horizontally and required scrolling to reach the
+right-hand tabs.
+
+v1.5.3 replaces the single horizontal row with a **left sidebar**
+grouped into five sections, modelled on the navigation patterns used
+by AWS Console, Azure Portal, and GitHub Settings:
+
+- **Overview** — Health, Sessions
+- **Identity & Access** — Access, AD Sync, SSO / OIDC, Kerberos, Password Mgmt
+- **Connectivity** — Network, DMZ Links, Trusted CAs, VDI
+- **Workspace** — Display, Tags, Notifications, Recordings
+- **Secrets & Security** — Vault, Security
+
+#### Behaviour
+
+- **Permission-aware section collapse** — sections become hidden
+  from the nav entirely when the current user has no permission to
+  see any item inside them, so a non-system-admin who can only
+  manage tags or view sessions sees a much smaller sidebar than a
+  full system administrator. The per-item permission predicates
+  (`can_manage_system`, `can_manage_users`, `can_manage_connections`,
+  `can_create_*`, `can_view_audit_logs`, `can_manage_system ||
+can_view_audit_logs` for Sessions, etc.) are unchanged from v1.5.2;
+  only the grouping and rendering changed.
+- **Responsive layout** — on screens narrower than the Tailwind
+  `lg` breakpoint (1024 px) the sidebar wraps inline above the
+  content as a horizontal flex row of buttons, so mobile and tablet
+  operators get the same content without a forced two-pane layout.
+- **Sticky sidebar** on `lg+` screens so the section list stays in
+  view while scrolling long settings panels (the Recordings tab,
+  the Notifications SMTP section, and the Access Control role
+  editor are all longer than a typical viewport).
+- **Accessibility** — the nav element has `aria-label="Admin
+sections"` and section headings render as visually-distinct
+  uppercase tracking-wider labels rather than `<h*>` elements (so
+  the page heading hierarchy is unchanged from v1.5.2 and screen
+  readers still see one `<h1>` for the page).
+
+#### What did **not** change
+
+- All 17 tab labels are byte-identical to v1.5.2 (Sessions, DMZ
+  Links, Trusted CAs, Password Mgmt, etc.).
+- The `.tab-active` CSS class is still applied to the currently-
+  selected button, so existing styling, themes, and the 220-test
+  AdminSettings unit-test suite continue to pass unchanged.
+- The `Tab` union type, the per-tab `<TabPane>` components, the
+  in-page `flash()` toast, the `getSettings()` / `getRoles()` /
+  `getConnections()` / `getConnectionFolders()` / `getUsers()` /
+  `getAdSyncConfigs()` initial-load logic, and the per-tab
+  `onSave={() => flash(…)}` wiring are all unchanged.
+- The default-tab heuristic (system admins land on Health, RBAC
+  admins on Access, audit-only viewers on Sessions) is unchanged.
+
+#### Tests
+
+All 1329 frontend tests continue to pass (`npm run test -- --run`).
+220 of those tests are in `src/__tests__/AdminSettings.test.tsx`
+and exercise tab-switching by clicking the visible tab labels —
+because the labels and the `.tab-active` class are preserved, no
+test changes were required.
+
+#### Upgrade
+
+Drop-in. Pull `ghcr.io/bails309/strata-client/frontend:1.5.3`,
+roll the frontend container. The backend, DMZ, and guacd images
+do not need to be touched — this is a static-asset change only.
+
+```bash
+export STRATA_VERSION=1.5.3
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull frontend
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d frontend
+```
+
+If you build from source, the unified `docker compose up -d --build`
+will rebuild the frontend layer only (the Cargo dep tree is
+unchanged from v1.5.2 so the backend / DMZ stages hit the cargo
+cache). The `__APP_VERSION__` Vite define automatically picks up
+the new version from `frontend/package.json`, which drives both the
+Admin → Health version banner and the **What's New** modal trigger
+(operators will see the modal pop up once on next login).
+
 ## [1.5.2] — 2026-05-08
 
 ### DMZ link — WebSocket forwarding (RFC 8441 Extended CONNECT)

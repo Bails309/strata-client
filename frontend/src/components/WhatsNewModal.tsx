@@ -29,6 +29,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.5.1",
+    subtitle:
+      "Pop-out window correctness fix release — F11 / F12, popup-local Ctrl+K Command Palette, clean teardown when the opener navigates away",
+    sections: [
+      {
+        title: "F11 fullscreen and F12 now behave correctly inside pop-out windows",
+        description:
+          "Previously the pop-out's keydown trap was registered after the Guacamole.Keyboard capture-phase listener, so F11 was forwarded to the remote desktop as a keystroke instead of toggling the popup's local fullscreen, and F12 either opened DevTools or leaked a key release into the remote (where it would 'stick' until the next F12 press). Registration order is now fixed in frontend/src/components/usePopOut.ts: the trap installs before new Guacamole.Keyboard(popup.document), F11 toggles popup.document.fullscreenElement and is consumed before Guacamole sees it, F12 is preventDefault'd locally, and Ctrl+Shift+I / Ctrl+Shift+J are forwarded to the popup's own DevTools the same way.",
+      },
+      {
+        title: "Ctrl+K now opens a popup-local Command Palette",
+        description:
+          "The main window's React-rooted Command Palette cannot render inside a pop-out window — different Window object, no React root, no router context. The new frontend/src/utils/popoutPalette.ts is a deliberately small vanilla-DOM palette rendered directly in the popup's document: dimmed backdrop, search input, filterable connection list styled to match the main palette. It fetches the user's connections lazily via the existing getMyConnections() and posts the chosen connection back to the opener as { type: 'strata:open-connection', id }. The opener's CommandPaletteProvider validates the id (typeof === 'string', length 1–255) and navigates to /session/${encodeURIComponent(id)}, reusing the existing routed-launch flow. Filter matches name / hostname / protocol (case-insensitive substring); arrow keys cycle with wrap-around; Enter activates; Escape closes; mousedown on a row activates; mousedown on the dimmed backdrop closes.",
+      },
+      {
+        title: "No race with Guacamole's capture-phase keyboard listener",
+        description:
+          "The popup palette intentionally does NOT register its own document keydown listener — doing so would race against the Guacamole.Keyboard capture-phase listener that the popout already installs on popup.document. Instead the popup's existing trapKeyDown delegates to popoutPalette.handleKeyDown(e). While the palette is open the trap returns true from Guacamole.Keyboard.onkeydown (the contract is inverted: returning true means 'do not preventDefault') and onkeyup early-returns, so the <input> element receives typed characters normally and Guacamole never sees palette keys.",
+      },
+      {
+        title: "Pop-out windows close cleanly when the opener navigates away",
+        description:
+          "A freeze in the opener — page reload, hard navigation, tab close — used to leave orphaned pop-out windows that could no longer talk to a parent JS realm. The opener now installs a pagehide handler that calls popup.close() for every tracked pop-out, mirroring what the per-session disconnect button already did.",
+      },
+      {
+        title: "Coverage ratchet held in lock-step",
+        description:
+          "A new 19-test unit suite at frontend/src/__tests__/popoutPalette.test.ts drives the new vanilla-DOM palette to 95.07% statements, 88.57% branches, 100% functions, 98.47% lines. Global thresholds in frontend/vitest.config.ts are unchanged; the suite restores the global numbers that the new untested file would otherwise have dragged below the floor (statements 72.47, branches 64.38, functions 62.26, lines 74.38). All 1 329 frontend tests still pass; lint stays at zero warnings on the changed files.",
+      },
+      {
+        title: "Drop-in upgrade from v1.5.0",
+        description:
+          "No database migrations, no /api/* contract changes, no config.toml or environment-variable changes. strata:open-connection is a same-origin postMessage event between the opener and its own pop-out window, not a public protocol. DMZ deployment mode is unaffected — pop-out windows are an in-browser concern and the link supervisor / edge-header HMAC paths are unchanged. Rebuild and roll: docker compose pull && docker compose up -d. Operators running the DMZ split should roll the internal node first and the DMZ edge second; the order is informational, not strictly required for v1.5.1.",
+      },
+    ],
+  },
+  {
     version: "1.5.0",
     subtitle:
       "DMZ deployment mode — split-topology release with a separate edge binary, HTTP/2-over-mTLS reverse tunnel, and zero-secret-overlap with the internal node",

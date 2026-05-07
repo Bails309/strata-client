@@ -659,6 +659,50 @@ integrity guarantees described in
 [security.md → Audit Trail](security.md#audit-trail) apply uniformly to
 this stream.
 
+### Pop-out Command Palette (v1.5.1)
+
+When a session is detached into its own pop-out window the main
+React-rooted Command Palette cannot render — the popup has its own
+`Window`, no React root, and no router context. Pressing `Ctrl+K`
+inside a pop-out instead opens a deliberately small **vanilla-DOM
+palette** rendered directly in the popup's `document`
+([`frontend/src/utils/popoutPalette.ts`](../frontend/src/utils/popoutPalette.ts)):
+dimmed backdrop, search input, filterable connection list. It fetches
+the user's connections lazily through the existing
+`getMyConnections()` (the popup is `about:blank`, opened by
+`window.open()` from the same origin, so it shares the opener's JS
+realm and cookies — no second auth round-trip) and posts the chosen
+connection back to the opener as a same-origin `postMessage`:
+
+```js
+opener.postMessage({ type: "strata:open-connection", id }, opener.location.origin);
+```
+
+The opener's [`CommandPaletteProvider`](../frontend/src/components/CommandPaletteProvider.tsx)
+validates the id (`typeof === "string"`, length 1–255) and navigates
+to `/session/${encodeURIComponent(id)}`, reusing the existing
+routed-launch flow. The palette intentionally does **not** register
+its own document keydown listener — doing so would race against the
+`Guacamole.Keyboard` capture-phase listener that the pop-out already
+installs on `popup.document`. Instead the popup's existing
+`trapKeyDown` (registered _before_ `new Guacamole.Keyboard(popup.document)`)
+delegates to `popoutPalette.handleKeyDown(e)`. While the palette is
+open the trap returns `true` from `Guacamole.Keyboard.onkeydown` —
+the contract is inverted: returning `true` means "do not
+`preventDefault`", so the `<input>` element receives typed characters
+normally — and `onkeyup` early-returns. Filter matches against
+`name`, `hostname`, and `protocol` (case-insensitive substring);
+arrow keys cycle with wrap-around; Enter activates; Escape closes;
+mousedown on a row activates; mousedown on the dimmed backdrop
+closes.
+
+The same registration-order fix (trap before `Guacamole.Keyboard`)
+makes `F11` toggle the pop-out's local fullscreen and `F12`
+preventDefault locally instead of forwarding to the remote desktop.
+A `pagehide` handler on the opener calls `popup.close()` for every
+tracked pop-out so an opener crash / hard navigation no longer leaves
+orphaned pop-out windows.
+
 ## Database Schema
 
 ```

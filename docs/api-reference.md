@@ -1419,6 +1419,58 @@ Delete a file. Requires authentication and ownership (only the uploader can dele
 
 ---
 
+## Same-origin `postMessage` Protocols (browser-internal)
+
+The frontend uses a small set of same-origin `window.postMessage`
+events to coordinate between the main React-rooted SPA and detached
+**pop-out windows**. These are not public network APIs — every
+listener strictly enforces `event.origin === window.location.origin`
+— but they are documented here for completeness because they
+participate in the user-visible launch flow.
+
+### `strata:open-command-palette` (opener → popup or popup → opener)
+
+Asks the receiving window to open its Command Palette. Used both
+when the opener wants to surface the palette inside the active
+pop-out (so the user can search for the next connection without
+returning to the main window) and when a pop-out's `Ctrl+K` arrives
+in the opener via the popup-local Command Palette path.
+
+```json
+{ "type": "strata:open-command-palette" }
+```
+
+The opener-side handler in
+[`CommandPaletteProvider.tsx`](../frontend/src/components/CommandPaletteProvider.tsx)
+calls `setOpen(true)` on receipt; no other payload fields are
+read. Unknown additional fields are ignored.
+
+### `strata:open-connection` (popup → opener) (v1.5.1)
+
+Sent by the **popup-local Command Palette**
+([`frontend/src/utils/popoutPalette.ts`](../frontend/src/utils/popoutPalette.ts))
+when the user picks a connection from the pop-out's `Ctrl+K`
+overlay. The opener navigates to the chosen connection using the
+existing routed-launch flow.
+
+```json
+{ "type": "strata:open-connection", "id": "<connection-uuid>" }
+```
+
+| Field  | Rule                                                                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------- |
+| `type` | Must equal the literal string `strata:open-connection`. Any other value is dropped silently.                        |
+| `id`   | `typeof === "string"`, length 1–255 inclusive. Wrapped in `encodeURIComponent` before being interpolated into `/session/${id}` so reserved URL characters cannot break out of the route segment. |
+
+The opener does **not** trust the id — `getConnection(id)` and the
+subsequent WebSocket upgrade re-check the user's RBAC against the
+connection. The `postMessage` channel adds zero authority; it is a
+courier, not a permission grant. See
+[security.md → Pop-out Window `postMessage` Protocol](security.md#pop-out-window-postmessage-protocol-v151)
+for the full threat model.
+
+---
+
 ## Error Responses
 
 All errors follow this format:

@@ -3,21 +3,35 @@
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
 import { useCallback, useEffect, useState } from "react";
-import { MetricsSummary, ServiceHealth, getMetrics, getServiceHealth } from "../../api";
+import {
+  CertificatesResponse,
+  CertificateEntry,
+  MetricsSummary,
+  ServiceHealth,
+  getCertificates,
+  getMetrics,
+  getServiceHealth,
+} from "../../api";
 
 export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
+  const [certs, setCerts] = useState<CertificatesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [countdown, setCountdown] = useState(60);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
-    Promise.all([getServiceHealth().catch(() => null), getMetrics().catch(() => null)])
-      .then(([h, m]) => {
+    Promise.all([
+      getServiceHealth().catch(() => null),
+      getMetrics().catch(() => null),
+      getCertificates().catch(() => null),
+    ])
+      .then(([h, m, c]) => {
         setHealth(h);
         setMetrics(m);
+        setCerts(c);
         setLastChecked(new Date());
         setCountdown(60);
       })
@@ -496,12 +510,140 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
         </div>
       </div>
 
+      {/* Certificates */}
+      <CertificatesSection certs={certs} />
+
       {/* Last Checked */}
       {lastChecked && (
         <p className="text-right text-[0.65rem] text-txt-tertiary">
           Last Checked: {lastChecked.toLocaleDateString("en-GB")},{" "}
           {lastChecked.toLocaleTimeString("en-GB")}
         </p>
+      )}
+    </div>
+  );
+}
+
+// ── Certificates panel ────────────────────────────────────────────────
+// Shows lifespan/validity of every cert the backend can see (public TLS,
+// DMZ link mTLS, internal client mTLS, CAs). Sorted soonest-to-expire
+// first so urgency is obvious without filtering.
+function CertificatesSection({ certs }: { certs: CertificatesResponse | null }) {
+  if (!certs) {
+    return null;
+  }
+  if (certs.certificates.length === 0 && certs.errors.length === 0) {
+    return null;
+  }
+
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString("en-GB");
+  };
+  const statusFor = (c: CertificateEntry): { label: string; cls: string } => {
+    if (c.expired) return { label: "Expired", cls: "badge-error" };
+    if (c.days_remaining <= 14) return { label: "Expiring", cls: "badge-warning" };
+    if (c.days_remaining <= 30) return { label: "Renew Soon", cls: "badge-warning" };
+    return { label: "Valid", cls: "badge-success" };
+  };
+
+  return (
+    <div
+      className="rounded-xl p-5"
+      style={{
+        background: "var(--color-surface-secondary)",
+        border: "1px solid var(--color-glass-border)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)",
+      }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Certificates</h3>
+          <p className="text-xs text-txt-tertiary">
+            TLS material in use across the public listener and DMZ link.
+          </p>
+        </div>
+        <span className="text-[0.65rem] text-txt-tertiary">
+          {certs.certificates.length} cert{certs.certificates.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      {certs.certificates.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr className="text-txt-tertiary text-[0.65rem] uppercase tracking-wider">
+                <th className="text-left py-2 pr-3 font-semibold">Source</th>
+                <th className="text-left py-2 pr-3 font-semibold">Category</th>
+                <th className="text-left py-2 pr-3 font-semibold">Subject</th>
+                <th className="text-left py-2 pr-3 font-semibold">Issuer</th>
+                <th className="text-left py-2 pr-3 font-semibold">Valid From</th>
+                <th className="text-left py-2 pr-3 font-semibold">Expires</th>
+                <th className="text-left py-2 pr-3 font-semibold">Days</th>
+                <th className="text-left py-2 font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {certs.certificates.map((c) => {
+                const st = statusFor(c);
+                const sanTitle = c.san.length > 0 ? `SAN: ${c.san.join(", ")}` : undefined;
+                return (
+                  <tr
+                    key={`${c.source}-${c.fingerprint}`}
+                    className="border-t border-[var(--color-glass-border)]"
+                  >
+                    <td className="py-2 pr-3 font-mono text-txt-secondary" title={c.fingerprint}>
+                      {c.source}
+                    </td>
+                    <td className="py-2 pr-3 text-txt-secondary">
+                      {c.category}
+                      {c.is_ca && (
+                        <span className="ml-1 text-[0.6rem] text-txt-tertiary">(CA)</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-txt-primary" title={sanTitle}>
+                      {c.subject}
+                      {c.san.length > 0 && (
+                        <span className="ml-1 text-[0.6rem] text-txt-tertiary">
+                          +{c.san.length} SAN
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-txt-secondary">{c.issuer}</td>
+                    <td className="py-2 pr-3 font-mono text-txt-secondary">
+                      {fmtDate(c.not_before)}
+                    </td>
+                    <td className="py-2 pr-3 font-mono text-txt-secondary">
+                      {fmtDate(c.not_after)}
+                    </td>
+                    <td
+                      className={`py-2 pr-3 font-mono ${c.expired || c.days_remaining <= 14 ? "text-danger" : c.days_remaining <= 30 ? "text-yellow-400" : "text-txt-secondary"}`}
+                    >
+                      {c.days_remaining}
+                    </td>
+                    <td className="py-2">
+                      <span className={`badge ${st.cls}`}>{st.label}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {certs.errors.length > 0 && (
+        <div className="mt-3 text-[0.65rem] text-txt-tertiary">
+          <p className="mb-1 font-semibold">Unparseable files:</p>
+          <ul className="list-disc list-inside">
+            {certs.errors.map((e) => (
+              <li key={e.source}>
+                <span className="font-mono">{e.source}</span> — {e.error}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

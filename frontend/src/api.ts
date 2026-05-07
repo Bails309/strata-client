@@ -812,6 +812,34 @@ export interface ServiceHealth {
 
 export const getServiceHealth = () => request<ServiceHealth>("/admin/health");
 
+// ── Certificates ────────────────────────────────────────────────────
+
+export interface CertificateEntry {
+  source: string;
+  category: string;
+  subject: string;
+  issuer: string;
+  san: string[];
+  not_before: string;
+  not_after: string;
+  days_remaining: number;
+  fingerprint: string;
+  expired: boolean;
+  is_ca: boolean;
+}
+
+export interface CertificateError {
+  source: string;
+  error: string;
+}
+
+export interface CertificatesResponse {
+  certificates: CertificateEntry[];
+  errors: CertificateError[];
+}
+
+export const getCertificates = () => request<CertificatesResponse>("/admin/certs");
+
 // ── Roles ───────────────────────────────────────────────────────────
 
 export interface Role {

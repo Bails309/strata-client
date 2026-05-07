@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod certs;
 pub mod files;
 pub mod health;
 pub mod notifications;
@@ -107,6 +108,7 @@ pub fn build_router(state: SharedState) -> Router {
             get(notifications::list_deliveries),
         )
         .route("/api/admin/health", get(health::service_health))
+        .route("/api/admin/certs", get(certs::list_certs))
         .route(
             "/api/admin/roles",
             get(admin::list_roles).post(admin::create_role),

@@ -388,9 +388,7 @@ fn write_forwarded_headers(buf: &mut Vec<u8>, headers: &HeaderMap) {
 /// Read until CRLFCRLF, parse the status line and headers, return
 /// `(status, headers, leftover)` where `leftover` is any bytes
 /// captured past the header terminator.
-async fn read_http1_response_head(
-    tcp: &mut TcpStream,
-) -> anyhow::Result<(u16, HeaderMap, Bytes)> {
+async fn read_http1_response_head(tcp: &mut TcpStream) -> anyhow::Result<(u16, HeaderMap, Bytes)> {
     let mut acc: Vec<u8> = Vec::with_capacity(2048);
     let mut tmp = [0u8; 2048];
     loop {

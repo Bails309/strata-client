@@ -273,7 +273,7 @@ pub async fn login(
             IP_WINDOW_SECS,
             MAX_RATE_LIMIT_ENTRIES,
         ) {
-            return Err(AppError::Auth(
+            return Err(AppError::RateLimited(
                 "Too many login attempts from this address. Please try again later.".into(),
             ));
         }
@@ -289,7 +289,7 @@ pub async fn login(
             WINDOW_SECS,
             MAX_RATE_LIMIT_ENTRIES,
         ) {
-            return Err(AppError::Auth(
+            return Err(AppError::RateLimited(
                 "Too many login attempts. Please try again later.".into(),
             ));
         }

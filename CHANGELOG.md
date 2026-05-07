@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Fixed
 
 - **`backend/src/routes/user.rs`** — replaced `body.checkout_id.unwrap()` after a non-`None` guard with an explicit `.ok_or_else(...)` returning `AppError::Internal(...)`. The unwrap was logically reachable only via a TOCTOU between two reads of `body.checkout_id`, but the explicit error keeps the panic-free invariant the rest of the route enforces and surfaces a stable `INTERNAL` error code instead of a 500 with no body.
+- **`POST /api/tunnel/ticket`** now returns `404 NOT_FOUND` when an admin (or other privileged caller bypassing the role-access check) supplies a `connection_id` for a connection that does not exist or has been soft-deleted. Previously the privileged branch minted a ticket for any UUID, which masked client bugs and produced a "tunnel works for a moment" false-positive on the subsequent WebSocket upgrade.
+- **Login rate-limit responses** now correctly return `429 Too Many Requests` with the new `RATE_LIMITED` error code, instead of `401 UNAUTHORIZED`. Both the per-IP and per-username throttles are affected. `AppError::RateLimited(String)` is the new variant; clients that branched on the textual `"Too many login attempts"` message keep working but should migrate to the `code` field.
 
 #### Drop-in upgrade — no migrations, no API contract changes
 

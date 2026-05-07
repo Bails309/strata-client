@@ -145,6 +145,23 @@ pub async fn create_tunnel_ticket(
         if !has_access {
             return Err(AppError::Forbidden);
         }
+    } else {
+        // Even privileged users may not mint tickets for connections that
+        // do not exist (or have been soft-deleted). Without this check
+        // an admin could trigger a tunnel WebSocket attempt against a
+        // bogus UUID and get a generic 200 back, which masks client
+        // bugs and leaks "exists vs not" timing on the subsequent
+        // upgrade. The non-admin branch above is implicitly covered by
+        // user_has_role_access (no row → no access → 403).
+        let exists = crate::services::connections::fetch_tunnel_details(
+            &db.pool,
+            body.connection_id,
+        )
+        .await?
+        .is_some();
+        if !exists {
+            return Err(AppError::NotFound("connection not found".into()));
+        }
     }
 
     let ticket = tunnel_tickets::TunnelTicket {

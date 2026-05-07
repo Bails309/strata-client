@@ -32,6 +32,10 @@ pub enum ErrorCode {
     /// Strata is mid-installation; the requested route is unavailable
     /// until first-run setup completes.
     SetupRequired,
+    /// Caller has been throttled by a per-IP, per-user, or per-route
+    /// rate limiter. Clients should back off; the response is mapped
+    /// to HTTP 429 Too Many Requests.
+    RateLimited,
 }
 
 impl ErrorCode {
@@ -45,6 +49,7 @@ impl ErrorCode {
             Self::InvalidRequest => "INVALID_REQUEST",
             Self::NotFound => "NOT_FOUND",
             Self::SetupRequired => "SETUP_REQUIRED",
+            Self::RateLimited => "RATE_LIMITED",
         }
     }
 }
@@ -77,6 +82,9 @@ pub enum AppError {
 
     #[error("Setup required")]
     SetupRequired,
+
+    #[error("{0}")]
+    RateLimited(String),
 
     #[error("{0}")]
     Internal(String),
@@ -127,6 +135,11 @@ pub fn error_status_and_message(err: &AppError) -> (StatusCode, ErrorCode, Strin
             StatusCode::SERVICE_UNAVAILABLE,
             ErrorCode::SetupRequired,
             "Setup required".into(),
+        ),
+        AppError::RateLimited(msg) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::RateLimited,
+            msg.clone(),
         ),
         AppError::Internal(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -437,6 +450,7 @@ mod tests {
         assert_eq!(ErrorCode::InvalidRequest.as_str(), "INVALID_REQUEST");
         assert_eq!(ErrorCode::NotFound.as_str(), "NOT_FOUND");
         assert_eq!(ErrorCode::SetupRequired.as_str(), "SETUP_REQUIRED");
+        assert_eq!(ErrorCode::RateLimited.as_str(), "RATE_LIMITED");
     }
 
     #[test]
@@ -453,6 +467,7 @@ mod tests {
             (AppError::NotFound("x".into()), ErrorCode::NotFound),
             (AppError::Forbidden, ErrorCode::Forbidden),
             (AppError::SetupRequired, ErrorCode::SetupRequired),
+            (AppError::RateLimited("x".into()), ErrorCode::RateLimited),
             (AppError::Internal("x".into()), ErrorCode::Internal),
         ];
         for (err, expected) in cases {

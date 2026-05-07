@@ -40,7 +40,7 @@ test.describe('Security headers & rate-limits', () => {
     // counter and cause flakes in the auth.spec.ts tests that share state.
     const username = `ratelimit_probe_${Date.now()}`;
     let saw429 = false;
-    for (let i = 0; i < 20 && !saw429; i++) {
+    for (let i = 0; i < 20; i++) {
       const res = await request.post('/api/auth/login', {
         data: { username, password: 'definitely-wrong' },
         failOnStatusCode: false,

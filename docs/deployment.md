@@ -1080,8 +1080,16 @@ For evaluation, the repo ships a test-cert generator:
 ```bash
 git clone <repo-url> strata-client
 cd strata-client
-./scripts/dmz/gen-test-certs.sh    # writes ./certs/dmz/{ca,server,client,public}.{crt,key}
+
+# For single-host A.1–A.6 walkthroughs (defaults are enough):
+./scripts/dmz/gen-test-certs.sh
+
+# For A.7 two-host deployments, add the public hostname the internal
+# node will dial so it appears in the link cert's SAN:
+EXTRA_SERVER_SANS=strata-edge.example.com ./scripts/dmz/gen-test-certs.sh
 ```
+
+The script writes `./certs/dmz/{ca,server,client,public}.{crt,key}`.
 
 > **Container UIDs and key permissions.** The two containers that read
 > `certs/dmz/` run as different non-root users:
@@ -1110,6 +1118,16 @@ cd strata-client
 > If you skip this step the affected container crash-loops with
 > `Permission denied (os error 13)` while reading `server.key` (DMZ
 > host) or `client.key` (internal host).
+>
+> **Link cert SAN must match `STRATA_DMZ_ENDPOINTS`.** The internal
+> node uses the hostname from `STRATA_DMZ_ENDPOINTS` as the TLS SNI,
+> and rustls rejects the connection with
+> `certificate not valid for name "<host>"` if that hostname isn't
+> in `server.crt`'s SAN. The test-cert generator's defaults cover
+> the docker service name; for a two-host A.7 deployment add your
+> public DMZ hostname via `EXTRA_SERVER_SANS=...` (see snippet
+> above) or supply your own operator-CA-issued cert with the right
+> SANs baked in.
 
 For **production**, replace those files with material from your
 operator-controlled CA. The link server cert MUST have a SAN matching

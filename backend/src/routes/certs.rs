@@ -9,6 +9,7 @@
 //!      `STRATA_DMZ_LINK_CA_BUNDLE`, `STRATA_DMZ_PUBLIC_TLS_CERT`).
 //!   2. Recursive scan of `STRATA_CERT_DIR` (defaults to
 //!      `/etc/strata/certs`) for `*.crt` / `*.pem` files.
+//!
 //! Duplicates (same canonical path) are de-duplicated; private keys
 //! and unparseable files are silently skipped (with a warning trace).
 //!

@@ -66,6 +66,29 @@ jobs:
         # (backend + strata-protocol + strata-dmz).
         run: cargo audit -f ../Cargo.lock --deny unsound --deny unmaintained
 
+      # cargo-audit only catches RUSTSEC IDs. cargo-deny adds:
+      #   • License allow-list — block GPL/AGPL/non-SPDX licenses
+      #     before they end up in a release artefact (Apache-2.0
+      #     project, see deny.toml).
+      #   • Banned-crate list — enforce the rustls-only TLS policy
+      #     by failing the gate if `openssl` / `native-tls` enters
+      #     the dep tree via a transitive bump.
+      #   • Source allow-list — refuse to build against unknown
+      #     registries or arbitrary git forks.
+      # Config lives at repo-root deny.toml.
+      - name: Cache cargo-deny binary
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-bin
+      - name: Install cargo-deny
+        run: |
+          if ! command -v cargo-deny >/dev/null 2>&1; then
+            cargo install cargo-deny --locked
+          fi
+      - name: Run cargo deny (licenses, bans, sources)
+        run: cargo deny --all-features check bans licenses sources
+
       # Node: npm advisory database
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -283,6 +306,23 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+
+      # Silent test deletion guard: Playwright happily passes when
+      # there are zero tests. Pin a floor so accidentally renaming a
+      # spec file or scoping a `.only()` to one block can't make the
+      # gate go green by erasing coverage. Bump this number whenever
+      # a new spec is intentionally added.
+      - name: Enforce E2E test count floor
+        working-directory: e2e
+        env:
+          E2E_TEST_FLOOR: '140'
+        run: |
+          COUNT=$(npx playwright test --list --reporter=json | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{const j=JSON.parse(s);const walk=(suites,n=0)=>suites.reduce((acc,su)=>acc+(su.specs?.length||0)+walk(su.suites||[],0),n);console.log(walk(j.suites||[]));})")
+          echo "Discovered $COUNT E2E tests (floor: $E2E_TEST_FLOOR)"
+          if [ "$COUNT" -lt "$E2E_TEST_FLOOR" ]; then
+            echo "ERROR: E2E test count $COUNT below floor $E2E_TEST_FLOOR — did a spec get accidentally deleted or scoped?"
+            exit 1
+          fi
 
       - name: Run E2E tests
         working-directory: e2e

@@ -38,6 +38,11 @@ function parseDN(dn: string): string {
   return domain ? `${domain}\\${cn}` : cn;
 }
 
+// Re-exported under a stable name purely so unit tests can import the
+// pure helper without rendering the full PasswordsTab component, which
+// pulls in heavy dependencies (Select, SettingsContext, ~20 API calls).
+export { parseDN as __parseDN };
+
 export default function PasswordsTab({
   users,
   adSyncConfigs,

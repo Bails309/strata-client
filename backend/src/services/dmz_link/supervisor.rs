@@ -467,6 +467,7 @@ mod tests {
             cfg(),
             connector,
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );
@@ -505,6 +506,7 @@ mod tests {
             cfg(),
             Arc::new(AlwaysFail),
             Arc::new(NullHandler),
+            Arc::new(super::super::upgrade_handler::RejectUpgradeHandler),
             reg.clone(),
             shutdown.clone(),
         );

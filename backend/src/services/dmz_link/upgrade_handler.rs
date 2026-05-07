@@ -72,6 +72,7 @@ pub trait UpgradeHandler: Send + Sync + 'static {
 /// Stub upgrade handler that rejects every Extended CONNECT stream
 /// with `503 Service Unavailable`. Used in tests and as the default
 /// when the operator has not opted into WebSocket bridging.
+#[allow(dead_code)]
 pub struct RejectUpgradeHandler;
 
 #[async_trait]

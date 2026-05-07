@@ -29,6 +29,144 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.6.0",
+    subtitle:
+      "Enterprise foundations — stable error codes, accessibility, i18n scaffold, and Kubernetes / API-lifecycle ops docs",
+    sections: [
+      {
+        title: "Stable error codes on every API response",
+        description:
+          "Every backend error now carries a stable `code` field alongside the human-readable `error` message — `INTERNAL`, `DEPENDENCY_UNAVAILABLE`, `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_REQUEST`, `NOT_FOUND`, `SETUP_REQUIRED`. Frontend and external integrators can branch on the code instead of regex-matching the prose, and the mapping is now part of the documented API contract (see new `docs/API-LIFECYCLE.md`). The existing `error` field is unchanged for backwards compatibility.",
+      },
+      {
+        title: "Skip-to-content link and focus-trapped confirm dialogs",
+        description:
+          "A skip link at the top of every page lets keyboard and screen-reader users jump past the persistent navigation rail directly to `<main>` (WCAG 2.4.1). Destructive-action confirmation dialogs (`ConfirmModal`) now trap focus inside the dialog while open and restore the previously-focused element on close (WCAG 2.4.3 / 2.1.2), via a new generic `useFocusTrap` hook reusable from any future modal.",
+      },
+      {
+        title: "Internationalisation scaffold (English baseline)",
+        description:
+          "`i18next` + `react-i18next` are now wired in with an English baseline locale (`common` and `login` namespaces), language detection from `localStorage` → browser → English fallback, and a `setLanguage()` helper ready for a future user-settings toggle. The Login page is the migrated exemplar so subsequent PRs can adopt the pattern incrementally instead of needing a single big-bang refactor.",
+      },
+      {
+        title: "API-lifecycle and Kubernetes deployment docs",
+        description:
+          "Two new operator-facing documents: `docs/API-LIFECYCLE.md` formalises the `/api/v1` versioning policy, support window, breaking-change definition, and `Deprecation`/`Sunset` headers per RFC 9745. `docs/deployment-kubernetes.md` covers production topology (backend stays at `replicas=1` because rate limits / settings cache / OIDC nonce cache / sessions are process-local), `ExternalSecrets` inventory, PVC sizing, ingress + `NetworkPolicy` YAML, split liveness/readiness probes, and a curated common-pitfalls section.",
+      },
+      {
+        title: "Hardened a panic-free invariant in the user routes",
+        description:
+          "Replaced an `unwrap()` after a non-`None` guard in the checkout-activation handler with an explicit error path that returns the new stable `INTERNAL` error code. Logically unreachable in normal flow, but the explicit handling keeps the panic-free guarantee the rest of the route enforces under concurrent or adversarial inputs.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API breakage",
+        description:
+          "No database migrations. The error response body gains a `code` field but the existing `error` field is unchanged, so v1.5.x clients keep working. Frontend bundle gains `i18next` + `react-i18next` (~30 KB gzipped). All four images (frontend, backend, DMZ edge, guacd) should be rolled together but each one is backwards-compatible with v1.5.5 peers during a rolling update.",
+      },
+    ],
+  },
+  {
+    version: "1.5.5",
+    subtitle:
+      "Security review — second-pass hardening across auth, race conditions, DMZ link channel, and background sweepers",
+    sections: [
+      {
+        title: "Auth — no more user enumeration via OIDC/SSO callbacks",
+        description:
+          "When the OIDC subject (or SAML/SSO email) does not match a provisioned user, the response is now the generic `Invalid or expired token` instead of including the offending claim, with the full claim only logged at debug. Closes a user-enumeration oracle reachable from any unauthenticated client that can reach the SSO callback URL. The `/auth/change-password` endpoint is also now rate-limited per user (5 attempts per hour) using the same mutex the login flow uses, so a stolen-cookie attacker can no longer brute-force the current password through the account-settings flow.",
+      },
+      {
+        title: "Auth — refresh-rotated JWTs are recorded in active_sessions",
+        description:
+          "The refresh handler now calls `active_sessions::record(...)` after minting a new access token, so the admin “active sessions” view reflects the post-rotation `jti` and the per-user signout flow correctly revokes it. Previously a long-running session that rotated tokens disappeared from the dashboard but stayed valid until the original `jti` expired naturally.",
+      },
+      {
+        title: "Auth — setup bootstrap-token check is constant-time on every path",
+        description:
+          "The previous short-circuit on empty input gave a measurable timing signal (`0` ns vs ~µs to compare). The new path always invokes `constant_time_eq` against a fixed-length expected value, so an attacker probing whether `STRATA_SETUP_TOKEN` is set sees identical timing for empty and non-empty input.",
+      },
+      {
+        title:
+          "LDAP filter validator — reject match-everything, control chars, oversize, deep nesting",
+        description:
+          "Replaced the legacy `validate_ldap_filter` with a stricter recursive-descent style validator. Caps total length at 2048 bytes and nesting depth at 32, rejects NUL and ASCII control characters, and explicitly refuses match-everything patterns (`(*)`, `(objectClass=*)`). Four new unit tests cover the new rejections; the original five tests still pass.",
+      },
+      {
+        title: "Race fix — activate_checkout no longer holds a row lock across LDAP + Vault IO",
+        description:
+          "The v1.5.4 fix used `SELECT … FOR UPDATE` which serialised concurrent activators correctly but blocked every other approver on the same row for as long as the AD password modify took (seconds in the slow case). The new flow uses a session-scoped `pg_try_advisory_lock` keyed on the checkout UUID for mutual exclusion, performs the LDAP and Vault calls with **no DB lock held**, and only opens a fresh short-lived transaction for the final UPDATE and audit write.",
+      },
+      {
+        title: "Share viewers — kicked when a share is revoked",
+        description:
+          "The viewer WebSocket now re-checks `find_active_by_token` every ~30 seconds inside the keepalive tick and closes the connection when the share row has been revoked, expired, or its underlying connection has been soft-deleted. Previously, revoke only prevented *new* viewers from joining — anyone already attached stayed attached for the rest of the owner's session.",
+      },
+      {
+        title:
+          "DMZ link channel — TLS resumption off, per-IP accept rate limit, h2 per-stream timeout",
+        description:
+          "TLS 1.3 session resumption is disabled on the link listener (`NoServerSessionStorage`, `send_tls13_tickets = 0`) — resumed handshakes do not re-present the client certificate, and for a private mTLS-only trust domain full handshake on every connect is the desired posture. The accept loop now sheds connections via the existing striped `PerIpRateLimiter` (default 5 rps, burst 30) **before** TLS handshake CPU spend. Regular HTTP/2 request handlers are wrapped in a 120 s timeout so a stalled handler cannot pin a stream slot indefinitely against `MAX_CONCURRENT_STREAMS`. WebSocket bridges are exempt; they own their own keepalive.",
+      },
+      {
+        title: "DMZ — loopback handler hardening, edge-signer charset, WebSocket version pin",
+        description:
+          "The loopback upgrade handler now asserts its target is a loopback address at construction (crashes the process on misconfiguration rather than silently proxying to a public IP), and rejects HTTP/1.1 request paths and Host headers containing CR/LF/NUL before the request line is concatenated. The edge-signer `x-request-id` filter narrows from any printable ASCII to `[A-Za-z0-9_-]` only — the value is MACed by the edge and trusted verbatim by the backend, and the wider character set let a public client smuggle log-field separators (`=`, `,`, `;`, ` `) into the trusted audit context. WebSocket upgrade detection now requires `Sec-WebSocket-Version: 13`; older drafts used incompatible framing and accepting them publicly while the inner backend rejects them was a smuggling primitive.",
+      },
+      {
+        title: "Sweepers — idempotency_keys is now part of the periodic cleanup",
+        description:
+          "The `idempotency_keys` table accumulates one row per write-with-`Idempotency-Key` for 24 hours. The live lookup already filtered expired rows, but without a sweep the table grew unboundedly. The new range delete piggybacks on the existing `active_sessions` cleanup tick (every 2 minutes) and uses the `idempotency_keys_expires_at_idx` index added in migration 053.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API changes",
+        description:
+          "v1.5.5 has no database migrations, no /api/* contract changes, and no protocol changes. The DMZ link `LinkServerConfig` struct gains two new fields (`accept_rate_rps`, `accept_rate_burst`) but `crates/strata-dmz/src/main.rs` constructs them with sensible defaults; operators running the published binary need do nothing. All four images (frontend, backend, DMZ edge, guacd) should be rolled together but each one is backwards-compatible with v1.5.4 peers during a rolling update.",
+      },
+    ],
+  },
+  {
+    version: "1.5.4",
+    subtitle:
+      "Security review — consolidated hardening pass across backend, DMZ link channel, and frontend",
+    sections: [
+      {
+        title: "Backend — JWT secret length and password caps enforced",
+        description:
+          "v1.5.4 refuses to start if `JWT_SECRET` is shorter than 32 bytes (256 bits) and emits a remediation hint (`openssl rand -base64 32`), preventing accidental deployment with a placeholder or truncated secret. The login and registration password length cap drops from 1024 → 256 bytes — Argon2 hashes any input length in roughly constant time, so the previous cap was a free amplification vector for credential stuffing and DoS without buying any real-world passphrase headroom.",
+      },
+      {
+        title: "Backend — optional one-shot bootstrap token on /api/setup/initialize",
+        description:
+          "When the new `STRATA_SETUP_TOKEN` env var is set, the first-boot `/api/setup/initialize` endpoint requires the matching `X-Strata-Setup-Token` header and compares it in constant time. Greenfield deploys without the env var keep the previous unauthenticated bootstrap flow, so existing first-boot scripts and orchestrated installs are unaffected. Operators who want defence-in-depth can now pin a one-shot token in the deployment manifest before exposing the backend to the network.",
+      },
+      {
+        title: "Backend — audit, pagination, and error-handling fixes",
+        description:
+          "The `share` revoke path now writes an audit log entry matching the create/use side, closing the audit-trail gap on link revocation. Recordings list pagination uses a deterministic tiebreaker (`ORDER BY created_at DESC, id DESC`) so cursor pages no longer silently drop or duplicate rows when several recordings share a timestamp. The favorites list endpoint surfaces DB errors instead of swallowing them with `unwrap_or(empty)`, so broken queries log and return a proper 5xx instead of hiding the failure as “no favorites”. The active-session GC interval shortens from 5 min → 2 min so abandoned viewer rows expire from the dashboard sooner.",
+      },
+      {
+        title: "DMZ link channel — TLS 1.3 pin, idle timeouts, streaming body cap",
+        description:
+          "TLS is pinned to 1.3 only on the operator ↔ edge link server — the control channel never needs TLS 1.2 fall-back, and restricting the protocol set removes an entire surface area of downgrade and cipher negotiation bugs. The WebSocket bridge enforces a 60 s I/O idle timeout on read/write/framing on both legs so a stalled inner TCP peer can no longer pin a goroutine + descriptor pair indefinitely. The HTTP body cap middleware now also wraps the streaming body with `http_body_util::Limited`, so chunked uploads that omit or lie about Content-Length are still bounded by the per-IP limit.",
+      },
+      {
+        title: "DMZ link channel — proxy hygiene, deterministic PSK, IPv6 zone scrub",
+        description:
+          "The reverse proxy now strips the full RFC 7230 hop-by-hop header set before forwarding (Connection, Keep-Alive, Proxy-Authenticate, Proxy-Authorization, TE, Trailers, Transfer-Encoding, Upgrade) plus any header named in the inbound `Connection` value, matching what production-grade reverse proxies do. The active link PSK id is now deterministic (the first id parsed from `LINK_PSKS`) instead of `HashMap::keys().next()`, which the std-lib does not promise to keep stable across runs. The edge signer scrubs IPv6 zone identifiers (`fe80::1%eth0`) from X-Forwarded-For before signing, removing a header smuggling primitive.",
+      },
+      {
+        title: "Frontend — Markdown sanitisation and ConfirmModal on destructive admin actions",
+        description:
+          "The Documentation viewer now sanitises rendered Markdown with DOMPurify before it lands in the DOM, treating `marked` output as untrusted and eliminating any chance of stored-XSS via doc content. The destructive admin actions in the Passwords tab (delete approval role, delete account mapping) use the existing `ConfirmModal` instead of the browser-native `window.confirm()`, matching the rest of the admin UX and avoiding click-jacking on the native dialog.",
+      },
+      {
+        title: "Drop-in upgrade — confirm JWT_SECRET length, no migrations",
+        description:
+          "v1.5.4 has no database migrations, no /api/* contract changes, and no protocol changes. Before upgrading, confirm `JWT_SECRET` is at least 32 bytes; rotate via `openssl rand -base64 32` if you were running with the old default. Optionally set `STRATA_SETUP_TOKEN` before exposing the backend to the network for greenfield deploys. All four images (frontend, backend, DMZ edge, guacd) should be rolled together but each one is backwards-compatible with v1.5.3 peers during a rolling update.",
+      },
+    ],
+  },
+  {
     version: "1.5.3",
     subtitle:
       "Admin Settings — grouped sidebar navigation replaces the 17-tab horizontal row that no longer fit on a single line",

@@ -770,7 +770,11 @@ pub async fn link_checkout_to_profile(
         return Ok(Json(json!({ "status": "unlinked" })));
     }
 
-    let checkout_id = body.checkout_id.unwrap();
+    // SAFETY: branch above returned when None; reject defensively in
+    // case a future refactor reorders the early-return.
+    let checkout_id = body
+        .checkout_id
+        .ok_or_else(|| AppError::Internal("checkout_id missing after non-None guard".into()))?;
 
     // Verify checkout belongs to user and is active
     let checkout = crate::services::checkouts::get_owned_by_user(&db.pool, checkout_id, user.id)

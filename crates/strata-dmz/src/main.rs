@@ -73,19 +73,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("rustls default crypto provider was already installed");
     }
 
-    // Pick the active PSK id: the first inserted entry is by
-    // convention "the active key". The DmzConfig HashMap doesn't
-    // preserve insertion order, so until we add an explicit field
-    // the operator should set STRATA_DMZ_LINK_PSKS with `current:...`
-    // as the first entry and we enforce that at parse time in 2c.
-    // For now use any key — every accepted internal node MACs under
-    // the id we send back.
-    let active_psk_id = cfg
-        .link_psks
-        .keys()
-        .next()
-        .cloned()
-        .expect("DmzConfig::from_env guarantees ≥1 PSK");
+    // Active PSK id is captured deterministically by config parsing
+    // (first entry of STRATA_DMZ_LINK_PSKS).
+    let active_psk_id = cfg.link_psk_active_id.clone();
 
     // Build the link-server TLS acceptor (mTLS, h2 ALPN-only).
     let acceptor = link_server::build_acceptor(
@@ -102,6 +92,12 @@ async fn main() -> anyhow::Result<()> {
         active_psk_id,
         psks: cfg.link_psks.clone(),
         listen_addr: cfg.link_bind,
+        // Generous defaults: an internal node legitimately reconnects
+        // perhaps once per minute on link teardown; 5/s with a burst
+        // of 30 absorbs reasonable retry storms but rate-limits a
+        // TLS handshake flood from a single source.
+        accept_rate_rps: 5,
+        accept_rate_burst: 30,
     };
     let registry_for_link = registry.clone();
     let shutdown_for_link = shutdown.clone();

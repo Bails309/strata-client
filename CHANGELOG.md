@@ -5,6 +5,232 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-05-23
+
+### Enterprise foundations — error codes, accessibility, i18n scaffold, ops docs
+
+#### Added
+
+- **`docs/API-LIFECYCLE.md`** — formal API versioning policy (`/api/v1`), support window, breaking-change definition, `Deprecation` / `Sunset` headers per RFC 9745, error-code stability contract, and changelog discipline so downstream integrators can plan upgrades against documented guarantees instead of inferred behaviour.
+- **`docs/deployment-kubernetes.md`** — production Kubernetes runbook covering the per-component replica topology (backend remains `replicas=1` because rate limits, settings cache, OIDC nonce cache, and HTTP session storage are all process-local), `ExternalSecrets` inventory, PVC sizing table (postgres / vault / recordings / config), ingress + `NetworkPolicy` YAML, split liveness/readiness probes (`/api/health/live`, `/api/health/ready`), resource sizing, `terminationGracePeriodSeconds: 45`, and a "common pitfalls" section drawn from the multi-replica caveats already documented in the architecture notes.
+- **Backend `ErrorCode` enum** (`backend/src/error.rs`) — every `AppError` now maps to a stable SCREAMING_SNAKE token (`INTERNAL`, `DEPENDENCY_UNAVAILABLE`, `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_REQUEST`, `NOT_FOUND`, `SETUP_REQUIRED`) and the JSON error body now emits `{ "error": "<message>", "code": "<token>" }`. Frontend and external integrators can branch on `code` (which is part of the API contract per `API-LIFECYCLE.md`) instead of regex-matching the human-readable `error` string. Two new tests (`error_codes_are_stable_strings`, `error_variants_map_to_expected_codes`) lock the mapping in.
+- **`useFocusTrap` hook** (`frontend/src/components/useFocusTrap.ts`) — generic React hook that records the previously-focused element, focuses the first focusable descendant when its container becomes active, intercepts Tab / Shift+Tab to cycle within the container, and restores focus on cleanup. WCAG 2.1 success criterion 2.4.3 (Focus Order) and 2.1.2 (No Keyboard Trap — controlled trap with explicit dismiss).
+- **Skip-to-content link** (`frontend/src/components/Layout.tsx`) — a visually-hidden anchor that becomes visible on keyboard focus and jumps past the persistent navigation chrome to `<main id="main-content" tabIndex={-1}>`. Keyboard-only and screen-reader users no longer have to tab through the full nav rail on every page change. WCAG 2.1 success criterion 2.4.1 (Bypass Blocks).
+- **i18n scaffold** (`frontend/src/i18n/`) — `i18next` + `react-i18next` (added as runtime dependencies), an `en` locale (`src/i18n/locales/en.json`) with `common` and `login` namespaces, language detection via `localStorage["strata.lang"] → navigator.language → "en"` fallback chain, and a `setLanguage(lang)` helper for a future user-settings toggle. `Login.tsx` is the migrated exemplar so future PRs can copy the pattern incrementally rather than landing a single mega-refactor.
+
+#### Changed
+
+- **`ConfirmModal.tsx`** wraps its dialog with `useFocusTrap`, so destructive-action confirmations cannot leak keyboard focus back to the page underneath until the user explicitly cancels or confirms.
+- **`Login.tsx`** field labels, button copy, and the generic error fallback are sourced from the `login` i18n namespace via `useTranslation()`. Hardcoded English strings remain wherever a string has not yet been migrated.
+- **Vitest setup** (`frontend/src/__tests__/setup.ts`) initialises `i18n` once per test process via a side-effect import so `useTranslation()` resolves to real English copy in the JSDOM environment instead of echoing translation keys.
+
+#### Fixed
+
+- **`backend/src/routes/user.rs`** — replaced `body.checkout_id.unwrap()` after a non-`None` guard with an explicit `.ok_or_else(...)` returning `AppError::Internal(...)`. The unwrap was logically reachable only via a TOCTOU between two reads of `body.checkout_id`, but the explicit error keeps the panic-free invariant the rest of the route enforces and surfaces a stable `INTERNAL` error code instead of a 500 with no body.
+- **`POST /api/tunnel/ticket`** now returns `404 NOT_FOUND` when an admin (or other privileged caller bypassing the role-access check) supplies a `connection_id` for a connection that does not exist or has been soft-deleted. Previously the privileged branch minted a ticket for any UUID, which masked client bugs and produced a "tunnel works for a moment" false-positive on the subsequent WebSocket upgrade.
+- **Login rate-limit responses** now correctly return `429 Too Many Requests` with the new `RATE_LIMITED` error code, instead of `401 UNAUTHORIZED`. Both the per-IP and per-username throttles are affected. `AppError::RateLimited(String)` is the new variant; clients that branched on the textual `"Too many login attempts"` message keep working but should migrate to the `code` field.
+
+#### Drop-in upgrade — no migrations, no API contract changes
+
+- No database migrations.
+- The error response body now carries an additional `code` field but the existing `error` field is unchanged in shape and meaning, so existing v1.5.x clients continue to work. New clients should prefer `code` for branching logic per `docs/API-LIFECYCLE.md`.
+- Frontend bundle gains `i18next` + `react-i18next` (~30 KB gzipped). All other surface area is documentation, accessibility affordances, and one defensive backend refactor.
+
+## [1.5.5] — 2026-05-22
+
+### Security review — second-pass hardening
+
+A focused follow-up to the v1.5.4 review. Items below were either
+new findings raised against v1.5.4, or original v1.5.4 findings that
+were partially mitigated and now have a complete fix landed.
+
+#### Authentication & enumeration
+
+- **OIDC / SSO error responses no longer enumerate users.** When the
+  OIDC subject (or SAML/SSO email) does not match a provisioned user,
+  the response is now the generic `Invalid or expired token` instead
+  of including the offending claim. The full claim is logged at
+  `debug` level so operators can still diagnose. Closes a
+  user-enumeration oracle reachable from any unauthenticated client
+  that can reach the SSO callback URL.
+- **`/auth/change-password` is rate-limited per user** at 5 attempts
+  per hour, using the same `RATE_LIMIT` mutex the login flow already
+  uses. Stops a stolen-cookie attacker from brute-forcing the
+  current password through the account-settings flow.
+- **Refresh-rotated JWTs are recorded in `active_sessions`.** The
+  refresh handler now calls `active_sessions::record(...)` after
+  minting the new access token, so the admin "active sessions" view
+  reflects the post-rotation `jti` and the per-user signout flow
+  correctly revokes it.
+- **Setup bootstrap-token check is constant-time on every path.**
+  The previous short-circuit on empty input gave a measurable timing
+  signal; the new path always invokes `constant_time_eq` against a
+  fixed-length expected value.
+
+#### LDAP filter validator
+
+- Replaced the legacy `validate_ldap_filter` with a stricter
+  recursive-descent style validator that caps total length at
+  2048 bytes and nesting depth at 32, rejects NUL and ASCII
+  control characters, and explicitly refuses match-everything
+  patterns (`(*)`, `(objectClass=*)`). Four new unit tests cover
+  the new rejections, the original five tests still pass.
+
+#### Race conditions
+
+- **`activate_checkout` no longer holds a DB row lock across LDAP
+  + Vault IO.** The original v1.5.4 fix used `SELECT … FOR UPDATE`,
+  which serialised concurrent activators correctly but blocked
+  every other approver on the same row for as long as the
+  Active-Directory password modify took (seconds in the slow case).
+  The new flow uses a session-scoped `pg_try_advisory_lock` keyed
+  on the checkout UUID for mutual exclusion, performs the LDAP and
+  Vault calls with no DB lock held, and only opens a fresh
+  short-lived transaction for the final `UPDATE` and audit write.
+- **Active shared viewers are kicked when a share is revoked.**
+  The viewer WebSocket now re-checks `find_active_by_token` every
+  ~30 seconds inside the keepalive tick and closes the connection
+  when the share row has been revoked, expired, or its underlying
+  connection has been soft-deleted. Previously, revoke only
+  prevented *new* viewers from joining.
+
+#### DMZ link channel
+
+- **TLS 1.3 session resumption is disabled on the link listener.**
+  Resumed TLS handshakes do not re-present the client certificate;
+  for a private mTLS-only trust domain, full handshake on every
+  connect is the desired posture. We install
+  `NoServerSessionStorage` and set `send_tls13_tickets = 0`.
+- **Per-IP TCP rate limit on the link `accept` loop.** Reuses the
+  existing striped `PerIpRateLimiter` to shed connections before
+  the TLS handshake CPU spend (default `5 rps`, burst `30` —
+  generous for legitimate internal-node reconnects, kicks in only
+  on flood-shaped traffic).
+- **HTTP/2 per-stream timeout (120 s) on regular request handlers.**
+  A stalled handler can no longer pin a stream slot indefinitely
+  against `MAX_CONCURRENT_STREAMS`. WebSocket bridges are exempt;
+  they own their own keepalive logic.
+- **Loopback upgrade handler asserts target is a loopback address**
+  at construction, and rejects HTTP/1.1 request paths and Host
+  headers containing CR/LF/NUL before the request line is
+  concatenated. Defence in depth against header smuggling and a
+  hard fail-closed if the loopback target is ever misconfigured.
+- **Edge-signer `x-request-id` filter tightened** from "any
+  printable ASCII" to `[A-Za-z0-9_-]` only. The value is MACed by
+  the edge and trusted verbatim by the backend; the wider
+  character set let a public client smuggle log-field separators
+  (`=`, `,`, `;`, ` `) into the trusted audit context.
+- **WebSocket upgrade detection requires `Sec-WebSocket-Version: 13`.**
+  Older drafts (8, 12) used incompatible framing; treating them as
+  a valid upgrade publicly while the inner backend rejects them is
+  a smuggling primitive.
+- PSK rotation grace is already supported by the link protocol —
+  internal nodes hold a map of PSKs and the server names the
+  active id, so operators stage-roll new keys to clients first,
+  then flip the server's `active_psk_id`. Documented here for
+  completeness; no code change needed.
+
+#### Background sweepers
+
+- **`idempotency_keys` cleanup added** to the existing
+  `active_sessions` periodic sweep. The table accumulates one row
+  per write-with-`Idempotency-Key` for 24 hours; the live lookup
+  already filters expired rows, but without a sweep the table
+  grows unboundedly. The new index from migration 053 makes the
+  range delete cheap.
+
+#### Tests
+
+- 4 new tests for `validate_ldap_filter` (match-everything,
+  control chars, oversize, excessive nesting).
+- New tests in `edge_signer` for the strict request-id charset
+  (rejects punctuation; accepts UUIDs).
+- New tests in `ws_proxy::is_websocket_upgrade` for required
+  `Sec-WebSocket-Version: 13` and obsolete-version rejection;
+  pre-existing tests updated to include the version header.
+
+### Bumped
+
+- `VERSION`, root `Cargo.toml`, `backend/Cargo.toml`,
+  `frontend/package.json` to `1.5.5`.
+
+## [1.5.4] — 2026-05-21
+
+### Security review — consolidated hardening pass
+
+v1.5.4 is a defence-in-depth release. None of the items below
+correspond to a known exploited vulnerability, but each closes a
+class of mistake we want gone before the v1.6 feature work lands.
+There are no breaking API or database changes; operators can roll
+the new images straight on top of v1.5.3.
+
+#### Backend
+
+- **JWT secret length is now enforced at boot.** `JWT_SECRET` shorter
+  than 32 bytes (256 bits) refuses to start the backend with a
+  remediation hint. Prevents accidental deployment with a placeholder
+  or trimmed secret.
+- **Login & registration password length cap reduced from 1024 → 256
+  bytes.** Argon2 hashes any input length in roughly constant time, so
+  a 1 KiB cap was a free amplification vector for credential-stuffing
+  and DoS. 256 bytes still admits any realistic passphrase.
+- **`/api/setup/initialize` accepts an optional one-shot bootstrap
+  token.** When `STRATA_SETUP_TOKEN` is set, the endpoint requires the
+  matching `X-Strata-Setup-Token` header (constant-time compared).
+  Greenfield deploys without the env var keep the previous
+  unauthenticated first-boot flow.
+- **Active-session GC interval shortened** from 5 min → 2 min so
+  abandoned/disconnected viewer rows expire from the dashboard sooner.
+- **`favorites` list endpoint surfaces DB errors** instead of silently
+  swallowing them with `unwrap_or(empty)` — broken queries now log and
+  return a proper 5xx instead of hiding the failure as “no favorites”.
+- **`recordings` pagination uses a deterministic tiebreaker**
+  (`ORDER BY created_at DESC, id DESC`) so cursor pages no longer drop
+  or duplicate rows when several recordings share a timestamp.
+- **`share` revoke writes an audit log entry** matching the create/use
+  side, closing the audit-trail gap on link revocation.
+
+#### Edge / DMZ link channel
+
+- **TLS pinned to 1.3 only** on the operator ↔ edge link server. The
+  control channel never needs TLS 1.2 fall-back; restricting the
+  protocol set removes an entire surface area of downgrade and cipher
+  negotiation bugs.
+- **WebSocket bridge enforces a 60 s I/O idle timeout** on both legs
+  (read / write / framing), so a stalled inner TCP peer can no longer
+  pin a goroutine + descriptor pair indefinitely.
+- **HTTP body cap also wraps the streaming body** with
+  `http_body_util::Limited`, so chunked uploads that omit or lie about
+  Content-Length are still bounded by the per-IP limit.
+- **Reverse proxy strips full RFC 7230 hop-by-hop header set** before
+  forwarding (Connection, Keep-Alive, Proxy-Authenticate,
+  Proxy-Authorization, TE, Trailers, Transfer-Encoding, Upgrade) plus
+  any header named in the inbound `Connection` value.
+- **Active link PSK id is now deterministic** (the first id parsed
+  from `LINK_PSKS`) instead of `HashMap::keys().next()`, which the
+  std-lib does not promise to keep stable across runs.
+- **Edge signer scrubs IPv6 zone identifiers** (`fe80::1%eth0`) from
+  X-Forwarded-For before signing, removing a header smuggling
+  primitive.
+
+#### Frontend
+
+- **Documentation viewer sanitises rendered Markdown with DOMPurify.**
+  `marked` output is treated as untrusted before being dropped into the
+  DOM, eliminating any chance of stored-XSS via doc content.
+- **Destructive admin actions (delete role, delete account mapping)
+  use the existing `ConfirmModal`** instead of the browser-native
+  `window.confirm()`, matching the rest of the admin UX and avoiding
+  click-jacking on the native dialog.
+
+#### Upgrade notes
+
+- Confirm `JWT_SECRET` is at least 32 bytes; rotate via
+  `openssl rand -base64 32` if you were running with the old default.
+- Optional: set `STRATA_SETUP_TOKEN` before exposing the backend to
+  network for greenfield deploys.
+- No database migrations.
+
 ## [1.5.3] — 2026-05-08
 
 ### Admin Settings — grouped sidebar navigation

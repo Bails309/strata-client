@@ -57,6 +57,8 @@ pub const MAX_PROXY_BODY_BYTES: usize = 8 * 1024 * 1024;
 const HOP_BY_HOP: &[&str] = &[
     "connection",
     "proxy-connection",
+    "proxy-authenticate",
+    "proxy-authorization",
     "keep-alive",
     "transfer-encoding",
     "te",

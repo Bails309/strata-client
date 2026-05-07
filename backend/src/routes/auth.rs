@@ -116,7 +116,7 @@ pub fn validate_login_input(username: &str, password: &str) -> Result<(), AppErr
     if username.is_empty() || password.is_empty() {
         return Err(AppError::Auth("Invalid credentials".into()));
     }
-    if username.len() > 256 || password.len() > 1024 {
+    if username.len() > 256 || password.len() > 256 {
         return Err(AppError::Auth("Invalid credentials".into()));
     }
     Ok(())
@@ -135,7 +135,7 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
             MIN_PASSWORD_LENGTH
         )));
     }
-    if password.len() > 1024 {
+    if password.len() > 256 {
         return Err(AppError::Validation("Password is too long".into()));
     }
     Ok(())
@@ -273,7 +273,7 @@ pub async fn login(
             IP_WINDOW_SECS,
             MAX_RATE_LIMIT_ENTRIES,
         ) {
-            return Err(AppError::Auth(
+            return Err(AppError::RateLimited(
                 "Too many login attempts from this address. Please try again later.".into(),
             ));
         }
@@ -289,7 +289,7 @@ pub async fn login(
             WINDOW_SECS,
             MAX_RATE_LIMIT_ENTRIES,
         ) {
-            return Err(AppError::Auth(
+            return Err(AppError::RateLimited(
                 "Too many login attempts. Please try again later.".into(),
             ));
         }
@@ -702,6 +702,20 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Per-user rate limit on password-change attempts. A stolen access token
+    // could otherwise grind through guesses (and cause downstream account
+    // lockouts on systems that observe failed-change events). 5 attempts
+    // per hour matches the login window.
+    {
+        let key = format!("change_password:{}", user.id);
+        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        if check_rate_limit(&mut map, &key, 5, 3600, MAX_RATE_LIMIT_ENTRIES) {
+            return Err(AppError::Auth(
+                "Too many password change attempts. Please wait before trying again.".into(),
+            ));
+        }
+    }
+
     // Validate the new password meets policy
     validate_password(&body.new_password)?;
 
@@ -1018,6 +1032,28 @@ pub async fn refresh(
     let (access_token, _jti) =
         create_local_jwt(user_id, &username, &role, "access", ACCESS_TOKEN_TTL)?;
 
+    // Record the new access-token jti so the admin "active sessions" panel
+    // and per-user revocation reflect refresh-rotated tokens. Without this
+    // the table only shows tokens from the original /login.
+    {
+        let client_ip = extract_client_ip(&headers);
+        let user_agent = headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ACCESS_TOKEN_TTL as i64);
+        let _ = crate::services::active_sessions::record(
+            &db.pool,
+            _jti,
+            user_id,
+            expires_at,
+            &client_ip,
+            &user_agent,
+        )
+        .await;
+    }
+
     // Rotate the CSRF token on every refresh — even though same-site cookies
     // already cover most of the threat model, rotating limits the window of
     // a stolen-cookie replay attack.
@@ -1241,7 +1277,14 @@ pub async fn sso_callback(
         })?;
 
     let row = row.ok_or_else(|| {
-        AppError::Auth(format!("No Strata user found for email {}. Registration via SSO is not enabled. Please contact your administrator.", user_email))
+        // Do NOT echo the email — it turns the SSO callback into an email
+        // enumeration oracle for anyone who can complete an OIDC flow.
+        // The email is logged at debug level for operator triage.
+        tracing::debug!(email = %user_email, "SSO callback for unknown email; registration via SSO disabled");
+        AppError::Auth(
+            "User registration via SSO is not enabled. Please contact your administrator."
+                .into(),
+        )
     })?;
 
     if let Some(sub) = &row.sub {
@@ -1722,14 +1765,14 @@ mod tests {
     #[test]
     fn validate_login_rejects_long_password() {
         let user = String::from("alice");
-        let long = "a".repeat(1025);
+        let long = "a".repeat(257);
         assert!(validate_login_input(&user, &long).is_err());
     }
 
     #[test]
     fn validate_login_accepts_boundary_lengths() {
         let u = "a".repeat(256);
-        let p = "a".repeat(1024);
+        let p = "a".repeat(256);
         assert!(validate_login_input(&u, &p).is_ok());
     }
 
@@ -1746,8 +1789,8 @@ mod tests {
         assert!(validate_password(&ok_phrase).is_ok());
         assert!(validate_password(&min_ok).is_ok()); // min length 12
         assert!(validate_password(&too_short).is_err()); // too short
-        assert!(validate_password(&"a".repeat(1024)).is_ok()); // max length
-        assert!(validate_password(&"a".repeat(1025)).is_err()); // too long
+        assert!(validate_password(&"a".repeat(256)).is_ok()); // max length
+        assert!(validate_password(&"a".repeat(257)).is_err()); // too long
     }
 
     // ── check_rate_limit ───────────────────────────────────────────────

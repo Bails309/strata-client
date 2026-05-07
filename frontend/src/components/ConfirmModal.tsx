@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useFocusTrap } from "./useFocusTrap";
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -30,10 +31,15 @@ export default function ConfirmModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, onCancel]);
 
+  // WCAG 2.4.3 / 2.1.2 — keep keyboard focus inside the dialog while
+  // it is open and restore focus to the trigger when it closes.
+  const dialogRef = useFocusTrap<HTMLDivElement>(isOpen);
+
   if (!isOpen) return null;
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-modal-title"

@@ -144,6 +144,11 @@ pub struct DmzConfig {
     /// during rotation.
     pub link_psks: HashMap<String, Zeroizing<Vec<u8>>>,
 
+    /// Id of the active PSK — the first entry parsed from
+    /// `STRATA_DMZ_LINK_PSKS`. Captured at parse time so we don't
+    /// rely on `HashMap` iteration order at runtime.
+    pub link_psk_active_id: String,
+
     /// Active HMAC key the DMZ uses to sign `x-strata-edge-*` headers.
     pub edge_hmac_key: Zeroizing<Vec<u8>>,
 
@@ -261,7 +266,7 @@ impl DmzConfig {
         };
         let link_ca_bundle_pem = read_required_file_var("STRATA_DMZ_LINK_CA_BUNDLE")?;
 
-        let link_psks = parse_psks_env()?;
+        let (link_psks, link_psk_active_id) = parse_psks_env()?;
         let edge_hmac_key = parse_b64_key_env("STRATA_DMZ_EDGE_HMAC_KEY")?;
 
         let cluster_id =
@@ -349,6 +354,7 @@ impl DmzConfig {
             link_tls,
             link_ca_bundle_pem,
             link_psks,
+            link_psk_active_id,
             edge_hmac_key,
             cluster_id,
             node_id,
@@ -438,10 +444,12 @@ fn parse_b64_key_env(var: &'static str) -> Result<Zeroizing<Vec<u8>>, ConfigErro
     Ok(Zeroizing::new(bytes))
 }
 
-fn parse_psks_env() -> Result<HashMap<String, Zeroizing<Vec<u8>>>, ConfigError> {
+fn parse_psks_env(
+) -> Result<(HashMap<String, Zeroizing<Vec<u8>>>, String), ConfigError> {
     const VAR: &str = "STRATA_DMZ_LINK_PSKS";
     let raw = std::env::var(VAR).map_err(|_| ConfigError::Missing(VAR))?;
     let mut out = HashMap::new();
+    let mut active: Option<String> = None;
     for entry in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let (id, b64) = entry.split_once(':').ok_or_else(|| ConfigError::Malformed {
             var: VAR,
@@ -476,6 +484,9 @@ fn parse_psks_env() -> Result<HashMap<String, Zeroizing<Vec<u8>>>, ConfigError> 
                 reason: format!("duplicate psk id {id:?}"),
             });
         }
+        if active.is_none() {
+            active = Some(id.clone());
+        }
     }
     if out.is_empty() {
         return Err(ConfigError::Malformed {
@@ -483,7 +494,8 @@ fn parse_psks_env() -> Result<HashMap<String, Zeroizing<Vec<u8>>>, ConfigError> 
             reason: "no PSK entries parsed".into(),
         });
     }
-    Ok(out)
+    let active = active.expect("non-empty PSK map implies an active id");
+    Ok((out, active))
 }
 
 #[cfg(test)]

@@ -201,15 +201,15 @@ pub async fn body_cap_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    use axum::body::Body;
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
+    use http_body_util::Limited;
 
     let cap = policy.cap_for(addr.ip());
 
-    // Fast-fail on advertised Content-Length. Public clients almost
-    // always announce Content-Length on POST/PUT bodies; chunked
-    // requests without C-L still fall through to the global
-    // `RequestBodyLimitLayer` set on the public router.
+    // Fast-fail on advertised Content-Length so callers don't get
+    // billed for the upload before we reject it.
     if let Some(cl) = req
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -224,6 +224,14 @@ pub async fn body_cap_middleware(
                 .into_response();
         }
     }
+
+    // Wrap the streaming body in `Limited` so chunked uploads that
+    // omit (or lie about) Content-Length still hit the per-IP cap.
+    // Errors from the limiter are surfaced downstream as body errors,
+    // which axum/hyper map to 400/413.
+    let (parts, body) = req.into_parts();
+    let limited = Limited::new(body, cap);
+    let req = axum::extract::Request::from_parts(parts, Body::new(limited));
 
     next.run(req).await
 }

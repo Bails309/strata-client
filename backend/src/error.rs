@@ -1,6 +1,58 @@
-use axum::http::StatusCode;
+﻿use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
+
+/// Stable, machine-readable error codes that accompany every error
+/// response. Clients pin against these codes rather than the
+/// human-readable `error` string, which is intentionally allowed to
+/// vary between releases (and, in future, between locales).
+///
+/// See [docs/API-LIFECYCLE.md](../../docs/API-LIFECYCLE.md) for the
+/// stability contract: codes will not change meaning within a major
+/// API version, and new codes may be added at any time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ErrorCode {
+    /// Generic internal failure; details intentionally not exposed.
+    Internal,
+    /// A required upstream dependency (Vault, LDAP, OIDC issuer, SMTP)
+    /// is unreachable or returned a transport-level error.
+    DependencyUnavailable,
+    /// Authentication failed or the supplied credentials/token are
+    /// missing, expired, or invalid.
+    Unauthenticated,
+    /// Authenticated, but the principal is not permitted to perform
+    /// this action.
+    Forbidden,
+    /// Request payload failed schema or business validation.
+    InvalidRequest,
+    /// The named resource does not exist or the caller is not entitled
+    /// to know whether it does.
+    NotFound,
+    /// Strata is mid-installation; the requested route is unavailable
+    /// until first-run setup completes.
+    SetupRequired,
+    /// Caller has been throttled by a per-IP, per-user, or per-route
+    /// rate limiter. Clients should back off; the response is mapped
+    /// to HTTP 429 Too Many Requests.
+    RateLimited,
+}
+
+impl ErrorCode {
+    /// Stable string form used in JSON responses and clients.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "INTERNAL",
+            Self::DependencyUnavailable => "DEPENDENCY_UNAVAILABLE",
+            Self::Unauthenticated => "UNAUTHENTICATED",
+            Self::Forbidden => "FORBIDDEN",
+            Self::InvalidRequest => "INVALID_REQUEST",
+            Self::NotFound => "NOT_FOUND",
+            Self::SetupRequired => "SETUP_REQUIRED",
+            Self::RateLimited => "RATE_LIMITED",
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -32,30 +84,66 @@ pub enum AppError {
     SetupRequired,
 
     #[error("{0}")]
+    RateLimited(String),
+
+    #[error("{0}")]
     Internal(String),
 }
 
-/// Extract the HTTP status code and user-facing message for an error variant.
-/// Internal details are never exposed to the client.
-pub fn error_status_and_message(err: &AppError) -> (StatusCode, String) {
+/// Extract the HTTP status code, machine-readable error code, and
+/// user-facing message for an error variant. Internal details are
+/// never exposed to the client.
+pub fn error_status_and_message(err: &AppError) -> (StatusCode, ErrorCode, String) {
     match err {
         AppError::Database(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::Internal,
             "Internal server error".into(),
         ),
         AppError::Config(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::Internal,
             "Internal server error".into(),
         ),
-        AppError::Vault(_) => (StatusCode::BAD_GATEWAY, "Service dependency error".into()),
-        AppError::Reqwest(_) => (StatusCode::BAD_GATEWAY, "Service connectivity error".into()),
-        AppError::Auth(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
-        AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-        AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
-        AppError::Forbidden => (StatusCode::FORBIDDEN, "Forbidden".into()),
-        AppError::SetupRequired => (StatusCode::SERVICE_UNAVAILABLE, "Setup required".into()),
+        AppError::Vault(_) => (
+            StatusCode::BAD_GATEWAY,
+            ErrorCode::DependencyUnavailable,
+            "Service dependency error".into(),
+        ),
+        AppError::Reqwest(_) => (
+            StatusCode::BAD_GATEWAY,
+            ErrorCode::DependencyUnavailable,
+            "Service connectivity error".into(),
+        ),
+        AppError::Auth(msg) => (
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::Unauthenticated,
+            msg.clone(),
+        ),
+        AppError::Validation(msg) => (
+            StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            msg.clone(),
+        ),
+        AppError::NotFound(msg) => (StatusCode::NOT_FOUND, ErrorCode::NotFound, msg.clone()),
+        AppError::Forbidden => (
+            StatusCode::FORBIDDEN,
+            ErrorCode::Forbidden,
+            "Forbidden".into(),
+        ),
+        AppError::SetupRequired => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::SetupRequired,
+            "Setup required".into(),
+        ),
+        AppError::RateLimited(msg) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::RateLimited,
+            msg.clone(),
+        ),
         AppError::Internal(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::Internal,
             "Internal server error".into(),
         ),
     }
@@ -63,7 +151,7 @@ pub fn error_status_and_message(err: &AppError) -> (StatusCode, String) {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
+        let (status, code, message) = match &self {
             AppError::Database(e) => {
                 tracing::error!("Database error: {e}");
                 error_status_and_message(&self)
@@ -87,7 +175,11 @@ impl IntoResponse for AppError {
             _ => error_status_and_message(&self),
         };
 
-        let body = json!({ "error": message });
+        // `error` is the legacy free-form string clients have always
+        // received; `code` is the new stable machine-readable tag
+        // (see ErrorCode docs and docs/API-LIFECYCLE.md). Both are
+        // emitted on every error response.
+        let body = json!({ "error": message, "code": code.as_str() });
         (status, axum::Json(body)).into_response()
     }
 }
@@ -173,7 +265,7 @@ mod tests {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    // ── into_response additional branches ────────────────────────────
+    // â”€â”€ into_response additional branches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn into_response_exercises_all_logging_arms() {
@@ -257,12 +349,12 @@ mod tests {
         }
     }
 
-    // ── error_status_and_message (pure, verifies body text) ────────────
+    // â”€â”€ error_status_and_message (pure, verifies body text) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn database_error_hides_internal_details() {
         let err = AppError::Database(sqlx::Error::RowNotFound);
-        let (status, msg) = error_status_and_message(&err);
+        let (status, _code, msg) = error_status_and_message(&err);
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(msg, "Internal server error");
         assert!(!msg.contains("RowNotFound"));
@@ -271,7 +363,7 @@ mod tests {
     #[test]
     fn config_error_hides_internal_details() {
         let err = AppError::Config("secret db url".into());
-        let (_, msg) = error_status_and_message(&err);
+        let (_, _code, msg) = error_status_and_message(&err);
         assert_eq!(msg, "Internal server error");
         assert!(!msg.contains("secret"));
     }
@@ -279,7 +371,7 @@ mod tests {
     #[test]
     fn vault_error_body_is_generic() {
         let err = AppError::Vault("vault token xyz".into());
-        let (status, msg) = error_status_and_message(&err);
+        let (status, _code, msg) = error_status_and_message(&err);
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert_eq!(msg, "Service dependency error");
         assert!(!msg.contains("xyz"));
@@ -290,7 +382,7 @@ mod tests {
         let err = reqwest::Client::new().get("not-a-url").build();
         if let Err(e) = err {
             let app_err: AppError = e.into();
-            let (_, msg) = error_status_and_message(&app_err);
+            let (_, _code, msg) = error_status_and_message(&app_err);
             assert_eq!(msg, "Service connectivity error");
         }
     }
@@ -298,7 +390,7 @@ mod tests {
     #[test]
     fn auth_error_passes_through_message() {
         let err = AppError::Auth("Invalid credentials".into());
-        let (status, msg) = error_status_and_message(&err);
+        let (status, _code, msg) = error_status_and_message(&err);
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(msg, "Invalid credentials");
     }
@@ -306,7 +398,7 @@ mod tests {
     #[test]
     fn validation_error_passes_through_message() {
         let err = AppError::Validation("name is required".into());
-        let (status, msg) = error_status_and_message(&err);
+        let (status, _code, msg) = error_status_and_message(&err);
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(msg, "name is required");
     }
@@ -314,21 +406,21 @@ mod tests {
     #[test]
     fn not_found_error_passes_through_message() {
         let err = AppError::NotFound("connection 123".into());
-        let (status, msg) = error_status_and_message(&err);
+        let (status, _code, msg) = error_status_and_message(&err);
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(msg, "connection 123");
     }
 
     #[test]
     fn forbidden_body_text() {
-        let (status, msg) = error_status_and_message(&AppError::Forbidden);
+        let (status, _code, msg) = error_status_and_message(&AppError::Forbidden);
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(msg, "Forbidden");
     }
 
     #[test]
     fn setup_required_body_text() {
-        let (status, msg) = error_status_and_message(&AppError::SetupRequired);
+        let (status, _code, msg) = error_status_and_message(&AppError::SetupRequired);
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(msg, "Setup required");
     }
@@ -336,9 +428,54 @@ mod tests {
     #[test]
     fn internal_error_hides_details() {
         let err = AppError::Internal("sensitive stack trace".into());
-        let (status, msg) = error_status_and_message(&err);
+        let (status, _code, msg) = error_status_and_message(&err);
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(msg, "Internal server error");
         assert!(!msg.contains("sensitive"));
+    }
+
+    // ── ErrorCode mapping (stable per docs/API-LIFECYCLE.md) ────────────
+
+    #[test]
+    fn error_codes_are_stable_strings() {
+        // These string values are part of the public API contract.
+        // Changing any of them is a breaking change.
+        assert_eq!(ErrorCode::Internal.as_str(), "INTERNAL");
+        assert_eq!(
+            ErrorCode::DependencyUnavailable.as_str(),
+            "DEPENDENCY_UNAVAILABLE"
+        );
+        assert_eq!(ErrorCode::Unauthenticated.as_str(), "UNAUTHENTICATED");
+        assert_eq!(ErrorCode::Forbidden.as_str(), "FORBIDDEN");
+        assert_eq!(ErrorCode::InvalidRequest.as_str(), "INVALID_REQUEST");
+        assert_eq!(ErrorCode::NotFound.as_str(), "NOT_FOUND");
+        assert_eq!(ErrorCode::SetupRequired.as_str(), "SETUP_REQUIRED");
+        assert_eq!(ErrorCode::RateLimited.as_str(), "RATE_LIMITED");
+    }
+
+    #[test]
+    fn error_variants_map_to_expected_codes() {
+        let cases = [
+            (
+                AppError::Database(sqlx::Error::RowNotFound),
+                ErrorCode::Internal,
+            ),
+            (AppError::Config("x".into()), ErrorCode::Internal),
+            (
+                AppError::Vault("x".into()),
+                ErrorCode::DependencyUnavailable,
+            ),
+            (AppError::Auth("x".into()), ErrorCode::Unauthenticated),
+            (AppError::Validation("x".into()), ErrorCode::InvalidRequest),
+            (AppError::NotFound("x".into()), ErrorCode::NotFound),
+            (AppError::Forbidden, ErrorCode::Forbidden),
+            (AppError::SetupRequired, ErrorCode::SetupRequired),
+            (AppError::RateLimited("x".into()), ErrorCode::RateLimited),
+            (AppError::Internal("x".into()), ErrorCode::Internal),
+        ];
+        for (err, expected) in cases {
+            let (_, code, _) = error_status_and_message(&err);
+            assert_eq!(code, expected, "wrong code for {err:?}");
+        }
     }
 }

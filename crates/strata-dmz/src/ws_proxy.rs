@@ -86,7 +86,20 @@ pub fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     if !connection_has_upgrade {
         return false;
     }
-    headers.get("sec-websocket-key").is_some()
+    if headers.get("sec-websocket-key").is_none() {
+        return false;
+    }
+    // RFC 6455 §1.2 — the only protocol version a server is required
+    // to accept is 13. Older drafts (8, 12) are obsolete and pre-date
+    // the framing/masking we rely on; treating them as a valid upgrade
+    // would create asymmetry between what the DMZ accepts publicly and
+    // what the inner backend accepts on the loopback side, which is
+    // the building block for a smuggling attack.
+    headers
+        .get("sec-websocket-version")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim() == "13")
+        .unwrap_or(false)
 }
 
 /// Compute the `Sec-WebSocket-Accept` value for a given client
@@ -358,14 +371,20 @@ async fn pump(
     let upgraded = hyper_util::rt::TokioIo::new(upgraded);
     let (mut tcp_r, mut tcp_w) = tokio::io::split(upgraded);
 
+    // Per-IO timeout so a slow/idle peer can't pin an h2 stream
+    // indefinitely. The websocket layer above us is expected to issue
+    // its own ping/pong; this is a belt-and-braces upper bound.
+    const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
     // public TCP -> h2
     let pub_to_link = async move {
         let mut buf = vec![0u8; 16 * 1024];
         loop {
-            let n = tcp_r
-                .read(&mut buf)
-                .await
-                .map_err(|e| anyhow::anyhow!("public tcp read: {e}"))?;
+            let n = match tokio::time::timeout(IO_TIMEOUT, tcp_r.read(&mut buf)).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {e}")),
+                Err(_) => return Err(anyhow::anyhow!("ws bridge: public→link read idle for 60s")),
+            };
             if n == 0 {
                 break;
             }
@@ -380,8 +399,13 @@ async fn pump(
 
     // h2 -> public TCP
     let link_to_pub = async move {
-        while let Some(chunk) = recv.data().await {
-            let chunk = chunk.map_err(|e| anyhow::anyhow!("h2 recv data: {e}"))?;
+        loop {
+            let next = match tokio::time::timeout(IO_TIMEOUT, recv.data()).await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => return Err(anyhow::anyhow!("ws bridge: link→public read idle for 60s")),
+            };
+            let chunk = next.map_err(|e| anyhow::anyhow!("h2 recv data: {e}"))?;
             let _ = recv.flow_control().release_capacity(chunk.len());
             if chunk.is_empty() {
                 continue;
@@ -392,10 +416,11 @@ async fn pump(
             if chunk.len() > MAX_PROXY_BODY_BYTES {
                 return Err(anyhow::anyhow!("oversized h2 frame on websocket bridge"));
             }
-            tcp_w
-                .write_all(&chunk)
-                .await
-                .map_err(|e| anyhow::anyhow!("public tcp write: {e}"))?;
+            match tokio::time::timeout(IO_TIMEOUT, tcp_w.write_all(&chunk)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {e}")),
+                Err(_) => return Err(anyhow::anyhow!("ws bridge: public write idle for 60s")),
+            }
         }
         let _ = tcp_w.shutdown().await;
         anyhow::Ok(())
@@ -449,6 +474,7 @@ mod tests {
             ("upgrade", "websocket"),
             ("connection", "keep-alive, Upgrade"),
             ("sec-websocket-key", "abc=="),
+            ("sec-websocket-version", "13"),
         ]);
         assert!(is_websocket_upgrade(&h));
     }
@@ -485,8 +511,40 @@ mod tests {
             ("upgrade", "WebSocket"),
             ("connection", "UPGRADE"),
             ("sec-websocket-key", "abc=="),
+            ("sec-websocket-version", "13"),
         ]);
         assert!(is_websocket_upgrade(&h));
+    }
+
+    #[test]
+    fn rejects_obsolete_websocket_version() {
+        // Drafts 8 and 12 of RFC 6455 are obsolete and use a different
+        // framing layer. Treating them as a valid upgrade publicly
+        // while the inner backend rejects them is a smuggling primitive.
+        for version in ["", "8", "12", "7", "foo"] {
+            let h = req_headers(&[
+                ("upgrade", "websocket"),
+                ("connection", "Upgrade"),
+                ("sec-websocket-key", "abc=="),
+                ("sec-websocket-version", version),
+            ]);
+            assert!(
+                !is_websocket_upgrade(&h),
+                "version {version:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_websocket_version() {
+        // Even with everything else correct, an absent version header
+        // means the client has not signalled RFC 6455 compliance.
+        let h = req_headers(&[
+            ("upgrade", "websocket"),
+            ("connection", "Upgrade"),
+            ("sec-websocket-key", "abc=="),
+        ]);
+        assert!(!is_websocket_upgrade(&h));
     }
 
     #[test]

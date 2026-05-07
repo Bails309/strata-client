@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, type ReactElement } from "react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { RELEASE_CARDS, WHATS_NEW_VERSION } from "../components/WhatsNewModal";
 import Select from "../components/Select";
 import {
@@ -180,12 +181,16 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
   const [activeId, setActiveId] = useState(SECTIONS[0].id);
   const active = SECTIONS.find((s) => s.id === activeId)!;
 
-  // Memoise parsed HTML per section to avoid re-parsing on every render
+  // Memoise parsed HTML per section to avoid re-parsing on every render.
+  // Each rendered HTML string is run through DOMPurify so a future
+  // markdown source containing raw <script>/<iframe>/event-handlers
+  // can never reach the DOM.
   const htmlCache = useMemo(() => {
     const cache: Record<string, string> = {};
     for (const s of SECTIONS) {
       if (s.content) {
-        cache[s.id] = marked.parse(s.content) as string;
+        const raw = marked.parse(s.content) as string;
+        cache[s.id] = DOMPurify.sanitize(raw);
       }
     }
     return cache;

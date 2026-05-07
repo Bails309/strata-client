@@ -57,13 +57,29 @@ pub fn build_acceptor(
         .build()
         .context("build mTLS client verifier")?;
 
-    let mut cfg = ServerConfig::builder()
+    // The link channel is a fully-controlled internal trust domain;
+    // pin TLS 1.3 only. Strata internal nodes are built against the
+    // same rustls (0.23) and always negotiate 1.3, so we drop 1.2
+    // entirely to remove its weaker AEAD modes from the attack
+    // surface (CVE-2013-0169 etc.).
+    let cfg = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_client_cert_verifier(verifier)
         .with_single_cert(server_chain, server_key)
         .context("install DMZ link server cert + key")?;
+    let mut cfg = cfg;
     // ALPN: link is h2-only. h2 0.4 negotiates over TLS via this
     // protocol identifier.
     cfg.alpn_protocols = vec![b"h2".to_vec()];
+
+    // Disable TLS 1.3 session resumption (PSK tickets). On resumption,
+    // rustls does NOT re-present the client certificate, which would
+    // silently weaken our mTLS guarantee from "every connection
+    // verifies the cert chain" to "every fresh handshake verifies it,
+    // and resumed ones inherit trust from a captured ticket". For a
+    // private trust domain that already needs full handshake on
+    // every connect, the ticket round-trip saves us nothing.
+    cfg.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    cfg.send_tls13_tickets = 0;
 
     Ok(TlsAcceptor::from(Arc::new(cfg)))
 }

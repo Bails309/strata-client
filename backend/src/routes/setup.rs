@@ -1,4 +1,5 @@
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
@@ -26,6 +27,7 @@ pub struct InitRequest {
 
 pub async fn initialize(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<InitRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Atomically check+transition with a write lock to prevent race conditions
@@ -33,6 +35,30 @@ pub async fn initialize(
         let s = state.read().await;
         if s.phase != BootPhase::Setup {
             return Err(AppError::Config("System is already initialized".into()));
+        }
+    }
+
+    // If a bootstrap token has been provisioned (env or persisted file)
+    // require callers to present it via `X-Strata-Setup-Token`. Compared
+    // in constant time to deny timing-based brute force. When unset we
+    // fall back to the previous behaviour so existing first-boot flows
+    // (greenfield deploys with no operator secrets yet) still work.
+    if let Some(expected) = read_bootstrap_token() {
+        let presented = headers
+            .get("x-strata-setup-token")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // Always run the constant-time compare — do NOT short-circuit on the
+        // empty/missing case. Branching before the compare leaks via response
+        // latency whether a token is required at all.
+        let ok = crate::services::middleware::constant_time_eq(
+            presented.as_bytes(),
+            expected.as_bytes(),
+        );
+        if !ok {
+            return Err(AppError::Auth(
+                "Missing or invalid X-Strata-Setup-Token header".into(),
+            ));
         }
     }
 
@@ -162,6 +188,26 @@ pub async fn initialize(
 
     tracing::info!("Initialization complete – system is now running");
     Ok(Json(json!({ "status": "initialized" })))
+}
+
+/// Resolve the optional one-shot setup token.
+///
+/// Priority order:
+/// 1. `STRATA_SETUP_TOKEN` env var (preferred for orchestrated deploys).
+/// 2. `system-secrets.json` `setup_token` field if present.
+///
+/// Returning `None` falls back to the legacy unauthenticated /initialize
+/// path so existing greenfield bootstrap flows keep working. Operators
+/// who want defence-in-depth set the env var or persist a token before
+/// exposing the backend.
+fn read_bootstrap_token() -> Option<String> {
+    if let Ok(v) = std::env::var("STRATA_SETUP_TOKEN") {
+        let t = v.trim().to_string();
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -1,0 +1,24 @@
+{
+  "common": {
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "delete": "Delete",
+    "close": "Close"
+  },
+  "login": {
+    "title": "Sign in to Strata",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign in",
+    "submitInProgress": "Signing in…",
+    "ssoButton": "Continue with single sign-on",
+    "errors": {
+      "invalidCredentials": "Invalid username or password.",
+      "rateLimited": "Too many failed attempts. Try again shortly.",
+      "generic": "Sign-in failed. Please try again."
+    }
+  }
+}

@@ -68,7 +68,10 @@ test.describe('Security headers & rate-limits', () => {
     const res = await request.get('/api/user/me', {
       headers: { Authorization: 'Bearer ' + 'A'.repeat(8192) },
     });
-    expect(res.status()).toBe(401);
+    // 401 from our auth middleware OR 400 from hyper's header-size
+    // framing limit — both are acceptable rejections; what matters is
+    // that the server didn't crash and didn't leak panic output.
+    expect([400, 401, 431]).toContain(res.status());
     const body = await res.text();
     // Must not leak stack traces / panic messages.
     expect(body).not.toMatch(/panic|backtrace|thread .* panicked/i);

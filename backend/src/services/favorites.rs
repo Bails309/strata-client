@@ -18,8 +18,6 @@ pub async fn list(pool: &Pool<Postgres>, user_id: Uuid) -> Result<Vec<Uuid>, App
 }
 
 /// Check whether a `(user, connection)` pair is favorited.
-/// DB errors are swallowed to `false` to preserve the prior behaviour
-/// of the handler (which used `.unwrap_or(false)`).
 pub async fn is_favorite(
     pool: &Pool<Postgres>,
     user_id: Uuid,
@@ -31,8 +29,7 @@ pub async fn is_favorite(
     .bind(user_id)
     .bind(connection_id)
     .fetch_one(pool)
-    .await
-    .unwrap_or(false);
+    .await?;
     Ok(exists)
 }
 

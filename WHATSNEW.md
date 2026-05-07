@@ -1,3 +1,86 @@
+# What's New in v1.6.0
+
+> **Minor release: enterprise foundations.** v1.6.0 lays groundwork
+> that has been requested by enterprise reviewers without changing
+> any existing API contract or requiring a database migration. The
+> backend now emits a stable machine-readable `code` field on every
+> error response (so integrators can branch on `UNAUTHENTICATED` or
+> `DEPENDENCY_UNAVAILABLE` instead of regex-matching English prose),
+> the frontend gains a skip-to-content link plus focus-trapped
+> confirmation dialogs and a freshly-wired i18n scaffold (English
+> baseline, Login as the migrated exemplar), and operators get two
+> new runbook-grade documents covering the API lifecycle policy
+> (`docs/API-LIFECYCLE.md`) and a production Kubernetes topology
+> (`docs/deployment-kubernetes.md`). Drop-in upgrade from v1.5.5 —
+> roll all four images together.
+
+## Stable error codes on every API response
+
+Every `AppError` now maps to a stable SCREAMING_SNAKE token, and the
+JSON error body is now `{ "error": "<message>", "code": "<token>" }`.
+The set of codes — `INTERNAL`, `DEPENDENCY_UNAVAILABLE`,
+`UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_REQUEST`, `NOT_FOUND`,
+`SETUP_REQUIRED` — is now part of the documented API contract per
+`docs/API-LIFECYCLE.md`. Existing clients that branch on the `error`
+string keep working; new clients should prefer `code`.
+
+## Accessibility — skip link + focus-trapped dialogs
+
+A skip-to-content anchor at the top of every page becomes visible on
+keyboard focus and jumps past the persistent navigation rail directly
+to `<main id="main-content">` (WCAG 2.4.1 — Bypass Blocks).
+Destructive-action confirmation dialogs (`ConfirmModal`) now trap
+keyboard focus inside the dialog while open and restore focus to the
+previously-focused element on close (WCAG 2.4.3 / 2.1.2), via a new
+generic `useFocusTrap` hook reusable from any future modal.
+
+## Internationalisation scaffold (English baseline)
+
+`i18next` + `react-i18next` are now wired in with an English baseline
+locale (`common` and `login` namespaces), language detection from
+`localStorage["strata.lang"]` → `navigator.language` → English
+fallback, and a `setLanguage(lang)` helper ready for a future
+user-settings toggle. The Login page is the migrated exemplar so
+subsequent PRs can adopt the pattern incrementally rather than
+landing a single mega-refactor. The frontend bundle gains roughly
+30 KB gzipped.
+
+## API-lifecycle and Kubernetes deployment docs
+
+`docs/API-LIFECYCLE.md` formalises the `/api/v1` versioning policy,
+support window, breaking-change definition, `Deprecation` / `Sunset`
+headers per RFC 9745, the error-code stability contract, and the
+changelog discipline that backs it.
+
+`docs/deployment-kubernetes.md` is a production-grade Kubernetes
+runbook: per-component replica topology (the backend stays at
+`replicas=1` because rate limits, settings cache, OIDC nonce cache,
+and HTTP session storage are all process-local), `ExternalSecrets`
+inventory, PVC sizing table (postgres / vault / recordings / config),
+ingress + `NetworkPolicy` YAML, split liveness / readiness probes
+(`/api/health/live`, `/api/health/ready`), resource sizing,
+`terminationGracePeriodSeconds: 45`, and a curated common-pitfalls
+section.
+
+## Hardened a panic-free invariant in the user routes
+
+Replaced an `unwrap()` after a non-`None` guard in the
+checkout-activation handler with an explicit error path that returns
+the new stable `INTERNAL` code. Logically unreachable in normal
+flow, but the explicit handling preserves the panic-free invariant
+the rest of the route enforces under concurrent or adversarial
+inputs.
+
+## Drop-in upgrade — no migrations, no API contract changes
+
+No database migrations. The error body adds a `code` field but the
+existing `error` field is unchanged in shape and meaning. All four
+images (frontend, backend, DMZ edge, guacd) should be rolled
+together but each one is backwards-compatible with v1.5.5 peers
+during a rolling update.
+
+---
+
 # What's New in v1.5.0
 
 > **Minor release: DMZ deployment mode.** v1.5.0 introduces a

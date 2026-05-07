@@ -332,7 +332,7 @@ fn generate_ws_key() -> String {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let mut bytes = [0u8; 16];
     {
-        use rand::Rng;
+        use rand::RngExt;
         rand::rng().fill(&mut bytes);
     }
     STANDARD.encode(bytes)

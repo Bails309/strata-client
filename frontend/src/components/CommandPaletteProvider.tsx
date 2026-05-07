@@ -18,6 +18,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import CommandPalette from "./CommandPalette";
 import { useUserPreferences } from "./UserPreferencesProvider";
 import {
@@ -57,6 +58,7 @@ export function useCommandPalette(): CommandPaletteCtx {
 export default function CommandPaletteProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const { preferences } = useUserPreferences();
+  const navigate = useNavigate();
   const bindingRef = useRef(
     parseBinding(preferences.commandPaletteBinding ?? DEFAULT_COMMAND_PALETTE_BINDING)
   );
@@ -89,6 +91,16 @@ export default function CommandPaletteProvider({ children }: { children: React.R
       if (ev.origin !== window.location.origin) return;
       if (ev.data?.type === "strata:open-command-palette") {
         setOpen(true);
+        return;
+      }
+      // Popout palette selection — open the chosen connection in this
+      // (main) window. Validate the id loosely; SessionManager / Router
+      // will reject anything bogus.
+      if (ev.data?.type === "strata:open-connection") {
+        const id = ev.data.id;
+        if (typeof id === "string" && id.length > 0 && id.length < 256) {
+          navigate(`/session/${encodeURIComponent(id)}`);
+        }
       }
     };
     window.addEventListener("message", handleMessage);
@@ -97,7 +109,7 @@ export default function CommandPaletteProvider({ children }: { children: React.R
       document.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("message", handleMessage);
     };
-  }, []);
+  }, [navigate]);
 
   return (
     <Ctx.Provider value={{ open: openPalette, isOpen: open, setSuppressed }}>

@@ -15,6 +15,7 @@ import {
   matchesBinding,
   DEFAULT_COMMAND_PALETTE_BINDING,
 } from "../utils/keybindings";
+import { createPopoutPalette } from "../utils/popoutPalette";
 
 /**
  * Hook that manages popping a Guacamole session out into a separate browser window.
@@ -198,31 +199,103 @@ export function usePopOut(
       sess.client.sendMouseState(e.state, true);
     });
 
+    // ── Capture-phase key trap ──
+    //
+    // MUST be registered BEFORE `new Guacamole.Keyboard(popup.document)`.
+    // Both listeners attach in the capture phase on the same element, and
+    // capture-phase listeners fire in registration order. If Guacamole's
+    // listener runs first it will forward F12 / Ctrl+K / etc. to the remote
+    // before we can stop them. By registering our trap first and calling
+    // `stopImmediatePropagation()`, the Guacamole listener never sees the
+    // event at all and nothing is sent to the remote — which means there
+    // is no "stuck key" to release later either.
+    //
+    // Popup-local command palette. Built lazily on first Ctrl+K so we
+    // don't pay for it unless the user actually opens it.
+    const popoutPalette = createPopoutPalette(popup, window);
+
+    const trapKeyDown = (e: KeyboardEvent) => {
+      // Popup palette open — route arrows / Enter / Escape to it and
+      // preventDefault for those, but do NOT stopPropagation: stopping
+      // propagation in the capture phase would prevent the event from
+      // ever reaching the search <input>, breaking typing. Guacamole's
+      // forwarding is gated below in kb.onkeydown / kb.onkeyup.
+      if (popoutPalette.isOpen()) {
+        const consumed = popoutPalette.handleKeyDown(e);
+        if (consumed) e.preventDefault();
+        return;
+      }
+      // Ctrl+Shift+I / Ctrl+Shift+J → DevTools. Don't forward to remote and
+      // don't preventDefault — let the browser open DevTools (matches
+      // main-window behaviour in SessionClient).
+      if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) {
+        e.stopImmediatePropagation();
+        return;
+      }
+      // F11 → toggle fullscreen on the popup itself. Without this the
+      // blanket preventDefault below would suppress the browser's native
+      // F11 fullscreen and the user could never fullscreen the popout.
+      if (e.key === "F11") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        try {
+          if (popup.document.fullscreenElement) {
+            void popup.document.exitFullscreen().catch(() => {});
+          } else {
+            void popup.document.documentElement.requestFullscreen().catch(() => {});
+          }
+        } catch {
+          /* fullscreen API unavailable */
+        }
+        return;
+      }
+      // User-configurable command-palette shortcut → render the palette
+      // in the popup itself. The selection is relayed to the opener via
+      // postMessage so SessionManager / Router still own session state.
+      if (matchesBinding(e, commandPaletteBindingRef.current)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        popoutPalette.open();
+        return;
+      }
+      // Everything else (including F12) is preventDefault'd so the browser
+      // doesn't act on it (no DevTools on F12, no F5 refresh, etc.) but
+      // NOT stopPropagation'd, so Guacamole.Keyboard's capture-phase
+      // listener still fires after us and forwards the key to the remote.
+      e.preventDefault();
+    };
+    popup.document.addEventListener("keydown", trapKeyDown, true);
+
     // ── Keyboard input in the popup ──
     const kb = new Guacamole.Keyboard(popup.document);
     const winProxy = createWinKeyProxy((p, k) => sess.client.sendKeyEvent(p, k));
     kb.onkeydown = (keysym: number) => {
+      // While the popup palette is open, don't forward to the remote and
+      // return TRUE so Guacamole.Keyboard does NOT call preventDefault on
+      // the underlying keydown — see Guacamole.Keyboard.press():
+      //   defaultPrevented = !press(keysym)
+      // Returning true means "key was handled, don't suppress default",
+      // which lets typed characters reach the palette's <input>.
+      if (popoutPalette.isOpen()) return true;
       return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {
+      if (popoutPalette.isOpen()) return;
       winProxy.onkeyup(keysym);
     };
 
-    // Capture-phase key trap to prevent browser shortcuts in popup
-    const trapKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F12") return;
-      if (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "J")) return;
-      // User-configurable command-palette shortcut → relay to main window.
-      if (matchesBinding(e, commandPaletteBindingRef.current)) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
+    // Safety net: when the popup loses focus (e.g. DevTools opens, user
+    // alt-tabs away) release every key the Guacamole keyboard thinks is
+    // currently held. Otherwise a key pressed at the moment focus left
+    // would stay "down" on the remote because the keyup is never delivered.
+    const onPopupBlur = () => {
+      try {
         kb.reset();
-        window.postMessage({ type: "strata:open-command-palette" }, "*");
-        return;
+      } catch {
+        /* ignore */
       }
-      e.preventDefault();
     };
-    popup.document.addEventListener("keydown", trapKeyDown, true);
+    popup.addEventListener("blur", onPopupBlur);
 
     // Shortcut proxy: Ctrl+Alt+Tab → Alt+Tab, Ctrl+Alt+` → Win+Tab
     const removeShortcutProxy = installShortcutProxy(popup.document, (p, k) =>
@@ -405,6 +478,21 @@ export function usePopOut(
     const onUnload = () => returnDisplay();
     popup.addEventListener("pagehide", onUnload);
 
+    // ── Close the popup if the main window goes away ──
+    // The Guacamole client, WebSocket and all session state live in the
+    // main window. If the user closes the main window the popup keeps
+    // displaying the last frame but is otherwise frozen (no input, no
+    // updates) — confusing and easy to mistake for a hung session.
+    // Close it explicitly when the opener unloads.
+    const onOpenerUnload = () => {
+      try {
+        if (!popup.closed) popup.close();
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener("pagehide", onOpenerUnload);
+
     // Poll in case pagehide doesn't fire reliably
     const pollId = setInterval(() => {
       if (popup.closed) {
@@ -432,12 +520,19 @@ export function usePopOut(
       popup.removeEventListener("resize", handleResize);
       popup.removeEventListener("pagehide", onUnload);
       popup.removeEventListener("focus", pushClipboardPopup);
+      popup.removeEventListener("blur", onPopupBlur);
+      try {
+        window.removeEventListener("pagehide", onOpenerUnload);
+      } catch {
+        /* ignore */
+      }
       // Restore previous display.onresize so the main-window effect can
       // re-register its own handler without leftover popup closures.
       display.onresize = prevOnResize ?? null;
       try {
         popup.document.removeEventListener("keydown", trapKeyDown, true);
         popup.document.removeEventListener("paste", handlePastePopup);
+        popoutPalette.destroy();
         removeShortcutProxy();
         removeKeyboardLock();
       } catch {

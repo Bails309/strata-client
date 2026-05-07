@@ -213,8 +213,8 @@ fn parse_cert_file(path: &Path, display: &str) -> Result<Vec<CertificateEntry>, 
     let now = chrono::Utc::now();
     for (idx, der) in ders.iter().enumerate() {
         let der_bytes = der.as_ref();
-        let (_, parsed) = x509_parser::parse_x509_certificate(der_bytes)
-            .map_err(|e| format!("x509: {e}"))?;
+        let (_, parsed) =
+            x509_parser::parse_x509_certificate(der_bytes).map_err(|e| format!("x509: {e}"))?;
         let subject = cn_or_full(&parsed.tbs_certificate.subject.to_string());
         let issuer = cn_or_full(&parsed.tbs_certificate.issuer.to_string());
         let nb_ts = parsed.tbs_certificate.validity.not_before.timestamp();

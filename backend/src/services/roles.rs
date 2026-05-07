@@ -228,3 +228,127 @@ pub async fn replace_mappings(
     tx.commit().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn role_row_serialize_includes_all_permission_flags() {
+        let row = RoleRow {
+            id: Uuid::nil(),
+            name: "admin".to_string(),
+            can_manage_system: true,
+            can_manage_users: true,
+            can_manage_connections: true,
+            can_view_audit_logs: true,
+            can_create_users: true,
+            can_create_user_groups: true,
+            can_create_connections: true,
+            can_create_sharing_profiles: true,
+            can_view_sessions: true,
+            can_use_quick_share: true,
+        };
+        let v = serde_json::to_value(&row).unwrap();
+        // Every permission flag must be a top-level boolean in the JSON
+        // payload so the admin UI can bind directly to it.
+        for key in [
+            "can_manage_system",
+            "can_manage_users",
+            "can_manage_connections",
+            "can_view_audit_logs",
+            "can_create_users",
+            "can_create_user_groups",
+            "can_create_connections",
+            "can_create_sharing_profiles",
+            "can_view_sessions",
+            "can_use_quick_share",
+        ] {
+            assert_eq!(v[key], json!(true), "missing or non-bool {key}");
+        }
+        assert_eq!(v["name"], json!("admin"));
+    }
+
+    #[test]
+    fn create_role_request_treats_missing_flags_as_none() {
+        // Defensive: the route handler depends on missing-flag => false
+        // semantics via .unwrap_or(false). We assert the deserializer
+        // gives us None (not e.g. an error) for that path.
+        let body: CreateRoleRequest =
+            serde_json::from_value(json!({ "name": "viewer" })).unwrap();
+        assert_eq!(body.name, "viewer");
+        assert!(body.can_manage_system.is_none());
+        assert!(body.can_use_quick_share.is_none());
+    }
+
+    #[test]
+    fn create_role_request_explicit_false_preserved() {
+        let body: CreateRoleRequest = serde_json::from_value(json!({
+            "name": "viewer",
+            "can_manage_system": false,
+            "can_use_quick_share": true,
+        }))
+        .unwrap();
+        assert_eq!(body.can_manage_system, Some(false));
+        assert_eq!(body.can_use_quick_share, Some(true));
+    }
+
+    #[test]
+    fn update_role_request_partial_update_allowed() {
+        // PATCH-style: only the name field is set, everything else None
+        // so the SQL COALESCE keeps the existing value.
+        let body: UpdateRoleRequest =
+            serde_json::from_value(json!({ "name": "renamed" })).unwrap();
+        assert_eq!(body.name.as_deref(), Some("renamed"));
+        assert!(body.can_manage_system.is_none());
+    }
+
+    #[test]
+    fn role_mapping_update_accepts_empty_collections() {
+        let body: RoleMappingUpdate = serde_json::from_value(json!({
+            "connection_ids": [],
+            "folder_ids": [],
+        }))
+        .unwrap();
+        assert!(body.connection_ids.is_empty());
+        assert!(body.folder_ids.is_empty());
+    }
+
+    #[test]
+    fn role_mappings_serializes_as_uuid_arrays() {
+        let id = Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap();
+        let m = RoleMappings {
+            connection_ids: vec![id],
+            folder_ids: vec![],
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(
+            v["connection_ids"][0],
+            json!("11111111-1111-1111-1111-111111111111")
+        );
+        assert!(v["folder_ids"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn select_columns_lists_every_role_row_field() {
+        // Guard against the SELECT_COLUMNS constant drifting from the
+        // RoleRow struct after a future migration adds a column.
+        for col in [
+            "id",
+            "name",
+            "can_manage_system",
+            "can_manage_users",
+            "can_manage_connections",
+            "can_view_audit_logs",
+            "can_create_users",
+            "can_create_user_groups",
+            "can_create_connections",
+            "can_create_sharing_profiles",
+            "can_view_sessions",
+            "can_use_quick_share",
+        ] {
+            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+        }
+    }
+}

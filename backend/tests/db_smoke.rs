@@ -44,12 +44,10 @@ async fn migrated_schema_has_core_tables() {
         "active_sessions",
     ];
 
-    let rows = sqlx::query(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("list tables");
+    let rows = sqlx::query("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+        .fetch_all(&pool)
+        .await
+        .expect("list tables");
 
     let names: Vec<String> = rows
         .iter()

@@ -159,4 +159,3 @@ mod tests {
         assert_eq!(IDEMPOTENCY_TTL_HOURS, 24);
     }
 }
-

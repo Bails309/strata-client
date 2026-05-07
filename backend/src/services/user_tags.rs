@@ -260,8 +260,7 @@ mod tests {
 
     #[test]
     fn create_tag_request_accepts_optional_color() {
-        let body: CreateTagRequest =
-            serde_json::from_value(json!({ "name": "qa" })).unwrap();
+        let body: CreateTagRequest = serde_json::from_value(json!({ "name": "qa" })).unwrap();
         assert_eq!(body.name, "qa");
         assert!(body.color.is_none());
 
@@ -272,8 +271,7 @@ mod tests {
 
     #[test]
     fn update_tag_request_allows_renaming_only() {
-        let body: UpdateTagRequest =
-            serde_json::from_value(json!({ "name": "renamed" })).unwrap();
+        let body: UpdateTagRequest = serde_json::from_value(json!({ "name": "renamed" })).unwrap();
         assert_eq!(body.name.as_deref(), Some("renamed"));
         assert!(body.color.is_none());
     }
@@ -297,4 +295,3 @@ mod tests {
         assert!(err.to_string().contains("tag_id"));
     }
 }
-

@@ -275,8 +275,7 @@ mod tests {
         // Defensive: the route handler depends on missing-flag => false
         // semantics via .unwrap_or(false). We assert the deserializer
         // gives us None (not e.g. an error) for that path.
-        let body: CreateRoleRequest =
-            serde_json::from_value(json!({ "name": "viewer" })).unwrap();
+        let body: CreateRoleRequest = serde_json::from_value(json!({ "name": "viewer" })).unwrap();
         assert_eq!(body.name, "viewer");
         assert!(body.can_manage_system.is_none());
         assert!(body.can_use_quick_share.is_none());
@@ -298,8 +297,7 @@ mod tests {
     fn update_role_request_partial_update_allowed() {
         // PATCH-style: only the name field is set, everything else None
         // so the SQL COALESCE keeps the existing value.
-        let body: UpdateRoleRequest =
-            serde_json::from_value(json!({ "name": "renamed" })).unwrap();
+        let body: UpdateRoleRequest = serde_json::from_value(json!({ "name": "renamed" })).unwrap();
         assert_eq!(body.name.as_deref(), Some("renamed"));
         assert!(body.can_manage_system.is_none());
     }
@@ -348,7 +346,10 @@ mod tests {
             "can_view_sessions",
             "can_use_quick_share",
         ] {
-            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+            assert!(
+                SELECT_COLUMNS.contains(col),
+                "SELECT_COLUMNS missing `{col}`"
+            );
         }
     }
 }

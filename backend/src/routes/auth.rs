@@ -116,7 +116,7 @@ pub fn validate_login_input(username: &str, password: &str) -> Result<(), AppErr
     if username.is_empty() || password.is_empty() {
         return Err(AppError::Auth("Invalid credentials".into()));
     }
-    if username.len() > 256 || password.len() > 1024 {
+    if username.len() > 256 || password.len() > 256 {
         return Err(AppError::Auth("Invalid credentials".into()));
     }
     Ok(())
@@ -135,7 +135,7 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
             MIN_PASSWORD_LENGTH
         )));
     }
-    if password.len() > 1024 {
+    if password.len() > 256 {
         return Err(AppError::Validation("Password is too long".into()));
     }
     Ok(())
@@ -1722,14 +1722,14 @@ mod tests {
     #[test]
     fn validate_login_rejects_long_password() {
         let user = String::from("alice");
-        let long = "a".repeat(1025);
+        let long = "a".repeat(257);
         assert!(validate_login_input(&user, &long).is_err());
     }
 
     #[test]
     fn validate_login_accepts_boundary_lengths() {
         let u = "a".repeat(256);
-        let p = "a".repeat(1024);
+        let p = "a".repeat(256);
         assert!(validate_login_input(&u, &p).is_ok());
     }
 
@@ -1746,8 +1746,8 @@ mod tests {
         assert!(validate_password(&ok_phrase).is_ok());
         assert!(validate_password(&min_ok).is_ok()); // min length 12
         assert!(validate_password(&too_short).is_err()); // too short
-        assert!(validate_password(&"a".repeat(1024)).is_ok()); // max length
-        assert!(validate_password(&"a".repeat(1025)).is_err()); // too long
+        assert!(validate_password(&"a".repeat(256)).is_ok()); // max length
+        assert!(validate_password(&"a".repeat(257)).is_err()); // too long
     }
 
     // ── check_rate_limit ───────────────────────────────────────────────

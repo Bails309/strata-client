@@ -112,6 +112,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Publish to process-wide OnceLock so auth/middleware can read it
+    // Enforce a 32-byte minimum to prevent weak-secret JWT forgery; if the
+    // operator-supplied value (env or persisted config) is too short we
+    // refuse to start rather than silently degrading.
+    if jwt_secret.len() < 32 {
+        anyhow::bail!(
+            "JWT_SECRET must be at least 32 bytes; got {} bytes. Generate one with `openssl rand -base64 32`.",
+            jwt_secret.len()
+        );
+    }
     config::JWT_SECRET
         .set(jwt_secret.clone())
         .expect("JWT_SECRET already initialized");

@@ -228,8 +228,9 @@ pub async fn require_csrf(req: Request, next: Next) -> Result<Response, AppError
     }
 }
 
-/// Constant-time byte comparison to avoid timing oracles on the CSRF token.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+/// Constant-time byte comparison to avoid timing oracles on tokens
+/// (CSRF cookie value, bootstrap token, operator-only secrets, ...).
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

@@ -57,10 +57,16 @@ pub fn build_acceptor(
         .build()
         .context("build mTLS client verifier")?;
 
-    let mut cfg = ServerConfig::builder()
+    // The link channel is a fully-controlled internal trust domain;
+    // pin TLS 1.3 only. Strata internal nodes are built against the
+    // same rustls (0.23) and always negotiate 1.3, so we drop 1.2
+    // entirely to remove its weaker AEAD modes from the attack
+    // surface (CVE-2013-0169 etc.).
+    let cfg = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .with_client_cert_verifier(verifier)
         .with_single_cert(server_chain, server_key)
         .context("install DMZ link server cert + key")?;
+    let mut cfg = cfg;
     // ALPN: link is h2-only. h2 0.4 negotiates over TLS via this
     // protocol identifier.
     cfg.alpn_protocols = vec![b"h2".to_vec()];

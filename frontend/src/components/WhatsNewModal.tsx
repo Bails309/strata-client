@@ -29,6 +29,48 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.5.4",
+    subtitle:
+      "Security review — consolidated hardening pass across backend, DMZ link channel, and frontend",
+    sections: [
+      {
+        title: "Backend — JWT secret length and password caps enforced",
+        description:
+          "v1.5.4 refuses to start if `JWT_SECRET` is shorter than 32 bytes (256 bits) and emits a remediation hint (`openssl rand -base64 32`), preventing accidental deployment with a placeholder or truncated secret. The login and registration password length cap drops from 1024 → 256 bytes — Argon2 hashes any input length in roughly constant time, so the previous cap was a free amplification vector for credential stuffing and DoS without buying any real-world passphrase headroom.",
+      },
+      {
+        title: "Backend — optional one-shot bootstrap token on /api/setup/initialize",
+        description:
+          "When the new `STRATA_SETUP_TOKEN` env var is set, the first-boot `/api/setup/initialize` endpoint requires the matching `X-Strata-Setup-Token` header and compares it in constant time. Greenfield deploys without the env var keep the previous unauthenticated bootstrap flow, so existing first-boot scripts and orchestrated installs are unaffected. Operators who want defence-in-depth can now pin a one-shot token in the deployment manifest before exposing the backend to the network.",
+      },
+      {
+        title: "Backend — audit, pagination, and error-handling fixes",
+        description:
+          "The `share` revoke path now writes an audit log entry matching the create/use side, closing the audit-trail gap on link revocation. Recordings list pagination uses a deterministic tiebreaker (`ORDER BY created_at DESC, id DESC`) so cursor pages no longer silently drop or duplicate rows when several recordings share a timestamp. The favorites list endpoint surfaces DB errors instead of swallowing them with `unwrap_or(empty)`, so broken queries log and return a proper 5xx instead of hiding the failure as “no favorites”. The active-session GC interval shortens from 5 min → 2 min so abandoned viewer rows expire from the dashboard sooner.",
+      },
+      {
+        title: "DMZ link channel — TLS 1.3 pin, idle timeouts, streaming body cap",
+        description:
+          "TLS is pinned to 1.3 only on the operator ↔ edge link server — the control channel never needs TLS 1.2 fall-back, and restricting the protocol set removes an entire surface area of downgrade and cipher negotiation bugs. The WebSocket bridge enforces a 60 s I/O idle timeout on read/write/framing on both legs so a stalled inner TCP peer can no longer pin a goroutine + descriptor pair indefinitely. The HTTP body cap middleware now also wraps the streaming body with `http_body_util::Limited`, so chunked uploads that omit or lie about Content-Length are still bounded by the per-IP limit.",
+      },
+      {
+        title: "DMZ link channel — proxy hygiene, deterministic PSK, IPv6 zone scrub",
+        description:
+          "The reverse proxy now strips the full RFC 7230 hop-by-hop header set before forwarding (Connection, Keep-Alive, Proxy-Authenticate, Proxy-Authorization, TE, Trailers, Transfer-Encoding, Upgrade) plus any header named in the inbound `Connection` value, matching what production-grade reverse proxies do. The active link PSK id is now deterministic (the first id parsed from `LINK_PSKS`) instead of `HashMap::keys().next()`, which the std-lib does not promise to keep stable across runs. The edge signer scrubs IPv6 zone identifiers (`fe80::1%eth0`) from X-Forwarded-For before signing, removing a header smuggling primitive.",
+      },
+      {
+        title: "Frontend — Markdown sanitisation and ConfirmModal on destructive admin actions",
+        description:
+          "The Documentation viewer now sanitises rendered Markdown with DOMPurify before it lands in the DOM, treating `marked` output as untrusted and eliminating any chance of stored-XSS via doc content. The destructive admin actions in the Passwords tab (delete approval role, delete account mapping) use the existing `ConfirmModal` instead of the browser-native `window.confirm()`, matching the rest of the admin UX and avoiding click-jacking on the native dialog.",
+      },
+      {
+        title: "Drop-in upgrade — confirm JWT_SECRET length, no migrations",
+        description:
+          "v1.5.4 has no database migrations, no /api/* contract changes, and no protocol changes. Before upgrading, confirm `JWT_SECRET` is at least 32 bytes; rotate via `openssl rand -base64 32` if you were running with the old default. Optionally set `STRATA_SETUP_TOKEN` before exposing the backend to the network for greenfield deploys. All four images (frontend, backend, DMZ edge, guacd) should be rolled together but each one is backwards-compatible with v1.5.3 peers during a rolling update.",
+      },
+    ],
+  },
+  {
     version: "1.5.3",
     subtitle:
       "Admin Settings — grouped sidebar navigation replaces the 17-tab horizontal row that no longer fit on a single line",

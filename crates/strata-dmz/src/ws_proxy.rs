@@ -358,14 +358,20 @@ async fn pump(
     let upgraded = hyper_util::rt::TokioIo::new(upgraded);
     let (mut tcp_r, mut tcp_w) = tokio::io::split(upgraded);
 
+    // Per-IO timeout so a slow/idle peer can't pin an h2 stream
+    // indefinitely. The websocket layer above us is expected to issue
+    // its own ping/pong; this is a belt-and-braces upper bound.
+    const IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
     // public TCP -> h2
     let pub_to_link = async move {
         let mut buf = vec![0u8; 16 * 1024];
         loop {
-            let n = tcp_r
-                .read(&mut buf)
-                .await
-                .map_err(|e| anyhow::anyhow!("public tcp read: {e}"))?;
+            let n = match tokio::time::timeout(IO_TIMEOUT, tcp_r.read(&mut buf)).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {e}")),
+                Err(_) => return Err(anyhow::anyhow!("ws bridge: public→link read idle for 60s")),
+            };
             if n == 0 {
                 break;
             }
@@ -380,8 +386,13 @@ async fn pump(
 
     // h2 -> public TCP
     let link_to_pub = async move {
-        while let Some(chunk) = recv.data().await {
-            let chunk = chunk.map_err(|e| anyhow::anyhow!("h2 recv data: {e}"))?;
+        loop {
+            let next = match tokio::time::timeout(IO_TIMEOUT, recv.data()).await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => return Err(anyhow::anyhow!("ws bridge: link→public read idle for 60s")),
+            };
+            let chunk = next.map_err(|e| anyhow::anyhow!("h2 recv data: {e}"))?;
             let _ = recv.flow_control().release_capacity(chunk.len());
             if chunk.is_empty() {
                 continue;
@@ -392,10 +403,11 @@ async fn pump(
             if chunk.len() > MAX_PROXY_BODY_BYTES {
                 return Err(anyhow::anyhow!("oversized h2 frame on websocket bridge"));
             }
-            tcp_w
-                .write_all(&chunk)
-                .await
-                .map_err(|e| anyhow::anyhow!("public tcp write: {e}"))?;
+            match tokio::time::timeout(IO_TIMEOUT, tcp_w.write_all(&chunk)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {e}")),
+                Err(_) => return Err(anyhow::anyhow!("ws bridge: public write idle for 60s")),
+            }
         }
         let _ = tcp_w.shutdown().await;
         anyhow::Ok(())

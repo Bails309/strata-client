@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.4] — 2026-05-21
+
+### Security review — consolidated hardening pass
+
+v1.5.4 is a defence-in-depth release. None of the items below
+correspond to a known exploited vulnerability, but each closes a
+class of mistake we want gone before the v1.6 feature work lands.
+There are no breaking API or database changes; operators can roll
+the new images straight on top of v1.5.3.
+
+#### Backend
+
+- **JWT secret length is now enforced at boot.** `JWT_SECRET` shorter
+  than 32 bytes (256 bits) refuses to start the backend with a
+  remediation hint. Prevents accidental deployment with a placeholder
+  or trimmed secret.
+- **Login & registration password length cap reduced from 1024 → 256
+  bytes.** Argon2 hashes any input length in roughly constant time, so
+  a 1 KiB cap was a free amplification vector for credential-stuffing
+  and DoS. 256 bytes still admits any realistic passphrase.
+- **`/api/setup/initialize` accepts an optional one-shot bootstrap
+  token.** When `STRATA_SETUP_TOKEN` is set, the endpoint requires the
+  matching `X-Strata-Setup-Token` header (constant-time compared).
+  Greenfield deploys without the env var keep the previous
+  unauthenticated first-boot flow.
+- **Active-session GC interval shortened** from 5 min → 2 min so
+  abandoned/disconnected viewer rows expire from the dashboard sooner.
+- **`favorites` list endpoint surfaces DB errors** instead of silently
+  swallowing them with `unwrap_or(empty)` — broken queries now log and
+  return a proper 5xx instead of hiding the failure as “no favorites”.
+- **`recordings` pagination uses a deterministic tiebreaker**
+  (`ORDER BY created_at DESC, id DESC`) so cursor pages no longer drop
+  or duplicate rows when several recordings share a timestamp.
+- **`share` revoke writes an audit log entry** matching the create/use
+  side, closing the audit-trail gap on link revocation.
+
+#### Edge / DMZ link channel
+
+- **TLS pinned to 1.3 only** on the operator ↔ edge link server. The
+  control channel never needs TLS 1.2 fall-back; restricting the
+  protocol set removes an entire surface area of downgrade and cipher
+  negotiation bugs.
+- **WebSocket bridge enforces a 60 s I/O idle timeout** on both legs
+  (read / write / framing), so a stalled inner TCP peer can no longer
+  pin a goroutine + descriptor pair indefinitely.
+- **HTTP body cap also wraps the streaming body** with
+  `http_body_util::Limited`, so chunked uploads that omit or lie about
+  Content-Length are still bounded by the per-IP limit.
+- **Reverse proxy strips full RFC 7230 hop-by-hop header set** before
+  forwarding (Connection, Keep-Alive, Proxy-Authenticate,
+  Proxy-Authorization, TE, Trailers, Transfer-Encoding, Upgrade) plus
+  any header named in the inbound `Connection` value.
+- **Active link PSK id is now deterministic** (the first id parsed
+  from `LINK_PSKS`) instead of `HashMap::keys().next()`, which the
+  std-lib does not promise to keep stable across runs.
+- **Edge signer scrubs IPv6 zone identifiers** (`fe80::1%eth0`) from
+  X-Forwarded-For before signing, removing a header smuggling
+  primitive.
+
+#### Frontend
+
+- **Documentation viewer sanitises rendered Markdown with DOMPurify.**
+  `marked` output is treated as untrusted before being dropped into the
+  DOM, eliminating any chance of stored-XSS via doc content.
+- **Destructive admin actions (delete role, delete account mapping)
+  use the existing `ConfirmModal`** instead of the browser-native
+  `window.confirm()`, matching the rest of the admin UX and avoiding
+  click-jacking on the native dialog.
+
+#### Upgrade notes
+
+- Confirm `JWT_SECRET` is at least 32 bytes; rotate via
+  `openssl rand -base64 32` if you were running with the old default.
+- Optional: set `STRATA_SETUP_TOKEN` before exposing the backend to
+  network for greenfield deploys.
+- No database migrations.
+
 ## [1.5.3] — 2026-05-08
 
 ### Admin Settings — grouped sidebar navigation

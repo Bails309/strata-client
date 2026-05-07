@@ -40,7 +40,7 @@ pub fn spawn_session_cleanup_task(
         PeriodicConfig {
             label: "active_sessions_cleanup",
             initial_delay: Duration::from_secs(60),
-            interval: Duration::from_secs(300),
+            interval: Duration::from_secs(120),
             iteration_timeout: Duration::from_secs(120),
             error_backoff_base: Duration::from_secs(10),
         },

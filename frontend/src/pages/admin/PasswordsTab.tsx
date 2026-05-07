@@ -4,6 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { useCallback, useEffect, useState } from "react";
 import Select from "../../components/Select";
+import ConfirmModal from "../../components/ConfirmModal";
 import { useSettings } from "../../contexts/SettingsContext";
 import {
   AdSyncConfig,
@@ -84,6 +85,15 @@ export default function PasswordsTab({
   // ── Checkout requests ──
   const [requests, setRequests] = useState<CheckoutRequest[]>([]);
 
+  // ── Confirmation modal for destructive actions ──
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    isDangerous?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
+
   // ── Loaders ──
   const loadRoles = useCallback(async () => {
     try {
@@ -142,9 +152,19 @@ export default function PasswordsTab({
   };
 
   const handleDeleteRole = async (id: string) => {
-    await deleteApprovalRole(id);
-    loadRoles();
-    onSave();
+    const role = roles.find((r) => r.id === id);
+    setConfirmModal({
+      title: "Delete approval role",
+      message: `Permanently delete the approval role "${role?.name ?? id}"? Approvers and account scopes attached to this role will be removed.`,
+      confirmLabel: "Delete role",
+      isDangerous: true,
+      onConfirm: async () => {
+        await deleteApprovalRole(id);
+        setConfirmModal(null);
+        loadRoles();
+        onSave();
+      },
+    });
   };
 
   const handleSaveAssignments = async (roleId: string) => {
@@ -190,14 +210,24 @@ export default function PasswordsTab({
   };
 
   const handleDeleteMapping = async (id: string) => {
-    await deleteAccountMapping(id);
-    loadMappings();
-    // Refresh unmapped accounts so deleted account reappears in the dropdown
-    if (newMapping.ad_sync_config_id) {
-      getUnmappedAccounts(newMapping.ad_sync_config_id)
-        .then(setUnmapped)
-        .catch(() => setUnmapped([]));
-    }
+    const mapping = mappings.find((m) => m.id === id);
+    const label = mapping?.friendly_name || mapping?.managed_ad_dn || id;
+    setConfirmModal({
+      title: "Delete account mapping",
+      message: `Remove the mapping for "${label}"? Existing approval roles that scope this account will lose it.`,
+      confirmLabel: "Delete mapping",
+      isDangerous: true,
+      onConfirm: async () => {
+        await deleteAccountMapping(id);
+        setConfirmModal(null);
+        loadMappings();
+        if (newMapping.ad_sync_config_id) {
+          getUnmappedAccounts(newMapping.ad_sync_config_id)
+            .then(setUnmapped)
+            .catch(() => setUnmapped([]));
+        }
+      },
+    });
   };
 
   const handleToggleSelfApprove = async (id: string, next: boolean) => {
@@ -862,6 +892,15 @@ export default function PasswordsTab({
           )}
         </div>
       )}
+      <ConfirmModal
+        isOpen={!!confirmModal}
+        title={confirmModal?.title || ""}
+        message={confirmModal?.message || ""}
+        confirmLabel={confirmModal?.confirmLabel}
+        isDangerous={confirmModal?.isDangerous}
+        onConfirm={() => confirmModal?.onConfirm()}
+        onCancel={() => setConfirmModal(null)}
+      />
     </div>
   );
 }

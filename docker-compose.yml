@@ -116,6 +116,15 @@ services:
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
       - STRATA_ALLOWED_ORIGINS=${STRATA_ALLOWED_ORIGINS:-}
+      # Public base URL for SSO redirect_uri construction when the
+      # backend sits behind a reverse proxy / DMZ relay that doesn't
+      # forward Host/X-Forwarded-* headers. Optional — when unset,
+      # the backend falls back to inferring from request headers.
+      - BASE_URL=${BASE_URL:-}
+      # Comma-separated allowlist of Host header values accepted when
+      # deriving base URL from request headers. Ignored if BASE_URL
+      # is set.
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-}
       # Web (Chromium kiosk) — always available because the binaries
       # are baked into the image. Operators who don't define `web`
       # connections simply never trigger a spawn.

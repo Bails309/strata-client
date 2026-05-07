@@ -76,7 +76,7 @@ function snippetFor(
   format: SnippetFormat,
   url: string,
   filename: string,
-  insecure: boolean,
+  insecure: boolean
 ): string {
   // Escape any single quote in the filename so it survives single-
   // quoted shell interpolation: `O'Brien.pdf` -> `O'\''Brien.pdf`.
@@ -192,7 +192,7 @@ export default function QuickShare({
       const url = `${window.location.origin}${file.download_url}`;
       return snippetFor(format, url, file.filename, insecure);
     },
-    [format, insecure],
+    [format, insecure]
   );
 
   const copyUrl = useCallback(

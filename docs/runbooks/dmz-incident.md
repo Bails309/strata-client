@@ -113,6 +113,33 @@ container reports healthy. Public traffic returns `503` from the DMZ.
    mismatch. Rotate per §Cert rotation if either side's cert was
    recently regenerated.
 
+5. **If the internal node logs `certificate not valid for name
+   "<hostname>"`**, the SNI it presents (taken from
+   `STRATA_DMZ_ENDPOINTS`) is missing from the link server cert's
+   SAN. Reissue `certs/dmz/server.crt` with the public DMZ hostname
+   added — the CA, `server.key`, and client material can stay the
+   same so nothing needs redistributing to the internal host:
+
+   ```bash
+   # On the DMZ host
+   cd /opt/strata-client/certs/dmz
+   sudo bash -c 'cat > server.ext <<EOF
+   subjectAltName=DNS:<public-dmz-hostname>,DNS:strata-dmz,DNS:localhost,IP:127.0.0.1
+   EOF'
+   sudo openssl req -new -key server.key -subj "/CN=strata-dmz" -out server.csr
+   sudo openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+       -days 30 -out server.crt -extfile server.ext
+   sudo rm server.csr server.ext && sudo chmod 644 server.crt
+
+   cd /opt/strata-client
+   docker compose --env-file .env.dmz -f docker-compose.dmz-edge.yml \
+       up -d --force-recreate strata-dmz
+   ```
+
+   For test stacks the easier path is `EXTRA_SERVER_SANS=<host>
+   ./scripts/dmz/gen-test-certs.sh`, but that rotates the CA so you
+   must redistribute to the internal host too (see §Cert rotation).
+
 ---
 
 ## Scenario 3 — Operator-token compromise (SEV-1/2)

@@ -99,11 +99,12 @@ pub async fn store(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderMap;
+    use axum::http::{HeaderMap, HeaderName};
 
     fn hdr(k: &str, v: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
-        h.insert(k, v.parse().unwrap());
+        let name: HeaderName = k.parse().unwrap();
+        h.insert(name, v.parse().unwrap());
         h
     }
 

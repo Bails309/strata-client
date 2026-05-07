@@ -3201,6 +3201,9 @@ describe("PasswordsTab", () => {
     await user.click(screen.getByText("Password Mgmt"));
     await screen.findByText("IT Admins");
     await user.click(screen.getByText("Delete"));
+    // v1.5.4: destructive admin actions confirm via ConfirmModal instead
+    // of window.confirm; click the confirm button inside the modal.
+    await user.click(await screen.findByRole("button", { name: "Delete role" }));
     await waitFor(() => {
       expect(deleteApprovalRole).toHaveBeenCalledWith("r1");
     });

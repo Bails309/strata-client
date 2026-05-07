@@ -24,6 +24,7 @@ vi.mock("../api", () => ({
   updateAuthMethods: vi.fn(),
   getServiceHealth: vi.fn(),
   getMetrics: vi.fn(),
+  getCertificates: vi.fn(() => Promise.resolve({ certificates: [], errors: [] })),
   getRoles: vi.fn(),
   createRole: vi.fn(),
   getRoleMappings: vi.fn().mockResolvedValue({ connection_ids: [], folder_ids: [] }),

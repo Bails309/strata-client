@@ -32,6 +32,7 @@ mod operator;
 mod proxy;
 mod public_server;
 mod public_tls;
+mod ws_proxy;
 
 use config::DmzConfig;
 

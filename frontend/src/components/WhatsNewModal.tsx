@@ -49,7 +49,8 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "The previous short-circuit on empty input gave a measurable timing signal (`0` ns vs ~µs to compare). The new path always invokes `constant_time_eq` against a fixed-length expected value, so an attacker probing whether `STRATA_SETUP_TOKEN` is set sees identical timing for empty and non-empty input.",
       },
       {
-        title: "LDAP filter validator — reject match-everything, control chars, oversize, deep nesting",
+        title:
+          "LDAP filter validator — reject match-everything, control chars, oversize, deep nesting",
         description:
           "Replaced the legacy `validate_ldap_filter` with a stricter recursive-descent style validator. Caps total length at 2048 bytes and nesting depth at 32, rejects NUL and ASCII control characters, and explicitly refuses match-everything patterns (`(*)`, `(objectClass=*)`). Four new unit tests cover the new rejections; the original five tests still pass.",
       },
@@ -64,7 +65,8 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "The viewer WebSocket now re-checks `find_active_by_token` every ~30 seconds inside the keepalive tick and closes the connection when the share row has been revoked, expired, or its underlying connection has been soft-deleted. Previously, revoke only prevented *new* viewers from joining — anyone already attached stayed attached for the rest of the owner's session.",
       },
       {
-        title: "DMZ link channel — TLS resumption off, per-IP accept rate limit, h2 per-stream timeout",
+        title:
+          "DMZ link channel — TLS resumption off, per-IP accept rate limit, h2 per-stream timeout",
         description:
           "TLS 1.3 session resumption is disabled on the link listener (`NoServerSessionStorage`, `send_tls13_tickets = 0`) — resumed handshakes do not re-present the client certificate, and for a private mTLS-only trust domain full handshake on every connect is the desired posture. The accept loop now sheds connections via the existing striped `PerIpRateLimiter` (default 5 rps, burst 30) **before** TLS handshake CPU spend. Regular HTTP/2 request handlers are wrapped in a 120 s timeout so a stalled handler cannot pin a stream slot indefinitely against `MAX_CONCURRENT_STREAMS`. WebSocket bridges are exempt; they own their own keepalive.",
       },

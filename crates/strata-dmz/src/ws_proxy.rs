@@ -220,17 +220,17 @@ pub(crate) async fn proxy_websocket(
 
     // Pick a link sender. Try twice on a stale-pick failure — same
     // pattern as the REST proxy.
-    let (info, recv_body, send_stream) = {
+    let (info, recv_body, send_stream, upstream_headers) = {
         let mut last_err: Option<WsProxyError> = None;
-        let mut acquired: Option<(_, _, _)> = None;
+        let mut acquired: Option<(_, _, _, _)> = None;
         for _attempt in 0..2 {
             let (info, sender) = match state.registry.pick_any() {
                 Some(p) => p,
                 None => return Err(WsProxyError::NoLinkUp),
             };
             match start_extended_connect(sender, &upstream_uri, &forward_headers).await {
-                Ok((recv, send)) => {
-                    acquired = Some((info, recv, send));
+                Ok((recv, send, hdrs)) => {
+                    acquired = Some((info, recv, send, hdrs));
                     break;
                 }
                 Err(e @ WsProxyError::LinkSendUnavailable)
@@ -272,24 +272,39 @@ pub(crate) async fn proxy_websocket(
         }
     });
 
-    // 101 Switching Protocols back to the public client.
-    let resp = Response::builder()
+    // 101 Switching Protocols back to the public client. RFC 6455
+    // §4.2.2 requires us to echo the negotiated `sec-websocket-protocol`
+    // (and any `sec-websocket-extensions`) the upstream selected — if
+    // we don't, browsers fail the WebSocket connection immediately.
+    let mut builder = Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)
         .header(http::header::UPGRADE, "websocket")
         .header(http::header::CONNECTION, "upgrade")
-        .header("sec-websocket-accept", accept)
+        .header("sec-websocket-accept", accept);
+    for (name, value) in upstream_headers.iter() {
+        if matches!(
+            name.as_str(),
+            "sec-websocket-protocol" | "sec-websocket-extensions"
+        ) {
+            builder = builder.header(name, value);
+        }
+    }
+    let resp = builder
         .body(Body::empty())
         .map_err(|_| WsProxyError::UpstreamHandshake)?;
     Ok(resp)
 }
 
 /// Send the inner Extended CONNECT request and wait for the 200
-/// acknowledgement from the internal node.
+/// acknowledgement from the internal node. Returns the inbound h2
+/// halves plus the upstream's response headers (used to propagate
+/// `sec-websocket-protocol` / `sec-websocket-extensions` onto the
+/// public 101 — RFC 6455 §4.2.2).
 async fn start_extended_connect(
     sender: SendRequest<Bytes>,
     upstream_uri: &Uri,
     headers: &HeaderMap,
-) -> Result<(h2::RecvStream, h2::SendStream<Bytes>), WsProxyError> {
+) -> Result<(h2::RecvStream, h2::SendStream<Bytes>, HeaderMap), WsProxyError> {
     let mut sender = sender.ready().await.map_err(|e| {
         tracing::debug!(error = %e, "link sender not ready (eviction will follow)");
         WsProxyError::LinkSendUnavailable
@@ -329,7 +344,7 @@ async fn start_extended_connect(
         return Err(WsProxyError::UpstreamRejected(head.status));
     }
 
-    Ok((recv, send_stream))
+    Ok((recv, send_stream, head.headers))
 }
 
 /// Bidirectional byte-pump between the public hyper-upgraded TCP

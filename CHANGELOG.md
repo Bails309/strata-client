@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] — 2026-05-23
+
+### Enterprise foundations — error codes, accessibility, i18n scaffold, ops docs
+
+#### Added
+
+- **`docs/API-LIFECYCLE.md`** — formal API versioning policy (`/api/v1`), support window, breaking-change definition, `Deprecation` / `Sunset` headers per RFC 9745, error-code stability contract, and changelog discipline so downstream integrators can plan upgrades against documented guarantees instead of inferred behaviour.
+- **`docs/deployment-kubernetes.md`** — production Kubernetes runbook covering the per-component replica topology (backend remains `replicas=1` because rate limits, settings cache, OIDC nonce cache, and HTTP session storage are all process-local), `ExternalSecrets` inventory, PVC sizing table (postgres / vault / recordings / config), ingress + `NetworkPolicy` YAML, split liveness/readiness probes (`/api/health/live`, `/api/health/ready`), resource sizing, `terminationGracePeriodSeconds: 45`, and a "common pitfalls" section drawn from the multi-replica caveats already documented in the architecture notes.
+- **Backend `ErrorCode` enum** (`backend/src/error.rs`) — every `AppError` now maps to a stable SCREAMING_SNAKE token (`INTERNAL`, `DEPENDENCY_UNAVAILABLE`, `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_REQUEST`, `NOT_FOUND`, `SETUP_REQUIRED`) and the JSON error body now emits `{ "error": "<message>", "code": "<token>" }`. Frontend and external integrators can branch on `code` (which is part of the API contract per `API-LIFECYCLE.md`) instead of regex-matching the human-readable `error` string. Two new tests (`error_codes_are_stable_strings`, `error_variants_map_to_expected_codes`) lock the mapping in.
+- **`useFocusTrap` hook** (`frontend/src/components/useFocusTrap.ts`) — generic React hook that records the previously-focused element, focuses the first focusable descendant when its container becomes active, intercepts Tab / Shift+Tab to cycle within the container, and restores focus on cleanup. WCAG 2.1 success criterion 2.4.3 (Focus Order) and 2.1.2 (No Keyboard Trap — controlled trap with explicit dismiss).
+- **Skip-to-content link** (`frontend/src/components/Layout.tsx`) — a visually-hidden anchor that becomes visible on keyboard focus and jumps past the persistent navigation chrome to `<main id="main-content" tabIndex={-1}>`. Keyboard-only and screen-reader users no longer have to tab through the full nav rail on every page change. WCAG 2.1 success criterion 2.4.1 (Bypass Blocks).
+- **i18n scaffold** (`frontend/src/i18n/`) — `i18next` + `react-i18next` (added as runtime dependencies), an `en` locale (`src/i18n/locales/en.json`) with `common` and `login` namespaces, language detection via `localStorage["strata.lang"] → navigator.language → "en"` fallback chain, and a `setLanguage(lang)` helper for a future user-settings toggle. `Login.tsx` is the migrated exemplar so future PRs can copy the pattern incrementally rather than landing a single mega-refactor.
+
+#### Changed
+
+- **`ConfirmModal.tsx`** wraps its dialog with `useFocusTrap`, so destructive-action confirmations cannot leak keyboard focus back to the page underneath until the user explicitly cancels or confirms.
+- **`Login.tsx`** field labels, button copy, and the generic error fallback are sourced from the `login` i18n namespace via `useTranslation()`. Hardcoded English strings remain wherever a string has not yet been migrated.
+- **Vitest setup** (`frontend/src/__tests__/setup.ts`) initialises `i18n` once per test process via a side-effect import so `useTranslation()` resolves to real English copy in the JSDOM environment instead of echoing translation keys.
+
+#### Fixed
+
+- **`backend/src/routes/user.rs`** — replaced `body.checkout_id.unwrap()` after a non-`None` guard with an explicit `.ok_or_else(...)` returning `AppError::Internal(...)`. The unwrap was logically reachable only via a TOCTOU between two reads of `body.checkout_id`, but the explicit error keeps the panic-free invariant the rest of the route enforces and surfaces a stable `INTERNAL` error code instead of a 500 with no body.
+
+#### Drop-in upgrade — no migrations, no API contract changes
+
+- No database migrations.
+- The error response body now carries an additional `code` field but the existing `error` field is unchanged in shape and meaning, so existing v1.5.x clients continue to work. New clients should prefer `code` for branching logic per `docs/API-LIFECYCLE.md`.
+- Frontend bundle gains `i18next` + `react-i18next` (~30 KB gzipped). All other surface area is documentation, accessibility affordances, and one defensive backend refactor.
+
 ## [1.5.5] — 2026-05-22
 
 ### Security review — second-pass hardening

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { login, getStatus, StatusResponse } from "../api";
 import { useTheme } from "../components/ThemeProvider";
 
@@ -7,6 +8,7 @@ interface Props {
 }
 
 export default function Login({ onLogin }: Props) {
+  const { t } = useTranslation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -49,7 +51,7 @@ export default function Login({ onLogin }: Props) {
       await login({ username, password });
       onLogin();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : t("login.errors.generic"));
     } finally {
       setLoading(false);
     }
@@ -83,7 +85,7 @@ export default function Login({ onLogin }: Props) {
               className={status.sso_enabled ? "mb-6 pb-6 border-b border-border/50" : ""}
             >
               <div className="form-group">
-                <label htmlFor="login-username">Username</label>
+                <label htmlFor="login-username">{t("login.username")}</label>
                 <input
                   id="login-username"
                   type="text"
@@ -99,7 +101,7 @@ export default function Login({ onLogin }: Props) {
               </div>
 
               <div className="form-group">
-                <label htmlFor="login-password">Password</label>
+                <label htmlFor="login-password">{t("login.password")}</label>
                 <input
                   id="login-password"
                   type="password"
@@ -117,7 +119,7 @@ export default function Login({ onLogin }: Props) {
                 disabled={loading || !username || !password}
                 style={{ padding: "0.65rem" }}
               >
-                {loading ? "Signing in…" : "Sign In"}
+                {loading ? t("login.submitInProgress") : t("login.submit")}
               </button>
             </form>
           )}

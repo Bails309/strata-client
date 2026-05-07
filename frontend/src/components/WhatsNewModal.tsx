@@ -29,6 +29,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.6.0",
+    subtitle:
+      "Enterprise foundations — stable error codes, accessibility, i18n scaffold, and Kubernetes / API-lifecycle ops docs",
+    sections: [
+      {
+        title: "Stable error codes on every API response",
+        description:
+          "Every backend error now carries a stable `code` field alongside the human-readable `error` message — `INTERNAL`, `DEPENDENCY_UNAVAILABLE`, `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_REQUEST`, `NOT_FOUND`, `SETUP_REQUIRED`. Frontend and external integrators can branch on the code instead of regex-matching the prose, and the mapping is now part of the documented API contract (see new `docs/API-LIFECYCLE.md`). The existing `error` field is unchanged for backwards compatibility.",
+      },
+      {
+        title: "Skip-to-content link and focus-trapped confirm dialogs",
+        description:
+          "A skip link at the top of every page lets keyboard and screen-reader users jump past the persistent navigation rail directly to `<main>` (WCAG 2.4.1). Destructive-action confirmation dialogs (`ConfirmModal`) now trap focus inside the dialog while open and restore the previously-focused element on close (WCAG 2.4.3 / 2.1.2), via a new generic `useFocusTrap` hook reusable from any future modal.",
+      },
+      {
+        title: "Internationalisation scaffold (English baseline)",
+        description:
+          "`i18next` + `react-i18next` are now wired in with an English baseline locale (`common` and `login` namespaces), language detection from `localStorage` → browser → English fallback, and a `setLanguage()` helper ready for a future user-settings toggle. The Login page is the migrated exemplar so subsequent PRs can adopt the pattern incrementally instead of needing a single big-bang refactor.",
+      },
+      {
+        title: "API-lifecycle and Kubernetes deployment docs",
+        description:
+          "Two new operator-facing documents: `docs/API-LIFECYCLE.md` formalises the `/api/v1` versioning policy, support window, breaking-change definition, and `Deprecation`/`Sunset` headers per RFC 9745. `docs/deployment-kubernetes.md` covers production topology (backend stays at `replicas=1` because rate limits / settings cache / OIDC nonce cache / sessions are process-local), `ExternalSecrets` inventory, PVC sizing, ingress + `NetworkPolicy` YAML, split liveness/readiness probes, and a curated common-pitfalls section.",
+      },
+      {
+        title: "Hardened a panic-free invariant in the user routes",
+        description:
+          "Replaced an `unwrap()` after a non-`None` guard in the checkout-activation handler with an explicit error path that returns the new stable `INTERNAL` error code. Logically unreachable in normal flow, but the explicit handling keeps the panic-free guarantee the rest of the route enforces under concurrent or adversarial inputs.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API breakage",
+        description:
+          "No database migrations. The error response body gains a `code` field but the existing `error` field is unchanged, so v1.5.x clients keep working. Frontend bundle gains `i18next` + `react-i18next` (~30 KB gzipped). All four images (frontend, backend, DMZ edge, guacd) should be rolled together but each one is backwards-compatible with v1.5.5 peers during a rolling update.",
+      },
+    ],
+  },
+  {
     version: "1.5.5",
     subtitle:
       "Security review — second-pass hardening across auth, race conditions, DMZ link channel, and background sweepers",

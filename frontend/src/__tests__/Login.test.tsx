@@ -188,6 +188,6 @@ describe("Login page", () => {
     await user.type(screen.getByPlaceholderText("••••••••"), "wrongpass");
     await user.click(screen.getByRole("button", { name: /sign in/i }));
 
-    expect(await screen.findByText("Login failed")).toBeInTheDocument();
+    expect(await screen.findByText("Sign-in failed. Please try again.")).toBeInTheDocument();
   });
 });

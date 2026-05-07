@@ -187,6 +187,16 @@ export default function Layout({
   return (
     <SidebarContext.Provider value={layoutSidebarWidth}>
       <div className="flex min-h-screen">
+        {/* WCAG 2.4.1 — skip-to-content link for keyboard and screen-
+            reader users. Hidden until focused; jumps past the
+            sidebar to the main region. */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[10001] focus:px-3 focus:py-2 focus:rounded focus:bg-bg-elevated focus:text-txt-primary focus:outline focus:outline-2 focus:outline-accent"
+        >
+          Skip to main content
+        </a>
+
         {/* ── Floating "show sidebar" chevron — only visible while in a
              session AND the sidebar is hidden. Mirrors the right-side
              SessionBar collapse handle. ── */}
@@ -466,6 +476,8 @@ export default function Layout({
 
         {/* ── Main Content ── */}
         <main
+          id="main-content"
+          tabIndex={-1}
           className="flex-1 min-h-screen animate-fade-in transition-[margin-left] duration-200 ease-out"
           style={{ marginLeft: layoutSidebarWidth, padding: "2rem 2.5rem" }}
         >

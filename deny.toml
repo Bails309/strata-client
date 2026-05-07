@@ -34,6 +34,7 @@ allow = [
     "MIT",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "0BSD",
     "ISC",
     "Unicode-DFS-2016",
     "Unicode-3.0",
@@ -62,6 +63,9 @@ license-files = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Workspace-internal path dependencies (e.g. strata-protocol) have no
+# version requirement and would otherwise be flagged as wildcards.
+allow-wildcard-paths = true
 highlight = "all"
 deny = [
     # `openssl` pulls in C OpenSSL — we standardise on rustls.

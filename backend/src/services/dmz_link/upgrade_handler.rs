@@ -571,7 +571,7 @@ mod tests {
         // exercised indirectly by parse_status_line's MAX_LINE_BYTES.
         let mut head = Vec::new();
         head.extend_from_slice(b"HTTP/1.1 ");
-        head.extend(std::iter::repeat(b'x').take(MAX_LINE_BYTES + 10));
+        head.extend(std::iter::repeat_n(b'x', MAX_LINE_BYTES + 10));
         head.extend_from_slice(b"\r\n");
         assert!(parse_status_line(&head).is_err());
     }

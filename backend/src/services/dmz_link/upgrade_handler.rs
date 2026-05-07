@@ -198,10 +198,13 @@ async fn bridge(
     }
 
     // Read the loopback response headers up to and including the
-    // terminating CRLFCRLF. We don't need the headers themselves —
-    // we just need to know if it's 101 (upgrade accepted) and then
-    // start byte-pumping after the header terminator.
-    let (status, leftover) = match read_http1_response_head(&mut tcp).await {
+    // terminating CRLFCRLF. We need the status code to know whether
+    // the upgrade succeeded, plus a small set of response headers
+    // (notably `sec-websocket-protocol` / `sec-websocket-extensions`)
+    // so the DMZ side can echo them on its public-facing 101 — RFC
+    // 6455 §4.2.2 requires the server to echo the negotiated
+    // subprotocol or browsers fail the WebSocket connection.
+    let (status, resp_headers, leftover) = match read_http1_response_head(&mut tcp).await {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "loopback read response head failed");
@@ -244,15 +247,20 @@ async fn bridge(
         return Ok(());
     }
 
-    // Loopback upgraded successfully. Tell the DMZ side we're good.
+    // Loopback upgraded successfully. Tell the DMZ side we're good
+    // and propagate any negotiated WebSocket response headers so the
+    // DMZ can echo them on its public 101.
+    let mut ok = Response::builder().status(StatusCode::OK);
+    for (name, value) in resp_headers.iter() {
+        if matches!(
+            name.as_str(),
+            "sec-websocket-protocol" | "sec-websocket-extensions"
+        ) {
+            ok = ok.header(name, value);
+        }
+    }
     let send_stream = respond
-        .send_response(
-            Response::builder()
-                .status(StatusCode::OK)
-                .body(())
-                .expect("static response"),
-            false,
-        )
+        .send_response(ok.body(()).expect("static response"), false)
         .map_err(|e| anyhow::anyhow!("h2 send 200: {e}"))?;
 
     pump(recv, send_stream, tcp, leftover).await
@@ -377,9 +385,12 @@ fn write_forwarded_headers(buf: &mut Vec<u8>, headers: &HeaderMap) {
     }
 }
 
-/// Read until CRLFCRLF, parse the status line, return `(status, leftover)`
-/// where `leftover` is any bytes captured past the header terminator.
-async fn read_http1_response_head(tcp: &mut TcpStream) -> anyhow::Result<(u16, Bytes)> {
+/// Read until CRLFCRLF, parse the status line and headers, return
+/// `(status, headers, leftover)` where `leftover` is any bytes
+/// captured past the header terminator.
+async fn read_http1_response_head(
+    tcp: &mut TcpStream,
+) -> anyhow::Result<(u16, HeaderMap, Bytes)> {
     let mut acc: Vec<u8> = Vec::with_capacity(2048);
     let mut tmp = [0u8; 2048];
     loop {
@@ -400,9 +411,55 @@ async fn read_http1_response_head(tcp: &mut TcpStream) -> anyhow::Result<(u16, B
             };
             let head = &acc[..idx + 2]; // include final CRLF on last header
             let status = parse_status_line(head)?;
-            return Ok((status, leftover));
+            let headers = parse_response_headers(head);
+            return Ok((status, headers, leftover));
         }
     }
+}
+
+/// Parse the response header block (everything after the status line
+/// up to and including the final CRLF). Lines with malformed values
+/// are skipped silently — we only use a small allowlist of headers
+/// downstream and an attacker can't smuggle anything useful through.
+fn parse_response_headers(head: &[u8]) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    // Skip the status line.
+    let after_status = match head.windows(2).position(|w| w == b"\r\n") {
+        Some(i) => &head[i + 2..],
+        None => return map,
+    };
+    for line in after_status.split(|b| *b == b'\n') {
+        // Trim trailing CR.
+        let line = match line.split_last() {
+            Some((b'\r', rest)) => rest,
+            _ => line,
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let colon = match line.iter().position(|b| *b == b':') {
+            Some(i) => i,
+            None => continue,
+        };
+        let name_bytes = &line[..colon];
+        let value_bytes = &line[colon + 1..];
+        // Trim leading whitespace from value.
+        let value_bytes = value_bytes
+            .iter()
+            .position(|b| *b != b' ' && *b != b'\t')
+            .map(|i| &value_bytes[i..])
+            .unwrap_or(&[]);
+        let name = match http::header::HeaderName::from_bytes(name_bytes) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let value = match http::header::HeaderValue::from_bytes(value_bytes) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        map.append(name, value);
+    }
+    map
 }
 
 fn find_crlfcrlf(buf: &[u8]) -> Option<usize> {

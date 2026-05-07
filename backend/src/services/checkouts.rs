@@ -224,24 +224,71 @@ pub async fn activate_checkout(
     vault_cfg: &VaultConfig,
     checkout_id: Uuid,
 ) -> Result<(), AppError> {
-    // W2-9 — race-free activation.
+    // W2-9 — race-free activation, **without holding a DB lock across LDAP/Vault**.
     //
-    // Two approvers clicking "Activate" at the same instant used to each
-    // read the row, see `status = 'Approved'`, and then each push a
-    // password to AD + seal a credential. The second write won: the first
-    // user's profile pointed at a password that no longer worked in AD.
+    // Original implementation took a row-level `SELECT … FOR UPDATE` and held
+    // the transaction open for the entire LDAP modify + Vault wrap. A slow
+    // AD response (seconds is normal for replication-lagged DCs) blocked
+    // *every* other approver looking at the same row, and burned a Postgres
+    // backend connection for the duration. Worse, if the request task got
+    // dropped (client disconnect, server restart), the row stayed locked
+    // until the txn timed out.
     //
-    // We now open a transaction and take a row-level lock via
-    // `SELECT ... FOR UPDATE` before looking at `status`. The lock is
-    // scoped to this one checkout row, so contention is bounded; the lock
-    // is released when the transaction commits (after the final UPDATE) or
-    // rolls back on error.
-    let mut tx = pool.begin().await?;
+    // New flow:
+    //   1. Take a session-scoped Postgres advisory lock keyed on the
+    //      checkout id. Only one activator per checkout can pass.
+    //   2. Read + idempotency check inside a short tx, commit immediately.
+    //   3. Do LDAP + Vault with no DB lock held at all.
+    //   4. Open a fresh tx for the final UPDATEs and commit.
+    //   5. Release the advisory lock on the same connection.
+    //
+    // The advisory lock substitutes for the row lock as the
+    // mutual-exclusion primitive; readers/writers of other rows are
+    // never blocked, and crashing the task drops the connection and
+    // releases the lock automatically.
+    let mut conn = pool.acquire().await.map_err(AppError::Database)?;
+    let uuid_bytes = checkout_id.as_u128();
+    let lock_key_hi = (uuid_bytes >> 64) as i64 as i32;
+    let lock_key_lo = uuid_bytes as i64 as i32;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1, $2)")
+        .bind(lock_key_hi)
+        .bind(lock_key_lo)
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(AppError::Database)?;
+    if !acquired {
+        return Err(AppError::Validation(
+            "Another activation for this checkout is already in progress".into(),
+        ));
+    }
 
+    // RAII helper: always release the lock on the same connection, even
+    // on early return / error. We use a scope guard pattern by wrapping
+    // the rest of the work in a closure-equivalent and matching its
+    // result before returning.
+    let result: Result<(), AppError> =
+        activate_checkout_inner(&mut conn, pool, vault_cfg, checkout_id).await;
+
+    let _ = sqlx::query("SELECT pg_advisory_unlock($1, $2)")
+        .bind(lock_key_hi)
+        .bind(lock_key_lo)
+        .execute(&mut *conn)
+        .await;
+
+    result
+}
+
+async fn activate_checkout_inner(
+    conn: &mut sqlx::pool::PoolConnection<Postgres>,
+    pool: &Pool<Postgres>,
+    vault_cfg: &VaultConfig,
+    checkout_id: Uuid,
+) -> Result<(), AppError> {
+    // ── Phase 1: read + idempotency (short tx, no IO) ──────────────────
     let req: CheckoutRequest =
-        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1 FOR UPDATE")
+        sqlx::query_as("SELECT * FROM password_checkout_requests WHERE id = $1")
             .bind(checkout_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **conn)
             .await?
             .ok_or_else(|| AppError::NotFound("Checkout request not found".into()))?;
 
@@ -252,21 +299,8 @@ pub async fn activate_checkout(
         )));
     }
 
-    // Idempotency on Active. The original race fix (FOR UPDATE around
-    // the status check + update) only protects *concurrent* activations
-    // within the same lock window. It does not protect against a second,
-    // separate request after the first has fully committed: the row is
-    // now `Active`, the status check above passes, and without this
-    // short-circuit we would push a second AD password reset and seal a
-    // second credential profile — invalidating the first profile that
-    // was issued seconds earlier. Common trigger: user clicks Activate,
-    // LDAP is slow, they refresh, the page re-fires activation on mount.
-    //
-    // If the row is already `Active`, return the existing
-    // `vault_credential_id`; do not touch AD.
     if req.status == "Active" {
         if let Some(existing_profile_id) = req.vault_credential_id {
-            tx.commit().await?;
             tracing::info!(
                 "Checkout {} already Active — skipping AD reset, existing credential profile {}",
                 checkout_id,
@@ -274,9 +308,6 @@ pub async fn activate_checkout(
             );
             return Ok(());
         }
-        // Active but no profile linked: this should not happen — fall
-        // through and rebuild the credential. We log it so it shows up
-        // if some out-of-band process ever zeroes the column.
         tracing::warn!(
             "Checkout {} is Active but vault_credential_id is NULL — re-running activation",
             checkout_id
@@ -287,11 +318,10 @@ pub async fn activate_checkout(
         .ad_sync_config_id
         .ok_or_else(|| AppError::Validation("Checkout has no associated AD sync config".into()))?;
 
-    // Load password policy and generate new password
+    // ── Phase 2: external IO (LDAP + Vault) — no DB lock held ──────────
     let policy = load_policy(pool, config_id).await?;
     let new_password = generate_password(&policy);
 
-    // Load the AD sync config for LDAP credentials
     let config: crate::services::ad_sync::AdSyncConfig =
         sqlx::query_as("SELECT * FROM ad_sync_configs WHERE id = $1")
             .bind(config_id)
@@ -299,7 +329,6 @@ pub async fn activate_checkout(
             .await?
             .ok_or_else(|| AppError::NotFound("AD sync config not found".into()))?;
 
-    // Push password to AD via LDAP modify
     let bind_dn = config
         .pm_bind_user
         .as_deref()
@@ -310,7 +339,6 @@ pub async fn activate_checkout(
         .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or(&config.bind_password);
-    // Decrypt vault-encrypted bind password
     let bind_pw = crate::services::vault::unseal_setting(vault_cfg, raw_pw).await?;
 
     let sam_account = ldap_reset_password(
@@ -321,11 +349,10 @@ pub async fn activate_checkout(
         &new_password,
         config.tls_skip_verify,
         config.ca_cert_pem.as_deref(),
-        false, // NOT a scramble - this is an activation, user needs to be able to login
+        false,
     )
     .await?;
 
-    // Seal credential into Vault and store as credential_profile
     let profile_id = seal_managed_credential(
         vault_cfg,
         pool,
@@ -337,8 +364,8 @@ pub async fn activate_checkout(
     )
     .await?;
 
-    // Update checkout to Active with expiry (inside the same transaction so
-    // the row lock held by `SELECT ... FOR UPDATE` is released atomically).
+    // ── Phase 3: commit final state in a fresh tx ──────────────────────
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE password_checkout_requests
          SET status = 'Active',
@@ -353,10 +380,6 @@ pub async fn activate_checkout(
     .execute(&mut *tx)
     .await?;
 
-    // Relink any profiles that were linked to a previous (expired) checkout
-    // for the same managed DN — point them to this new checkout instead.
-    // Also refresh expires_at so the tunnel query's `cp.expires_at > now()`
-    // filter still passes with the new checkout's duration.
     sqlx::query(
         "UPDATE credential_profiles
          SET checkout_id = $1,
@@ -386,7 +409,6 @@ pub async fn activate_checkout(
         req.requested_duration_mins
     );
 
-    // Audit
     crate::services::audit::log(
         pool,
         Some(req.requester_user_id),

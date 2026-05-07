@@ -29,6 +29,63 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.5.5",
+    subtitle:
+      "Security review — second-pass hardening across auth, race conditions, DMZ link channel, and background sweepers",
+    sections: [
+      {
+        title: "Auth — no more user enumeration via OIDC/SSO callbacks",
+        description:
+          "When the OIDC subject (or SAML/SSO email) does not match a provisioned user, the response is now the generic `Invalid or expired token` instead of including the offending claim, with the full claim only logged at debug. Closes a user-enumeration oracle reachable from any unauthenticated client that can reach the SSO callback URL. The `/auth/change-password` endpoint is also now rate-limited per user (5 attempts per hour) using the same mutex the login flow uses, so a stolen-cookie attacker can no longer brute-force the current password through the account-settings flow.",
+      },
+      {
+        title: "Auth — refresh-rotated JWTs are recorded in active_sessions",
+        description:
+          "The refresh handler now calls `active_sessions::record(...)` after minting a new access token, so the admin “active sessions” view reflects the post-rotation `jti` and the per-user signout flow correctly revokes it. Previously a long-running session that rotated tokens disappeared from the dashboard but stayed valid until the original `jti` expired naturally.",
+      },
+      {
+        title: "Auth — setup bootstrap-token check is constant-time on every path",
+        description:
+          "The previous short-circuit on empty input gave a measurable timing signal (`0` ns vs ~µs to compare). The new path always invokes `constant_time_eq` against a fixed-length expected value, so an attacker probing whether `STRATA_SETUP_TOKEN` is set sees identical timing for empty and non-empty input.",
+      },
+      {
+        title: "LDAP filter validator — reject match-everything, control chars, oversize, deep nesting",
+        description:
+          "Replaced the legacy `validate_ldap_filter` with a stricter recursive-descent style validator. Caps total length at 2048 bytes and nesting depth at 32, rejects NUL and ASCII control characters, and explicitly refuses match-everything patterns (`(*)`, `(objectClass=*)`). Four new unit tests cover the new rejections; the original five tests still pass.",
+      },
+      {
+        title: "Race fix — activate_checkout no longer holds a row lock across LDAP + Vault IO",
+        description:
+          "The v1.5.4 fix used `SELECT … FOR UPDATE` which serialised concurrent activators correctly but blocked every other approver on the same row for as long as the AD password modify took (seconds in the slow case). The new flow uses a session-scoped `pg_try_advisory_lock` keyed on the checkout UUID for mutual exclusion, performs the LDAP and Vault calls with **no DB lock held**, and only opens a fresh short-lived transaction for the final UPDATE and audit write.",
+      },
+      {
+        title: "Share viewers — kicked when a share is revoked",
+        description:
+          "The viewer WebSocket now re-checks `find_active_by_token` every ~30 seconds inside the keepalive tick and closes the connection when the share row has been revoked, expired, or its underlying connection has been soft-deleted. Previously, revoke only prevented *new* viewers from joining — anyone already attached stayed attached for the rest of the owner's session.",
+      },
+      {
+        title: "DMZ link channel — TLS resumption off, per-IP accept rate limit, h2 per-stream timeout",
+        description:
+          "TLS 1.3 session resumption is disabled on the link listener (`NoServerSessionStorage`, `send_tls13_tickets = 0`) — resumed handshakes do not re-present the client certificate, and for a private mTLS-only trust domain full handshake on every connect is the desired posture. The accept loop now sheds connections via the existing striped `PerIpRateLimiter` (default 5 rps, burst 30) **before** TLS handshake CPU spend. Regular HTTP/2 request handlers are wrapped in a 120 s timeout so a stalled handler cannot pin a stream slot indefinitely against `MAX_CONCURRENT_STREAMS`. WebSocket bridges are exempt; they own their own keepalive.",
+      },
+      {
+        title: "DMZ — loopback handler hardening, edge-signer charset, WebSocket version pin",
+        description:
+          "The loopback upgrade handler now asserts its target is a loopback address at construction (crashes the process on misconfiguration rather than silently proxying to a public IP), and rejects HTTP/1.1 request paths and Host headers containing CR/LF/NUL before the request line is concatenated. The edge-signer `x-request-id` filter narrows from any printable ASCII to `[A-Za-z0-9_-]` only — the value is MACed by the edge and trusted verbatim by the backend, and the wider character set let a public client smuggle log-field separators (`=`, `,`, `;`, ` `) into the trusted audit context. WebSocket upgrade detection now requires `Sec-WebSocket-Version: 13`; older drafts used incompatible framing and accepting them publicly while the inner backend rejects them was a smuggling primitive.",
+      },
+      {
+        title: "Sweepers — idempotency_keys is now part of the periodic cleanup",
+        description:
+          "The `idempotency_keys` table accumulates one row per write-with-`Idempotency-Key` for 24 hours. The live lookup already filtered expired rows, but without a sweep the table grew unboundedly. The new range delete piggybacks on the existing `active_sessions` cleanup tick (every 2 minutes) and uses the `idempotency_keys_expires_at_idx` index added in migration 053.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API changes",
+        description:
+          "v1.5.5 has no database migrations, no /api/* contract changes, and no protocol changes. The DMZ link `LinkServerConfig` struct gains two new fields (`accept_rate_rps`, `accept_rate_burst`) but `crates/strata-dmz/src/main.rs` constructs them with sensible defaults; operators running the published binary need do nothing. All four images (frontend, backend, DMZ edge, guacd) should be rolled together but each one is backwards-compatible with v1.5.4 peers during a rolling update.",
+      },
+    ],
+  },
+  {
     version: "1.5.4",
     subtitle:
       "Security review — consolidated hardening pass across backend, DMZ link channel, and frontend",

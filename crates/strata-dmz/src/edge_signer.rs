@@ -15,7 +15,7 @@
 //! | `x-strata-edge-tls-cipher`        | Set by the public TLS listener (Phase 2e). Empty in 2d.                                |
 //! | `x-strata-edge-tls-ja3`           | Optional. Empty in 2d.                                                                  |
 //! | `x-strata-edge-user-agent`        | Public request `User-Agent` header verbatim (truncated to 1 KiB).                       |
-//! | `x-strata-edge-request-id`        | Existing `x-request-id` if present and ≤ 128 chars and printable ASCII; else minted v4. |
+//! | `x-strata-edge-request-id`        | Existing `x-request-id` if present, ≤ 128 chars and `[A-Za-z0-9_-]` only; else minted v4. |
 //! | `x-strata-edge-link-id`           | DMZ `node_id` from config.                                                              |
 //! | `x-strata-edge-timestamp-ms`      | `SystemTime::now()` as unix-ms.                                                         |
 //!
@@ -126,9 +126,22 @@ impl EdgeSigner for HmacEdgeSigner {
             .get("x-request-id")
             .and_then(|v| v.to_str().ok())
             .filter(|s| {
+                // Restrict to a strict subset that is safe to drop into
+                // structured logs and cannot be confused with a key/value
+                // pair. Previously we accepted any printable ASCII
+                // (0x21–0x7e), which let a public client smuggle
+                // characters like `=`, `,`, ` ` into the trusted
+                // audit context (the value is MACed by the edge
+                // signer, so the backend trusts it verbatim). The
+                // narrow set below covers UUIDs (with or without
+                // hyphens), short hex tokens, and trace ids while
+                // refusing punctuation operators commonly used as
+                // log-field separators.
                 !s.is_empty()
                     && s.len() <= MAX_REQUEST_ID_LEN
-                    && s.bytes().all(|b| (0x21..=0x7e).contains(&b))
+                    && s.bytes().all(|b| {
+                        b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
+                    })
             })
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -380,6 +393,61 @@ mod tests {
         assert_eq!(
             h.get("x-strata-edge-request-id").unwrap().to_str().unwrap(),
             "01J0000ABCDEF"
+        );
+    }
+
+    #[test]
+    fn punctuation_request_id_is_replaced_with_minted_uuid() {
+        // The previous filter accepted any printable ASCII, which let a
+        // public client smuggle log-field separators (=, ,, ;, etc.)
+        // into the trusted edge audit context. Each of these MUST now
+        // be rejected and replaced with a freshly minted UUID.
+        for bad in [
+            "a=b",
+            "foo,bar",
+            "foo;bar",
+            "foo bar",
+            "foo/bar",
+            "foo:bar",
+        ] {
+            let s = signer();
+            let mut h = HeaderMap::new();
+            h.insert("x-request-id", bad.parse().unwrap());
+            s.sign(
+                &mut h,
+                Some(SocketAddr::from(([1, 2, 3, 4], 1))),
+                &http::Method::GET,
+                &"/".parse().unwrap(),
+            );
+            let id = h
+                .get("x-strata-edge-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert_ne!(id, bad, "rejected id {bad:?} should not be echoed");
+            assert_eq!(
+                id.len(),
+                36,
+                "rejected id {bad:?} should be replaced with a v4 UUID"
+            );
+        }
+    }
+
+    #[test]
+    fn well_formed_uuid_request_id_is_preserved() {
+        let s = signer();
+        let mut h = HeaderMap::new();
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        h.insert("x-request-id", uuid.parse().unwrap());
+        s.sign(
+            &mut h,
+            Some(SocketAddr::from(([1, 2, 3, 4], 1))),
+            &http::Method::GET,
+            &"/".parse().unwrap(),
+        );
+        assert_eq!(
+            h.get("x-strata-edge-request-id").unwrap().to_str().unwrap(),
+            uuid
         );
     }
 

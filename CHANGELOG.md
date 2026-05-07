@@ -5,6 +5,124 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.5] — 2026-05-22
+
+### Security review — second-pass hardening
+
+A focused follow-up to the v1.5.4 review. Items below were either
+new findings raised against v1.5.4, or original v1.5.4 findings that
+were partially mitigated and now have a complete fix landed.
+
+#### Authentication & enumeration
+
+- **OIDC / SSO error responses no longer enumerate users.** When the
+  OIDC subject (or SAML/SSO email) does not match a provisioned user,
+  the response is now the generic `Invalid or expired token` instead
+  of including the offending claim. The full claim is logged at
+  `debug` level so operators can still diagnose. Closes a
+  user-enumeration oracle reachable from any unauthenticated client
+  that can reach the SSO callback URL.
+- **`/auth/change-password` is rate-limited per user** at 5 attempts
+  per hour, using the same `RATE_LIMIT` mutex the login flow already
+  uses. Stops a stolen-cookie attacker from brute-forcing the
+  current password through the account-settings flow.
+- **Refresh-rotated JWTs are recorded in `active_sessions`.** The
+  refresh handler now calls `active_sessions::record(...)` after
+  minting the new access token, so the admin "active sessions" view
+  reflects the post-rotation `jti` and the per-user signout flow
+  correctly revokes it.
+- **Setup bootstrap-token check is constant-time on every path.**
+  The previous short-circuit on empty input gave a measurable timing
+  signal; the new path always invokes `constant_time_eq` against a
+  fixed-length expected value.
+
+#### LDAP filter validator
+
+- Replaced the legacy `validate_ldap_filter` with a stricter
+  recursive-descent style validator that caps total length at
+  2048 bytes and nesting depth at 32, rejects NUL and ASCII
+  control characters, and explicitly refuses match-everything
+  patterns (`(*)`, `(objectClass=*)`). Four new unit tests cover
+  the new rejections, the original five tests still pass.
+
+#### Race conditions
+
+- **`activate_checkout` no longer holds a DB row lock across LDAP
+  + Vault IO.** The original v1.5.4 fix used `SELECT … FOR UPDATE`,
+  which serialised concurrent activators correctly but blocked
+  every other approver on the same row for as long as the
+  Active-Directory password modify took (seconds in the slow case).
+  The new flow uses a session-scoped `pg_try_advisory_lock` keyed
+  on the checkout UUID for mutual exclusion, performs the LDAP and
+  Vault calls with no DB lock held, and only opens a fresh
+  short-lived transaction for the final `UPDATE` and audit write.
+- **Active shared viewers are kicked when a share is revoked.**
+  The viewer WebSocket now re-checks `find_active_by_token` every
+  ~30 seconds inside the keepalive tick and closes the connection
+  when the share row has been revoked, expired, or its underlying
+  connection has been soft-deleted. Previously, revoke only
+  prevented *new* viewers from joining.
+
+#### DMZ link channel
+
+- **TLS 1.3 session resumption is disabled on the link listener.**
+  Resumed TLS handshakes do not re-present the client certificate;
+  for a private mTLS-only trust domain, full handshake on every
+  connect is the desired posture. We install
+  `NoServerSessionStorage` and set `send_tls13_tickets = 0`.
+- **Per-IP TCP rate limit on the link `accept` loop.** Reuses the
+  existing striped `PerIpRateLimiter` to shed connections before
+  the TLS handshake CPU spend (default `5 rps`, burst `30` —
+  generous for legitimate internal-node reconnects, kicks in only
+  on flood-shaped traffic).
+- **HTTP/2 per-stream timeout (120 s) on regular request handlers.**
+  A stalled handler can no longer pin a stream slot indefinitely
+  against `MAX_CONCURRENT_STREAMS`. WebSocket bridges are exempt;
+  they own their own keepalive logic.
+- **Loopback upgrade handler asserts target is a loopback address**
+  at construction, and rejects HTTP/1.1 request paths and Host
+  headers containing CR/LF/NUL before the request line is
+  concatenated. Defence in depth against header smuggling and a
+  hard fail-closed if the loopback target is ever misconfigured.
+- **Edge-signer `x-request-id` filter tightened** from "any
+  printable ASCII" to `[A-Za-z0-9_-]` only. The value is MACed by
+  the edge and trusted verbatim by the backend; the wider
+  character set let a public client smuggle log-field separators
+  (`=`, `,`, `;`, ` `) into the trusted audit context.
+- **WebSocket upgrade detection requires `Sec-WebSocket-Version: 13`.**
+  Older drafts (8, 12) used incompatible framing; treating them as
+  a valid upgrade publicly while the inner backend rejects them is
+  a smuggling primitive.
+- PSK rotation grace is already supported by the link protocol —
+  internal nodes hold a map of PSKs and the server names the
+  active id, so operators stage-roll new keys to clients first,
+  then flip the server's `active_psk_id`. Documented here for
+  completeness; no code change needed.
+
+#### Background sweepers
+
+- **`idempotency_keys` cleanup added** to the existing
+  `active_sessions` periodic sweep. The table accumulates one row
+  per write-with-`Idempotency-Key` for 24 hours; the live lookup
+  already filters expired rows, but without a sweep the table
+  grows unboundedly. The new index from migration 053 makes the
+  range delete cheap.
+
+#### Tests
+
+- 4 new tests for `validate_ldap_filter` (match-everything,
+  control chars, oversize, excessive nesting).
+- New tests in `edge_signer` for the strict request-id charset
+  (rejects punctuation; accepts UUIDs).
+- New tests in `ws_proxy::is_websocket_upgrade` for required
+  `Sec-WebSocket-Version: 13` and obsolete-version rejection;
+  pre-existing tests updated to include the version header.
+
+### Bumped
+
+- `VERSION`, root `Cargo.toml`, `backend/Cargo.toml`,
+  `frontend/package.json` to `1.5.5`.
+
 ## [1.5.4] — 2026-05-21
 
 ### Security review — consolidated hardening pass

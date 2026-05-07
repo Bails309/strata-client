@@ -154,11 +154,40 @@ where
         let upgrade = upgrade.clone();
         stream_tasks.push(tokio::spawn(async move {
             if is_websocket_extended_connect(&request) {
+                // WebSocket bridges are intentionally long-lived; the
+                // upgrade handler owns its own idle/keepalive logic
+                // and we must not bound it from the outside.
                 if let Err(e) = upgrade.handle(request, respond).await {
                     tracing::warn!(error = %e, "DMZ link h2 upgrade stream errored");
                 }
-            } else if let Err(e) = serve_one_stream(request, respond, handler).await {
-                tracing::warn!(error = %e, "DMZ link h2 stream errored");
+            } else {
+                // Cap regular request handling so a stalled handler
+                // (slow loris reading body bytes one at a time, dead
+                // upstream that never sends EOF, etc.) cannot pin a
+                // stream slot indefinitely against the
+                // MAX_CONCURRENT_STREAMS budget. 120s is comfortably
+                // above the slowest legitimate REST call this link
+                // carries, while still well under the public
+                // gateway's idle timeout.
+                const PER_STREAM_TIMEOUT: std::time::Duration =
+                    std::time::Duration::from_secs(120);
+                match tokio::time::timeout(
+                    PER_STREAM_TIMEOUT,
+                    serve_one_stream(request, respond, handler),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "DMZ link h2 stream errored");
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_secs = PER_STREAM_TIMEOUT.as_secs(),
+                            "DMZ link h2 stream timed out; resetting"
+                        );
+                    }
+                }
             }
         }));
 

@@ -60,6 +60,21 @@ async fn run_once(pool: &Pool<Postgres>) -> anyhow::Result<()> {
     if deleted > 0 {
         tracing::debug!("active_sessions sweep: {deleted} expired rows deleted");
     }
+
+    // Idempotency keys table accumulates one row per
+    // mutation-with-Idempotency-Key header for `IDEMPOTENCY_TTL_HOURS`
+    // (24h). Without a sweep, the table grows unboundedly even though
+    // no live lookup ever returns the expired rows (they're filtered
+    // by `expires_at > now()`). Index `idempotency_keys_expires_at_idx`
+    // makes this a cheap range delete.
+    let deleted_idem = sqlx::query("DELETE FROM idempotency_keys WHERE expires_at < now()")
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if deleted_idem > 0 {
+        tracing::debug!("idempotency_keys sweep: {deleted_idem} expired rows deleted");
+    }
+
     Ok(())
 }
 

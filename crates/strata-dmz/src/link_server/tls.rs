@@ -71,6 +71,16 @@ pub fn build_acceptor(
     // protocol identifier.
     cfg.alpn_protocols = vec![b"h2".to_vec()];
 
+    // Disable TLS 1.3 session resumption (PSK tickets). On resumption,
+    // rustls does NOT re-present the client certificate, which would
+    // silently weaken our mTLS guarantee from "every connection
+    // verifies the cert chain" to "every fresh handshake verifies it,
+    // and resumed ones inherit trust from a captured ticket". For a
+    // private trust domain that already needs full handshake on
+    // every connect, the ticket round-trip saves us nothing.
+    cfg.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    cfg.send_tls13_tickets = 0;
+
     Ok(TlsAcceptor::from(Arc::new(cfg)))
 }
 

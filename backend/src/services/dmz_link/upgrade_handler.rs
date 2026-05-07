@@ -111,7 +111,18 @@ pub struct LoopbackUpgradeHandler {
 
 impl LoopbackUpgradeHandler {
     /// Construct a bridge that targets the supplied loopback address.
+    ///
+    /// Hard-asserts the address is a loopback. The whole security
+    /// model of this handler depends on the inner backend living on
+    /// the same host — if a misconfiguration ever pointed it at a
+    /// public IP, the DMZ would happily proxy raw, unauthenticated
+    /// WebSocket traffic to it. Crashing on startup is the correct
+    /// failure mode.
     pub fn new(addr: SocketAddr) -> Self {
+        assert!(
+            addr.ip().is_loopback(),
+            "LoopbackUpgradeHandler target must be a loopback address (got {addr})"
+        );
         Self { addr }
     }
 }
@@ -163,11 +174,47 @@ async fn bridge(
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
+    // Defence in depth: the HTTP/1.1 request line we are about to
+    // build is constructed by string concatenation. Reject any path
+    // containing CR/LF so a smuggled value cannot inject extra
+    // headers, and require the path to start with `/` so we cannot
+    // accidentally turn the request line into an absolute-form URI
+    // pointing at a different host.
+    if !path_and_query.starts_with('/')
+        || path_and_query.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0)
+    {
+        let _ = respond.send_response(
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("x-strata-link", "loopback-bad-path")
+                .body(())
+                .expect("static response"),
+            true,
+        );
+        return Err(anyhow::anyhow!(
+            "refusing to proxy loopback upgrade with malformed path"
+        ));
+    }
     let host_header = parts
         .headers
         .get(http::header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("internal.local");
+    // Same defence applied to the Host header — it is also
+    // concatenated into the request line/headers verbatim.
+    if host_header.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+        let _ = respond.send_response(
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("x-strata-link", "loopback-bad-host")
+                .body(())
+                .expect("static response"),
+            true,
+        );
+        return Err(anyhow::anyhow!(
+            "refusing to proxy loopback upgrade with malformed host header"
+        ));
+    }
     let key = generate_ws_key();
     let mut req_buf = Vec::with_capacity(512);
     req_buf.extend_from_slice(format!("GET {path_and_query} HTTP/1.1\r\n").as_bytes());

@@ -48,12 +48,14 @@ pub async fn initialize(
             .get("x-strata-setup-token")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if presented.is_empty()
-            || !crate::services::middleware::constant_time_eq(
-                presented.as_bytes(),
-                expected.as_bytes(),
-            )
-        {
+        // Always run the constant-time compare — do NOT short-circuit on the
+        // empty/missing case. Branching before the compare leaks via response
+        // latency whether a token is required at all.
+        let ok = crate::services::middleware::constant_time_eq(
+            presented.as_bytes(),
+            expected.as_bytes(),
+        );
+        if !ok {
             return Err(AppError::Auth(
                 "Missing or invalid X-Strata-Setup-Token header".into(),
             ));

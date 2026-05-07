@@ -30,6 +30,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::registry::{LinkSessionInfo, LinkSessionRegistry};
+use crate::limits::PerIpRateLimiter;
 
 /// Inputs for the link server listener.
 pub struct LinkServerConfig {
@@ -40,6 +41,13 @@ pub struct LinkServerConfig {
     pub psks: HashMap<String, Zeroizing<Vec<u8>>>,
     /// TCP listener address.
     pub listen_addr: std::net::SocketAddr,
+    /// Per-IP rate limit on accepted TCP connections (before TLS).
+    /// Set `rate_rps = 0` to disable. Defaults are intentionally
+    /// generous: legitimate internal nodes reconnect at most a few
+    /// times a minute, so even `rate_rps = 5, burst = 30` only ever
+    /// kicks in on attack-like traffic.
+    pub accept_rate_rps: u32,
+    pub accept_rate_burst: u32,
 }
 
 /// Bind, accept, and drive link connections until `shutdown` cancels.
@@ -58,6 +66,7 @@ pub async fn serve_link(
         .with_context(|| format!("bind link listener on {}", cfg.listen_addr))?;
     tracing::info!(addr = %cfg.listen_addr, "DMZ link server listening");
 
+    let accept_limiter = PerIpRateLimiter::new(cfg.accept_rate_rps, cfg.accept_rate_burst);
     let cfg = Arc::new(cfg);
 
     loop {
@@ -75,6 +84,20 @@ pub async fn serve_link(
                         continue;
                     }
                 };
+                // Hard-shed before TLS work. The TLS handshake is the
+                // single most expensive step on this socket
+                // (asymmetric crypto, allocator pressure, syscalls)
+                // and must not be reachable by a flood from a single
+                // peer. Drop the TCP stream so the attacker pays the
+                // RTT cost without us spending CPU.
+                if !accept_limiter.check(peer.ip()) {
+                    tracing::warn!(
+                        %peer,
+                        "DMZ link accept rate-limited (per-IP); dropping TCP connection before TLS"
+                    );
+                    drop(tcp);
+                    continue;
+                }
                 if let Err(e) = tcp.set_nodelay(true) {
                     tracing::warn!(%peer, error = %e, "set_nodelay failed on link socket");
                 }

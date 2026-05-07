@@ -309,6 +309,13 @@ pub async fn ws_shared_tunnel(
     };
 
     let buffer_for_recovery = session.buffer.clone();
+    // Captures for the revocation re-check that runs inside the
+    // viewer loop. Without these, the WebSocket would stay open
+    // indefinitely once joined — admins clicking "revoke" only
+    // stopped *new* viewers from connecting, never the ones already
+    // mid-session.
+    let revoke_pool = db.pool.clone();
+    let revoke_token = share_token.clone();
 
     Ok(ws
         .protocols(["guacamole"])
@@ -356,6 +363,15 @@ pub async fn ws_shared_tunnel(
             let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
             keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_frame_at = std::time::Instant::now();
+            // Re-check share validity at most once per `revoke_check_every`
+            // keepalive ticks. With ticks at 5s and N=6 that lands on a
+            // ~30s revocation latency — fast enough to bound damage,
+            // slow enough to keep the per-viewer DB load to ~2 queries
+            // per minute. The first check fires immediately after the
+            // first tick (not at startup) because the join-time check
+            // already ran.
+            let revoke_check_every: u32 = 6;
+            let mut ticks_since_check: u32 = 0;
 
             loop {
                 tokio::select! {
@@ -435,6 +451,43 @@ pub async fn ws_shared_tunnel(
                             let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
                             if socket.send(Message::Text(sync.into())).await.is_err() {
                                 break;
+                            }
+                        }
+                        ticks_since_check += 1;
+                        if ticks_since_check >= revoke_check_every {
+                            ticks_since_check = 0;
+                            // If the share row has been revoked
+                            // (deleted/expired) OR the underlying
+                            // connection has been soft-deleted,
+                            // `find_active_by_token` returns None.
+                            // We treat a transient DB error as "keep
+                            // serving" — a network blip should not
+                            // boot every active viewer — but log it.
+                            match crate::services::shares::find_active_by_token(
+                                &revoke_pool,
+                                &revoke_token,
+                            )
+                            .await
+                            {
+                                Ok(Some(_)) => {}
+                                Ok(None) => {
+                                    tracing::info!(
+                                        token_prefix = %hash_token_prefix(&revoke_token),
+                                        "shared viewer kicked: share no longer active"
+                                    );
+                                    let _ = socket
+                                        .send(Message::Text(
+                                            "0.10.disconnect;".into(),
+                                        ))
+                                        .await;
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "share revocation re-check failed; keeping viewer connected"
+                                    );
+                                }
                             }
                         }
                     }

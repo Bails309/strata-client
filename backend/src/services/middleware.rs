@@ -448,10 +448,12 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
     .map_err(AppError::Database)?;
 
     let user = row.ok_or_else(|| {
-        AppError::Auth(format!(
-            "No active user found for OIDC subject: {}",
-            claims.sub
-        ))
+        // Do NOT include the OIDC subject in the error string — leaking it
+        // turns this endpoint into a user-enumeration oracle (confirms the
+        // sub is otherwise valid but not provisioned in Strata). The full
+        // sub is logged at debug level for operator triage instead.
+        tracing::debug!(sub = %claims.sub, "OIDC token validated but no active Strata user is mapped");
+        AppError::Auth("Invalid or expired token".into())
     })?;
 
     Ok(AuthUser {

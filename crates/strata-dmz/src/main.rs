@@ -92,6 +92,12 @@ async fn main() -> anyhow::Result<()> {
         active_psk_id,
         psks: cfg.link_psks.clone(),
         listen_addr: cfg.link_bind,
+        // Generous defaults: an internal node legitimately reconnects
+        // perhaps once per minute on link teardown; 5/s with a burst
+        // of 30 absorbs reasonable retry storms but rate-limits a
+        // TLS handshake flood from a single source.
+        accept_rate_rps: 5,
+        accept_rate_burst: 30,
     };
     let registry_for_link = registry.clone();
     let shutdown_for_link = shutdown.clone();

@@ -59,13 +59,81 @@ fn validate_ldap_url(url: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Validate that an LDAP search filter has balanced parentheses.
+/// Validate an LDAP search filter against an admin-supplied configuration.
+///
+/// Even though the endpoint requires `can_manage_system`, we still want a
+/// strict syntactic check so that a typo or stolen admin token can't:
+///   * exhaust the LDAP server with a runaway filter (e.g. unbalanced
+///     parens or a bare `*` filter that matches every object),
+///   * smuggle a control byte / NUL that some LDAP servers interpret
+///     differently than ldap3 does, or
+///   * exceed a sane size cap before it ever reaches the directory.
+///
+/// The check stays purely syntactic — semantic correctness (does the
+/// objectClass exist, does the OU make sense) is the operator's job.
 fn validate_ldap_filter(filter: &str) -> Result<(), AppError> {
-    let opens = filter.chars().filter(|c| *c == '(').count();
-    let closes = filter.chars().filter(|c| *c == ')').count();
-    if opens != closes || opens == 0 {
+    const MAX_FILTER_LEN: usize = 2048;
+    const MAX_FILTER_DEPTH: usize = 32;
+
+    if filter.is_empty() {
+        return Err(AppError::Validation(
+            "Invalid LDAP search filter — must not be empty".into(),
+        ));
+    }
+    if filter.len() > MAX_FILTER_LEN {
+        return Err(AppError::Validation(format!(
+            "Invalid LDAP search filter — exceeds {MAX_FILTER_LEN} byte cap"
+        )));
+    }
+    if !filter.starts_with('(') || !filter.ends_with(')') {
+        return Err(AppError::Validation(
+            "Invalid LDAP search filter — must start with '(' and end with ')'".into(),
+        ));
+    }
+    if filter.bytes().any(|b| b == 0 || (b < 0x20 && b != b'\t')) {
+        return Err(AppError::Validation(
+            "Invalid LDAP search filter — contains control characters".into(),
+        ));
+    }
+    let mut depth: usize = 0;
+    let mut max_depth: usize = 0;
+    for c in filter.chars() {
+        match c {
+            '(' => {
+                depth = depth.saturating_add(1);
+                if depth > max_depth {
+                    max_depth = depth;
+                }
+                if max_depth > MAX_FILTER_DEPTH {
+                    return Err(AppError::Validation(format!(
+                        "Invalid LDAP search filter — nesting depth exceeds {MAX_FILTER_DEPTH}"
+                    )));
+                }
+            }
+            ')' => {
+                if depth == 0 {
+                    return Err(AppError::Validation(
+                        "Invalid LDAP search filter — unbalanced parentheses".into(),
+                    ));
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
         return Err(AppError::Validation(
             "Invalid LDAP search filter — unbalanced parentheses".into(),
+        ));
+    }
+    // A bare `(*)` or `(objectClass=*)` is technically valid LDAP but is a
+    // common mistake that returns the entire directory and is a reliable
+    // way to DoS a large AD. Reject it — operators who really want it can
+    // narrow with at least one additional clause.
+    let inner = filter.trim_start_matches('(').trim_end_matches(')');
+    if inner.trim() == "*" || inner.trim().eq_ignore_ascii_case("objectclass=*") {
+        return Err(AppError::Validation(
+            "Invalid LDAP search filter — refusing match-everything filter".into(),
         ));
     }
     Ok(())
@@ -4825,6 +4893,39 @@ mod tests {
     #[test]
     fn validate_ldap_filter_deep_nesting() {
         assert!(validate_ldap_filter("((&(|(cn=a)(cn=b))(sn=c)))").is_ok());
+    }
+
+    #[test]
+    fn validate_ldap_filter_rejects_match_everything() {
+        // Refuse the bare match-everything filters that are notorious for
+        // accidentally pulling the entire directory and DoS-ing AD.
+        assert!(validate_ldap_filter("(*)").is_err());
+        assert!(validate_ldap_filter("(objectClass=*)").is_err());
+        assert!(validate_ldap_filter("(OBJECTCLASS=*)").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_rejects_control_chars() {
+        // NUL and other low control bytes are smuggling vectors.
+        assert!(validate_ldap_filter("(cn=a\0b)").is_err());
+        assert!(validate_ldap_filter("(cn=a\nb)").is_err());
+        assert!(validate_ldap_filter("(cn=a\rb)").is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_rejects_oversize() {
+        // 2 KiB cap; we deliberately go over to confirm the hard rejection.
+        let big = format!("({})", "a".repeat(3000));
+        assert!(validate_ldap_filter(&big).is_err());
+    }
+
+    #[test]
+    fn validate_ldap_filter_rejects_excessive_nesting() {
+        // 33 nested parens triggers the depth cap (limit is 32).
+        let opens = "(".repeat(33);
+        let closes = ")".repeat(33);
+        let bad = format!("{opens}cn=a{closes}");
+        assert!(validate_ldap_filter(&bad).is_err());
     }
 
     // ── is_safe_hostname (additional coverage) ─────────────────────────

@@ -86,7 +86,20 @@ pub fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     if !connection_has_upgrade {
         return false;
     }
-    headers.get("sec-websocket-key").is_some()
+    if headers.get("sec-websocket-key").is_none() {
+        return false;
+    }
+    // RFC 6455 §1.2 — the only protocol version a server is required
+    // to accept is 13. Older drafts (8, 12) are obsolete and pre-date
+    // the framing/masking we rely on; treating them as a valid upgrade
+    // would create asymmetry between what the DMZ accepts publicly and
+    // what the inner backend accepts on the loopback side, which is
+    // the building block for a smuggling attack.
+    headers
+        .get("sec-websocket-version")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim() == "13")
+        .unwrap_or(false)
 }
 
 /// Compute the `Sec-WebSocket-Accept` value for a given client
@@ -461,6 +474,7 @@ mod tests {
             ("upgrade", "websocket"),
             ("connection", "keep-alive, Upgrade"),
             ("sec-websocket-key", "abc=="),
+            ("sec-websocket-version", "13"),
         ]);
         assert!(is_websocket_upgrade(&h));
     }
@@ -497,8 +511,40 @@ mod tests {
             ("upgrade", "WebSocket"),
             ("connection", "UPGRADE"),
             ("sec-websocket-key", "abc=="),
+            ("sec-websocket-version", "13"),
         ]);
         assert!(is_websocket_upgrade(&h));
+    }
+
+    #[test]
+    fn rejects_obsolete_websocket_version() {
+        // Drafts 8 and 12 of RFC 6455 are obsolete and use a different
+        // framing layer. Treating them as a valid upgrade publicly
+        // while the inner backend rejects them is a smuggling primitive.
+        for version in ["", "8", "12", "7", "foo"] {
+            let h = req_headers(&[
+                ("upgrade", "websocket"),
+                ("connection", "Upgrade"),
+                ("sec-websocket-key", "abc=="),
+                ("sec-websocket-version", version),
+            ]);
+            assert!(
+                !is_websocket_upgrade(&h),
+                "version {version:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_websocket_version() {
+        // Even with everything else correct, an absent version header
+        // means the client has not signalled RFC 6455 compliance.
+        let h = req_headers(&[
+            ("upgrade", "websocket"),
+            ("connection", "Upgrade"),
+            ("sec-websocket-key", "abc=="),
+        ]);
+        assert!(!is_websocket_upgrade(&h));
     }
 
     #[test]

@@ -702,6 +702,20 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Per-user rate limit on password-change attempts. A stolen access token
+    // could otherwise grind through guesses (and cause downstream account
+    // lockouts on systems that observe failed-change events). 5 attempts
+    // per hour matches the login window.
+    {
+        let key = format!("change_password:{}", user.id);
+        let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
+        if check_rate_limit(&mut map, &key, 5, 3600, MAX_RATE_LIMIT_ENTRIES) {
+            return Err(AppError::Auth(
+                "Too many password change attempts. Please wait before trying again.".into(),
+            ));
+        }
+    }
+
     // Validate the new password meets policy
     validate_password(&body.new_password)?;
 
@@ -1018,6 +1032,29 @@ pub async fn refresh(
     let (access_token, _jti) =
         create_local_jwt(user_id, &username, &role, "access", ACCESS_TOKEN_TTL)?;
 
+    // Record the new access-token jti so the admin "active sessions" panel
+    // and per-user revocation reflect refresh-rotated tokens. Without this
+    // the table only shows tokens from the original /login.
+    {
+        let client_ip = extract_client_ip(&headers);
+        let user_agent = headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let expires_at =
+            chrono::Utc::now() + chrono::Duration::seconds(ACCESS_TOKEN_TTL as i64);
+        let _ = crate::services::active_sessions::record(
+            &db.pool,
+            _jti,
+            user_id,
+            expires_at,
+            &client_ip,
+            &user_agent,
+        )
+        .await;
+    }
+
     // Rotate the CSRF token on every refresh — even though same-site cookies
     // already cover most of the threat model, rotating limits the window of
     // a stolen-cookie replay attack.
@@ -1241,7 +1278,14 @@ pub async fn sso_callback(
         })?;
 
     let row = row.ok_or_else(|| {
-        AppError::Auth(format!("No Strata user found for email {}. Registration via SSO is not enabled. Please contact your administrator.", user_email))
+        // Do NOT echo the email — it turns the SSO callback into an email
+        // enumeration oracle for anyone who can complete an OIDC flow.
+        // The email is logged at debug level for operator triage.
+        tracing::debug!(email = %user_email, "SSO callback for unknown email; registration via SSO disabled");
+        AppError::Auth(
+            "User registration via SSO is not enabled. Please contact your administrator."
+                .into(),
+        )
     })?;
 
     if let Some(sub) = &row.sub {

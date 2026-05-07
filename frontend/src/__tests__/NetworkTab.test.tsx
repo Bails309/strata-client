@@ -10,8 +10,10 @@ import NetworkTab from "../pages/admin/NetworkTab";
 import { updateDns } from "../api";
 
 beforeEach(() => {
-  vi.mocked(updateDns).mockResolvedValue({ restart_required: false } as unknown as {
-    restart_required: boolean;
+  vi.mocked(updateDns).mockResolvedValue({
+    status: "ok",
+    restart_required: false,
+    message: "",
   });
 });
 
@@ -28,12 +30,8 @@ describe("NetworkTab", () => {
   it("reveals DNS inputs when toggled on", async () => {
     render(<NetworkTab settings={{}} onSave={() => {}} />);
     await userEvent.click(screen.getByRole("checkbox", { name: /Enable Custom DNS/i }));
-    expect(
-      screen.getByRole("textbox", { name: /DNS Server Addresses/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("textbox", { name: /Search Domains/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /DNS Server Addresses/i })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /Search Domains/i })).toBeInTheDocument();
   });
 
   it("rejects malformed DNS server addresses (non-numeric octet)", async () => {
@@ -51,10 +49,7 @@ describe("NetworkTab", () => {
 
   it("rejects octet > 255", async () => {
     render(
-      <NetworkTab
-        settings={{ dns_enabled: "true", dns_servers: "10.0.0.999" }}
-        onSave={() => {}}
-      />
+      <NetworkTab settings={{ dns_enabled: "true", dns_servers: "10.0.0.999" }} onSave={() => {}} />
     );
     expect(screen.getByText(/Invalid IP address/i)).toBeInTheDocument();
   });
@@ -70,9 +65,7 @@ describe("NetworkTab", () => {
         onSave={() => {}}
       />
     );
-    expect(
-      screen.getByText(/at most 6 search domains/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/at most 6 search domains/i)).toBeInTheDocument();
   });
 
   it("accepts ip:port form", async () => {
@@ -88,8 +81,10 @@ describe("NetworkTab", () => {
   });
 
   it("calls updateDns + onSave with trimmed values, surfaces restart banner", async () => {
-    vi.mocked(updateDns).mockResolvedValueOnce({ restart_required: true } as unknown as {
-      restart_required: boolean;
+    vi.mocked(updateDns).mockResolvedValueOnce({
+      status: "ok",
+      restart_required: true,
+      message: "",
     });
     const onSave = vi.fn();
     render(
@@ -102,9 +97,7 @@ describe("NetworkTab", () => {
         onSave={onSave}
       />
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: /Save Network Settings/ })
-    );
+    await userEvent.click(screen.getByRole("button", { name: /Save Network Settings/ }));
     await waitFor(() =>
       expect(updateDns).toHaveBeenCalledWith({
         dns_enabled: true,

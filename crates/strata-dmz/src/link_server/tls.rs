@@ -87,7 +87,10 @@ mod tests {
 
     #[test]
     fn rejects_empty_cert_pem() {
-        let err = build_acceptor(&fixture("empty"), b"key", b"ca").unwrap_err();
+        let err = match build_acceptor(&fixture("empty"), b"key", b"ca") {
+            Ok(_) => panic!("expected build_acceptor to fail on empty cert PEM"),
+            Err(e) => e,
+        };
         let msg = format!("{err:#}");
         assert!(
             msg.contains("server cert") || msg.contains("no certificates"),
@@ -97,7 +100,10 @@ mod tests {
 
     #[test]
     fn rejects_junk_cert_pem() {
-        let err = build_acceptor(&fixture("junk"), b"key", b"ca").unwrap_err();
+        let err = match build_acceptor(&fixture("junk"), b"key", b"ca") {
+            Ok(_) => panic!("expected build_acceptor to fail on junk cert PEM"),
+            Err(e) => e,
+        };
         let _ = format!("{err:#}");
     }
 }

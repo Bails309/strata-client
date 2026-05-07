@@ -11,8 +11,8 @@ import SecurityTab from "../pages/admin/SecurityTab";
 import { updateSettings, updateAuthMethods } from "../api";
 
 beforeEach(() => {
-  vi.mocked(updateSettings).mockResolvedValue(undefined as unknown as void);
-  vi.mocked(updateAuthMethods).mockResolvedValue(undefined as unknown as void);
+  vi.mocked(updateSettings).mockResolvedValue({ status: "ok" });
+  vi.mocked(updateAuthMethods).mockResolvedValue({ status: "ok" });
 });
 
 afterEach(() => {
@@ -22,15 +22,15 @@ afterEach(() => {
 describe("SecurityTab", () => {
   it("defaults local auth to enabled when setting is undefined", () => {
     render(<SecurityTab settings={{}} onSave={() => {}} />);
-    const local = screen.getByRole("checkbox", { name: /Local Authentication/i }) as HTMLInputElement;
+    const local = screen.getByRole("checkbox", {
+      name: /Local Authentication/i,
+    }) as HTMLInputElement;
     expect(local.checked).toBe(true);
   });
 
   it("uses 90 days as the default user hard-delete window", () => {
     render(<SecurityTab settings={{}} onSave={() => {}} />);
-    const days = screen.getByLabelText(
-      /User hard-delete window/i
-    ) as HTMLInputElement;
+    const days = screen.getByLabelText(/User hard-delete window/i) as HTMLInputElement;
     expect(days.value).toBe("90");
   });
 
@@ -43,7 +43,9 @@ describe("SecurityTab", () => {
         onSave={() => {}}
       />
     );
-    const local = screen.getByRole("checkbox", { name: /Local Authentication/i }) as HTMLInputElement;
+    const local = screen.getByRole("checkbox", {
+      name: /Local Authentication/i,
+    }) as HTMLInputElement;
     expect(local.checked).toBe(true);
     await userEvent.click(local);
     expect(local.checked).toBe(true);
@@ -51,14 +53,10 @@ describe("SecurityTab", () => {
 
   it("rejects out-of-range user hard-delete window", async () => {
     render(<SecurityTab settings={{}} onSave={() => {}} />);
-    const days = screen.getByLabelText(
-      /User hard-delete window/i
-    ) as HTMLInputElement;
+    const days = screen.getByLabelText(/User hard-delete window/i) as HTMLInputElement;
     await userEvent.clear(days);
     await userEvent.type(days, "99999");
-    await userEvent.click(
-      screen.getByRole("button", { name: /Save Security Settings/ })
-    );
+    await userEvent.click(screen.getByRole("button", { name: /Save Security Settings/ }));
     // Validation throws before either API is called.
     await waitFor(() => {
       expect(updateSettings).not.toHaveBeenCalled();
@@ -79,9 +77,7 @@ describe("SecurityTab", () => {
         onSave={onSave}
       />
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: /Save Security Settings/ })
-    );
+    await userEvent.click(screen.getByRole("button", { name: /Save Security Settings/ }));
     await waitFor(() => {
       expect(updateSettings).toHaveBeenCalledWith([
         { key: "watermark_enabled", value: "true" },

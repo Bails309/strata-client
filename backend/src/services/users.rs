@@ -407,7 +407,10 @@ mod tests {
         }))
         .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("role_id") || msg.contains("auth_type"), "got: {msg}");
+        assert!(
+            msg.contains("role_id") || msg.contains("auth_type"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -415,8 +418,7 @@ mod tests {
         let q: UserListQuery = serde_json::from_value(json!({})).unwrap();
         assert_eq!(q.include_deleted, None);
 
-        let q: UserListQuery =
-            serde_json::from_value(json!({ "include_deleted": true })).unwrap();
+        let q: UserListQuery = serde_json::from_value(json!({ "include_deleted": true })).unwrap();
         assert_eq!(q.include_deleted, Some(true));
     }
 
@@ -466,7 +468,10 @@ mod tests {
             "r.name as role_name",
             "u.deleted_at",
         ] {
-            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+            assert!(
+                SELECT_COLUMNS.contains(col),
+                "SELECT_COLUMNS missing `{col}`"
+            );
         }
     }
 }

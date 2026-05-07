@@ -214,8 +214,10 @@ mod tests {
             "created_at",
             "updated_at",
         ] {
-            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+            assert!(
+                SELECT_COLUMNS.contains(col),
+                "SELECT_COLUMNS missing `{col}`"
+            );
         }
     }
 }
-

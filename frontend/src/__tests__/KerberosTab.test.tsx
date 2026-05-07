@@ -41,9 +41,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   onSave.mockReset();
   vi.mocked(getKerberosRealms).mockResolvedValue([]);
-  vi.mocked(createKerberosRealm).mockResolvedValue(realm());
-  vi.mocked(updateKerberosRealm).mockResolvedValue(realm());
-  vi.mocked(deleteKerberosRealm).mockResolvedValue(undefined as never);
+  vi.mocked(createKerberosRealm).mockResolvedValue({ id: "new-id", status: "ok" });
+  vi.mocked(updateKerberosRealm).mockResolvedValue({ status: "ok" });
+  vi.mocked(deleteKerberosRealm).mockResolvedValue({ status: "ok" });
 });
 
 describe("KerberosTab", () => {

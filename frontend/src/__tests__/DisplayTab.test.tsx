@@ -10,7 +10,7 @@ import DisplayTab from "../pages/admin/DisplayTab";
 import { updateSettings } from "../api";
 
 beforeEach(() => {
-  vi.mocked(updateSettings).mockResolvedValue(undefined as unknown as void);
+  vi.mocked(updateSettings).mockResolvedValue({ status: "ok" });
 });
 
 afterEach(() => {
@@ -26,9 +26,7 @@ describe("DisplayTab", () => {
     expect(screen.getByLabelText(/Display Timezone/i)).toBeInTheDocument();
     // Preview row mirrors the chosen format. With ISO + 24h the date
     // segment must be `YYYY-MM-DD` shape.
-    const preview = screen.getByText(
-      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/
-    );
+    const preview = screen.getByText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
     expect(preview).toBeInTheDocument();
   });
 
@@ -51,9 +49,7 @@ describe("DisplayTab", () => {
   it("persists settings via updateSettings on save and invokes onSave", async () => {
     const onSave = vi.fn();
     render(<DisplayTab settings={{}} onSave={onSave} />);
-    await userEvent.click(
-      screen.getByRole("button", { name: /Save Display Settings/ })
-    );
+    await userEvent.click(screen.getByRole("button", { name: /Save Display Settings/ }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(updateSettings).toHaveBeenCalledWith([
       { key: "display_timezone", value: "UTC" },
@@ -67,12 +63,8 @@ describe("DisplayTab", () => {
     vi.mocked(updateSettings).mockRejectedValueOnce(new Error("boom"));
     const onSave = vi.fn();
     render(<DisplayTab settings={{}} onSave={onSave} />);
-    await userEvent.click(
-      screen.getByRole("button", { name: /Save Display Settings/ })
-    );
-    await waitFor(() =>
-      expect(updateSettings).toHaveBeenCalled()
-    );
+    await userEvent.click(screen.getByRole("button", { name: /Save Display Settings/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
     expect(onSave).not.toHaveBeenCalled();
   });
 });

@@ -50,14 +50,20 @@ mod tests {
 
     #[test]
     fn rejects_empty_cert_pem() {
-        let err = build_public_acceptor(b"", b"-----BEGIN PRIVATE KEY-----\n").unwrap_err();
+        let err = match build_public_acceptor(b"", b"-----BEGIN PRIVATE KEY-----\n") {
+            Ok(_) => panic!("expected build_public_acceptor to fail on empty cert PEM"),
+            Err(e) => e,
+        };
         let msg = format!("{err:#}");
         assert!(msg.contains("no certificates"), "got: {msg}");
     }
 
     #[test]
     fn rejects_junk_pem() {
-        let err = build_public_acceptor(b"not a pem", b"not a key").unwrap_err();
+        let err = match build_public_acceptor(b"not a pem", b"not a key") {
+            Ok(_) => panic!("expected build_public_acceptor to fail on junk PEM"),
+            Err(e) => e,
+        };
         let _ = err; // any error is acceptable
     }
 }

@@ -418,8 +418,7 @@ mod tests {
 
     #[test]
     fn folder_request_root_folder_has_null_parent() {
-        let body: FolderRequest =
-            serde_json::from_value(json!({ "name": "Production" })).unwrap();
+        let body: FolderRequest = serde_json::from_value(json!({ "name": "Production" })).unwrap();
         assert_eq!(body.name, "Production");
         assert!(body.parent_id.is_none());
     }
@@ -442,7 +441,10 @@ mod tests {
             "health_status",
             "health_checked_at",
         ] {
-            assert!(SELECT_COLUMNS.contains(col), "SELECT_COLUMNS missing `{col}`");
+            assert!(
+                SELECT_COLUMNS.contains(col),
+                "SELECT_COLUMNS missing `{col}`"
+            );
         }
     }
 

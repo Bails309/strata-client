@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn loads_minimum_valid_env_in_dev_mode() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
 
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn missing_cluster_id_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn missing_operator_token_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn short_operator_token_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn missing_public_tls_in_prod_mode_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn psk_too_short_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn psk_duplicate_id_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn psk_missing_separator_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -702,7 +702,7 @@ mod tests {
 
     #[test]
     fn edge_key_too_short_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn invalid_socket_addr_is_rejected() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
@@ -728,22 +728,24 @@ mod tests {
 
     #[test]
     fn debug_redacts_secrets() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         let cfg = DmzConfig::from_env().unwrap();
         let s = format!("{cfg:?}");
-        assert!(!s.contains("rust"), "debug output unexpectedly clean: {s}");
-        // Ensure no decoded secret bytes leak. The dummy key is all
-        // 0xAB; any "ab" sequence in the redacted debug string would
-        // be suspicious.
-        assert!(s.contains("<redacted>"));
+        // The plaintext operator token used by `set_minimum_valid_env`
+        // must not appear in the Debug output.
+        assert!(
+            !s.contains("a-32-char-or-longer-operator-token"),
+            "operator token leaked in debug output: {s}"
+        );
+        assert!(s.contains("<redacted>"), "missing <redacted> marker: {s}");
         cleanup_env();
     }
 
     #[test]
     fn trust_forwarded_from_parses_csv() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cleanup_env();
         set_minimum_valid_env();
         unsafe {

@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Strata Client DMZ node — public-facing dumb-proxy. Holds NO Strata business secrets."
+publish = false
 
 [[bin]]
 name = "strata-dmz"

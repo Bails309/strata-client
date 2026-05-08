@@ -299,6 +299,13 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
           // user can still read the diagram source.
           // eslint-disable-next-line no-console
           console.error("mermaid render failed", err);
+        } finally {
+          // mermaid.render() injects a temporary measurement element
+          // (id === the id we passed) directly under document.body and
+          // is supposed to remove it. On parse failures it sometimes
+          // leaks an error SVG onto the page; clean up explicitly.
+          document.getElementById(id)?.remove();
+          document.querySelector(`#d${id}`)?.remove();
         }
       }
     })();

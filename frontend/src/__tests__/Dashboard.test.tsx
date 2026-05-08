@@ -52,6 +52,7 @@ vi.mock("../api", () => ({
   deleteTag: vi.fn(),
   getAdminTags: vi.fn(),
   getAdminConnectionTags: vi.fn(),
+  getMyConnectionFolders: vi.fn(),
 }));
 
 vi.mock("../contexts/SettingsContext", () => ({
@@ -89,6 +90,7 @@ import {
   getConnectionTags,
   getAdminTags,
   getAdminConnectionTags,
+  getMyConnectionFolders,
 } from "../api";
 
 const baseStatus = {
@@ -176,6 +178,11 @@ describe("Dashboard", () => {
     vi.mocked(getAdminTags).mockResolvedValue([]);
     vi.mocked(getAdminConnectionTags).mockResolvedValue({});
     vi.mocked(getStatus).mockResolvedValue({ ...baseStatus });
+    vi.mocked(getMyConnectionFolders).mockResolvedValue([
+      // Default folder set covers `mockGroupedConnections` (folder_id "g1").
+      // Tests using only `mockConnections` won't touch folders so this is harmless.
+      { id: "g1", name: "Production" },
+    ]);
   });
 
   afterEach(() => {

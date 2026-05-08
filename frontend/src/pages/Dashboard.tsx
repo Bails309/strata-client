@@ -27,6 +27,8 @@ import {
   UserTag,
   getAdminTags,
   getAdminConnectionTags,
+  getMyConnectionFolders,
+  ConnectionFolder,
 } from "../api";
 import { useSessionManager } from "../components/SessionManager";
 import Select from "../components/Select";
@@ -182,6 +184,7 @@ interface TiledCredPrompt {
 
 export default function Dashboard() {
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [folders, setFolders] = useState<ConnectionFolder[]>([]);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [page, setPage] = useState(1);
@@ -271,6 +274,9 @@ export default function Dashboard() {
         }
       })
       .catch(() => {});
+    getMyConnectionFolders()
+      .then(setFolders)
+      .catch(() => {});
     getStatus()
       .then((s) => setVaultConfigured(s.vault_configured))
       .catch(() => {});
@@ -356,23 +362,88 @@ export default function Dashboard() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Build grouped structure for folder view — uses ALL filtered connections
-  // (not paged) so folders aren't split across pages.
-  const groupedConnections = useMemo(() => {
+  // Build nested folder tree for folder view. Walks `folders` (which carry
+  // `parent_id`) to construct the hierarchy and buckets each connection
+  // under its leaf `folder_id`. Returns null when folder view is off.
+  // Connections whose folder_id no longer matches any known folder fall into
+  // the synthetic "Ungrouped" bucket alongside truly folderless ones.
+  const folderTree = useMemo(() => {
     if (!folderView) return null;
-    const folderMap = new Map<string, { name: string; connections: Connection[] }>();
+
+    type Node = {
+      id: string;
+      name: string;
+      children: Node[];
+      connections: Connection[];
+      /** Total connection count including all descendants. */
+      totalCount: number;
+    };
+
+    const folderById = new Map(folders.map((f) => [f.id, f]));
+    const nodes = new Map<string, Node>(
+      folders.map((f) => [
+        f.id,
+        { id: f.id, name: f.name, children: [], connections: [], totalCount: 0 },
+      ])
+    );
+    const roots: Node[] = [];
+    for (const f of folders) {
+      const node = nodes.get(f.id)!;
+      if (f.parent_id && nodes.has(f.parent_id)) {
+        nodes.get(f.parent_id)!.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+
     const ungrouped: Connection[] = [];
     for (const conn of filtered) {
       const fid = conn.folder_id;
-      if (fid && conn.folder_name) {
-        if (!folderMap.has(fid)) folderMap.set(fid, { name: conn.folder_name, connections: [] });
-        folderMap.get(fid)!.connections.push(conn);
+      if (fid && nodes.has(fid)) {
+        nodes.get(fid)!.connections.push(conn);
       } else {
         ungrouped.push(conn);
       }
     }
-    return { folders: [...folderMap.entries()], ungrouped };
-  }, [folderView, filtered]);
+
+    // Compute descendant counts depth-first.
+    const computeCount = (n: Node): number => {
+      n.totalCount = n.connections.length + n.children.reduce((a, c) => a + computeCount(c), 0);
+      return n.totalCount;
+    };
+    roots.forEach(computeCount);
+
+    // Sort children alphabetically at every level for predictable display.
+    const sortRec = (n: Node) => {
+      n.children.sort((a, b) => a.name.localeCompare(b.name));
+      n.children.forEach(sortRec);
+    };
+    roots.sort((a, b) => a.name.localeCompare(b.name));
+    roots.forEach(sortRec);
+
+    return { roots, ungrouped, folderById };
+  }, [folderView, folders, filtered]);
+
+  // When a search filter is active, auto-expand any folder containing
+  // matches so users don't see an empty tree.
+  const autoExpandedIds = useMemo(() => {
+    if (!folderTree || !search.trim()) return null;
+    const ids = new Set<string>();
+    type VisitNode = { id: string; children: VisitNode[]; totalCount: number };
+    const visit = (node: VisitNode): boolean => {
+      let hit = false;
+      for (const c of node.children) {
+        if (visit(c)) hit = true;
+      }
+      if (node.totalCount > 0 || hit) {
+        ids.add(node.id);
+        return true;
+      }
+      return false;
+    };
+    folderTree.roots.forEach((r) => visit(r));
+    return ids;
+  }, [folderTree, search]);
 
   const toggleFolderCollapse = useCallback((fid: string) => {
     setExpandedFolders((prev) => {
@@ -907,6 +978,51 @@ export default function Dashboard() {
           Folders
         </button>
 
+        {folderView &&
+          folderTree &&
+          (folderTree.roots.length > 0 || folderTree.ungrouped.length > 0) && (
+            <>
+              <button
+                className="btn-sm inline-flex items-center gap-1.5"
+                onClick={() => {
+                  // Collect every folder ID in the tree (recursively) plus the
+                  // synthetic ungrouped bucket so all rows pop open at once.
+                  const all = new Set<string>();
+                  type WalkNode = { id: string; children: WalkNode[] };
+                  const walk = (n: WalkNode) => {
+                    all.add(n.id);
+                    n.children.forEach(walk);
+                  };
+                  folderTree.roots.forEach(walk);
+                  if (folderTree.ungrouped.length > 0) all.add("__ungrouped");
+                  setExpandedFolders(all);
+                  try {
+                    localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...all]));
+                  } catch {
+                    /* localStorage may be unavailable; persistence best-effort. */
+                  }
+                }}
+                title="Expand all folders"
+              >
+                Expand all
+              </button>
+              <button
+                className="btn-sm inline-flex items-center gap-1.5"
+                onClick={() => {
+                  setExpandedFolders(new Set());
+                  try {
+                    localStorage.setItem(EXPANDED_FOLDERS_KEY, "[]");
+                  } catch {
+                    /* localStorage may be unavailable; persistence best-effort. */
+                  }
+                }}
+                title="Collapse all folders"
+              >
+                Collapse all
+              </button>
+            </>
+          )}
+
         {allTags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs uppercase text-txt-tertiary font-semibold tracking-wide">
@@ -1017,16 +1133,16 @@ export default function Dashboard() {
             </tr>
           </thead>
           <tbody>
-            {folderView && groupedConnections ? (
+            {folderView && folderTree ? (
               <>
-                {groupedConnections.folders.map(([fid, folder]) => (
-                  <ConnectionFolderRows
-                    key={fid}
-                    folderId={fid}
-                    folderName={folder.name}
-                    connections={folder.connections}
-                    collapsed={!expandedFolders.has(fid)}
-                    onToggleCollapse={() => toggleFolderCollapse(fid)}
+                {folderTree.roots.map((root) => (
+                  <ConnectionFolderTree
+                    key={root.id}
+                    node={root}
+                    depth={0}
+                    expandedFolders={expandedFolders}
+                    autoExpandedIds={autoExpandedIds}
+                    onToggleCollapse={toggleFolderCollapse}
                     checked={checked}
                     toggleChecked={toggleChecked}
                     favorites={favorites}
@@ -1044,14 +1160,20 @@ export default function Dashboard() {
                     adminTagIds={adminTagIds}
                   />
                 ))}
-                {groupedConnections.ungrouped.length > 0 && (
-                  <ConnectionFolderRows
+                {folderTree.ungrouped.length > 0 && (
+                  <ConnectionFolderTree
                     key="__ungrouped"
-                    folderId="__ungrouped"
-                    folderName="Ungrouped"
-                    connections={groupedConnections.ungrouped}
-                    collapsed={!expandedFolders.has("__ungrouped")}
-                    onToggleCollapse={() => toggleFolderCollapse("__ungrouped")}
+                    node={{
+                      id: "__ungrouped",
+                      name: "Ungrouped",
+                      children: [],
+                      connections: folderTree.ungrouped,
+                      totalCount: folderTree.ungrouped.length,
+                    }}
+                    depth={0}
+                    expandedFolders={expandedFolders}
+                    autoExpandedIds={autoExpandedIds}
+                    onToggleCollapse={toggleFolderCollapse}
                     checked={checked}
                     toggleChecked={toggleChecked}
                     favorites={favorites}
@@ -1111,14 +1233,10 @@ export default function Dashboard() {
         <div className="mt-4">
           <span className="text-[0.8125rem] text-txt-secondary">
             {filtered.length} connection{filtered.length !== 1 ? "s" : ""} in{" "}
-            {groupedConnections
-              ? groupedConnections.folders.length +
-                (groupedConnections.ungrouped.length > 0 ? 1 : 0)
-              : 0}{" "}
+            {folderTree ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0) : 0}{" "}
             folder
-            {(groupedConnections
-              ? groupedConnections.folders.length +
-                (groupedConnections.ungrouped.length > 0 ? 1 : 0)
+            {(folderTree
+              ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0)
               : 0) !== 1
               ? "s"
               : ""}
@@ -1341,6 +1459,7 @@ function ConnectionRow({
   onSetTags,
   onCreateTag,
   adminTagIds,
+  indentPx,
 }: {
   conn: Connection;
   checked: boolean;
@@ -1358,6 +1477,10 @@ function ConnectionRow({
   onSetTags: (connectionId: string, tagIds: string[]) => void;
   onCreateTag: (name: string, color: string) => Promise<UserTag>;
   adminTagIds: Set<string>;
+  /** Optional left indent in px applied to the name cell when this row is
+   *  rendered inside a nested folder tree. Aligns the connection name with
+   *  its parent folder header. */
+  indentPx?: number;
 }) {
   const { formatDateTime } = useSettings();
   const [showTagMenu, setShowTagMenu] = useState(false);
@@ -1366,6 +1489,7 @@ function ConnectionRow({
     bottom?: number;
     left?: number;
     right?: number;
+    maxHeight?: number;
   }>({});
   const [newTagName, setNewTagName] = useState("");
   const tagMenuRef = useRef<HTMLDivElement>(null);
@@ -1417,12 +1541,25 @@ function ConnectionRow({
         />
       </td>
       <td>
-        <div className="font-medium">{conn.name}</div>
+        <div
+          className="font-medium"
+          style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}
+        >
+          {conn.name}
+        </div>
         {conn.description && (
-          <div className="text-[0.75rem] text-txt-tertiary mt-0.5">{conn.description}</div>
+          <div
+            className="text-[0.75rem] text-txt-tertiary mt-0.5"
+            style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}
+          >
+            {conn.description}
+          </div>
         )}
         {connTags.length > 0 && (
-          <div className="flex gap-1 mt-1 flex-wrap">
+          <div
+            className="flex gap-1 mt-1 flex-wrap"
+            style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}
+          >
             {connTags.map((tag) => (
               <span
                 key={tag.id}
@@ -1514,13 +1651,22 @@ function ConnectionRow({
               onClick={() => {
                 if (!showTagMenu && tagMenuRef.current) {
                   const rect = tagMenuRef.current.getBoundingClientRect();
-                  const dropUp = rect.bottom + 260 > window.innerHeight;
+                  const margin = 8; // breathing room from viewport edge
+                  const spaceBelow = window.innerHeight - rect.bottom - margin;
+                  const spaceAbove = rect.top - margin;
+                  // Drop in whichever direction has more room. The menu's
+                  // maxHeight is whatever space we actually have there, so
+                  // long lists scroll inside the visible region instead of
+                  // overflowing the viewport.
+                  const dropUp = spaceAbove > spaceBelow;
+                  const maxHeight = Math.max(120, dropUp ? spaceAbove : spaceBelow);
                   const dropLeft = rect.right - 200 >= 0;
                   setMenuPos({
                     ...(dropUp
                       ? { bottom: window.innerHeight - rect.top + 4 }
                       : { top: rect.bottom + 4 }),
                     ...(dropLeft ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+                    maxHeight,
                   });
                 }
                 setShowTagMenu(!showTagMenu);
@@ -1544,7 +1690,16 @@ function ConnectionRow({
             {showTagMenu && (
               <div
                 className="card !p-2"
-                style={{ position: "fixed", zIndex: 30, minWidth: 200, ...menuPos }}
+                style={{
+                  position: "fixed",
+                  zIndex: 30,
+                  minWidth: 200,
+                  // maxHeight is computed from actual remaining viewport
+                  // space (see button onClick) so the menu always fits and
+                  // long lists scroll inside it.
+                  overflowY: "auto",
+                  ...menuPos,
+                }}
               >
                 {tags.length === 0 && (
                   <div className="text-xs text-txt-tertiary py-1 px-1">No tags yet</div>
@@ -1670,35 +1825,30 @@ function ConnectionRow({
   );
 }
 
-// ── Connection Folder Rows ───────────────────────────────────────────
+// ── Connection Folder Tree ───────────────────────────────────────────
+//
+// Recursive nested-folder renderer. Each call produces:
+//   • one <tr> for the folder header (chevron + name + descendant count)
+//   • child folder rows (recursive)
+//   • this folder's own connection rows
+// Indentation is purely visual — applied via inline padding on the first cell.
 
-function ConnectionFolderRows({
-  folderId: _fid,
-  folderName,
-  connections,
-  collapsed,
-  onToggleCollapse,
-  checked,
-  toggleChecked,
-  favorites,
-  onToggleFavorite,
-  vaultConfigured,
-  credProfiles,
-  allCheckouts,
-  connProfileMap,
-  onProfileChange,
-  navigate,
-  tags,
-  connTagMap,
-  onSetConnectionTags,
-  onCreateTag,
-  adminTagIds,
-}: {
-  folderId: string;
-  folderName: string;
+interface FolderTreeNode {
+  id: string;
+  name: string;
+  children: FolderTreeNode[];
   connections: Connection[];
-  collapsed: boolean;
-  onToggleCollapse: () => void;
+  totalCount: number;
+}
+
+interface FolderTreeProps {
+  node: FolderTreeNode;
+  depth: number;
+  expandedFolders: Set<string>;
+  /** When set (i.e. a search filter is active), folders whose ID appears here
+   *  are force-expanded regardless of the user's manual expand/collapse state. */
+  autoExpandedIds: Set<string> | null;
+  onToggleCollapse: (fid: string) => void;
   checked: Set<string>;
   toggleChecked: (id: string) => void;
   favorites: Set<string>;
@@ -1714,16 +1864,47 @@ function ConnectionFolderRows({
   onSetConnectionTags: (connectionId: string, tagIds: string[]) => void;
   onCreateTag: (name: string, color: string) => Promise<UserTag>;
   adminTagIds: Set<string>;
-}) {
+}
+
+function ConnectionFolderTree(props: FolderTreeProps) {
+  const { node, depth, expandedFolders, autoExpandedIds, onToggleCollapse } = props;
+  const isExpanded = autoExpandedIds ? autoExpandedIds.has(node.id) : expandedFolders.has(node.id);
+  const collapsed = !isExpanded;
+  // Empty branches are hidden when search is active so the tree only shows hits.
+  if (autoExpandedIds && node.totalCount === 0) return null;
+  // 16px indent per depth level — matches VS Code Explorer / Outlook folder pane.
+  const indentPx = 8 + depth * 16;
+  const hasChildren = node.children.length > 0;
+
   return (
     <>
       <tr
-        onClick={onToggleCollapse}
+        onClick={() => onToggleCollapse(node.id)}
         style={{ cursor: "pointer", background: "var(--color-surface-secondary)" }}
       >
         <td />
         <td colSpan={6} className="!py-2">
-          <div className="flex items-center gap-2 font-semibold text-[0.8125rem] -ml-2">
+          <div
+            className="flex items-center gap-2 font-semibold text-[0.8125rem]"
+            style={{ paddingLeft: `${indentPx}px` }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{
+                transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
+                transition: "transform 0.15s",
+                opacity: hasChildren || node.connections.length > 0 ? 1 : 0.3,
+              }}
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
             <svg
               width="14"
               height="14"
@@ -1734,50 +1915,46 @@ function ConnectionFolderRows({
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+              {collapsed ? (
+                <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+              ) : (
+                <path d="M2 7a2 2 0 012-2h5l2 2h9a2 2 0 012 2v1H2V7zm0 3h20l-2 8a2 2 0 01-2 1.5H6a2 2 0 01-2-1.5L2 10z" />
+              )}
             </svg>
-            <span>{folderName}</span>
-            <span className="text-txt-tertiary font-normal">({connections.length})</span>
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              className="ml-auto"
-              style={{
-                transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
-                transition: "transform 0.15s",
-              }}
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+            <span>{node.name}</span>
+            <span className="text-txt-tertiary font-normal">({node.totalCount})</span>
           </div>
         </td>
       </tr>
-      {!collapsed &&
-        connections.map((conn) => (
-          <ConnectionRow
-            key={conn.id}
-            conn={conn}
-            checked={checked.has(conn.id)}
-            onToggleChecked={() => toggleChecked(conn.id)}
-            isFavorite={favorites.has(conn.id)}
-            onToggleFavorite={() => onToggleFavorite(conn.id)}
-            vaultConfigured={vaultConfigured}
-            credProfiles={credProfiles}
-            allCheckouts={allCheckouts}
-            assignedProfileId={connProfileMap[conn.id] || ""}
-            onProfileChange={onProfileChange}
-            onConnect={() => navigate(`/session/${conn.id}`)}
-            tags={tags}
-            connTagIds={connTagMap[conn.id] || []}
-            onSetTags={onSetConnectionTags}
-            onCreateTag={onCreateTag}
-            adminTagIds={adminTagIds}
-          />
-        ))}
+      {!collapsed && (
+        <>
+          {node.children.map((child) => (
+            <ConnectionFolderTree key={child.id} {...props} node={child} depth={depth + 1} />
+          ))}
+          {node.connections.map((conn) => (
+            <ConnectionRow
+              key={conn.id}
+              conn={conn}
+              checked={props.checked.has(conn.id)}
+              onToggleChecked={() => props.toggleChecked(conn.id)}
+              isFavorite={props.favorites.has(conn.id)}
+              onToggleFavorite={() => props.onToggleFavorite(conn.id)}
+              vaultConfigured={props.vaultConfigured}
+              credProfiles={props.credProfiles}
+              allCheckouts={props.allCheckouts}
+              assignedProfileId={props.connProfileMap[conn.id] || ""}
+              onProfileChange={props.onProfileChange}
+              onConnect={() => props.navigate(`/session/${conn.id}`)}
+              tags={props.tags}
+              connTagIds={props.connTagMap[conn.id] || []}
+              onSetTags={props.onSetConnectionTags}
+              onCreateTag={props.onCreateTag}
+              adminTagIds={props.adminTagIds}
+              indentPx={indentPx + 16}
+            />
+          ))}
+        </>
+      )}
     </>
   );
 }

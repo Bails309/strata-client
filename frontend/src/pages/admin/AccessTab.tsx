@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ConfirmModal from "../../components/ConfirmModal";
 import Select from "../../components/Select";
+import { orderFoldersByHierarchy, indentedFolderLabel } from "../../utils/folderTree";
 import {
   Connection,
   ConnectionFolder,
@@ -674,10 +675,11 @@ export default function AccessTab({
                             No folders created yet
                           </div>
                         ) : (
-                          folders.map((f) => (
+                          orderFoldersByHierarchy(folders).map(({ folder: f, depth }) => (
                             <label
                               key={f.id}
                               className="flex items-center gap-2 cursor-pointer py-1 px-1.5 hover:bg-surface-secondary rounded transition-colors group"
+                              style={depth > 0 ? { paddingLeft: `${6 + depth * 16}px` } : undefined}
                             >
                               <input
                                 type="checkbox"
@@ -693,7 +695,7 @@ export default function AccessTab({
                                 }}
                               />
                               <span className="text-xs font-medium group-hover:text-accent transition-colors">
-                                {f.name}
+                                {depth > 0 ? `└ ${f.name}` : f.name}
                               </span>
                             </label>
                           ))
@@ -1003,9 +1005,9 @@ export default function AccessTab({
                 placeholder="No folder"
                 options={[
                   { value: "", label: "No folder" },
-                  ...folders.map((f) => ({
+                  ...orderFoldersByHierarchy(folders).map(({ folder: f, depth }) => ({
                     value: f.id,
-                    label: f.parent_id ? `  └ ${f.name}` : f.name,
+                    label: indentedFolderLabel(f.name, depth),
                   })),
                 ]}
               />
@@ -1094,10 +1096,15 @@ export default function AccessTab({
                 </tr>
               </thead>
               <tbody>
-                {folders.map((f) => (
+                {orderFoldersByHierarchy(folders).map(({ folder: f, depth }) => (
                   <tr key={f.id}>
                     <td>
-                      <span className="font-medium">{f.name}</span>
+                      <span
+                        className="font-medium inline-block"
+                        style={depth > 0 ? { paddingLeft: `${depth * 16}px` } : undefined}
+                      >
+                        {f.name}
+                      </span>
                     </td>
                     <td>
                       {f.parent_id ? (

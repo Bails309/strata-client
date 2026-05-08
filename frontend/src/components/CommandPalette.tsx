@@ -9,7 +9,7 @@ import {
   getMyConnections,
   getTags,
   getConnectionTags,
-  getConnectionFolders,
+  getMyConnectionFolders,
   postCommandAudit,
   Connection,
   ConnectionFolder,
@@ -190,7 +190,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       getMyConnections().catch(() => [] as Connection[]),
       getTags().catch(() => [] as UserTag[]),
       getConnectionTags().catch(() => ({}) as Record<string, string[]>),
-      getConnectionFolders().catch(() => [] as ConnectionFolder[]),
+      getMyConnectionFolders().catch(() => [] as ConnectionFolder[]),
     ])
       .then(([conns, allTags, ctags, fs]) => {
         setConnections(conns);

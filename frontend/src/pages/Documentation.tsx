@@ -270,9 +270,13 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
           // through DOMPurify in SVG mode — this strips any <script>,
           // <foreignObject> with HTML, or event-handler attributes
           // mermaid might emit, and breaks the data-flow path
-          // CodeQL is tracing.
+          // CodeQL is tracing. We additionally allow <style> because
+          // mermaid embeds its theme CSS inline as a <style> element
+          // (the SVG profile drops it by default and every node
+          // would render black-on-black without the fill colours).
           const cleanSvg = DOMPurify.sanitize(svg, {
             USE_PROFILES: { svg: true, svgFilters: true },
+            ADD_TAGS: ["style"],
           });
           const wrapper = document.createElement("div");
           wrapper.className = "mermaid-diagram";

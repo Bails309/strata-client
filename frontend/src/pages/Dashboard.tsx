@@ -1486,6 +1486,7 @@ function ConnectionRow({
     bottom?: number;
     left?: number;
     right?: number;
+    maxHeight?: number;
   }>({});
   const [newTagName, setNewTagName] = useState("");
   const tagMenuRef = useRef<HTMLDivElement>(null);
@@ -1644,17 +1645,22 @@ function ConnectionRow({
               onClick={() => {
                 if (!showTagMenu && tagMenuRef.current) {
                   const rect = tagMenuRef.current.getBoundingClientRect();
-                  // Cap the menu height at 60vh so a long tag list never
-                  // pushes off-screen — matches the maxHeight applied below.
-                  const maxMenuPx = Math.min(window.innerHeight * 0.6, 400);
-                  const spaceBelow = window.innerHeight - rect.bottom;
-                  const dropUp = spaceBelow < Math.min(maxMenuPx, 260) && rect.top > spaceBelow;
+                  const margin = 8; // breathing room from viewport edge
+                  const spaceBelow = window.innerHeight - rect.bottom - margin;
+                  const spaceAbove = rect.top - margin;
+                  // Drop in whichever direction has more room. The menu's
+                  // maxHeight is whatever space we actually have there, so
+                  // long lists scroll inside the visible region instead of
+                  // overflowing the viewport.
+                  const dropUp = spaceAbove > spaceBelow;
+                  const maxHeight = Math.max(120, dropUp ? spaceAbove : spaceBelow);
                   const dropLeft = rect.right - 200 >= 0;
                   setMenuPos({
                     ...(dropUp
                       ? { bottom: window.innerHeight - rect.top + 4 }
                       : { top: rect.bottom + 4 }),
                     ...(dropLeft ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+                    maxHeight,
                   });
                 }
                 setShowTagMenu(!showTagMenu);
@@ -1682,10 +1688,9 @@ function ConnectionRow({
                   position: "fixed",
                   zIndex: 30,
                   minWidth: 200,
-                  // Cap height so long tag lists scroll inside the menu rather
-                  // than overflowing the viewport (which is unreachable when
-                  // anchored with `position: fixed`).
-                  maxHeight: "min(60vh, 400px)",
+                  // maxHeight is computed from actual remaining viewport
+                  // space (see button onClick) so the menu always fits and
+                  // long lists scroll inside it.
                   overflowY: "auto",
                   ...menuPos,
                 }}

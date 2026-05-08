@@ -262,9 +262,21 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
         try {
           const { svg } = await mermaid.render(id, source);
           if (cancelled) return;
+          // Sanitise the rendered SVG before inserting via innerHTML.
+          // mermaid.render emits SVG markup that is derived from the
+          // diagram source (which itself comes from DOM text via
+          // code.textContent), so CodeQL's "DOM text reinterpreted as
+          // HTML" rule flags the unsanitised assignment. Run the SVG
+          // through DOMPurify in SVG mode — this strips any <script>,
+          // <foreignObject> with HTML, or event-handler attributes
+          // mermaid might emit, and breaks the data-flow path
+          // CodeQL is tracing.
+          const cleanSvg = DOMPurify.sanitize(svg, {
+            USE_PROFILES: { svg: true, svgFilters: true },
+          });
           const wrapper = document.createElement("div");
           wrapper.className = "mermaid-diagram";
-          wrapper.innerHTML = svg;
+          wrapper.innerHTML = cleanSvg;
           pre.replaceWith(wrapper);
         } catch (err) {
           // Leave the raw code block in place if rendering fails so the

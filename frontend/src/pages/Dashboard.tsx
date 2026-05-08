@@ -1549,7 +1549,10 @@ function ConnectionRow({
           </div>
         )}
         {connTags.length > 0 && (
-          <div className="flex gap-1 mt-1 flex-wrap">
+          <div
+            className="flex gap-1 mt-1 flex-wrap"
+            style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}
+          >
             {connTags.map((tag) => (
               <span
                 key={tag.id}

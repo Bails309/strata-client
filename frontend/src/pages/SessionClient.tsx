@@ -359,16 +359,21 @@ export default function SessionClient() {
           setRenewLoading(false);
         }
       } else {
-        // Standard manual renewal
-        if (!renewForm.username || !renewForm.password) {
-          setRenewError("Username and password are required.");
+        // Standard manual renewal. Username is optional — if the user leaves
+        // it blank we keep the existing stored username and only rotate the
+        // password. The PUT endpoint accepts partial updates.
+        if (!renewForm.password) {
+          setRenewError("Password is required.");
           setRenewLoading(false);
           return;
         }
-        await updateCredentialProfile(expiredProfile.id, {
-          username: renewForm.username,
+        const updatePayload: { username?: string; password: string } = {
           password: renewForm.password,
-        });
+        };
+        if (renewForm.username.trim()) {
+          updatePayload.username = renewForm.username.trim();
+        }
+        await updateCredentialProfile(expiredProfile.id, updatePayload);
         pendingCredsRef.current = {
           username: "",
           password: "",
@@ -1464,7 +1469,8 @@ export default function SessionClient() {
                       <>
                         <div className="form-group !mb-2">
                           <label htmlFor="renew-username" className="text-xs">
-                            Username
+                            Username{" "}
+                            <span className="text-txt-tertiary font-normal">(optional)</span>
                           </label>
                           <input
                             id="renew-username"
@@ -1473,9 +1479,7 @@ export default function SessionClient() {
                             onChange={(e) =>
                               setRenewForm((f) => ({ ...f, username: e.target.value }))
                             }
-                            // Credential renewal modal just opened — focus-on-appear UX.
-                            // eslint-disable-next-line jsx-a11y/no-autofocus
-                            autoFocus
+                            placeholder="Leave blank to keep current username"
                           />
                         </div>
                         <div className="form-group !mb-2">
@@ -1489,6 +1493,10 @@ export default function SessionClient() {
                             onChange={(e) =>
                               setRenewForm((f) => ({ ...f, password: e.target.value }))
                             }
+                            // Credential renewal modal just opened — password is the
+                            // primary field (username is optional and pre-kept).
+                            // eslint-disable-next-line jsx-a11y/no-autofocus
+                            autoFocus
                           />
                         </div>
                       </>

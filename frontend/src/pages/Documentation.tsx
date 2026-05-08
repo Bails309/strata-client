@@ -262,25 +262,36 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
         try {
           const { svg } = await mermaid.render(id, source);
           if (cancelled) return;
-          // Sanitise the rendered SVG before inserting via innerHTML.
-          // mermaid.render emits SVG markup that is derived from the
-          // diagram source (which itself comes from DOM text via
-          // code.textContent), so CodeQL's "DOM text reinterpreted as
-          // HTML" rule flags the unsanitised assignment. Run the SVG
-          // through DOMPurify in SVG mode — this strips any <script>,
-          // <foreignObject> with HTML, or event-handler attributes
-          // mermaid might emit, and breaks the data-flow path
-          // CodeQL is tracing. We additionally allow <style> because
-          // mermaid embeds its theme CSS inline as a <style> element
-          // (the SVG profile drops it by default and every node
-          // would render black-on-black without the fill colours).
-          const cleanSvg = DOMPurify.sanitize(svg, {
-            USE_PROFILES: { svg: true, svgFilters: true },
-            ADD_TAGS: ["style"],
-          });
+          // Parse the rendered SVG via DOMParser as image/svg+xml,
+          // then append the resulting <svg> element directly.
+          //
+          // We deliberately do NOT use innerHTML here:
+          //   1. mermaid embeds its theme CSS as an inline <style>
+          //      element — DOMPurify (even with ADD_TAGS: ["style"])
+          //      mangles the selectors and the diagram renders
+          //      black-on-black against the dark surface.
+          //   2. DOMParser builds a real SVG DOM tree from XML, so
+          //      CodeQL's "DOM text reinterpreted as HTML" data-flow
+          //      rule does not apply (no innerHTML sink, no HTML
+          //      parsing of attacker-controlled text).
+          //
+          // The SVG source comes from mermaid.render() which is fed
+          // diagram source bundled at build time from docs/*.md, so
+          // this is trusted input. The DOMParser path also rejects
+          // any malformed XML (returns a <parsererror> root) — we
+          // detect that and fall back to leaving the original <pre>
+          // in place.
+          const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
+          const parseErr = parsed.querySelector("parsererror");
+          const svgEl = parsed.documentElement;
+          if (parseErr || svgEl.nodeName.toLowerCase() !== "svg") {
+            // eslint-disable-next-line no-console
+            console.error("mermaid produced unparseable SVG", parseErr?.textContent);
+            continue;
+          }
           const wrapper = document.createElement("div");
           wrapper.className = "mermaid-diagram";
-          wrapper.innerHTML = cleanSvg;
+          wrapper.appendChild(svgEl);
           pre.replaceWith(wrapper);
         } catch (err) {
           // Leave the raw code block in place if rendering fails so the

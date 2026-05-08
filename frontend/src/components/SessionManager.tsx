@@ -5,6 +5,7 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
 import { preparePastePayload } from "./pastePayload";
+import { notifySessionActivity } from "./sessionActivity";
 export interface GuacSession {
   id: string; // connection UUID
   connectionId: string;
@@ -217,6 +218,12 @@ export function SessionManagerProvider({
     const mouse = new Guacamole.Mouse(displayEl);
     mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       client.sendMouseState(e.state, true);
+      // Mouse events on the Guacamole canvas are hijacked by the vendor
+      // library (preventDefault + stopPropagation) and never bubble to
+      // window-level "is the user active?" listeners. Notify the
+      // activity bus directly so SessionTimeoutWarning's proactive
+      // refresh fires while the user is actively using a session.
+      notifySessionActivity();
     });
 
     // Release any held mouse buttons when the cursor leaves the canvas or

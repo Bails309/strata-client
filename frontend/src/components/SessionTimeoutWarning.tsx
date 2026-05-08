@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { refreshAccessToken, readCookie } from "../api";
+import { SESSION_ACTIVITY_EVENT } from "./sessionActivity";
 
 /**
  * Read the access-token expiry timestamp.
@@ -62,8 +63,15 @@ export default function SessionTimeoutWarning({ onExpired }: { onExpired?: () =>
 
     const events: (keyof WindowEventMap)[] = ["mousedown", "keydown", "touchstart", "scroll"];
     for (const e of events) window.addEventListener(e, onActivity, { passive: true });
+    // Custom event from Guacamole session input handlers — see
+    // components/sessionActivity.ts. The vendor library calls
+    // preventDefault()+stopPropagation() on canvas keystrokes and
+    // mouse moves, so the standard DOM events above never fire while
+    // the user is interacting with a remote session.
+    window.addEventListener(SESSION_ACTIVITY_EVENT, onActivity);
     return () => {
       for (const e of events) window.removeEventListener(e, onActivity);
+      window.removeEventListener(SESSION_ACTIVITY_EVENT, onActivity);
     };
   }, []);
 

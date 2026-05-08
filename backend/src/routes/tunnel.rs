@@ -1488,7 +1488,11 @@ mod tests {
         let none = cred(None, None);
         let empty_ticket = cred(None, None);
         let (u, p) = resolve_credentials(&none, &none, Some(&empty_ticket), &none, "fb");
-        assert!(u.is_none(), "expected no fallback username, got {u:?}");
-        assert!(p.is_none(), "expected no password, got {p:?}");
+        // Don't interpolate `u` / `p` into the panic message — even in a
+        // test these are typed as `Option<String>` carrying credential
+        // material in production callers, and CodeQL flags any format!()
+        // of those types as cleartext logging of sensitive information.
+        assert!(u.is_none(), "expected no fallback username");
+        assert!(p.is_none(), "expected no password");
     }
 }

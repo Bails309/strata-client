@@ -559,6 +559,16 @@ export default function SessionClient() {
       };
 
       session.client.onrequired = (parameters: string[]) => {
+        // guacd's SSH plugin only lists `password` in its `required`
+        // instruction when no username has been supplied at handshake —
+        // it accepts an empty username at connect time but then has no
+        // identity to authenticate, so we'd be prompting the operator
+        // for a password that can never succeed. Always include the
+        // username field for SSH so they can supply both halves of the
+        // credential pair from a single dialog.
+        if (session.protocol === "ssh" && !parameters.includes("username")) {
+          parameters = ["username", ...parameters];
+        }
         setSshRequired(parameters);
       };
     },

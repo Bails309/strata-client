@@ -9,6 +9,15 @@ vi.mock("@docs/api-reference.md?raw", () => ({ default: "# API Reference\nAPI co
 vi.mock("@docs/web-sessions.md?raw", () => ({ default: "# Web Sessions\nWeb content here" }));
 vi.mock("@docs/vdi.md?raw", () => ({ default: "# VDI\nVDI content here" }));
 
+// Mermaid pulls in a large ESM bundle and only runs when fenced ```mermaid
+// blocks are present in the rendered docs; stub it in the test environment.
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(async () => ({ svg: "<svg></svg>" })),
+  },
+}));
+
 // Mock the roadmap API calls used by the Roadmap tab.
 const getRoadmapStatusesMock = vi.fn();
 const setRoadmapStatusMock = vi.fn();

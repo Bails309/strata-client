@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect, type ReactElement } from "react";
+import { useState, useMemo, useEffect, useRef, type ReactElement } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import mermaid from "mermaid";
 import { RELEASE_CARDS, WHATS_NEW_VERSION } from "../components/WhatsNewModal";
 import Select from "../components/Select";
 import {
@@ -175,16 +176,35 @@ const SECTIONS: DocSection[] = [
 
 marked.setOptions({ gfm: true, breaks: false });
 
+// Mermaid is initialised once. We disable startOnLoad and render manually
+// after each tab switch so we only process diagrams in the active section.
+// The dark theme matches the surrounding docs surface.
+let mermaidInitialised = false;
+function ensureMermaidInitialised() {
+  if (mermaidInitialised) return;
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "dark",
+    securityLevel: "strict",
+    fontFamily: "inherit",
+  });
+  mermaidInitialised = true;
+}
+
 /* ── Component ─────────────────────────────────────────────────────── */
 
 export default function Documentation({ user }: { user?: MeResponse | null }) {
   const [activeId, setActiveId] = useState(SECTIONS[0].id);
   const active = SECTIONS.find((s) => s.id === activeId)!;
+  const articleRef = useRef<HTMLElement | null>(null);
 
   // Memoise parsed HTML per section to avoid re-parsing on every render.
   // Each rendered HTML string is run through DOMPurify so a future
   // markdown source containing raw <script>/<iframe>/event-handlers
-  // can never reach the DOM.
+  // can never reach the DOM. DOMPurify keeps `class` attributes by
+  // default so the `language-mermaid` marker survives sanitisation and
+  // the post-render effect below can find and replace those code blocks
+  // with rendered SVG.
   const htmlCache = useMemo(() => {
     const cache: Record<string, string> = {};
     for (const s of SECTIONS) {
@@ -195,6 +215,49 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
     }
     return cache;
   }, []);
+
+  // Render any ```mermaid fenced code blocks in the active section as SVG.
+  // marked emits them as <pre><code class="language-mermaid">…</code></pre>;
+  // we hand the source to mermaid.render and swap the <pre> for the SVG.
+  // Source markdown is bundled at build time (Vite ?raw imports of files
+  // under docs/), so the mermaid input is trusted; we still set
+  // securityLevel: "strict" above as defence-in-depth.
+  useEffect(() => {
+    const root = articleRef.current;
+    if (!root) return;
+    if (active.content === null) return;
+    const blocks = root.querySelectorAll<HTMLElement>(
+      "pre > code.language-mermaid",
+    );
+    if (blocks.length === 0) return;
+    ensureMermaidInitialised();
+    let cancelled = false;
+    (async () => {
+      for (let i = 0; i < blocks.length; i++) {
+        const code = blocks[i];
+        const pre = code.parentElement;
+        if (!pre) continue;
+        const source = code.textContent ?? "";
+        const id = `mermaid-${active.id}-${i}-${Date.now()}`;
+        try {
+          const { svg } = await mermaid.render(id, source);
+          if (cancelled) return;
+          const wrapper = document.createElement("div");
+          wrapper.className = "mermaid-diagram";
+          wrapper.innerHTML = svg;
+          pre.replaceWith(wrapper);
+        } catch (err) {
+          // Leave the raw code block in place if rendering fails so the
+          // user can still read the diagram source.
+          // eslint-disable-next-line no-console
+          console.error("mermaid render failed", err);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, active.content, active.id]);
 
   return (
     <div className="flex gap-6 min-h-[calc(100vh-4rem)]">
@@ -224,6 +287,7 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
       <div className="flex-1 min-w-0">
         {active.content !== null ? (
           <article
+            ref={articleRef}
             className="prose-docs"
             dangerouslySetInnerHTML={{ __html: htmlCache[active.id] }}
           />

@@ -913,8 +913,7 @@ export const getConnectionFolders = () => request<ConnectionFolder[]>("/admin/co
 /** User-accessible flat list of all connection folders (id, name, parent_id).
  *  Used by Dashboard to render the nested folder tree without requiring
  *  admin privileges. Mutations remain on `/admin/connection-folders`. */
-export const getMyConnectionFolders = () =>
-  request<ConnectionFolder[]>("/user/connection-folders");
+export const getMyConnectionFolders = () => request<ConnectionFolder[]>("/user/connection-folders");
 
 export const createConnectionFolder = (data: { name: string; parent_id?: string }) =>
   request<ConnectionFolder>("/admin/connection-folders", {

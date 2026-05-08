@@ -381,7 +381,10 @@ export default function Dashboard() {
 
     const folderById = new Map(folders.map((f) => [f.id, f]));
     const nodes = new Map<string, Node>(
-      folders.map((f) => [f.id, { id: f.id, name: f.name, children: [], connections: [], totalCount: 0 }])
+      folders.map((f) => [
+        f.id,
+        { id: f.id, name: f.name, children: [], connections: [], totalCount: 0 },
+      ])
     );
     const roots: Node[] = [];
     for (const f of folders) {
@@ -975,48 +978,50 @@ export default function Dashboard() {
           Folders
         </button>
 
-        {folderView && folderTree && (folderTree.roots.length > 0 || folderTree.ungrouped.length > 0) && (
-          <>
-            <button
-              className="btn-sm inline-flex items-center gap-1.5"
-              onClick={() => {
-                // Collect every folder ID in the tree (recursively) plus the
-                // synthetic ungrouped bucket so all rows pop open at once.
-                const all = new Set<string>();
-                type WalkNode = { id: string; children: WalkNode[] };
-                const walk = (n: WalkNode) => {
-                  all.add(n.id);
-                  n.children.forEach(walk);
-                };
-                folderTree.roots.forEach(walk);
-                if (folderTree.ungrouped.length > 0) all.add("__ungrouped");
-                setExpandedFolders(all);
-                try {
-                  localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...all]));
-                } catch {
-                  /* localStorage may be unavailable; persistence best-effort. */
-                }
-              }}
-              title="Expand all folders"
-            >
-              Expand all
-            </button>
-            <button
-              className="btn-sm inline-flex items-center gap-1.5"
-              onClick={() => {
-                setExpandedFolders(new Set());
-                try {
-                  localStorage.setItem(EXPANDED_FOLDERS_KEY, "[]");
-                } catch {
-                  /* localStorage may be unavailable; persistence best-effort. */
-                }
-              }}
-              title="Collapse all folders"
-            >
-              Collapse all
-            </button>
-          </>
-        )}
+        {folderView &&
+          folderTree &&
+          (folderTree.roots.length > 0 || folderTree.ungrouped.length > 0) && (
+            <>
+              <button
+                className="btn-sm inline-flex items-center gap-1.5"
+                onClick={() => {
+                  // Collect every folder ID in the tree (recursively) plus the
+                  // synthetic ungrouped bucket so all rows pop open at once.
+                  const all = new Set<string>();
+                  type WalkNode = { id: string; children: WalkNode[] };
+                  const walk = (n: WalkNode) => {
+                    all.add(n.id);
+                    n.children.forEach(walk);
+                  };
+                  folderTree.roots.forEach(walk);
+                  if (folderTree.ungrouped.length > 0) all.add("__ungrouped");
+                  setExpandedFolders(all);
+                  try {
+                    localStorage.setItem(EXPANDED_FOLDERS_KEY, JSON.stringify([...all]));
+                  } catch {
+                    /* localStorage may be unavailable; persistence best-effort. */
+                  }
+                }}
+                title="Expand all folders"
+              >
+                Expand all
+              </button>
+              <button
+                className="btn-sm inline-flex items-center gap-1.5"
+                onClick={() => {
+                  setExpandedFolders(new Set());
+                  try {
+                    localStorage.setItem(EXPANDED_FOLDERS_KEY, "[]");
+                  } catch {
+                    /* localStorage may be unavailable; persistence best-effort. */
+                  }
+                }}
+                title="Collapse all folders"
+              >
+                Collapse all
+              </button>
+            </>
+          )}
 
         {allTags.length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1228,9 +1233,7 @@ export default function Dashboard() {
         <div className="mt-4">
           <span className="text-[0.8125rem] text-txt-secondary">
             {filtered.length} connection{filtered.length !== 1 ? "s" : ""} in{" "}
-            {folderTree
-              ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0)
-              : 0}{" "}
+            {folderTree ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0) : 0}{" "}
             folder
             {(folderTree
               ? folderTree.roots.length + (folderTree.ungrouped.length > 0 ? 1 : 0)
@@ -1538,7 +1541,10 @@ function ConnectionRow({
         />
       </td>
       <td>
-        <div className="font-medium" style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}>
+        <div
+          className="font-medium"
+          style={indentPx ? { paddingLeft: `${indentPx}px` } : undefined}
+        >
           {conn.name}
         </div>
         {conn.description && (

@@ -1644,7 +1644,11 @@ function ConnectionRow({
               onClick={() => {
                 if (!showTagMenu && tagMenuRef.current) {
                   const rect = tagMenuRef.current.getBoundingClientRect();
-                  const dropUp = rect.bottom + 260 > window.innerHeight;
+                  // Cap the menu height at 60vh so a long tag list never
+                  // pushes off-screen — matches the maxHeight applied below.
+                  const maxMenuPx = Math.min(window.innerHeight * 0.6, 400);
+                  const spaceBelow = window.innerHeight - rect.bottom;
+                  const dropUp = spaceBelow < Math.min(maxMenuPx, 260) && rect.top > spaceBelow;
                   const dropLeft = rect.right - 200 >= 0;
                   setMenuPos({
                     ...(dropUp
@@ -1674,7 +1678,17 @@ function ConnectionRow({
             {showTagMenu && (
               <div
                 className="card !p-2"
-                style={{ position: "fixed", zIndex: 30, minWidth: 200, ...menuPos }}
+                style={{
+                  position: "fixed",
+                  zIndex: 30,
+                  minWidth: 200,
+                  // Cap height so long tag lists scroll inside the menu rather
+                  // than overflowing the viewport (which is unreachable when
+                  // anchored with `position: fixed`).
+                  maxHeight: "min(60vh, 400px)",
+                  overflowY: "auto",
+                  ...menuPos,
+                }}
               >
                 {tags.length === 0 && (
                   <div className="text-xs text-txt-tertiary py-1 px-1">No tags yet</div>

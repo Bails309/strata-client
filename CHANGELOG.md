@@ -5,6 +5,155 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] — 2026-05-08
+
+### Patch release — connection-folder hierarchy, tag-picker viewport, SSH credential prompt
+
+Six independent UX/correctness fixes raised against the v1.6.1 deployment.
+No API contract changes, no database migrations, no new environment
+variables, no new runtime dependencies. Drop-in upgrade from v1.6.1 — roll
+the backend and frontend images together.
+
+#### Added
+
+- **`GET /api/user/connection-folders`**
+  ([`backend/src/routes/user.rs`](backend/src/routes/user.rs)) — returns
+  the full list of connection folders the authenticated user can
+  reference (`id`, `name`, `parent_id`). The Dashboard tree view and
+  the global Command Palette previously fell back to "ungrouped" for
+  every nested connection because the only existing
+  `GET /api/admin/connection-folders` endpoint required
+  `can_manage_connections`. The new endpoint is read-only, gated by
+  the same auth middleware as `/api/user/connections`, and wraps the
+  same `connections::list_folders(&db.pool)` service the admin
+  endpoint uses (folders are not user-scoped — every authenticated
+  user needs to be able to draw the same hierarchy the admins
+  authored). Documented in [`docs/api-reference.md`](docs/api-reference.md).
+- **`frontend/src/utils/folderTree.ts`** — `orderFoldersByHierarchy()`
+  performs a depth-first preorder traversal with alphabetic sibling
+  ordering and an orphan-as-root fallback (so a folder whose parent
+  has been deleted out from under it still appears at the top level
+  rather than vanishing). `indentedFolderLabel()` produces a
+  non-breaking-space-padded "└ " label suitable for `<option>`
+  elements (which cannot host real CSS). Both helpers are reused by
+  the Dashboard tree, the admin connection-edit Folder dropdown,
+  the role-folder assignment checklist, the folder management
+  table, and the AD-sync default-folder picker so every folder
+  picker in the application now renders the same hierarchy in the
+  same order.
+
+#### Fixed
+
+- **Dashboard now renders connections under their nested folders.**
+  Operators creating a folder hierarchy of e.g. `Root → Switches →
+Coventry` and adding a connection inside `Coventry` previously saw
+  the connection only when they expanded `Coventry` directly; the
+  tree was a one-level-deep group list rather than a recursive tree,
+  and the per-row indent collapsed every connection to the same
+  visual depth regardless of its real folder. The Dashboard
+  ([`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx))
+  now builds a recursive `folderTree` model with descendant-inclusive
+  count badges (so the parent folder header shows the total count
+  even while collapsed), depth-proportional indentation
+  (`8 + depth * 16` px on the connection row name, description, and
+  tag pills), per-folder open/closed chevron + folder icon, and
+  toolbar **Expand all** / **Collapse all** buttons (visible only in
+  folder view with a non-empty tree). When a search filter is active
+  every folder containing a match is auto-expanded so hits never
+  hide behind a collapsed parent.
+- **Folder pickers across the admin surface now sort hierarchically
+  with depth indentation.** The connection-edit Folder dropdown,
+  the role-folder assignment checklist, the folder management
+  table, and the AD-sync default-folder picker
+  ([`AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx),
+  [`AdSyncTab.tsx`](frontend/src/pages/admin/AdSyncTab.tsx))
+  previously listed folders alphabetically with no nesting visible,
+  scattering children away from their parents and making it very
+  hard to tell where a connection would actually be placed. They
+  now share the new `orderFoldersByHierarchy()` helper, render
+  options in depth-first preorder, and indent children with
+  non-breaking-space padding (in `<select>` options) or a left
+  `paddingLeft: depth * 16px` on the row label / span (in HTML
+  controls).
+- **Tag picker no longer overflows the viewport on connections low
+  on the page.** The per-row tag-picker dropdown was anchored to the
+  pill button with a fixed `top` position, so opening it on a
+  connection near the bottom of the viewport pushed half the menu
+  off-screen with no scroll. The Dashboard now measures
+  `spaceBelow = innerHeight - rect.bottom - 8` and
+  `spaceAbove = rect.top - 8` on open, drops the menu in whichever
+  direction has more room, sets `maxHeight: max(120, chosen)`, and
+  uses `overflowY: auto` so the picker is always fully reachable
+  regardless of where its anchor sits.
+- **Tag pill column on connection rows now lines up with the
+  folder-indented name.** The pill container previously aligned
+  flush-left even when the row name was indented under a nested
+  folder, producing a visible left-edge step that made it look like
+  the pill belonged to a different connection. The pill container
+  now mirrors the row's depth-derived `paddingLeft`, so name,
+  description, and pill all share the same left margin.
+- **SSH connections without preselected credentials now prompt for
+  username and password before the terminal opens.** When the
+  frontend created a tunnel ticket without supplying any
+  credentials (the normal flow for SSH with no preselected
+  profile), `resolve_credentials` in
+  [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)
+  matched the `ticket` arm purely on `Some(&ticket)` — ignoring
+  whether the ticket actually carried a password — and silently
+  returned `(Some(<strata_user>), None)` via the fallback-username
+  path. The Strata user's local username was injected as the SSH
+  username in the guacd handshake; the SSH server then short-
+  circuited its in-band username prompt and asked only for a
+  password in the terminal, leaving operators no way to
+  authenticate as a different remote account. Skip the ticket arm
+  when `ticket.password.is_none()` so the cascade falls through to
+  `(None, None)`, guacd emits a `required` instruction listing
+  both `username` and `password`, and the credential modal
+  collects the right pair before the SSH session is opened. As a
+  defence in depth, [`SessionClient.tsx`](frontend/src/pages/SessionClient.tsx)
+  also prepends `"username"` to the required-parameter list
+  whenever guacd's `required` instruction omits it on an SSH
+  connection — guacd's SSH plugin sometimes lists only `password`
+  even when no username has been supplied at handshake. Two new
+  unit tests
+  (`resolve_creds_empty_ticket_returns_none`,
+  `resolve_creds_ticket_no_password_skipped` — the latter rewritten
+  to assert the cascade falls through) lock the contract in.
+- **Prettier formatting** — repository-wide format pass after the
+  Dashboard tree, AccessTab folder-picker, and folderTree helper
+  edits, so future PRs against these files don't carry whitespace-
+  only churn.
+
+#### Verified behaviour after this release
+
+- Creating a connection under any depth of nested folder makes it
+  appear under that folder in the Dashboard tree, with the parent
+  hierarchy fully expandable / collapsible, descendant counts
+  visible on every collapsed parent, and the connection row's
+  name + description + tag pill all aligned to the same indent.
+- Every admin folder picker (connection edit, role assignment,
+  folder management, AD sync default) renders folders in the same
+  depth-first preorder with the same depth indentation as the
+  Dashboard tree.
+- Opening an SSH connection with no preselected credentials
+  produces the credential modal with both Username and Password
+  fields populated before the terminal renders. Submitting the
+  modal flows the credentials into guacd via two
+  `argument_value` streams so the SSH session is authenticated
+  correctly on the first attempt.
+
+#### Drop-in upgrade — no migrations, no API contract changes
+
+- No database migrations.
+- No new environment variables.
+- The new `GET /api/user/connection-folders` endpoint is purely
+  additive (no existing endpoint changes shape or status); the
+  Dashboard / Command Palette degrade gracefully when called
+  against a v1.6.1 backend that does not yet implement it (an
+  empty folders array yields the same flat-list rendering as
+  v1.6.1).
+- Roll the backend and frontend images together.
+
 ## [1.6.1] — 2026-05-08
 
 ### Patch release — production bug fixes against three user-reported issues

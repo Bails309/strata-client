@@ -77,7 +77,7 @@ pub fn resolve_credentials(
                 .or_else(|| Some(fallback_username.to_string())),
             vault.password.clone(),
         )
-    } else if let Some(tc) = ticket {
+    } else if let Some(tc) = ticket.filter(|t| t.password.is_some()) {
         (
             tc.username
                 .clone()
@@ -1412,7 +1412,11 @@ mod tests {
 
     #[test]
     fn resolve_creds_ticket_no_password_skipped() {
-        // ticket with username but no password: still uses ticket source
+        // Ticket with a username but no password must NOT short-circuit
+        // the cascade — otherwise an empty ticket silently wins over a
+        // later source that DOES have a password (see the `query`
+        // CredentialSource here). The cascade must fall through to the
+        // next source that actually carries a password.
         let (u, p) = resolve_credentials(
             &cred(None, None),
             &cred(None, None),
@@ -1420,9 +1424,8 @@ mod tests {
             &cred(Some("qu"), Some("qp")),
             "fb",
         );
-        // ticket has no password — username from ticket, password None
-        assert_eq!(u.as_deref(), Some("tu"));
-        assert!(p.is_none());
+        assert_eq!(u.as_deref(), Some("qu"));
+        assert_eq!(p.as_deref(), Some("qp"));
     }
 
     #[test]
@@ -1471,5 +1474,25 @@ mod tests {
         let (u, p) = resolve_credentials(&none, &none, None, &query, "john");
         assert_eq!(u.as_deref(), Some("john"));
         assert_eq!(p.as_deref(), Some("p4"));
+    }
+
+    /// Regression: an empty ticket (no password, no username) must NOT
+    /// trigger the fallback-username path. Otherwise SSH connections with
+    /// no preselected credentials get a free "username=<strata user>"
+    /// silently injected into the guacd handshake, the SSH server
+    /// short-circuits the in-band username prompt and only asks for a
+    /// password — leaving the operator no way to specify the actual remote
+    /// account they want to log in as.
+    #[test]
+    fn resolve_creds_empty_ticket_returns_none() {
+        let none = cred(None, None);
+        let empty_ticket = cred(None, None);
+        let (u, p) = resolve_credentials(&none, &none, Some(&empty_ticket), &none, "fb");
+        // Don't interpolate `u` / `p` into the panic message — even in a
+        // test these are typed as `Option<String>` carrying credential
+        // material in production callers, and CodeQL flags any format!()
+        // of those types as cleartext logging of sensitive information.
+        assert!(u.is_none(), "expected no fallback username");
+        assert!(p.is_none(), "expected no password");
     }
 }

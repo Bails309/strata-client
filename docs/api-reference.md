@@ -1170,6 +1170,36 @@ Stream a recording for playback. Only accessible for recordings owned by the aut
 - `storage_type = "local"` — file is read from the shared `guac-recordings` Docker volume at `/var/lib/guacamole/recordings/<storage_path>`. Cross-container POSIX permissions are documented in [security.md — Recordings Volume](./security.md). EACCES on the file open closes the WebSocket immediately and the frontend renders a _"Tunnel error"_ badge; check backend logs for _"Failed to open recording file"_ to disambiguate from network-level failures.
 - `storage_type = "azure"` — file is streamed from the configured Azure Storage container over HTTPS via `reqwest`. Auth is via the connection string / managed identity sealed in Vault; POSIX permissions are not involved in this path.
 
+### `GET /api/user/connection-folders`
+
+Returns the full list of connection folders visible to the authenticated user, in storage order. Used by the Dashboard tree view and the global Command Palette to render the same hierarchy admins authored when assigning connections to folders.
+
+Folders are not user-scoped — every authenticated user needs to be able to draw the same hierarchy so a connection mapped to a child folder appears in its real position in the tree (the row-level access check happens on `/api/user/connections`, not here). The endpoint is read-only and gated by the same auth middleware as the rest of `/api/user/...`; it is the user-facing twin of `GET /api/admin/connection-folders`, which requires `can_manage_connections` and is intended for the admin folder editor.
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Switches",
+    "parent_id": null
+  },
+  {
+    "id": "uuid",
+    "name": "Coventry",
+    "parent_id": "<switches-uuid>"
+  }
+]
+```
+
+`parent_id` is `null` for root-level folders. Nested folders reference their parent's `id`. The frontend reconstructs the tree client-side via depth-first preorder with alphabetic sibling ordering (see [`frontend/src/utils/folderTree.ts`](../frontend/src/utils/folderTree.ts)).
+
+**Errors**
+
+- `401 UNAUTHENTICATED` — missing or invalid access token.
+- `503 SETUP_REQUIRED` — backend is still in initial setup phase.
+
 ### `GET /api/user/connections`
 
 Connections accessible to the authenticated user. Admin users see **all** connections; non-admin users see only connections mapped to their role via `role_connections`.

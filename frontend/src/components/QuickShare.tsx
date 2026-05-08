@@ -357,20 +357,22 @@ export default function QuickShare({
           variant because there's no flag to inject — the user's
           browser handles cert validation. */}
       {format !== "url" && (
-        <div className="px-4 py-2 border-b border-white/5 flex items-center gap-2">
-          <input
-            id="quick-share-insecure"
-            type="checkbox"
-            checked={insecure}
-            onChange={(e) => setInsecure(e.target.checked)}
-            className="shrink-0 cursor-pointer"
-          />
+        <div className="px-4 py-2.5 border-b border-white/5">
           <label
             htmlFor="quick-share-insecure"
-            className="min-w-0 flex-1 text-[0.65rem] text-txt-secondary cursor-pointer leading-tight"
+            className="flex items-center gap-2.5 cursor-pointer select-none group"
             title="Adds -k / --no-check-certificate / ServicePointManager bypass so the snippet works against a Strata server with a self-signed or internal-CA TLS cert."
           >
-            Skip TLS verification
+            <input
+              id="quick-share-insecure"
+              type="checkbox"
+              checked={insecure}
+              onChange={(e) => setInsecure(e.target.checked)}
+              className="h-4 w-4 shrink-0 rounded border border-white/20 bg-white/5 accent-accent cursor-pointer"
+            />
+            <span className="text-xs text-txt-secondary group-hover:text-txt-primary transition-colors whitespace-nowrap">
+              Skip TLS verification
+            </span>
           </label>
         </div>
       )}

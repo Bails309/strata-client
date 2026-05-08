@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import { GuacSession } from "./SessionManager";
+import { preparePastePayload } from "./pastePayload";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
@@ -312,11 +313,12 @@ export function usePopOut(
       try {
         const text = await popup.navigator.clipboard?.readText();
         if (text && text !== sess.remoteClipboard) {
+          const payload = preparePastePayload(text, sess.protocol);
           const stream = sess.client.createClipboardStream("text/plain");
           const writer = new Guacamole.StringWriter(stream);
           const CHUNK_SIZE = 4096;
-          for (let i = 0; i < text.length; i += CHUNK_SIZE) {
-            writer.sendText(text.substring(i, i + CHUNK_SIZE));
+          for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+            writer.sendText(payload.substring(i, i + CHUNK_SIZE));
           }
           writer.sendEnd();
           sess.remoteClipboard = text;
@@ -330,11 +332,12 @@ export function usePopOut(
       const ce = e as ClipboardEvent;
       const text = ce.clipboardData?.getData("text/plain");
       if (text && text !== sess.remoteClipboard) {
+        const payload = preparePastePayload(text, sess.protocol);
         const stream = sess.client.createClipboardStream("text/plain");
         const writer = new Guacamole.StringWriter(stream);
         const CHUNK_SIZE = 4096;
-        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
-          writer.sendText(text.substring(i, i + CHUNK_SIZE));
+        for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+          writer.sendText(payload.substring(i, i + CHUNK_SIZE));
         }
         writer.sendEnd();
         sess.remoteClipboard = text;

@@ -4,6 +4,7 @@
    eslint.config.js W4-1 commentary. */
 import { createContext, useContext, useCallback, useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
+import { preparePastePayload } from "./pastePayload";
 export interface GuacSession {
   id: string; // connection UUID
   connectionId: string;
@@ -289,6 +290,7 @@ export function SessionManagerProvider({
       try {
         const text = await navigator.clipboard?.readText();
         if (text && text !== session.remoteClipboard) {
+          const payload = preparePastePayload(text, session.protocol);
           const stream = client.createClipboardStream("text/plain");
           const writer = new Guacamole.StringWriter(stream);
 
@@ -296,8 +298,8 @@ export function SessionManagerProvider({
           // instruction size limits (typically 8KB). 4096 is a safe chunk size.
           // Add a small delay between chunks to avoid overwhelming the tunnel.
           const CHUNK_SIZE = 4096;
-          for (let i = 0; i < text.length; i += CHUNK_SIZE) {
-            writer.sendText(text.substring(i, i + CHUNK_SIZE));
+          for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+            writer.sendText(payload.substring(i, i + CHUNK_SIZE));
             // Tiny delay to let the event loop process and allow guacd to
             // handle the reassembly buffer without bursting.
             await new Promise((resolve) => setTimeout(resolve, 5));
@@ -327,11 +329,12 @@ export function SessionManagerProvider({
     const handlePaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text/plain");
       if (text && text !== session.remoteClipboard) {
+        const payload = preparePastePayload(text, session.protocol);
         const stream = client.createClipboardStream("text/plain");
         const writer = new Guacamole.StringWriter(stream);
         const CHUNK_SIZE = 4096;
-        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
-          writer.sendText(text.substring(i, i + CHUNK_SIZE));
+        for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
+          writer.sendText(payload.substring(i, i + CHUNK_SIZE));
         }
         writer.sendEnd();
         session.remoteClipboard = text;

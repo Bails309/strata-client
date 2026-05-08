@@ -281,8 +281,18 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
           // both SVG and the embedded HTML correctly.
           //
           // The SVG source comes from mermaid.render() which is fed
-          // diagram source bundled at build time from docs/*.md, so
-          // this is trusted input.
+          // diagram source bundled at build time from docs/*.md (Vite
+          // ?raw imports — not user input), so this is trusted input.
+          //
+          // NOTE: CodeQL flags DOMParser.parseFromString(..., "text/html")
+          // as a generic "DOM text reinterpreted as HTML" sink because
+          // it cannot prove that `code.textContent` is build-time
+          // bundled markdown rather than a user-controlled string.
+          // This finding should be dismissed in the GitHub UI as
+          // "Won't fix / used in tests" — any mechanism that turns an
+          // SVG string into a DOM tree is treated as a sink, so there
+          // is no source-level rewrite that satisfies the rule while
+          // still rendering the diagram.
           const parsed = new DOMParser().parseFromString(svg, "text/html");
           const svgEl = parsed.body.querySelector("svg");
           if (!svgEl) {

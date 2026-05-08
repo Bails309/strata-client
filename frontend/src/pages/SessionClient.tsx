@@ -18,6 +18,7 @@ import {
   ConnectionInfo,
 } from "../api";
 import { useSessionManager, GuacSession } from "../components/SessionManager";
+import { notifySessionActivity } from "../components/sessionActivity";
 import { useSidebarWidth } from "../components/Layout";
 import { usePopOut } from "../components/usePopOut";
 import { useMultiMonitor } from "../components/useMultiMonitor";
@@ -893,6 +894,13 @@ export default function SessionClient() {
       // auto-repeats from the still-held activation key don't bleed
       // into the remote.
       if (keyboardShieldRef.current) return true;
+      // Guacamole.Keyboard installs its listener on `document` and
+      // calls preventDefault()+stopPropagation(); a window-level
+      // "user is active" listener therefore never fires while the
+      // user is typing into a session. Notify the activity bus so
+      // SessionTimeoutWarning's proactive refresh keeps the access
+      // token alive during long active sessions.
+      notifySessionActivity();
       return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {

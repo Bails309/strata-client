@@ -1,5 +1,8 @@
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 
@@ -24,12 +27,12 @@ pub struct OidcDiscovery {
 }
 
 /// JSON Web Key Set.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Jwks {
     keys: Vec<Jwk>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Jwk {
     kid: Option<String>,
     n: String,
@@ -37,20 +40,67 @@ struct Jwk {
     kty: String,
 }
 
-/// Validate an OIDC bearer token against the dynamically-configured issuer.
-pub async fn validate_token(
-    issuer_url: &str,
-    client_id: &str,
-    token: &str,
-) -> Result<Claims, AppError> {
-    // Validate issuer URL scheme to prevent SSRF
+// ── OIDC discovery + JWKS cache ────────────────────────────────────────
+//
+// Why this exists
+// ---------------
+// Both the SSO callback (`routes::auth::sso_callback`) and the bearer-
+// token validator (`validate_token` below) need the OIDC discovery
+// document and the JWKS for the configured issuer. Before this cache
+// existed, a single SSO sign-in performed FOUR upstream HTTP round-trips
+// to Keycloak on a cold cache:
+//   1. discovery (cached in routes::auth)
+//   2. token exchange POST
+//   3. discovery AGAIN (uncached, inside validate_token)
+//   4. JWKS (never cached)
+// On a sluggish corporate IdP that cumulates to 15-30s of latency
+// during which the user's URL bar still shows the Keycloak callback
+// URL — the user-visible symptom is "the login hangs on a Keycloak
+// page". A second attempt within the cache TTL is fast.
+//
+// The fix is to share both caches across all callers, with a 10-minute
+// TTL that matches Keycloak's default key-rotation grace window.
+
+const OIDC_CACHE_TTL: Duration = Duration::from_secs(600);
+
+#[derive(Clone)]
+struct CachedDiscovery {
+    discovery: OidcDiscovery,
+    fetched_at: Instant,
+}
+
+#[derive(Clone)]
+struct CachedJwks {
+    jwks: Jwks,
+    fetched_at: Instant,
+}
+
+static OIDC_DISCOVERY_CACHE: LazyLock<Mutex<HashMap<String, CachedDiscovery>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static OIDC_JWKS_CACHE: LazyLock<Mutex<HashMap<String, CachedJwks>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Fetch (and cache for ~10 minutes) the OIDC discovery document for an
+/// issuer. The cache is shared across the SSO callback and bearer-token
+/// validation paths. Also asserts that the discovered `issuer` matches
+/// the configured `issuer_url`, preventing redirect/secret exfiltration
+/// via spoofed discovery documents.
+pub async fn fetch_oidc_discovery_cached(issuer_url: &str) -> Result<OidcDiscovery, AppError> {
     if !issuer_url.starts_with("https://") {
         return Err(AppError::Auth("OIDC issuer must use HTTPS".into()));
     }
+    {
+        let cache = OIDC_DISCOVERY_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = cache.get(issuer_url) {
+            if entry.fetched_at.elapsed() < OIDC_CACHE_TTL {
+                return Ok(entry.discovery.clone());
+            }
+        }
+    }
 
     let client = crate::services::http_client::oidc_client();
-
-    // 1. Fetch OIDC discovery
     let discovery_url = format!(
         "{}/.well-known/openid-configuration",
         issuer_url.trim_end_matches('/')
@@ -64,7 +114,6 @@ pub async fn validate_token(
         .await
         .map_err(|e| AppError::Auth(format!("OIDC discovery parse: {e}")))?;
 
-    // Validate that the discovered issuer matches the configured one
     let normalised_issuer = issuer_url.trim_end_matches('/');
     let normalised_discovery = discovery.issuer.trim_end_matches('/');
     if normalised_issuer != normalised_discovery {
@@ -73,15 +122,67 @@ pub async fn validate_token(
         )));
     }
 
-    // 2. Fetch JWKS
+    {
+        let mut cache = OIDC_DISCOVERY_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        cache.insert(
+            issuer_url.to_string(),
+            CachedDiscovery {
+                discovery: discovery.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+
+    Ok(discovery)
+}
+
+/// Fetch (and cache for ~10 minutes) the JWKS for an OIDC issuer.
+async fn fetch_jwks_cached(jwks_uri: &str) -> Result<Jwks, AppError> {
+    {
+        let cache = OIDC_JWKS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = cache.get(jwks_uri) {
+            if entry.fetched_at.elapsed() < OIDC_CACHE_TTL {
+                return Ok(entry.jwks.clone());
+            }
+        }
+    }
+    let client = crate::services::http_client::oidc_client();
     let jwks: Jwks = client
-        .get(&discovery.jwks_uri)
+        .get(jwks_uri)
         .send()
         .await
         .map_err(|e| AppError::Auth(format!("JWKS fetch failed: {e}")))?
         .json()
         .await
         .map_err(|e| AppError::Auth(format!("JWKS parse: {e}")))?;
+
+    {
+        let mut cache = OIDC_JWKS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        cache.insert(
+            jwks_uri.to_string(),
+            CachedJwks {
+                jwks: jwks.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+    Ok(jwks)
+}
+
+/// Validate an OIDC bearer token against the dynamically-configured issuer.
+pub async fn validate_token(
+    issuer_url: &str,
+    client_id: &str,
+    token: &str,
+) -> Result<Claims, AppError> {
+    // 1. Fetch (cached) OIDC discovery — also rejects non-HTTPS issuers
+    //    and verifies the discovered issuer matches the configured one.
+    let discovery = fetch_oidc_discovery_cached(issuer_url).await?;
+
+    // 2. Fetch (cached) JWKS
+    let jwks = fetch_jwks_cached(&discovery.jwks_uri).await?;
 
     // 3. Decode header to find kid
     let header = jsonwebtoken::decode_header(token)

@@ -110,16 +110,29 @@ Initiates the OIDC Single Sign-On flow. Redirects the user to the configured OID
 
 **Success**: `303 See Other` redirect to the issuer.
 
+**Response headers** (since v1.6.1):
+
+- `Cache-Control: no-store` — set explicitly so browsers (notably Chromium's BFCache) do not retain the redirect. Preventing replay of the single-use `state` UUID across forward/back navigation.
+
 ### `GET /api/auth/sso/callback`
 
-The handle for the OIDC provider's callback. Exchange the authorization code for an ID token and establishes a session.
+The handler for the OIDC provider's callback. Exchanges the authorization code for an ID token and establishes a session.
 
 **Query Parameters**
 
 - `code`: The authorization code from the issuer.
 - `state`: The CSRF state token.
 
-**Success**: `303 See Other` redirect back to the frontend dashboard.
+**Success**: `303 See Other` redirect back to the frontend dashboard, with the same `Set-Cookie` (refresh token) and `Cache-Control: no-store` semantics as `POST /api/auth/login`.
+
+**Performance** (since v1.6.1): on a warm OIDC discovery + JWKS cache (10-minute TTL inside `services::auth`) the handler performs a single upstream HTTP round-trip to the IdP (the token-endpoint POST). On the very first sign-in after backend process start it performs two (discovery + token POST). All upstream calls have a 5-second connect / 10-second overall timeout.
+
+**Diagnostic logging** (since v1.6.1): every successful callback emits an info-level tracing line on the `strata::auth::sso` target with per-step latency fields:
+
+- `discovery_ms` — time spent in the cached discovery fetch (0 on cache hit).
+- `token_exchange_ms` — time spent in the token-endpoint POST.
+- `token_validate_ms` — time spent verifying the ID-token signature against the cached JWKS.
+- `total_so_far_ms` — wall-clock time inside the handler.
 
 ### `POST /api/auth/refresh`
 
@@ -137,6 +150,8 @@ Exchange a valid refresh cookie for a new access token. The refresh token is sen
 ```
 
 **Error** `401 Unauthorized` — refresh cookie missing, expired, or revoked.
+
+**Refresh-token semantics**: the refresh cookie itself is **not** rotated by this endpoint — only a new access token is minted. The 8-hour cookie `Max-Age=28800` is therefore a hard ceiling on continuous session length, not a sliding window. At the 8-hour mark even an actively-used session is required to log in again. The frontend's proactive refresh logic (driven by DOM activity and, since v1.6.1, the in-process `sessionActivity` event bus that bridges Guacamole-hijacked input events) calls this endpoint silently when the access token has under 10 minutes remaining and an activity event arrives.
 
 ### `PUT /api/auth/password`
 

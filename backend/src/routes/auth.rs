@@ -1,6 +1,5 @@
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
-use axum::response::Redirect;
 use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
@@ -31,70 +30,18 @@ const SSO_STATE_TTL_SECS: u64 = 300; // 5 minutes
 /// Hard cap on SSO state entries to prevent OOM from unauthenticated floods.
 const MAX_SSO_STATE_ENTRIES: usize = 10_000;
 
-/// Cached OIDC discovery document with TTL.
-struct CachedDiscovery {
-    discovery: crate::services::auth::OidcDiscovery,
-    fetched_at: Instant,
-}
-static OIDC_DISCOVERY_CACHE: std::sync::LazyLock<Mutex<HashMap<String, CachedDiscovery>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-const OIDC_DISCOVERY_TTL_SECS: u64 = 600; // 10 minutes
+// OIDC discovery is now cached in `services::auth::fetch_oidc_discovery_cached`
+// so the cache is shared between the SSO callback and the bearer-token
+// validator. Keeping a duplicate cache here used to result in TWO discovery
+// fetches per callback on a cold cache, which the user perceived as
+// "the login hangs on a Keycloak page".
 
 /// Fetch OIDC discovery document, returning a cached copy if fresh.
+/// Thin wrapper that delegates to the shared cache in `services::auth`.
 async fn fetch_oidc_discovery(
     issuer_url: &str,
 ) -> Result<crate::services::auth::OidcDiscovery, AppError> {
-    // Check cache
-    {
-        let cache = OIDC_DISCOVERY_CACHE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = cache.get(issuer_url) {
-            if entry.fetched_at.elapsed().as_secs() < OIDC_DISCOVERY_TTL_SECS {
-                return Ok(entry.discovery.clone());
-            }
-        }
-    }
-
-    let client = crate::services::http_client::oidc_client();
-    let discovery_url = format!(
-        "{}/.well-known/openid-configuration",
-        issuer_url.trim_end_matches('/')
-    );
-    let discovery: crate::services::auth::OidcDiscovery = client
-        .get(&discovery_url)
-        .send()
-        .await
-        .map_err(|e| AppError::Auth(format!("OIDC discovery failed: {e}")))?
-        .json()
-        .await
-        .map_err(|e| AppError::Auth(format!("OIDC discovery parse: {e}")))?;
-
-    // Validate that the discovered issuer matches the configured one to
-    // prevent redirect/secret exfiltration via spoofed discovery documents.
-    let normalised_issuer = issuer_url.trim_end_matches('/');
-    let normalised_discovery = discovery.issuer.trim_end_matches('/');
-    if normalised_issuer != normalised_discovery {
-        return Err(AppError::Auth(format!(
-            "OIDC issuer mismatch: expected {normalised_issuer}, got {normalised_discovery}"
-        )));
-    }
-
-    // Update cache
-    {
-        let mut cache = OIDC_DISCOVERY_CACHE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        cache.insert(
-            issuer_url.to_string(),
-            CachedDiscovery {
-                discovery: discovery.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
-    }
-
-    Ok(discovery)
+    crate::services::auth::fetch_oidc_discovery_cached(issuer_url).await
 }
 
 const MAX_ATTEMPTS: usize = 5;
@@ -1108,7 +1055,7 @@ pub async fn refresh(
 pub async fn sso_login(
     State(state): State<SharedState>,
     headers: HeaderMap,
-) -> Result<Redirect, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let db = {
         let s = state.read().await;
         s.db.clone()
@@ -1165,7 +1112,20 @@ pub async fn sso_login(
         urlencoding::encode(&state),
     );
 
-    Ok(Redirect::to(&auth_url))
+    // Build the redirect manually so we can attach `Cache-Control: no-store`.
+    // Without this, browsers (and intermediate proxies) may cache the 302
+    // response itself; if the user later hits /api/auth/sso/login from
+    // back/forward navigation, they'd be redirected to a Keycloak URL with
+    // a stale `state` value that no longer exists in SSO_STATE_STORE — the
+    // callback would then reject it with "Invalid or expired SSO state".
+    let response = axum::response::Response::builder()
+        .status(302)
+        .header("Location", &auth_url)
+        .header("Cache-Control", "no-store")
+        .header("Pragma", "no-cache")
+        .body(axum::body::Body::empty())
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -1180,6 +1140,12 @@ pub async fn sso_callback(
     headers: HeaderMap,
     Query(params): Query<SsoCallbackParams>,
 ) -> Result<axum::response::Response, AppError> {
+    // Total time for the whole callback. The user perceives latency here
+    // as "the login is hanging on a Keycloak page" because the URL bar
+    // shows the Keycloak callback URL until our 303 fires. Anything over
+    // ~5s is worth investigating; over ~10s and users will start clicking
+    // refresh / closing the tab.
+    let callback_started = Instant::now();
     // Validate CSRF state parameter
     let state_value = &params.state;
     {
@@ -1231,13 +1197,16 @@ pub async fn sso_callback(
     };
 
     // Discovery for token endpoint (cached)
+    let t_discovery = Instant::now();
     let discovery = fetch_oidc_discovery(&issuer_url).await?;
+    let elapsed_discovery = t_discovery.elapsed();
     let client = crate::services::http_client::oidc_client();
 
     let base_url = get_base_url(&headers);
     let redirect_uri = format!("{}/api/auth/sso/callback", base_url);
 
     // Exchange code for token
+    let t_token = Instant::now();
     let token_res: serde_json::Value = client
         .post(&discovery.token_endpoint)
         .form(&[
@@ -1253,13 +1222,28 @@ pub async fn sso_callback(
         .json()
         .await
         .map_err(|e| AppError::Auth(format!("Token response parse error: {e}")))?;
+    let elapsed_token = t_token.elapsed();
 
     let id_token = token_res["id_token"]
         .as_str()
         .ok_or_else(|| AppError::Auth("Missing id_token in response".into()))?;
 
     // Validate token and get claims
+    let t_validate = Instant::now();
     let claims = crate::services::auth::validate_token(&issuer_url, &client_id, id_token).await?;
+    let elapsed_validate = t_validate.elapsed();
+
+    // Single info-level breakdown of where the callback spent its time.
+    // If users keep reporting "hangs on Keycloak", this is the first
+    // place to look — the IdP being slow vs. our own DB / vault path.
+    tracing::info!(
+        target: "strata::auth::sso",
+        discovery_ms = elapsed_discovery.as_millis() as u64,
+        token_exchange_ms = elapsed_token.as_millis() as u64,
+        token_validate_ms = elapsed_validate.as_millis() as u64,
+        total_so_far_ms = callback_started.elapsed().as_millis() as u64,
+        "SSO callback IdP timings"
+    );
 
     // Extract email from claims
     let user_email = claims.email.as_ref().ok_or_else(|| {
@@ -1530,7 +1514,6 @@ mod tests {
         assert_eq!(IP_WINDOW_SECS, 300);
         assert_eq!(MAX_RATE_LIMIT_ENTRIES, 50_000);
         assert_eq!(SSO_STATE_TTL_SECS, 300);
-        assert_eq!(OIDC_DISCOVERY_TTL_SECS, 600);
     }
 
     #[test]

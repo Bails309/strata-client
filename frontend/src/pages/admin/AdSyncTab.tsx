@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Select from "../../components/Select";
+import { orderFoldersByHierarchy, indentedFolderLabel } from "../../utils/folderTree";
 import { useSettings } from "../../contexts/SettingsContext";
 import { getTimezones } from "../../utils/time";
 import {
@@ -173,7 +174,10 @@ export default function AdSyncTab({
 
   const folderOptions = [
     { value: "", label: "— No folder —" },
-    ...folders.map((f) => ({ value: f.id, label: f.name })),
+    ...orderFoldersByHierarchy(folders).map(({ folder: f, depth }) => ({
+      value: f.id,
+      label: indentedFolderLabel(f.name, depth),
+    })),
   ];
 
   const presetFilters = [

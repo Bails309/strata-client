@@ -306,6 +306,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/user/command-audit", post(user::post_command_audit))
         .route("/api/roadmap", get(roadmap::get_statuses))
         .route("/api/user/connections", get(user::my_connections))
+        .route(
+            "/api/user/connection-folders",
+            get(user::my_connection_folders),
+        )
         .route("/api/user/credentials", put(user::update_credential))
         .route(
             "/api/user/credential-profiles",

@@ -145,6 +145,17 @@ pub async fn my_connections(
     Ok(Json(rows))
 }
 
+/// Flat list of all connection folders (id, name, parent_id) so the
+/// frontend can render the nested folder tree on Dashboard. Folder names
+/// are not sensitive — admin-only mutations stay on `/api/admin/...`.
+pub async fn my_connection_folders(
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<crate::services::connections::ConnectionFolderRow>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows = crate::services::connections::list_folders(&db.pool).await?;
+    Ok(Json(rows))
+}
+
 // ── Favorites ─────────────────────────────────────────────────────────
 
 use crate::services::favorites;

@@ -12,6 +12,7 @@ vi.mock("../api", () => ({
   getTags: vi.fn(),
   getConnectionTags: vi.fn(),
   getConnectionFolders: vi.fn().mockResolvedValue([]),
+  getMyConnectionFolders: vi.fn().mockResolvedValue([]),
   postCommandAudit: vi.fn().mockResolvedValue(undefined),
   BUILTIN_COMMANDS: ["reload", "disconnect", "fullscreen", "commands", "close", "explorer"],
   MAX_OPEN_PATH_LEN: 1024,

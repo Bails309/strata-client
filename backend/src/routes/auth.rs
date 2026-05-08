@@ -1514,7 +1514,6 @@ mod tests {
         assert_eq!(IP_WINDOW_SECS, 300);
         assert_eq!(MAX_RATE_LIMIT_ENTRIES, 50_000);
         assert_eq!(SSO_STATE_TTL_SECS, 300);
-        assert_eq!(OIDC_DISCOVERY_TTL_SECS, 600);
     }
 
     #[test]

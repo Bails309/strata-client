@@ -426,11 +426,10 @@ export default function Dashboard() {
   const autoExpandedIds = useMemo(() => {
     if (!folderTree || !search.trim()) return null;
     const ids = new Set<string>();
-    const visit = (
-      node: { id: string; children: { id: string }[]; totalCount: number }
-    ): boolean => {
+    type VisitNode = { id: string; children: VisitNode[]; totalCount: number };
+    const visit = (node: VisitNode): boolean => {
       let hit = false;
-      for (const c of node.children as Array<typeof node>) {
+      for (const c of node.children) {
         if (visit(c)) hit = true;
       }
       if (node.totalCount > 0 || hit) {
@@ -439,7 +438,7 @@ export default function Dashboard() {
       }
       return false;
     };
-    folderTree.roots.forEach((r) => visit(r as never));
+    folderTree.roots.forEach((r) => visit(r));
     return ids;
   }, [folderTree, search]);
 
@@ -984,7 +983,8 @@ export default function Dashboard() {
                 // Collect every folder ID in the tree (recursively) plus the
                 // synthetic ungrouped bucket so all rows pop open at once.
                 const all = new Set<string>();
-                const walk = (n: { id: string; children: { id: string }[] }) => {
+                type WalkNode = { id: string; children: WalkNode[] };
+                const walk = (n: WalkNode) => {
                   all.add(n.id);
                   n.children.forEach(walk);
                 };

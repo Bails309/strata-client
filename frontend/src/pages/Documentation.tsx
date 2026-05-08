@@ -15,6 +15,7 @@ import {
 import architectureMd from "@docs/architecture.md?raw";
 import securityMd from "@docs/security.md?raw";
 import apiReferenceMd from "@docs/api-reference.md?raw";
+import dmzMd from "@docs/dmz.md?raw";
 import webSessionsMd from "@docs/web-sessions.md?raw";
 import vdiMd from "@docs/vdi.md?raw";
 
@@ -108,6 +109,27 @@ const SECTIONS: DocSection[] = [
       </svg>
     ),
     content: apiReferenceMd,
+  },
+  {
+    id: "dmz",
+    label: "DMZ Deployment",
+    icon: (
+      <svg
+        width={ICON_SIZE}
+        height={ICON_SIZE}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="2" y="6" width="7" height="12" rx="1" />
+        <rect x="15" y="6" width="7" height="12" rx="1" />
+        <path d="M9 12h6" strokeDasharray="2 2" />
+      </svg>
+    ),
+    content: dmzMd,
   },
   {
     id: "web-sessions",

@@ -3,11 +3,27 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Mock the markdown imports and marked
-vi.mock("@docs/architecture.md?raw", () => ({ default: "# Architecture\nArch content here" }));
+vi.mock("@docs/architecture.md?raw", () => ({
+  default: "# Architecture\nArch content here\n\n```mermaid\nflowchart LR\n  A-->B\n```\n",
+}));
 vi.mock("@docs/security.md?raw", () => ({ default: "# Security\nSecurity content here" }));
 vi.mock("@docs/api-reference.md?raw", () => ({ default: "# API Reference\nAPI content here" }));
+vi.mock("@docs/dmz.md?raw", () => ({ default: "# DMZ Deployment\nDMZ content here" }));
 vi.mock("@docs/web-sessions.md?raw", () => ({ default: "# Web Sessions\nWeb content here" }));
 vi.mock("@docs/vdi.md?raw", () => ({ default: "# VDI\nVDI content here" }));
+
+// Mermaid pulls in a large ESM bundle and only runs when fenced ```mermaid
+// blocks are present in the rendered docs; stub it in the test environment.
+const mermaidInitialiseMock = vi.fn();
+const mermaidRenderMock = vi.fn(async (_id: string, _src: string) => ({
+  svg: "<svg data-testid='mermaid-svg'></svg>",
+}));
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: (...args: unknown[]) => mermaidInitialiseMock(...args),
+    render: (...args: [string, string]) => mermaidRenderMock(...args),
+  },
+}));
 
 // Mock the roadmap API calls used by the Roadmap tab.
 const getRoadmapStatusesMock = vi.fn();
@@ -108,6 +124,53 @@ describe("Documentation", () => {
     render(<Documentation />);
     expect(screen.getByText("v0.14.7")).toBeInTheDocument();
     expect(screen.getByText("v0.14.6")).toBeInTheDocument();
+  });
+
+  describe("mermaid diagram rendering", () => {
+    it("calls mermaid.render and swaps the <pre> for the SVG when switching to a tab with a ```mermaid block", async () => {
+      mermaidInitialiseMock.mockClear();
+      mermaidRenderMock.mockClear();
+      mermaidRenderMock.mockResolvedValue({ svg: "<svg data-testid='mermaid-svg'></svg>" });
+
+      const user = userEvent.setup();
+      const { container } = render(<Documentation />);
+      await user.click(screen.getByText("Architecture"));
+
+      await waitFor(() => expect(mermaidRenderMock).toHaveBeenCalledTimes(1));
+      // initialize is module-scoped (called at most once per test process);
+      // we only assert render() was invoked here.
+      // The <pre> should have been replaced by a div.mermaid-diagram wrapping the svg
+      await waitFor(() => {
+        expect(container.querySelector("div.mermaid-diagram")).not.toBeNull();
+      });
+      expect(container.querySelector("pre > code.language-mermaid")).toBeNull();
+    });
+
+    it("leaves the raw code block in place when mermaid.render rejects", async () => {
+      mermaidRenderMock.mockClear();
+      mermaidRenderMock.mockRejectedValueOnce(new Error("bad diagram"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const user = userEvent.setup();
+      const { container } = render(<Documentation />);
+      await user.click(screen.getByText("Architecture"));
+
+      await waitFor(() => expect(errSpy).toHaveBeenCalled());
+      // <pre> survives the failure so users can still read the diagram source
+      expect(container.querySelector("pre > code.language-mermaid")).not.toBeNull();
+      expect(container.querySelector("div.mermaid-diagram")).toBeNull();
+      errSpy.mockRestore();
+    });
+
+    it("does not call mermaid.render on tabs without ```mermaid blocks", async () => {
+      mermaidRenderMock.mockClear();
+      const user = userEvent.setup();
+      render(<Documentation />);
+      await user.click(screen.getByText("Security"));
+      // Security mock has no mermaid block; give the effect a tick to run
+      await new Promise((r) => setTimeout(r, 10));
+      expect(mermaidRenderMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("Roadmap tab", () => {

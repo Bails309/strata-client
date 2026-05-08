@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  notifySessionActivity,
-  SESSION_ACTIVITY_EVENT,
-} from "../components/sessionActivity";
+import { notifySessionActivity, SESSION_ACTIVITY_EVENT } from "../components/sessionActivity";
 
 describe("sessionActivity bus", () => {
   beforeEach(() => {

@@ -29,6 +29,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.6.2",
+    subtitle:
+      "Connection folder hierarchy everywhere, tag-picker viewport overflow, SSH credential prompt",
+    sections: [
+      {
+        title: "Connections now appear under their nested folders on the Dashboard",
+        description:
+          "Creating a folder hierarchy of e.g. `Root → Switches → Coventry` and adding a connection inside `Coventry` previously listed the connection only under `Coventry` itself, with the parent levels showing as empty. The Dashboard is now a real recursive tree: every parent folder shows a descendant-inclusive count badge so you can see how many connections live below it without expanding it, the chevron and folder icon flip open/closed, every connection row is indented (`8 + depth * 16` px) to match its real folder depth, and a new toolbar pair — **Expand all** / **Collapse all** — drives the whole tree at once. When you type in the search box, every folder containing a hit is auto-expanded so a match never hides behind a collapsed parent.",
+      },
+      {
+        title: "Every admin folder picker now renders the same hierarchy in the same order",
+        description:
+          "The connection-edit Folder dropdown, the role-folder assignment checklist, the folder management table, and the AD-sync default-folder picker previously listed folders alphabetically with no nesting visible, so a child folder named `Coventry` would land between `Cardiff` and `Dover` rather than under its parent `Switches`. They now share a single helper (`orderFoldersByHierarchy` in `frontend/src/utils/folderTree.ts`) that produces a depth-first preorder traversal with alphabetic sibling ordering, and indent children with non-breaking-space padding (in HTML `<select>`) or `paddingLeft: depth * 16px` (everywhere else). It is now visually obvious which folder a new connection or role assignment will land under.",
+      },
+      {
+        title: "Tag picker no longer disappears off the bottom of the viewport",
+        description:
+          "Opening the per-row tag picker on a connection low on the page used to push half the menu below the visible area with no scroll. The Dashboard now measures the available space above and below the pill button on open, drops the menu in whichever direction has more room, and clamps the menu height with `overflow-y: auto` so the picker is always fully reachable regardless of where the anchor row sits.",
+      },
+      {
+        title: "Tag pill column lines up with the indented connection name",
+        description:
+          "The tag pill container on each connection row used to align flush-left even when the row's name was indented under a nested folder, producing a visible left-edge step that made the pill look like it belonged to a different connection. The pill container now mirrors the row's depth-derived `paddingLeft`, so name, description, and pill all share the same left margin.",
+      },
+      {
+        title: "SSH now prompts for both username and password when none are preselected",
+        description:
+          "Opening an SSH connection without a preselected credential profile used to drop straight into the terminal with the SSH server prompting for a password in-band — and no way to specify which remote account to authenticate as. Root cause: the backend's credential cascade matched the ticket arm purely on `Some(&ticket)` regardless of whether the ticket actually carried a password, and quietly injected the Strata user's local username as the SSH username in the guacd handshake. Empty tickets are now treated as no-creds, the cascade falls through to `(None, None)`, and guacd's `required` instruction triggers the in-app credential modal with both Username and Password fields before the terminal opens.",
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API contract changes",
+        description:
+          "No database migrations, no new environment variables, no new runtime dependencies, no bundle-size growth. One purely additive endpoint (`GET /api/user/connection-folders`) so non-admin users can render the same folder hierarchy admins authored. Backend and frontend images should be rolled together but each remains backwards-compatible with v1.6.1 peers during a rolling update.",
+      },
+    ],
+  },
+  {
     version: "1.6.1",
     subtitle: "Production hardening — paste fidelity, never logged out mid-session, faster SSO",
     sections: [

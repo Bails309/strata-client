@@ -162,11 +162,11 @@ describe("Documentation", () => {
       errSpy.mockRestore();
     });
 
-    it("leaves the raw code block in place when mermaid produces unparseable SVG", async () => {
+    it("leaves the raw code block in place when mermaid produces no <svg> root", async () => {
       mermaidRenderMock.mockClear();
-      // Returning non-SVG text causes DOMParser to produce a <parsererror>
-      // root (or a non-svg element) — the effect should bail out.
-      mermaidRenderMock.mockResolvedValueOnce({ svg: "not an svg <<<" });
+      // Returning markup with no <svg> element makes the effect log an
+      // error and leave the original <pre> in place.
+      mermaidRenderMock.mockResolvedValueOnce({ svg: "<p>not an svg</p>" });
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       const user = userEvent.setup();

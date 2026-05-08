@@ -262,31 +262,32 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
         try {
           const { svg } = await mermaid.render(id, source);
           if (cancelled) return;
-          // Parse the rendered SVG via DOMParser as image/svg+xml,
-          // then append the resulting <svg> element directly.
+          // Parse the rendered markup via DOMParser in text/html mode,
+          // then lift the <svg> element out and append it directly.
           //
           // We deliberately do NOT use innerHTML here:
           //   1. mermaid embeds its theme CSS as an inline <style>
           //      element — DOMPurify (even with ADD_TAGS: ["style"])
           //      mangles the selectors and the diagram renders
           //      black-on-black against the dark surface.
-          //   2. DOMParser builds a real SVG DOM tree from XML, so
-          //      CodeQL's "DOM text reinterpreted as HTML" data-flow
-          //      rule does not apply (no innerHTML sink, no HTML
-          //      parsing of attacker-controlled text).
+          //   2. DOMParser builds a real DOM tree, so CodeQL's
+          //      "DOM text reinterpreted as HTML" data-flow rule
+          //      does not apply (no innerHTML sink).
+          //
+          // We use text/html rather than image/svg+xml because
+          // mermaid embeds HTML inside <foreignObject> (e.g. <br>
+          // in <subgraph> labels) which is not valid XML and would
+          // cause an image/svg+xml parse to fail. text/html parses
+          // both SVG and the embedded HTML correctly.
           //
           // The SVG source comes from mermaid.render() which is fed
           // diagram source bundled at build time from docs/*.md, so
-          // this is trusted input. The DOMParser path also rejects
-          // any malformed XML (returns a <parsererror> root) — we
-          // detect that and fall back to leaving the original <pre>
-          // in place.
-          const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
-          const parseErr = parsed.querySelector("parsererror");
-          const svgEl = parsed.documentElement;
-          if (parseErr || svgEl.nodeName.toLowerCase() !== "svg") {
+          // this is trusted input.
+          const parsed = new DOMParser().parseFromString(svg, "text/html");
+          const svgEl = parsed.body.querySelector("svg");
+          if (!svgEl) {
             // eslint-disable-next-line no-console
-            console.error("mermaid produced unparseable SVG", parseErr?.textContent);
+            console.error("mermaid produced no <svg> root", svg.slice(0, 120));
             continue;
           }
           const wrapper = document.createElement("div");

@@ -130,18 +130,18 @@ describe("Documentation", () => {
     it("calls mermaid.render and swaps the <pre> for the SVG when switching to a tab with a ```mermaid block", async () => {
       mermaidInitialiseMock.mockClear();
       mermaidRenderMock.mockClear();
-      mermaidRenderMock.mockResolvedValue({ svg: "<svg data-testid='mermaid-svg'></svg>" });
+      mermaidRenderMock.mockResolvedValue({
+        svg: "<svg xmlns='http://www.w3.org/2000/svg' data-testid='mermaid-svg'></svg>",
+      });
 
       const user = userEvent.setup();
       const { container } = render(<Documentation />);
       await user.click(screen.getByText("Architecture"));
 
       await waitFor(() => expect(mermaidRenderMock).toHaveBeenCalledTimes(1));
-      // initialize is module-scoped (called at most once per test process);
-      // we only assert render() was invoked here.
       // The <pre> should have been replaced by a div.mermaid-diagram wrapping the svg
       await waitFor(() => {
-        expect(container.querySelector("div.mermaid-diagram")).not.toBeNull();
+        expect(container.querySelector("div.mermaid-diagram > svg")).not.toBeNull();
       });
       expect(container.querySelector("pre > code.language-mermaid")).toBeNull();
     });
@@ -157,6 +157,23 @@ describe("Documentation", () => {
 
       await waitFor(() => expect(errSpy).toHaveBeenCalled());
       // <pre> survives the failure so users can still read the diagram source
+      expect(container.querySelector("pre > code.language-mermaid")).not.toBeNull();
+      expect(container.querySelector("div.mermaid-diagram")).toBeNull();
+      errSpy.mockRestore();
+    });
+
+    it("leaves the raw code block in place when mermaid produces no <svg> root", async () => {
+      mermaidRenderMock.mockClear();
+      // Returning markup with no <svg> element makes the effect log an
+      // error and leave the original <pre> in place.
+      mermaidRenderMock.mockResolvedValueOnce({ svg: "<p>not an svg</p>" });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const user = userEvent.setup();
+      const { container } = render(<Documentation />);
+      await user.click(screen.getByText("Architecture"));
+
+      await waitFor(() => expect(errSpy).toHaveBeenCalled());
       expect(container.querySelector("pre > code.language-mermaid")).not.toBeNull();
       expect(container.querySelector("div.mermaid-diagram")).toBeNull();
       errSpy.mockRestore();

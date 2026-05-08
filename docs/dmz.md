@@ -36,7 +36,7 @@ flowchart LR
         Backend --> AD["Active Directory"]
         Backend --> Guacd["guacd"]
     end
-    Backend -.->|"mTLS h2 link<br/>:8444 outbound from internal"| DMZ
+    Backend -. "mTLS h2 link<br/>:8444 outbound from internal" .-> DMZ
 ```
 
 The polarity is reversed from a normal proxy: **the internal node

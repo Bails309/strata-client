@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Guacamole from "guacamole-common-js";
 import { GuacSession } from "./SessionManager";
+import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock, requestFullscreenWithLock } from "../utils/keyboardLock";
@@ -411,6 +412,7 @@ export function useMultiMonitor(
       const sliceH = Math.min(screen.height, layout.aggregateHeight);
       const mouse = new Guacamole.Mouse(canvas);
       mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
+        notifySessionActivity();
         const st = e.state;
         const cssW = canvas.clientWidth || sliceW;
         const cssH = canvas.clientHeight || sliceH;
@@ -433,7 +435,13 @@ export function useMultiMonitor(
       // ── Keyboard input ──
       const keyboard = new Guacamole.Keyboard(popup.document);
       const winProxy = createWinKeyProxy((pressed, keysym) => client.sendKeyEvent(pressed, keysym));
-      keyboard.onkeydown = (keysym: number) => winProxy.onkeydown(keysym);
+      keyboard.onkeydown = (keysym: number) => {
+        // Multi-monitor popouts host the same Guacamole client but in
+        // separate browser windows; their keystrokes never reach the
+        // opener's window-level activity listeners. Notify the bus.
+        notifySessionActivity();
+        return winProxy.onkeydown(keysym);
+      };
       keyboard.onkeyup = (keysym: number) => {
         winProxy.onkeyup(keysym);
       };

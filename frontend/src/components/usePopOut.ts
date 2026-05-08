@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import { GuacSession } from "./SessionManager";
 import { preparePastePayload } from "./pastePayload";
+import { notifySessionActivity } from "./sessionActivity";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { installShortcutProxy } from "../utils/shortcutProxy";
 import { installKeyboardLock } from "../utils/keyboardLock";
@@ -82,10 +83,12 @@ export function usePopOut(
       const mouse = new Guacamole.Mouse(session.displayEl);
       mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
         session.client.sendMouseState(e.state, true);
+        notifySessionActivity();
       });
       const touch = new Guacamole.Mouse.Touchscreen(session.displayEl);
       touch.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
         session.client.sendMouseState(e.state, true);
+        notifySessionActivity();
       });
 
       // Force Guacamole to re-render display and cursor layers
@@ -190,14 +193,20 @@ export function usePopOut(
     body.appendChild(sess.displayEl);
 
     // ── Mouse/touch handlers for the popup document ──
+    // Note: notifySessionActivity() dispatches on the opener's window
+    // (where SessionTimeoutWarning lives) since this module runs in the
+    // opener context — popup canvas activity therefore correctly keeps
+    // the access token alive.
     const mouse = new Guacamole.Mouse(sess.displayEl);
     mouse.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       sess.client.sendMouseState(e.state, true);
+      notifySessionActivity();
     });
 
     const touch = new Guacamole.Mouse.Touchscreen(sess.displayEl);
     touch.onEach(["mousedown", "mouseup", "mousemove"], (e: Guacamole.Mouse.Event) => {
       sess.client.sendMouseState(e.state, true);
+      notifySessionActivity();
     });
 
     // ── Capture-phase key trap ──
@@ -278,6 +287,9 @@ export function usePopOut(
       // Returning true means "key was handled, don't suppress default",
       // which lets typed characters reach the palette's <input>.
       if (popoutPalette.isOpen()) return true;
+      // Keep the access token alive while the user is typing into a
+      // popped-out remote session — see sessionActivity.ts.
+      notifySessionActivity();
       return winProxy.onkeydown(keysym);
     };
     kb.onkeyup = (keysym: number) => {

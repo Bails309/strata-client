@@ -248,9 +248,7 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
     const root = articleRef.current;
     if (!root) return;
     if (active.content === null) return;
-    const blocks = root.querySelectorAll<HTMLElement>(
-      "pre > code.language-mermaid",
-    );
+    const blocks = root.querySelectorAll<HTMLElement>("pre > code.language-mermaid");
     if (blocks.length === 0) return;
     ensureMermaidInitialised();
     let cancelled = false;

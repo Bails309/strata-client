@@ -171,20 +171,6 @@ async fn fetch_jwks_cached(jwks_uri: &str) -> Result<Jwks, AppError> {
     Ok(jwks)
 }
 
-/// Test-only: clear the discovery + JWKS caches. Lets unit tests exercise
-/// the fetch path repeatedly without bleed-over between cases.
-#[cfg(test)]
-pub fn clear_oidc_caches() {
-    OIDC_DISCOVERY_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
-    OIDC_JWKS_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
-}
-
 /// Validate an OIDC bearer token against the dynamically-configured issuer.
 pub async fn validate_token(
     issuer_url: &str,

@@ -60,6 +60,38 @@ Authentication uses a **dual-token architecture** aligned with OWASP session tim
 
 **Per-user session tracking:** Each login records an entry in the `active_sessions` table with the token's JTI (UUID), user ID, IP address, user agent, and expiry time. This provides visibility into how many active sessions a user has.
 
+#### Refresh-token semantics (clarified v1.6.1)
+
+The 8-hour refresh token is **not** rotated on `POST /api/auth/refresh` — the same cookie remains valid until its `exp`, and only the access token is reissued. The 8-hour value is therefore a hard ceiling on continuous session length, not a sliding window: at the 8-hour mark even the most active user is forced through a fresh login. This is intentional, aligns with the [ADR-0005](adr/ADR-0005-jwt-refresh-token-sessions.md) decision, and combined with the activity-driven access-token refresh below produces a session-timeout matrix that is straightforward to reason about for compliance reviews.
+
+| Scenario                                                                | Behaviour                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| User actively using the SPA or a session                                | Access token silently refreshes when it has < 10 min remaining and an activity event arrives, for up to **8 hours total** since login. At 8 h the refresh fails and the user is redirected to the login page. |
+| User idle (no DOM events, no Guacamole input)                           | Access token expires **20 min** after the most recent refresh. Warning toast appears at the 2-min mark with an explicit extend button.                                                                        |
+| Refresh token revoked server-side (e.g. admin signout, password change) | Next `POST /api/auth/refresh` returns 401; the WebSocket-tunnel auth watchdog (≤ 30 s tick) tears the active session down on the backend.                                                                     |
+
+#### Session-activity bus inside remote sessions (v1.6.1)
+
+The proactive refresh in `SessionTimeoutWarning` listens for
+`mousedown` / `keydown` / `touchstart` / `scroll` on `window`. Inside an active Guacamole session, however, the vendored `guacamole-common-js` library installs `Keyboard(document)` and `Mouse(displayEl)` handlers that call `event.preventDefault()` and `event.stopPropagation()` on every input event before it can bubble to `window`. Before v1.6.1 a user actively typing or clicking inside an RDP / SSH session produced **zero** events that the timeout warning could observe, so the access token expired at the 20-minute mark and the next API call returned 401 — even though the user had been demonstrably active.
+
+v1.6.1 introduces a `sessionActivity` event bus
+(`frontend/src/components/sessionActivity.ts`). The Guacamole input
+callbacks in `SessionManager.tsx`, `SessionClient.tsx`,
+`usePopOut.ts` and `useMultiMonitor.ts` call
+`notifySessionActivity()`, which dispatches a 1-Hz-throttled
+`strata-session-activity` window event;
+`SessionTimeoutWarning` subscribes to it alongside the existing DOM
+events. The result is a single in-process invariant —
+**as long as the user is interacting with any window of any session, they cannot be silently signed out** — and the 8-hour refresh-token ceiling is the only hard cap on session length. See [docs/architecture.md § Session-activity bus and proactive token refresh (v1.6.1)](architecture.md#session-activity-bus-and-proactive-token-refresh-v161) for the full call-site table and design rationale.
+
+#### SSO callback hardening (v1.6.1)
+
+Two defensive changes ride along on the v1.6.1 SSO-latency fix:
+
+- **`Cache-Control: no-store` on the SSO redirect.** `GET /api/auth/sso/login` previously responded with a bare 303 to the IdP; the browser was free to BFCache the response. A user who navigated forward, then back to the SSO landing, could replay an already-consumed single-use `state` UUID, which the callback's nonce store correctly rejected — but the failure mode (an "Invalid or expired token" page after a back-button) was a poor UX. The redirect is now built explicitly as a `Response` with a `Cache-Control: no-store` header so BFCache treats it as ineligible, eliminating the back-button replay path.
+- **Diagnostic timing trace.** Every successful SSO callback emits an info-level tracing line on the `strata::auth::sso` target with `discovery_ms`, `token_exchange_ms`, `token_validate_ms`, and `total_so_far_ms`. The line is the canonical signal for triaging "SSO is slow" reports — the values either add up to the user-perceived wait (in which case Strata is the bottleneck and the OIDC discovery / JWKS cache hit/miss can be reasoned about — see [architecture.md § OIDC discovery and JWKS cache consolidation (v1.6.1)](architecture.md#oidc-discovery-and-jwks-cache-consolidation-v161)) or they are small while the user still waited minutes (in which case the time was spent inside Keycloak's broker path or a federated upstream IdP, and the trail continues outside the Strata logs).
+
 ### WebSocket-tunnel auth watchdog (v1.3.2; revised v1.4.1)
 
 A WebSocket tunnel that has already passed the upgrade-time `require_auth` check is, in HTTP terms, a single very long-lived request. Without further checks, an access token that is _revoked_ during that request stays in force for the lifetime of the tunnel — typically until the operator's tab closes. On hosts where browser tabs were terminated without a graceful close (OS task-killer, kernel OOM, network drop, force-quit), the tunnel could continue proxying frames into a recording for hours.

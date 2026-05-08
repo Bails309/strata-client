@@ -5,6 +5,133 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] — 2026-05-08
+
+### Patch release — production bug fixes against three user-reported issues
+
+A focused patch release driven entirely by production reports against the
+v1.6.0 deployment. Three independent issues, each with a non-obvious root
+cause, are addressed; no API contract changes, no database migrations,
+and no new environment variables. Drop-in upgrade from v1.6.0 — roll the
+backend and frontend images together.
+
+#### Fixed
+
+- **SSH/Telnet paste — bracketed-paste markers and CRLF→CR translation.**
+  Multi-line pastes from the system clipboard into an SSH or Telnet
+  session were arriving at the remote shell as a series of separate
+  keystrokes with embedded `\r\n` pairs. Editors that interpret bracketed
+  paste (`vim`, `nano`, `less`, `psql`, etc.) saw each line as a fresh
+  command rather than a single paste, and the trailing `\n` of every
+  CRLF triggered an unintended Enter that committed half-formed
+  commands. The new `preparePastePayload(text, protocol)` helper
+  ([`frontend/src/components/pastePayload.ts`](frontend/src/components/pastePayload.ts))
+  wraps the payload with the bracketed-paste start/end sequences
+  (`ESC [ 200 ~` / `ESC [ 201 ~`) and rewrites every `\r\n` and bare
+  `\n` to a single `\r` to match what a real terminal emits, but only
+  for `ssh` and `telnet` connection protocols — RDP, VNC, Kubernetes
+  and Quick-Share clipboard payloads are unchanged. Seven new unit
+  tests pin the boundary conditions (empty input, `\r\n` runs, mixed
+  line endings, RDP passthrough). The integration is wired through
+  both the main-window `pushClipboard` / `handlePaste` paths in
+  `SessionManager.tsx` and the popout-window equivalents in
+  `usePopOut.ts`.
+- **RDP/SSH active-session idle logout — Guacamole input no longer
+  silently expires the access token.** Users actively typing or
+  clicking inside a remote session were being signed out of the
+  Strata SPA at the 20-minute access-token mark even though they
+  were demonstrably active. Root cause: `Guacamole.Keyboard(document)`
+  and `Guacamole.Mouse(displayEl)` install document- and canvas-level
+  listeners that call `event.preventDefault()` and
+  `event.stopPropagation()`, so the bubbled `mousedown` / `keydown` /
+  `touchstart` / `scroll` events that
+  [`SessionTimeoutWarning`](frontend/src/components/SessionTimeoutWarning.tsx)
+  uses to drive proactive token refresh never reach the `window`
+  while the user is interacting with a remote session. A new
+  [`sessionActivity` bus](frontend/src/components/sessionActivity.ts)
+  exposes `notifySessionActivity()` (throttled to once per second)
+  and dispatches a `strata-session-activity` window event;
+  `SessionTimeoutWarning` subscribes to that event in addition to the
+  existing DOM events. The notify call is wired into the Guacamole
+  input callbacks in:
+  - [`SessionManager.tsx`](frontend/src/components/SessionManager.tsx) — main-window mouse handler.
+  - [`SessionClient.tsx`](frontend/src/pages/SessionClient.tsx) — main-window keyboard handler (`kb.onkeydown`).
+  - [`usePopOut.ts`](frontend/src/components/usePopOut.ts) — popout-window mouse, touch, and keyboard handlers.
+  - [`useMultiMonitor.ts`](frontend/src/components/useMultiMonitor.ts) — multi-monitor popout mouse and keyboard handlers per monitor.
+
+  Both popout hooks execute in the _opener's_ JS context (only the
+  Guacamole `displayEl` is reparented into the popup's DOM), so
+  `notifySessionActivity()` correctly dispatches on the opener
+  `window` where `SessionTimeoutWarning` is mounted — no
+  cross-window plumbing is required and pop-out / multi-monitor /
+  fullscreen sessions are all covered by the same single bus.
+  Two new unit tests
+  ([`frontend/src/__tests__/sessionActivity.test.ts`](frontend/src/__tests__/sessionActivity.test.ts))
+  cover dispatch and the 1-second throttle.
+
+- **SSO callback latency — duplicate uncached IdP round-trips
+  removed.** A user reported the first SSO sign-in of the day
+  appeared to "hang on a Keycloak page" before eventually
+  succeeding; subsequent attempts were instant. Investigation
+  identified that on a cold OIDC cache `/api/auth/sso/callback`
+  was performing **four** upstream HTTP round-trips to the IdP
+  before issuing its 303 redirect to `/`:
+  1. discovery (cached only inside `routes::auth`),
+  2. `POST` to the token endpoint,
+  3. discovery **again** inside `services::auth::validate_token`
+     (a separate, uncached cache miss because the cache lived in
+     the wrong module), and
+  4. JWKS fetch (never cached).
+
+  Each call has a 5-second connect / 10-second overall timeout.
+  On a sluggish corporate IdP that cumulates to 15–30 seconds of
+  callback latency during which the URL bar still shows the
+  Keycloak callback URL — the user perceives this as Keycloak
+  hanging. The fix moves the OIDC discovery cache into
+  `services::auth::fetch_oidc_discovery_cached` so both call sites
+  share it, and adds a JWKS cache with the same 10-minute TTL.
+  The callback now performs at most one upstream call (the token
+  POST) on warm cache, and only two (discovery + token) on the
+  first ever sign-in. As a defensive secondary, the
+  `/api/auth/sso/login` redirect now sends `Cache-Control: no-store`
+  to prevent BFCache replay of stale `state` UUIDs, and an
+  info-level tracing line on the callback path emits a per-step
+  latency breakdown
+  (`discovery_ms`, `token_exchange_ms`, `token_validate_ms`,
+  `total_so_far_ms`) so future "SSO is slow" reports can be
+  triaged from logs alone.
+
+  > **Operational note.** A separate user-reported case where the
+  > Keycloak page sat at "Authentication Redirect — Redirecting,
+  > please wait" for ~5 minutes is _not_ explained by the cold
+  > callback path (our timeouts cap that at ~30 s). That symptom
+  > is consistent with Keycloak brokering to an upstream IdP
+  > (AD FS / Entra ID / federated LDAP) that itself was slow on
+  > first sign-in of the day. The new tracing line will
+  > distinguish the two cases the next time it occurs:
+  > if the line is absent, the callback never ran and the time
+  > was spent inside Keycloak or a federated IdP, not in Strata.
+
+#### Verified behaviour after this release
+
+The session-timeout model after the activity-bus fix:
+
+| Scenario                                                                                                                               | Token behaviour                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Actively using a session (any window — main, popout, multi-monitor, fullscreen)                                                        | Access token silently refreshes every ~10 minutes for up to **8 hours**, then a fresh login is required (the refresh token has an 8-hour hard ceiling and is not rotated on `/api/auth/refresh`).                |
+| Idle (no DOM events, no Guacamole input)                                                                                               | The access token expires **20 minutes** after the most recent refresh; a warning toast appears at the 2-minute remaining mark with an extend button.                                                             |
+| Returning from idle before the 20-minute cap, with a click or keypress (anywhere — main app, in-session canvas, popout, multi-monitor) | If the access token has less than 10 minutes remaining, the click triggers a silent background refresh and the session continues. If more than 10 minutes remain, no refresh is needed and the click is a no-op. |
+
+#### Drop-in upgrade — no migrations, no API contract changes
+
+- No database migrations.
+- No new environment variables.
+- No API contract changes (the SSO redirect now carries
+  `Cache-Control: no-store` and the callback emits an extra
+  tracing line, neither of which is part of any documented
+  contract).
+- Roll the backend and frontend images together.
+
 ## [1.6.0] — 2026-05-23
 
 ### Enterprise foundations — error codes, accessibility, i18n scaffold, ops docs
@@ -78,21 +205,21 @@ were partially mitigated and now have a complete fix landed.
 
 #### Race conditions
 
-- **`activate_checkout` no longer holds a DB row lock across LDAP
-  + Vault IO.** The original v1.5.4 fix used `SELECT … FOR UPDATE`,
-  which serialised concurrent activators correctly but blocked
-  every other approver on the same row for as long as the
-  Active-Directory password modify took (seconds in the slow case).
-  The new flow uses a session-scoped `pg_try_advisory_lock` keyed
-  on the checkout UUID for mutual exclusion, performs the LDAP and
-  Vault calls with no DB lock held, and only opens a fresh
-  short-lived transaction for the final `UPDATE` and audit write.
+- \*\*`activate_checkout` no longer holds a DB row lock across LDAP
+  - Vault IO.\*\* The original v1.5.4 fix used `SELECT … FOR UPDATE`,
+    which serialised concurrent activators correctly but blocked
+    every other approver on the same row for as long as the
+    Active-Directory password modify took (seconds in the slow case).
+    The new flow uses a session-scoped `pg_try_advisory_lock` keyed
+    on the checkout UUID for mutual exclusion, performs the LDAP and
+    Vault calls with no DB lock held, and only opens a fresh
+    short-lived transaction for the final `UPDATE` and audit write.
 - **Active shared viewers are kicked when a share is revoked.**
   The viewer WebSocket now re-checks `find_active_by_token` every
   ~30 seconds inside the keepalive tick and closes the connection
   when the share row has been revoked, expired, or its underlying
   connection has been soft-deleted. Previously, revoke only
-  prevented *new* viewers from joining.
+  prevented _new_ viewers from joining.
 
 #### DMZ link channel
 

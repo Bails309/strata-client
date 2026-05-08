@@ -29,6 +29,37 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.6.1",
+    subtitle: "Production hardening — paste fidelity, never logged out mid-session, faster SSO",
+    sections: [
+      {
+        title: "Multi-line paste into SSH/Telnet now matches a real terminal",
+        description:
+          "Pastes into SSH and Telnet sessions are now wrapped with bracketed-paste markers (`ESC [ 200 ~` / `ESC [ 201 ~`) and `\\r\\n` is rewritten to a single `\\r`, so editors like `vim`, `nano`, `psql` and the `python` REPL see the payload as a single paste rather than as a sequence of separate keystrokes that each commit a half-formed command. Only `ssh` and `telnet` are affected — RDP, VNC, Kubernetes-exec and Quick-Share clipboard payloads are passed through verbatim.",
+      },
+      {
+        title: "You will no longer be logged out while actively using a session",
+        description:
+          "The Guacamole vendor library hijacks document- and canvas-level mouse and keyboard events with `preventDefault()` + `stopPropagation()`, which used to prevent the proactive token-refresh logic from seeing your activity inside a remote session — so the access token quietly expired at the 20-minute mark even while you were typing. A new `sessionActivity` event bus now bridges Guacamole input back to the timeout warning across every window context (main, popout, multi-monitor, fullscreen). As long as you are interacting with a session, you cannot be signed out; the only hard cap on session length is the 8-hour refresh-token ceiling.",
+      },
+      {
+        title: "SSO sign-in is faster on a cold cache",
+        description:
+          "The SSO callback used to perform four upstream HTTP round-trips to the IdP on a cold cache (discovery, token, discovery again, JWKS) because the discovery cache lived in the wrong module and JWKS was uncached. Both are now cached for 10 minutes inside `services::auth`, so the callback issues at most one upstream call on a warm cache and two on the first sign-in after process start. The `/api/auth/sso/login` redirect also gains `Cache-Control: no-store` to prevent BFCache replay of single-use `state` UUIDs from the browser's back/forward buttons.",
+      },
+      {
+        title: "Diagnostic tracing for future SSO latency reports",
+        description:
+          'A new info-level tracing line on the `strata::auth::sso` target emits a per-step latency breakdown (`discovery_ms`, `token_exchange_ms`, `token_validate_ms`, `total_so_far_ms`) on every successful SSO callback. The next "SSO is slow" report can be triaged from the backend logs alone — if the numbers add up to the user-perceived wait the time was spent inside Strata; if they are tiny but the user still waited minutes, the time was spent inside Keycloak or a federated upstream IdP and the trail continues there.',
+      },
+      {
+        title: "Drop-in upgrade — no migrations, no API contract changes",
+        description:
+          "No database migrations, no new environment variables, no new dependencies, no bundle-size growth. Backend and frontend images should be rolled together but each remains backwards-compatible with v1.6.0 peers during a rolling update.",
+      },
+    ],
+  },
+  {
     version: "1.6.0",
     subtitle:
       "Enterprise foundations — stable error codes, accessibility, i18n scaffold, and Kubernetes / API-lifecycle ops docs",

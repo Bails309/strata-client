@@ -1004,6 +1004,123 @@ Step-by-step procedures for on-call engineers live under
 | [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config |
 | [dmz-incident.md](runbooks/dmz-incident.md)                 | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                  |
 
+## Session-activity bus and proactive token refresh (v1.6.1)
+
+The frontend keeps a 20-minute access token alive across user
+activity through a small in-process event bus rather than relying
+solely on bubbling DOM events. The need for the bus is a direct
+consequence of how the vendored `guacamole-common-js` library
+captures input.
+
+**Why the DOM event-bubbling path is not enough.** The proactive
+refresh logic in
+[`SessionTimeoutWarning.tsx`](../frontend/src/components/SessionTimeoutWarning.tsx)
+listens for `mousedown` / `keydown` / `touchstart` / `scroll` on
+`window`. When the access token has under 10 minutes remaining
+(`PROACTIVE_REFRESH_THRESHOLD_SECS = 600`) and the user produces
+any of those events, it triggers a silent `POST /api/auth/refresh`
+(rate-limited to one attempt per 30 s through `PROACTIVE_COOLDOWN_MS`).
+This works perfectly for the SPA chrome — clicking the dashboard,
+typing in a search box, scrolling the audit page — but it is
+defeated inside an active remote session. `Guacamole.Keyboard` is
+constructed against `document` and `Guacamole.Mouse` against the
+`<canvas>` display element; both call `event.preventDefault()` and
+`event.stopPropagation()` on every input event before it can bubble
+to `window`. The result before v1.6.1 was a logged-in user being
+silently signed out at the 20-minute mark while actively working
+inside an RDP or SSH tab — the warning toast fired, but no input
+ever reached it to extend the session, and the next API call
+returned 401.
+
+**The bus.** [`sessionActivity.ts`](../frontend/src/components/sessionActivity.ts)
+exports a single `notifySessionActivity()` function that, throttled
+to one call per second, dispatches a custom
+`strata-session-activity` event on the opener `window`.
+`SessionTimeoutWarning` subscribes to that event in addition to its
+existing DOM listeners, and treats it as the same "user activity"
+signal. The throttle is intentional — the Guacamole keyboard
+callback fires on every keydown, and a 100-WPM typist would
+otherwise dispatch ~10 events per second for the entire session
+duration with no observable benefit.
+
+**Notify-call call-sites.** The notify call is wired into every
+Guacamole input callback in every window context the product
+exposes:
+
+| File                                                                  | Context                             | Hooks                                |
+| --------------------------------------------------------------------- | ----------------------------------- | ------------------------------------ |
+| [`SessionManager.tsx`](../frontend/src/components/SessionManager.tsx) | Main-window session container       | `mouse.onEach`                       |
+| [`SessionClient.tsx`](../frontend/src/pages/SessionClient.tsx)        | Main-window keyboard handler        | `kb.onkeydown`                       |
+| [`usePopOut.ts`](../frontend/src/components/usePopOut.ts)             | Pop-out window (single secondary)   | mouse, touch, and keyboard callbacks |
+| [`useMultiMonitor.ts`](../frontend/src/components/useMultiMonitor.ts) | Multi-monitor pop-out (per monitor) | mouse and keyboard callbacks         |
+
+Both pop-out hooks execute in the _opener's_ JS context (only the
+Guacamole `displayEl` is reparented into the popup's DOM), so
+`window.dispatchEvent` reaches the same `window` where
+`SessionTimeoutWarning` is mounted. No cross-window plumbing is
+required, and any future window-flavour additions (e.g. picture-
+in-picture) only need to call `notifySessionActivity()` from their
+own input callbacks to inherit the same behaviour.
+
+**Resulting timeout model.**
+
+| Scenario                                  | Token behaviour                                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Actively using a session (any window)     | Access token silently refreshes whenever it has < 10 min remaining and an input event arrives, for up to **8 hours** (the refresh-token hard ceiling). |
+| Idle (no DOM events, no Guacamole input)  | Access token expires **20 min** after the most recent refresh; warning toast appears at the 2-min mark with an explicit extend button.                 |
+| Returning from idle before the 20-min cap | A click or keypress with < 10 min left triggers a silent background refresh; with > 10 min left it is a no-op.                                         |
+
+## SSH/Telnet paste payload normalisation (v1.6.1)
+
+[`pastePayload.ts`](../frontend/src/components/pastePayload.ts)
+exports a single
+`preparePastePayload(text: string, protocol: string): string`
+helper that the main-window paste path in `SessionManager.tsx` and
+the pop-out paste path in `usePopOut.ts` both call before the
+clipboard payload is shipped over the Guacamole tunnel. For `ssh`
+and `telnet` protocols the payload is wrapped with the
+bracketed-paste start/end sequences (`ESC [ 200 ~` /
+`ESC [ 201 ~`) and every `\r\n` and bare `\n` is rewritten to a
+single `\r`. For all other protocols (RDP, VNC, Kubernetes-exec,
+Quick-Share clipboard) the payload is returned unchanged. The
+transformation matches what an `xterm`-class terminal emits when a
+real human pastes into it, which is the contract editors and REPLs
+on the remote end (`vim`, `nano`, `psql`, `python`) interpret.
+Seven unit tests in
+[`__tests__/pastePayload.test.ts`](../frontend/src/__tests__/pastePayload.test.ts)
+pin the boundary conditions.
+
+## OIDC discovery and JWKS cache consolidation (v1.6.1)
+
+The OIDC SSO callback handler used to perform up to four upstream
+HTTP round-trips on a cold cache: discovery (cached only inside
+`backend/src/routes/auth.rs`), the token endpoint POST, discovery
+**again** inside `backend/src/services/auth.rs::validate_token`
+(a separate uncached cache miss because the cache lived in the
+wrong module), and the JWKS fetch (never cached). Each upstream
+call has a 5-second connect / 10-second overall timeout, which on
+a sluggish corporate IdP cumulates to 15–30 seconds of callback
+latency. v1.6.1 consolidates the discovery cache into
+`services::auth::fetch_oidc_discovery_cached` so both call sites
+share a single `tokio::sync::Mutex<Option<(Instant, OidcDiscovery)>>`,
+and adds an equivalent `fetch_jwks_cached` for the JWKS document.
+Both caches share the constant `OIDC_CACHE_TTL = Duration::from_secs(600)`
+(10 minutes). The callback now performs at most one upstream call
+on a warm cache (the token POST) and at most two on the very
+first sign-in after process start (discovery + token POST).
+
+A diagnostic info-level tracing line on the
+`strata::auth::sso` target is emitted at the end of every
+successful callback and carries the per-step latency breakdown:
+`discovery_ms`, `token_exchange_ms`, `token_validate_ms`,
+`total_so_far_ms`. This is the canonical signal for triaging
+future "SSO is slow" reports — the values either add up to the
+user-perceived latency (in which case the time was spent inside
+Strata and the cache hit/miss can be reasoned about) or they are
+small while the user still waited minutes (in which case the time
+was spent inside Keycloak's broker path or a federated upstream
+IdP, and the trail continues outside the Strata logs).
+
 ## Extended protocols
 
 In addition to the classic RDP / SSH / VNC connections, Strata

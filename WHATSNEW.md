@@ -1,4 +1,122 @@
-# What's New in v1.6.0
+# What's New in v1.6.1
+
+> **Patch release: production hardening.** v1.6.1 is a focused patch
+> against three independent issues reported against the v1.6.0
+> deployment. There are no API contract changes, no database
+> migrations, no new environment variables, and no new dependencies
+> — drop-in upgrade from v1.6.0. Two of the three fixes were
+> straightforward to reproduce; the third required tracing the
+> Guacamole vendor's input-event hijacking through four window
+> contexts (main, popout, multi-monitor, fullscreen) before the
+> shape of the fix became obvious. The release also adds a small
+> amount of diagnostic tracing on the SSO callback so future
+> "sign-in is slow" reports can be triaged from logs alone.
+
+## Multi-line paste into SSH/Telnet now matches what a real terminal sees
+
+Pasting a multi-line snippet from the system clipboard into an SSH
+or Telnet session was being delivered to the remote shell as a
+sequence of separate keystrokes with embedded `\r\n` pairs. Editors
+that interpret bracketed paste — `vim`, `nano`, `less`, `psql`,
+`mysql`'s shell, `python` REPL, etc. — saw each line as a freshly
+typed command rather than as part of a single paste, and the
+trailing `\n` of every CRLF triggered an unintended Enter that
+committed half-formed commands. The fix wraps the payload with the
+bracketed-paste start/end sequences (`ESC [ 200 ~` / `ESC [ 201 ~`)
+exactly like a `xterm`-class terminal would, and rewrites every
+`\r\n` and bare `\n` to a single `\r` to match the carriage-return
+that a real keyboard emits. The transformation only applies to
+`ssh` and `telnet` connection protocols — RDP, VNC, Kubernetes
+exec and Quick-Share clipboard payloads are passed through
+verbatim, so nothing changes for non-terminal protocols. Seven new
+unit tests pin the boundary conditions (empty input, `\r\n` runs,
+mixed line endings, RDP passthrough) and the integration is wired
+through both the main-window paste path in `SessionManager.tsx`
+and the popout-window equivalents in `usePopOut.ts`.
+
+## You will no longer be logged out mid-session
+
+Users actively typing or clicking inside a remote session were
+being signed out of the Strata SPA at the 20-minute access-token
+mark even though they were demonstrably active. The proactive
+token-refresh logic in `SessionTimeoutWarning` listens for
+`mousedown` / `keydown` / `touchstart` / `scroll` on `window`,
+and on a click or keypress with under 10 minutes left on the access
+token it triggers a silent background refresh. The Guacamole vendor
+library, however, installs its own `Keyboard(document)` and
+`Mouse(displayEl)` handlers that call `event.preventDefault()` and
+`event.stopPropagation()` on every input event before they bubble
+to `window` — so for the duration of an active session the
+warning never saw a single user input event, the access token
+expired, and the next API call returned 401. The fix introduces a
+small `sessionActivity` event bus
+(`frontend/src/components/sessionActivity.ts`): the Guacamole input
+callbacks call `notifySessionActivity()`, which dispatches a
+throttled (1 Hz) `strata-session-activity` window event;
+`SessionTimeoutWarning` subscribes to that event in addition to its
+existing DOM listeners. The notify call is plumbed through every
+window context where Guacamole input might be handled — the
+main-window mouse and keyboard paths in `SessionManager.tsx` and
+`SessionClient.tsx`, the popout-window mouse, touch, and keyboard
+paths in `usePopOut.ts`, and the multi-monitor per-monitor mouse
+and keyboard paths in `useMultiMonitor.ts`. Both popout hooks
+execute in the _opener's_ JS context (only the Guacamole
+`displayEl` is reparented into the popup's DOM), so the event
+dispatches on the same `window` where `SessionTimeoutWarning` is
+mounted and no cross-window plumbing is required. The result is a
+simple invariant that holds for every window flavour the product
+exposes: **as long as you are interacting with a remote session,
+you cannot be signed out**, and the existing 8-hour refresh-token
+ceiling is the only hard cap on session length.
+
+## SSO sign-in is faster — and emits enough trace context to triage future hangs
+
+A user reported the first SSO sign-in of the day appeared to hang
+on a Keycloak page before eventually succeeding; subsequent
+attempts were instant. Investigation showed that on a cold OIDC
+cache the `/api/auth/sso/callback` handler was performing **four**
+upstream HTTP round-trips to the IdP before issuing its 303
+redirect: discovery (cached only inside `routes::auth`), the token
+endpoint POST, discovery **again** inside
+`services::auth::validate_token` (a separate uncached cache miss
+because the cache lived in the wrong module), and the JWKS fetch
+(never cached). Each upstream call has a 5-second connect /
+10-second overall timeout, so on a sluggish corporate IdP that
+cumulates to 15–30 seconds of callback latency during which the URL
+bar still shows the Keycloak callback URL and the user perceives
+Keycloak as hanging. The fix consolidates discovery into
+`services::auth::fetch_oidc_discovery_cached` so both call sites
+share a single cache, and adds a JWKS cache with the same 10-minute
+TTL. The callback now performs at most one upstream call (the
+token POST) on a warm cache, and only two (discovery + token POST)
+on the first ever sign-in after process start. As a defensive
+secondary the `/api/auth/sso/login` redirect now sends
+`Cache-Control: no-store` to prevent BFCache replay of stale
+single-use `state` UUIDs from the back/forward buttons.
+
+A new info-level tracing line emitted at the end of every
+successful callback under the `strata::auth::sso` target carries a
+per-step latency breakdown (`discovery_ms`, `token_exchange_ms`,
+`token_validate_ms`, `total_so_far_ms`) so the next "SSO is slow"
+report can be triaged from the backend logs alone — if those
+numbers add up to roughly the user-perceived wait, the time was
+spent inside Strata; if they are tiny but the user still waited
+minutes, the time was spent inside Keycloak or a federated
+upstream IdP (AD FS / Entra ID / federated LDAP) and the trail
+continues there rather than here.
+
+## Drop-in upgrade — no migrations, no API contract changes
+
+No database migrations. No new environment variables. No API
+contract changes (the SSO redirect now carries a
+`Cache-Control: no-store` header and the callback emits an extra
+tracing line, neither of which is part of any documented contract).
+Bundle size is unchanged. Backend memory footprint gains two
+small `tokio::sync::Mutex<Option<(Instant, T)>>` cache cells.
+Roll the backend and frontend images together; both remain
+backwards-compatible with v1.6.0 peers during a rolling update.
+
+---
 
 > **Minor release: enterprise foundations.** v1.6.0 lays groundwork
 > that has been requested by enterprise reviewers without changing
@@ -132,11 +250,10 @@ internal node's existing `axum::Router` handles the request unmodified
 
 Layered on top of the mTLS link is an application-level
 challenge–response: the DMZ sends a 32-byte random nonce, the
-internal node returns HMAC-SHA-256(psk_key, nonce ‖ cluster_id ‖
+internal node returns HMAC-SHA-256(psk*key, nonce ‖ cluster_id ‖
 node_id) and an `AuthHello` frame identifying its cluster id, node
 id and software version. PSKs are configured per-id
-(`STRATA_DMZ_LINK_PSK_<id>=<base64>` on the internal node;
-`STRATA_DMZ_LINK_PSKS=id:b64,id2:b64` on the DMZ — first entry is the
+(`STRATA_DMZ_LINK_PSK*<id>=<base64>`on the internal node;`STRATA_DMZ_LINK_PSKS=id:b64,id2:b64` on the DMZ — first entry is the
 active key, rest accepted during rotation). A stolen mTLS cert alone
 is not enough to bring up a link; a stolen PSK alone is not enough
 either. Both must hold.
@@ -193,28 +310,28 @@ single-node host.
 
 DMZ side (`strata-dmz` binary):
 
-| Variable | Purpose |
-| --- | --- |
-| `STRATA_DMZ_PUBLIC_BIND` | Public-facing listener (default `0.0.0.0:8443`). |
-| `STRATA_DMZ_LINK_BIND` | Link-server listener (default `0.0.0.0:9443`). |
-| `STRATA_DMZ_PUBLIC_TLS_{CERT,KEY}` | Public TLS material (PEM). |
-| `STRATA_DMZ_LINK_TLS_{CERT,KEY}` | DMZ side of the link mTLS material (PEM). |
-| `STRATA_DMZ_LINK_CA_BUNDLE` | Private CA bundle that signs the **internal** node link cert (PEM). |
-| `STRATA_DMZ_LINK_PSKS` | `id:base64,id2:base64,…` — first active. |
-| `STRATA_DMZ_EDGE_HMAC_KEY` | Base64 key used to sign `x-strata-edge-*` headers. |
-| `STRATA_DMZ_CLUSTER_ID`, `STRATA_DMZ_NODE_ID` | Cluster + node identification. |
-| `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES`, `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP`, `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS`, `STRATA_DMZ_PUBLIC_RATE_RPS`, `STRATA_DMZ_PUBLIC_RATE_BURST`, `STRATA_DMZ_PUBLIC_MAX_INFLIGHT`, `STRATA_DMZ_TRUST_FORWARDED_FROM` | Public-surface abuse guards. |
+| Variable                                                                                                                                                                                                                                              | Purpose                                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `STRATA_DMZ_PUBLIC_BIND`                                                                                                                                                                                                                              | Public-facing listener (default `0.0.0.0:8443`).                    |
+| `STRATA_DMZ_LINK_BIND`                                                                                                                                                                                                                                | Link-server listener (default `0.0.0.0:9443`).                      |
+| `STRATA_DMZ_PUBLIC_TLS_{CERT,KEY}`                                                                                                                                                                                                                    | Public TLS material (PEM).                                          |
+| `STRATA_DMZ_LINK_TLS_{CERT,KEY}`                                                                                                                                                                                                                      | DMZ side of the link mTLS material (PEM).                           |
+| `STRATA_DMZ_LINK_CA_BUNDLE`                                                                                                                                                                                                                           | Private CA bundle that signs the **internal** node link cert (PEM). |
+| `STRATA_DMZ_LINK_PSKS`                                                                                                                                                                                                                                | `id:base64,id2:base64,…` — first active.                            |
+| `STRATA_DMZ_EDGE_HMAC_KEY`                                                                                                                                                                                                                            | Base64 key used to sign `x-strata-edge-*` headers.                  |
+| `STRATA_DMZ_CLUSTER_ID`, `STRATA_DMZ_NODE_ID`                                                                                                                                                                                                         | Cluster + node identification.                                      |
+| `STRATA_DMZ_PUBLIC_BODY_LIMIT_BYTES`, `STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP`, `STRATA_DMZ_PUBLIC_HEADER_TIMEOUT_MS`, `STRATA_DMZ_PUBLIC_RATE_RPS`, `STRATA_DMZ_PUBLIC_RATE_BURST`, `STRATA_DMZ_PUBLIC_MAX_INFLIGHT`, `STRATA_DMZ_TRUST_FORWARDED_FROM` | Public-surface abuse guards.                                        |
 
 Internal-node side (`strata-backend`):
 
-| Variable | Purpose |
-| --- | --- |
-| `STRATA_DMZ_ENDPOINTS` | Comma-separated list of DMZ endpoints to dial; unset = standalone. |
-| `STRATA_CLUSTER_ID`, `STRATA_NODE_ID` | Required when `STRATA_DMZ_ENDPOINTS` is set. |
-| `STRATA_DMZ_LINK_TLS_{CERT,KEY}` | Internal side of the link mTLS material (PEM). |
-| `STRATA_DMZ_LINK_CA` | Private CA bundle that signs the **DMZ** server cert (PEM). |
-| `STRATA_DMZ_LINK_PSK_<id>` | One env var per PSK; value is base64 raw key. |
-| `STRATA_DMZ_EDGE_HMAC_KEYS` | Comma-separated list of base64 HMAC keys; first active, rest accepted during rotation. |
+| Variable                              | Purpose                                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------------------- |
+| `STRATA_DMZ_ENDPOINTS`                | Comma-separated list of DMZ endpoints to dial; unset = standalone.                     |
+| `STRATA_CLUSTER_ID`, `STRATA_NODE_ID` | Required when `STRATA_DMZ_ENDPOINTS` is set.                                           |
+| `STRATA_DMZ_LINK_TLS_{CERT,KEY}`      | Internal side of the link mTLS material (PEM).                                         |
+| `STRATA_DMZ_LINK_CA`                  | Private CA bundle that signs the **DMZ** server cert (PEM).                            |
+| `STRATA_DMZ_LINK_PSK_<id>`            | One env var per PSK; value is base64 raw key.                                          |
+| `STRATA_DMZ_EDGE_HMAC_KEYS`           | Comma-separated list of base64 HMAC keys; first active, rest accepted during rotation. |
 
 See `docs/deployment.md` for the full reference table including
 defaults, accepted ranges and rotation procedure.
@@ -223,7 +340,7 @@ defaults, accepted ranges and rotation procedure.
 
 - `GET /api/admin/dmz-links` — supervisor snapshot.
   Response: `{ configured: bool, links: [{ endpoint, state, connects,
-  failures, since_unix_secs, last_error }, …] }`.
+failures, since_unix_secs, last_error }, …] }`.
 - `POST /api/admin/dmz-links/reconnect` — best-effort kick that drops
   and redials every link. Response: `{ nudged: <count> }`.
 
@@ -275,7 +392,7 @@ tunnel closed when that timestamp was reached. Access tokens
 have a 20-minute TTL. The frontend rotates them via
 `POST /api/auth/refresh` on user activity (after roughly ten
 minutes, while the warning toast counts down to expiry), so the
-*UI* stays logged in indefinitely as long as you're using it —
+_UI_ stays logged in indefinitely as long as you're using it —
 but the already-open WebSocket has no way to learn about that
 rotation. So every active connection session was reaped at
 T+20 minutes regardless of how busy the operator was, with
@@ -299,7 +416,7 @@ entirely. Tunnel teardown is now driven by:
 If you scrape the audit log, the `reason` field for
 `tunnel.terminated` events can now take the values `"revoked"`
 or `"max_duration"` instead of `"revoked"` or `"expired"`. They
-mean roughly the same thing — *the watchdog forced closure* —
+mean roughly the same thing — _the watchdog forced closure_ —
 just measured against wall-clock elapsed time rather than the
 (now-rotating) token `exp`.
 
@@ -311,8 +428,8 @@ The custom `guacd` image build was briefly broken on
 `origin/main` while we attempted to drop our local patch
 [`guacd/patches/006-freerdp325-authenticate-ex.patch`](guacd/patches/006-freerdp325-authenticate-ex.patch).
 The hypothesis — that the upstream commit `7696572`
-(GUACAMOLE-2273, *"Implement FreeRDP AuthenticateEx callback
-and handle deprecation of Authenticate callback"*) had landed
+(GUACAMOLE-2273, _"Implement FreeRDP AuthenticateEx callback
+and handle deprecation of Authenticate callback"_) had landed
 on the `staging/1.6.1` branch HEAD and rendered our patch
 redundant — was wrong: GUACAMOLE-2273 currently exists only as
 an unmerged PR commit. Building the v1.4.0 pin (`4163ead`)
@@ -334,14 +451,14 @@ this function)
 
 `AUTH_FIDO_PIN` is part of the FreeRDP `rdp_auth_reason` enum
 that was added after FreeRDP 3.25.0, which is what Alpine edge
-currently ships. Net result: neither *"drop patch 006"* nor
-*"pin to the unmerged PR"* works today against the Alpine edge
+currently ships. Net result: neither _"drop patch 006"_ nor
+_"pin to the unmerged PR"_ works today against the Alpine edge
 runtime libraries. v1.4.1 keeps the working v1.4.0 combination
 — pin `4163ead` plus patch 006 plus the two grep guards in the
 [`guacd/Dockerfile`](guacd/Dockerfile) — and updates the
 Dockerfile comment block so the next maintainer doesn't repeat
 the experiment. Functionally this is a no-op vs. v1.4.0; only
-the *story* recorded in the source comments changed.
+the _story_ recorded in the source comments changed.
 
 ---
 
@@ -441,9 +558,9 @@ behind a cached layer.
 Add a new connection, pick **Kubernetes Pod** as the protocol,
 fill in the API server hostname/port, paste your kubeconfig into
 the **Import kubeconfig** textarea above the form sections, and
-click *Parse and fill form*. Strata extracts the cluster server,
+click _Parse and fill form_. Strata extracts the cluster server,
 namespace, CA cert and client cert into the right fields; the
-client *private key* surfaces in a "copy now" panel that goes
+client _private key_ surfaces in a "copy now" panel that goes
 away as soon as you stash it into a credential profile (it's
 never persisted on this path).
 
@@ -464,7 +581,7 @@ The protocol surfaces in:
 - `backend/src/tunnel.rs` `kubernetes` branch in `full_param_map()`
   with terminal defaults; whitelist additions for `namespace`,
   `pod`, `container`, `exec-command`, `use-ssl`, `ca-cert` and
-  `client-cert` extras (note: `client-key` is *not* whitelisted —
+  `client-cert` extras (note: `client-key` is _not_ whitelisted —
   the private half flows through the Vault-encrypted credential-
   profile path, never connection extras).
 - `backend/src/routes/tunnel.rs` credential remap that takes the
@@ -545,7 +662,7 @@ adds three small unified-diff hunks against `rdp.c`:
    `<freerdp/...>` includes so the `FREERDP_VERSION_MAJOR` /
    `FREERDP_VERSION_MINOR` preprocessor macros are visible at
    every conditional that follows. Without this, the macros
-   are *not* transitively defined inside `rdp.c` despite
+   are _not_ transitively defined inside `rdp.c` despite
    `<freerdp/freerdp.h>` being included — a fact that wasted
    an embarrassing amount of debugging time during the first
    patch attempt.
@@ -567,12 +684,12 @@ adds three small unified-diff hunks against `rdp.c`:
 
 ### Defence-in-depth: Dockerfile grep guard
 
-The first attempt at this patch *applied successfully* —
+The first attempt at this patch _applied successfully_ —
 `patch -p1` returned exit 0 for every hunk — but selected the
 `#else` (legacy) branch at every conditional because
 `FREERDP_VERSION_MAJOR` was undefined at that point in the
 translation unit. The build then failed at compile time with
-the *same* error as before, just with the line number shifted
+the _same_ error as before, just with the line number shifted
 down by 11 (the size of the inserted `#if` blocks). It cost
 several iterations to realise the patch was applying but
 silently no-op'ing.
@@ -580,7 +697,7 @@ silently no-op'ing.
 [`guacd/Dockerfile`](guacd/Dockerfile) now runs two `grep -q`
 assertions immediately after the patch loop that fail the build
 with a clear error message if the post-patch source tree does
-not contain `#include <freerdp/version.h>` *and*
+not contain `#include <freerdp/version.h>` _and_
 `rdp_inst->AuthenticateEx = rdp_freerdp_authenticate;`. Future
 silent semantic regressions get caught in seconds rather than
 minutes.
@@ -679,9 +796,9 @@ Effects:
    - asks `services::token_revocation::is_revoked(token)`;
    - compares `chrono::Utc::now().timestamp() as u64` to the
      cached `exp`.
-   Either condition logs at `INFO` and aborts the proxy loop,
-   so the recording flushes and `session_registry`
-   decrements within at most one tick.
+     Either condition logs at `INFO` and aborts the proxy loop,
+     so the recording flushes and `session_registry`
+     decrements within at most one tick.
 
 > **Cadence rationale.** 30 s detects revocation in ≤ 30 s
 > even on aggressive 1-minute access-token TTLs, while a
@@ -707,7 +824,7 @@ worse than the lint.
 
 `App.tsx`'s `handleLogout` previously flipped React auth state
 (`setAuthenticated(false)`, `setUser(null)`) and navigated to
-`/login` *without* closing any open Guacamole tunnels first. The
+`/login` _without_ closing any open Guacamole tunnels first. The
 `SessionManagerProvider` stayed mounted across the logout
 because it lives above the route tree, so its in-memory
 sessions kept streaming until the browser eventually closed the
@@ -732,7 +849,7 @@ export function closeAllSessionsExternal(): void {
 The provider registers its own `closeAllSessions` callback via
 `setCloseAllSessionsHandler` on mount and unregisters on
 unmount. `closeAllSessions` iterates `sessionsRef.current` and
-runs the *same* cleanup path used by the per-session disconnect
+runs the _same_ cleanup path used by the per-session disconnect
 button:
 
 - `cleanupPopout(session)`,
@@ -793,10 +910,10 @@ of an old tag will leave you on the broken `guacd` image.
 > production rollout: SSH terminal defaults so `nano`, `less`,
 > `vim`, and `ls --color` actually look right; a mouse-leave /
 > window-blur button-release that kills the long-standing
-> *"phantom text selection extends across the SSH terminal as I
-> move my cursor to the browser tab strip"* bug; a recording
+> _"phantom text selection extends across the SSH terminal as I
+> move my cursor to the browser tab strip"_ bug; a recording
 > playback URL fix so seek and speed buttons no longer surface
-> *"Tunnel error"*; a fuzz-tolerant guacd patch step so image
+> _"Tunnel error"_; a fuzz-tolerant guacd patch step so image
 > builds survive harmless upstream context drift; and the
 > deletion of a stray diagnostic patch that was superseded by the
 > SSH defaults work. **Drop-in upgrade from v1.3.0** — no
@@ -815,16 +932,16 @@ now seeds the same SSH terminal defaults that upstream
 every `protocol == "ssh"` connection where the admin has not
 explicitly overridden them:
 
-| Parameter               | Default                | Why it matters                                                                                       |
-| ----------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------- |
-| `terminal-type`         | `xterm-256color`       | Exported as `TERM` on the remote PTY. Without it, OpenSSH sees the empty string and most distros fall back to `TERM=linux` — a 16-colour profile that does *not* advertise `smcup`/`rmcup`, so `nano` and `less` cannot save and restore the alternate screen. **This is what made closing `nano` leave the file stuck on your viewport.** |
-| `color-scheme`          | `gray-black`           | Rustguac-default colour palette. Without it, guacd renders SGR escape sequences in the `black-white` palette, inverting most users' expectations and visually obliterating dark prompts. |
-| `scrollback`            | `1000`                 | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000, matching `xterm`'s historical default. Below ~500 lines, a single `journalctl -xe` doesn't fit. |
-| `font-name`             | `monospace`            | The browser-side default already happened to be monospace; we now make the wire value explicit. |
-| `font-size`             | `12`                   | Rustguac parity.                                                                                     |
-| `backspace`             | `127`                  | DEL — what every Linux distro ships as the SSH default. Stops `^?` characters appearing in the terminal when you press Backspace on certain remote shells. |
-| `locale`                | `en_US.UTF-8`          | Exported as `LC_*`. Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars, etc. |
-| `server-alive-interval` | `0`                    | Disables guacd-side keepalives — the WebSocket tunnel already provides liveness via Guacamole's own keep-alive instructions. |
+| Parameter               | Default          | Why it matters                                                                                                                                                                                                                                                                                                                             |
+| ----------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `terminal-type`         | `xterm-256color` | Exported as `TERM` on the remote PTY. Without it, OpenSSH sees the empty string and most distros fall back to `TERM=linux` — a 16-colour profile that does _not_ advertise `smcup`/`rmcup`, so `nano` and `less` cannot save and restore the alternate screen. **This is what made closing `nano` leave the file stuck on your viewport.** |
+| `color-scheme`          | `gray-black`     | Rustguac-default colour palette. Without it, guacd renders SGR escape sequences in the `black-white` palette, inverting most users' expectations and visually obliterating dark prompts.                                                                                                                                                   |
+| `scrollback`            | `1000`           | Lifts guacd's in-buffer line count from its built-in default (~256) to 1000, matching `xterm`'s historical default. Below ~500 lines, a single `journalctl -xe` doesn't fit.                                                                                                                                                               |
+| `font-name`             | `monospace`      | The browser-side default already happened to be monospace; we now make the wire value explicit.                                                                                                                                                                                                                                            |
+| `font-size`             | `12`             | Rustguac parity.                                                                                                                                                                                                                                                                                                                           |
+| `backspace`             | `127`            | DEL — what every Linux distro ships as the SSH default. Stops `^?` characters appearing in the terminal when you press Backspace on certain remote shells.                                                                                                                                                                                 |
+| `locale`                | `en_US.UTF-8`    | Exported as `LC_*`. Required for UTF-8 box-drawing characters in `htop`, `mc`, `tmux` status bars, etc.                                                                                                                                                                                                                                    |
+| `server-alive-interval` | `0`              | Disables guacd-side keepalives — the WebSocket tunnel already provides liveness via Guacamole's own keep-alive instructions.                                                                                                                                                                                                               |
 
 Three of these (`color-scheme`, `locale`, `server-alive-interval`)
 have also been added to the `is_allowed_guacd_param` allowlist so
@@ -899,7 +1016,7 @@ Symptom: opening a recording playback page (Sessions → LIVE/Rewind
 button → Recorded Session) and clicking **any** of the seek
 buttons (`30S`, `1M`, `3M`, `5M` in either direction) or speed
 buttons (`2x`, `4x`, `8x`) at the bottom of the player would
-render a red *"Tunnel error"* badge over the player and stop
+render a red _"Tunnel error"_ badge over the player and stop
 playback. Pressing **Retry** would just reproduce the same
 error.
 
@@ -912,7 +1029,7 @@ string, so the resulting URL became
 `wss://strata.example.com/api/admin/recordings/<uuid>/stream&seek=3114&speed=2`
 — a malformed path that the WebSocket upgrader on the backend
 correctly rejected as an unknown route, surfacing as the
-*"Tunnel error"* the user saw.
+_"Tunnel error"_ the user saw.
 
 **Fix:** collect the parameters into a list, then prepend `?`
 when the base URL has no existing query string and `&` when it
@@ -966,7 +1083,7 @@ docker compose up -d --build
 - **Mandatory image rebuild.** All fixes live in the backend
   Rust binary, the frontend bundle, and the guacd Dockerfile
   patch step — all three are baked into their respective
-  images. A `docker compose pull` of an old tag is *not*
+  images. A `docker compose pull` of an old tag is _not_
   enough.
 - **No database migrations.** v1.3.1 is schema-stable relative
   to v1.3.0 and v1.2.0.
@@ -1060,14 +1177,14 @@ Pressing `Ctrl+K` (or your customised binding from v0.30.1) and typing
 a colon now switches the palette into **command mode**. Six built-ins
 ship out of the box:
 
-| Command                | What it does                                                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `:reload`              | Reconnect the active session (forces an IDR keyframe — clears stale GFX without dropping the tunnel)                              |
-| `:disconnect`          | Close the active session and return to the dashboard                                                                              |
-| `:close`               | Friendlier alias for `:disconnect` — closes the current server page                                                               |
-| `:fullscreen`          | Toggle fullscreen with Keyboard Lock (the same chord the SessionBar uses, so OS shortcuts stay captured)                          |
-| `:commands`            | Inline list of every command available to you — built-ins plus your personal mappings, with a colour-coded pill for each kind     |
-| `:explorer <arg>`      | Drives the Run dialog on the active session — `:explorer cmd` opens a command prompt, `:explorer powershell` opens a PowerShell prompt, `:explorer \\server\share` opens a share, `:explorer notepad` launches Notepad. Anything `start` accepts works. |
+| Command           | What it does                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `:reload`         | Reconnect the active session (forces an IDR keyframe — clears stale GFX without dropping the tunnel)                                                                                                                                                    |
+| `:disconnect`     | Close the active session and return to the dashboard                                                                                                                                                                                                    |
+| `:close`          | Friendlier alias for `:disconnect` — closes the current server page                                                                                                                                                                                     |
+| `:fullscreen`     | Toggle fullscreen with Keyboard Lock (the same chord the SessionBar uses, so OS shortcuts stay captured)                                                                                                                                                |
+| `:commands`       | Inline list of every command available to you — built-ins plus your personal mappings, with a colour-coded pill for each kind                                                                                                                           |
+| `:explorer <arg>` | Drives the Run dialog on the active session — `:explorer cmd` opens a command prompt, `:explorer powershell` opens a PowerShell prompt, `:explorer \\server\share` opens a share, `:explorer notepad` launches Notepad. Anything `start` accepts works. |
 
 Commands that need an active session (`:reload`, `:disconnect`,
 `:close`, `:explorer`) are disabled (greyed) when none is open; the
@@ -1085,14 +1202,14 @@ same control-character rejection, and the audit log records only
 Visit **Profile → Command Palette Mappings** to define up to **50** of
 your own `:command` triggers. Six action types are supported:
 
-| Action            | What it opens                                                                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `open-connection` | A specific saved connection by its UUID                                                                                                                              |
-| `open-folder`     | The dashboard pre-filtered to a folder                                                                                                                               |
-| `open-tag`        | The dashboard pre-filtered to a tag                                                                                                                                  |
-| `open-page`       | An in-app route (`/dashboard`, `/profile`, `/credentials`, `/settings`, `/admin`, `/audit`, `/recordings`)                                                          |
+| Action            | What it opens                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open-connection` | A specific saved connection by its UUID                                                                                                                                                                                                                                                                                                         |
+| `open-folder`     | The dashboard pre-filtered to a folder                                                                                                                                                                                                                                                                                                          |
+| `open-tag`        | The dashboard pre-filtered to a tag                                                                                                                                                                                                                                                                                                             |
+| `open-page`       | An in-app route (`/dashboard`, `/profile`, `/credentials`, `/settings`, `/admin`, `/audit`, `/recordings`)                                                                                                                                                                                                                                      |
 | `open-path`       | **Opens a path on the active remote session.** Drives the Windows Run dialog (Win+R → paste path → Enter), so a UNC share like `\\computer456\share`, a local folder like `C:\Users\Public`, or a `shell:` URI like `shell:startup` opens directly in Explorer on the remote box. The example everyone wants: `:comp1` → `\\computer456\share`. |
-| `paste-text`      | Sends free-form text into the active session via clipboard + Ctrl+V (no Enter, just a paste). Up to 4096 chars.                                                       |
+| `paste-text`      | Sends free-form text into the active session via clipboard + Ctrl+V (no Enter, just a paste). Up to 4096 chars.                                                                                                                                                                                                                                 |
 
 Triggers are validated against `^[a-z0-9_-]{1,32}$`, must not collide
 with built-in command names, and must be unique within your own list.

@@ -4,8 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 // Mock the markdown imports and marked
 vi.mock("@docs/architecture.md?raw", () => ({
-  default:
-    "# Architecture\nArch content here\n\n```mermaid\nflowchart LR\n  A-->B\n```\n",
+  default: "# Architecture\nArch content here\n\n```mermaid\nflowchart LR\n  A-->B\n```\n",
 }));
 vi.mock("@docs/security.md?raw", () => ({ default: "# Security\nSecurity content here" }));
 vi.mock("@docs/api-reference.md?raw", () => ({ default: "# API Reference\nAPI content here" }));

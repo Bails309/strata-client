@@ -102,6 +102,51 @@
   background: var(--color-scrollbar-thumb-hover);
 }
 
+/* Themed range slider — track is filled to --range-pct using the accent
+   colour so the fill always reaches the thumb, even at the maximum value. */
+.range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--color-accent) 0%,
+    var(--color-accent) var(--range-pct, 0%),
+    rgba(255, 255, 255, 0.12) var(--range-pct, 0%),
+    rgba(255, 255, 255, 0.12) 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+.range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: transform 0.12s var(--ease-out);
+}
+.range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+.range-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+.range-slider:focus-visible {
+  box-shadow: 0 0 0 3px var(--color-accent-dim);
+}
+
 .animate-pop-in {
   animation: popIn 0.3s var(--ease-spring) both;
 }

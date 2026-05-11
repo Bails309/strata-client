@@ -10,10 +10,17 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{settings, vault};
 
-/// Resolve effective TTL: user preference capped by admin max.
-/// Both inputs and output are clamped to [1, admin_max].
-pub fn resolve_ttl(user_pref: Option<i32>, admin_max: i64) -> i32 {
-    (user_pref.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32
+/// Resolve TTL for a credential profile, picking the effective upper
+/// bound based on whether the profile opts in to extended expiry.
+/// Falls back to `admin_max` (i.e. the existing 12 h cap) when not extended.
+pub fn resolve_profile_ttl(user_pref: Option<i32>, admin_max: i64, extended: bool) -> i32 {
+    let cap = crate::services::credential_profiles::effective_ttl_max(admin_max, extended);
+    let default = if extended {
+        cap as i32
+    } else {
+        admin_max as i32
+    };
+    (user_pref.unwrap_or(default) as i64).clamp(1, cap) as i32
 }
 
 /// Validate a hex color string (e.g. "#ff00aa" or "#abc").
@@ -573,6 +580,8 @@ pub struct CreateCredentialProfileRequest {
     pub username: String,
     pub password: String,
     pub ttl_hours: Option<i32>,
+    #[serde(default)]
+    pub extended_expiry: Option<bool>,
 }
 
 pub async fn list_credential_profiles(
@@ -612,15 +621,29 @@ pub async fn create_credential_profile(
     };
 
     let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
-    let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
+    let extended_expiry = body.extended_expiry.unwrap_or(false);
+    let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
 
-    let id = cp_svc::insert(&db.pool, user.id, &body.label, &sealed, ttl_hours).await?;
+    let id = cp_svc::insert(
+        &db.pool,
+        user.id,
+        &body.label,
+        &sealed,
+        ttl_hours,
+        extended_expiry,
+    )
+    .await?;
 
     crate::services::audit::log(
         &db.pool,
         Some(user.id),
         "credential_profile.created",
-        &json!({ "profile_id": id.to_string(), "label": body.label }),
+        &json!({
+            "profile_id": id.to_string(),
+            "label": body.label,
+            "extended_expiry": extended_expiry,
+            "ttl_hours": ttl_hours,
+        }),
     )
     .await?;
 
@@ -633,6 +656,8 @@ pub struct UpdateCredentialProfileRequest {
     pub username: Option<String>,
     pub password: Option<String>,
     pub ttl_hours: Option<i32>,
+    #[serde(default)]
+    pub extended_expiry: Option<bool>,
 }
 
 pub async fn update_credential_profile(
@@ -648,6 +673,12 @@ pub async fn update_credential_profile(
     }
 
     let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
+    // The effective extended-expiry value for clamping the TTL is whatever
+    // the body sent, falling back to whatever's currently stored.
+    let extended_expiry = match body.extended_expiry {
+        Some(v) => v,
+        None => cp_svc::get_extended_expiry(&db.pool, profile_id).await?,
+    };
 
     // If credentials are being updated, re-encrypt
     if body.username.is_some() || body.password.is_some() {
@@ -699,19 +730,29 @@ pub async fn update_credential_profile(
             nonce: sealed_raw.nonce,
         };
 
-        let ttl_hours = resolve_ttl(body.ttl_hours, admin_max);
+        let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
         cp_svc::update_sealed(
             &db.pool,
             profile_id,
             &sealed,
             ttl_hours,
+            extended_expiry,
             body.label.as_deref(),
         )
         .await?;
     } else {
-        // No credential change — update label and/or TTL
-        let ttl_hours = body.ttl_hours.map(|h| resolve_ttl(Some(h), admin_max));
-        cp_svc::update_metadata(&db.pool, profile_id, body.label.as_deref(), ttl_hours).await?;
+        // No credential change — update label and/or TTL and/or extended flag.
+        let ttl_hours = body
+            .ttl_hours
+            .map(|h| resolve_profile_ttl(Some(h), admin_max, extended_expiry));
+        cp_svc::update_metadata(
+            &db.pool,
+            profile_id,
+            body.label.as_deref(),
+            ttl_hours,
+            body.extended_expiry,
+        )
+        .await?;
     }
 
     crate::services::audit::log(
@@ -2058,12 +2099,14 @@ mod tests {
             expires_at: chrono::Utc::now(),
             expired: false,
             ttl_hours: 8,
+            extended_expiry: false,
             checkout_id: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Work");
         assert_eq!(v["expired"], false);
         assert_eq!(v["ttl_hours"], 8);
+        assert_eq!(v["extended_expiry"], false);
     }
 
     #[test]
@@ -2230,6 +2273,7 @@ mod tests {
             expires_at: now,
             expired: true,
             ttl_hours: 4,
+            extended_expiry: false,
             checkout_id: None,
         };
         let v = serde_json::to_value(&r).unwrap();
@@ -2332,38 +2376,38 @@ mod tests {
         assert!(!is_safe_recording_filename("C:\\Windows\\System32"));
     }
 
-    // ── resolve_ttl ────────────────────────────────────────────────────
+    // ── resolve_profile_ttl (extended-expiry aware) ────────────────────
 
     #[test]
-    fn resolve_ttl_uses_user_pref_within_range() {
-        assert_eq!(resolve_ttl(Some(6), 12), 6);
+    fn resolve_profile_ttl_non_extended_uses_admin_max() {
+        // Non-extended profiles must still respect the admin's 1–12 cap.
+        assert_eq!(resolve_profile_ttl(Some(8), 12, false), 8);
+        assert_eq!(resolve_profile_ttl(Some(48), 12, false), 12);
+        assert_eq!(resolve_profile_ttl(None, 12, false), 12);
     }
 
     #[test]
-    fn resolve_ttl_clamps_above_max() {
-        assert_eq!(resolve_ttl(Some(24), 12), 12);
+    fn resolve_profile_ttl_extended_allows_up_to_90_days() {
+        // 2160 hours = 90 days
+        assert_eq!(resolve_profile_ttl(Some(720), 12, true), 720);
+        assert_eq!(resolve_profile_ttl(Some(2160), 12, true), 2160);
     }
 
     #[test]
-    fn resolve_ttl_clamps_below_one() {
-        assert_eq!(resolve_ttl(Some(0), 12), 1);
-        assert_eq!(resolve_ttl(Some(-5), 12), 1);
+    fn resolve_profile_ttl_extended_clamps_above_extended_max() {
+        assert_eq!(resolve_profile_ttl(Some(9999), 12, true), 2160);
     }
 
     #[test]
-    fn resolve_ttl_defaults_to_admin_max() {
-        assert_eq!(resolve_ttl(None, 8), 8);
+    fn resolve_profile_ttl_extended_default_is_extended_max() {
+        // No user preference + extended => default to the extended cap.
+        assert_eq!(resolve_profile_ttl(None, 12, true), 2160);
     }
 
     #[test]
-    fn resolve_ttl_none_with_small_admin_max() {
-        assert_eq!(resolve_ttl(None, 1), 1);
-    }
-
-    #[test]
-    fn resolve_ttl_exact_boundary() {
-        assert_eq!(resolve_ttl(Some(12), 12), 12);
-        assert_eq!(resolve_ttl(Some(1), 12), 1);
+    fn resolve_profile_ttl_clamps_below_one() {
+        assert_eq!(resolve_profile_ttl(Some(0), 12, false), 1);
+        assert_eq!(resolve_profile_ttl(Some(-5), 12, true), 1);
     }
 
     // ── is_valid_hex_color ─────────────────────────────────────────────
@@ -2430,11 +2474,5 @@ mod tests {
     fn parse_ignore_cert_null_value() {
         let extra = Some(json!({ "ignore-cert": null }));
         assert!(!parse_ignore_cert(&extra));
-    }
-
-    #[test]
-    fn resolve_ttl_boundary_clamping() {
-        // Assuming resolve_ttl(input, min, max)
-        // Let's find the function first to be sure
     }
 }

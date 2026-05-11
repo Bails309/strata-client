@@ -42,11 +42,34 @@
  * its own virtual channel; VNC's `cuttext`) and do NOT want either
  * transformation, so this helper returns the original text unchanged
  * for those protocols.
+ *
+ * Single-line SSH payloads — why we skip the wrappers
+ * ---------------------------------------------------
+ * Bracketed paste exists to make multi-line paste safe inside
+ * paste-aware applications. A single-line payload (no `\n`, no
+ * `\r`) does not need that protection: there is no auto-indent
+ * concern, no per-keystroke binding hazard, and no line-ending
+ * translation to do. More importantly, **password prompts**
+ * (`sudo`, `ssh` password auth, `passwd`, `mysql -p`, …) read
+ * stdin in raw no-echo mode and are not paste-aware, so the
+ * literal bytes `\x1b[200~` and `\x1b[201~` would be ingested as
+ * part of the password and authentication would fail. Skipping
+ * the wrappers when the payload is a single line preserves the
+ * common "paste my password" workflow while keeping the
+ * multi-line protection above for code / config blocks.
  */
 export function preparePastePayload(text: string, protocol: string): string {
   const proto = protocol.toLowerCase();
   if (proto !== "ssh" && proto !== "telnet") {
     // RDP / VNC / Kubernetes / etc. — leave the payload alone.
+    return text;
+  }
+
+  // Single-line payload: pass through byte-for-byte. Bracketed-paste
+  // markers and CR translation only matter when newlines are present;
+  // wrapping a single line breaks password prompts (see comment block
+  // above).
+  if (!/[\r\n]/.test(text)) {
     return text;
   }
 

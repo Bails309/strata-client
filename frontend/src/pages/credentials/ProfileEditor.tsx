@@ -183,6 +183,7 @@ export default function ProfileEditor(props: ProfileEditorProps) {
               <input
                 id="prof-extended-expiry"
                 type="checkbox"
+                className="checkbox"
                 checked={editing.extended_expiry}
                 onChange={(e) => {
                   const next = e.target.checked;

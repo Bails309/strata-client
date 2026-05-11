@@ -23,6 +23,8 @@ import SessionBar from "./components/SessionBar";
 import WhatsNewModal from "./components/WhatsNewModal";
 import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
 import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
+import ToastProvider from "./components/ToastProvider";
+import CredentialProfileExpiryWatcher from "./components/CredentialProfileExpiryWatcher";
 import { checkAuthStatus, logout as apiLogout, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { UserPreferencesProvider } from "./components/UserPreferencesProvider";
@@ -101,121 +103,124 @@ export default function App() {
   return (
     <SettingsProvider>
       <UserPreferencesProvider>
-        <SessionManagerProvider
-          canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
-          canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
-        >
-          {!authenticated ? (
-            <Routes>
-              <Route path="/login" element={<Login onLogin={handleLogin} />} />
-              <Route path="/shared/:shareToken" element={<SharedViewer />} />
-              <Route path="*" element={<Navigate to="/login" replace />} />
-            </Routes>
-          ) : user?.terms_accepted_version !== TERMS_VERSION ? (
-            <DisclaimerModal
-              onAccept={() =>
-                setUser((u) =>
-                  u
-                    ? {
-                        ...u,
-                        terms_accepted_at: new Date().toISOString(),
-                        terms_accepted_version: TERMS_VERSION,
-                      }
-                    : u
-                )
-              }
-              onDecline={handleLogout}
-            />
-          ) : (
-            <CommandPaletteProvider>
+        <ToastProvider>
+          <SessionManagerProvider
+            canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
+            canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
+          >
+            {!authenticated ? (
               <Routes>
-                <Route element={<Layout user={user} onLogout={handleLogout} />}>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route
-                    path="/credentials"
-                    element={
-                      user?.vault_configured ? (
-                        <Credentials vaultConfigured={true} />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/admin"
-                    element={
-                      user?.can_manage_system ||
-                      user?.can_manage_users ||
-                      user?.can_manage_connections ||
-                      user?.can_create_users ||
-                      user?.can_create_user_groups ||
-                      user?.can_create_connections ||
-                      user?.can_create_sharing_profiles ? (
-                        <AdminSettings user={user} />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
-                  />
-                  <Route path="/session/:connectionId" element={<SessionClient />} />
-                  <Route path="/tiled" element={<TiledView />} />
-                  <Route
-                    path="/observe/:sessionId"
-                    element={
-                      user?.can_manage_system ||
-                      user?.can_view_audit_logs ||
-                      user?.can_view_sessions ? (
-                        <NvrPlayer />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/audit"
-                    element={
-                      user?.can_manage_system || user?.can_view_audit_logs ? (
-                        <AuditLogs />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/sessions"
-                    element={
-                      user?.can_view_sessions ||
-                      user?.can_manage_system ||
-                      user?.can_view_audit_logs ? (
-                        <Sessions user={user} />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/approvals"
-                    element={
-                      user?.vault_configured ? (
-                        <Approvals user={user} />
-                      ) : (
-                        <Navigate to="/" replace />
-                      )
-                    }
-                  />
-                  <Route path="/docs" element={<Documentation user={user} />} />
-                  <Route path="/profile" element={<Profile />} />
-                </Route>
+                <Route path="/login" element={<Login onLogin={handleLogin} />} />
                 <Route path="/shared/:shareToken" element={<SharedViewer />} />
-                <Route path="/login" element={<Navigate to="/" replace />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/login" replace />} />
               </Routes>
-              <SessionBar />
-              <SessionTimeoutWarning onExpired={handleLogout} />
-              <WhatsNewModal userId={user?.id} />
-            </CommandPaletteProvider>
-          )}
-        </SessionManagerProvider>
+            ) : user?.terms_accepted_version !== TERMS_VERSION ? (
+              <DisclaimerModal
+                onAccept={() =>
+                  setUser((u) =>
+                    u
+                      ? {
+                          ...u,
+                          terms_accepted_at: new Date().toISOString(),
+                          terms_accepted_version: TERMS_VERSION,
+                        }
+                      : u
+                  )
+                }
+                onDecline={handleLogout}
+              />
+            ) : (
+              <CommandPaletteProvider>
+                <Routes>
+                  <Route element={<Layout user={user} onLogout={handleLogout} />}>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route
+                      path="/credentials"
+                      element={
+                        user?.vault_configured ? (
+                          <Credentials vaultConfigured={true} />
+                        ) : (
+                          <Navigate to="/" replace />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/admin"
+                      element={
+                        user?.can_manage_system ||
+                        user?.can_manage_users ||
+                        user?.can_manage_connections ||
+                        user?.can_create_users ||
+                        user?.can_create_user_groups ||
+                        user?.can_create_connections ||
+                        user?.can_create_sharing_profiles ? (
+                          <AdminSettings user={user} />
+                        ) : (
+                          <Navigate to="/" replace />
+                        )
+                      }
+                    />
+                    <Route path="/session/:connectionId" element={<SessionClient />} />
+                    <Route path="/tiled" element={<TiledView />} />
+                    <Route
+                      path="/observe/:sessionId"
+                      element={
+                        user?.can_manage_system ||
+                        user?.can_view_audit_logs ||
+                        user?.can_view_sessions ? (
+                          <NvrPlayer />
+                        ) : (
+                          <Navigate to="/" replace />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/audit"
+                      element={
+                        user?.can_manage_system || user?.can_view_audit_logs ? (
+                          <AuditLogs />
+                        ) : (
+                          <Navigate to="/" replace />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/sessions"
+                      element={
+                        user?.can_view_sessions ||
+                        user?.can_manage_system ||
+                        user?.can_view_audit_logs ? (
+                          <Sessions user={user} />
+                        ) : (
+                          <Navigate to="/" replace />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/approvals"
+                      element={
+                        user?.vault_configured ? (
+                          <Approvals user={user} />
+                        ) : (
+                          <Navigate to="/" replace />
+                        )
+                      }
+                    />
+                    <Route path="/docs" element={<Documentation user={user} />} />
+                    <Route path="/profile" element={<Profile />} />
+                  </Route>
+                  <Route path="/shared/:shareToken" element={<SharedViewer />} />
+                  <Route path="/login" element={<Navigate to="/" replace />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+                <SessionBar />
+                <SessionTimeoutWarning onExpired={handleLogout} />
+                {user?.vault_configured && <CredentialProfileExpiryWatcher />}
+                <WhatsNewModal userId={user?.id} />
+              </CommandPaletteProvider>
+            )}
+          </SessionManagerProvider>
+        </ToastProvider>
       </UserPreferencesProvider>
     </SettingsProvider>
   );

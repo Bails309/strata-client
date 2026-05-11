@@ -12,10 +12,30 @@ describe("preparePastePayload", () => {
     expect(preparePastePayload(text, "vnc")).toBe(text);
   });
 
-  it("wraps SSH payloads in bracketed paste markers", () => {
-    const out = preparePastePayload("hi", "ssh");
+  it("wraps multi-line SSH payloads in bracketed paste markers", () => {
+    const out = preparePastePayload("hi\nthere", "ssh");
     expect(out.startsWith("\x1b[200~")).toBe(true);
     expect(out.endsWith("\x1b[201~")).toBe(true);
+  });
+
+  it("passes single-line SSH payloads through untouched (password-prompt safety)", () => {
+    // Password prompts (sudo, ssh password auth, mysql -p, …) read stdin
+    // in raw no-echo mode and are not bracketed-paste-aware. Wrapping a
+    // single-line payload would cause the literal escape bytes to be
+    // ingested as part of the password. See preparePastePayload.ts
+    // header comment for the full rationale.
+    expect(preparePastePayload("hunter2", "ssh")).toBe("hunter2");
+    expect(preparePastePayload("hunter2", "telnet")).toBe("hunter2");
+    expect(preparePastePayload("p@ss w0rd!", "ssh")).toBe("p@ss w0rd!");
+  });
+
+  it("does not add a trailing CR to a single-line SSH paste", () => {
+    // A trailing CR would auto-submit the password prompt, which is
+    // never what a copy-paste of a password should do — pressing Enter
+    // is the user's job, not the paste handler's.
+    const out = preparePastePayload("hunter2", "ssh");
+    expect(out.endsWith("\r")).toBe(false);
+    expect(out.endsWith("\n")).toBe(false);
   });
 
   it("translates LF to CR for SSH so the remote PTY sees real Enter", () => {

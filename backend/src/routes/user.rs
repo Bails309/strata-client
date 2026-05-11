@@ -2273,6 +2273,7 @@ mod tests {
             expires_at: now,
             expired: true,
             ttl_hours: 4,
+            extended_expiry: false,
             checkout_id: None,
         };
         let v = serde_json::to_value(&r).unwrap();

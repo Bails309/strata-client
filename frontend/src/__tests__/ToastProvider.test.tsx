@@ -62,7 +62,7 @@ describe("ToastProvider", () => {
     const { container } = render(
       <ToastProvider>
         <div />
-      </ToastProvider>,
+      </ToastProvider>
     );
     expect(container.querySelector("[role='region']")).toBeNull();
   });
@@ -72,7 +72,7 @@ describe("ToastProvider", () => {
     render(
       <ToastProvider>
         <Trigger variant="warning" title="Heads up" description="Something's coming." />
-      </ToastProvider>,
+      </ToastProvider>
     );
     await user.click(screen.getByText("fire"));
     expect(screen.getByText("Heads up")).toBeInTheDocument();
@@ -84,7 +84,7 @@ describe("ToastProvider", () => {
     render(
       <ToastProvider>
         <Trigger variant="info" title="Tick" />
-      </ToastProvider>,
+      </ToastProvider>
     );
     await user.click(screen.getByText("fire"));
     expect(screen.getByText("Tick")).toBeInTheDocument();
@@ -99,7 +99,7 @@ describe("ToastProvider", () => {
     render(
       <ToastProvider>
         <Trigger variant="error" title="Boom" />
-      </ToastProvider>,
+      </ToastProvider>
     );
     await user.click(screen.getByText("fire"));
     act(() => {
@@ -113,13 +113,8 @@ describe("ToastProvider", () => {
     const action = vi.fn();
     render(
       <ToastProvider>
-        <Trigger
-          variant="warning"
-          title="Action me"
-          actionLabel="Renew now"
-          onAction={action}
-        />
-      </ToastProvider>,
+        <Trigger variant="warning" title="Action me" actionLabel="Renew now" onAction={action} />
+      </ToastProvider>
     );
     await user.click(screen.getByText("fire"));
     await user.click(screen.getByText("Renew now"));
@@ -132,7 +127,7 @@ describe("ToastProvider", () => {
     render(
       <ToastProvider>
         <Trigger variant="warning" title="Closable" />
-      </ToastProvider>,
+      </ToastProvider>
     );
     await user.click(screen.getByText("fire"));
     expect(screen.getByText("Closable")).toBeInTheDocument();

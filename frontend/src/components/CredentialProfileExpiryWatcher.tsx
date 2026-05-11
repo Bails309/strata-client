@@ -100,7 +100,7 @@ export default function CredentialProfileExpiryWatcher({
   // Hold the latest renew callback in a ref so the polling effect doesn't
   // re-arm its setInterval on every parent re-render.
   const renewRef = useRef<(p: CredentialProfile) => void>(
-    onRenew ?? (() => navigate("/credentials")),
+    onRenew ?? (() => navigate("/credentials"))
   );
   useEffect(() => {
     renewRef.current = onRenew ?? (() => navigate("/credentials"));
@@ -133,9 +133,7 @@ export default function CredentialProfileExpiryWatcher({
         if (!Number.isFinite(expiresAtMs)) continue;
 
         const secsLeft = Math.floor((expiresAtMs - now) / 1000);
-        const thresholds = profile.extended_expiry
-          ? EXTENDED_THRESHOLDS
-          : STANDARD_THRESHOLDS;
+        const thresholds = profile.extended_expiry ? EXTENDED_THRESHOLDS : STANDARD_THRESHOLDS;
 
         // Re-arm: if the profile's expires_at has shifted (TTL re-issued,
         // extended_expiry toggled, password rotated) drop every prior

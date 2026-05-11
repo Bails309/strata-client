@@ -32,7 +32,7 @@ function mount() {
       <ToastProvider>
         <CredentialProfileExpiryWatcher pollIntervalMs={1000} />
       </ToastProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
 }
 
@@ -61,9 +61,7 @@ describe("CredentialProfileExpiryWatcher", () => {
       profile({ expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }),
     ]);
     mount();
-    await waitFor(() =>
-      expect(screen.getByText(/PROD expires in/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/PROD expires in/)).toBeInTheDocument());
   });
 
   it("fires an error toast for an already-expired profile", async () => {
@@ -82,9 +80,7 @@ describe("CredentialProfileExpiryWatcher", () => {
       profile({ expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }),
     ]);
     mount();
-    await waitFor(() =>
-      expect(screen.getAllByText(/PROD expires in/).length).toBe(1),
-    );
+    await waitFor(() => expect(screen.getAllByText(/PROD expires in/).length).toBe(1));
     // Advance one poll cycle; the toast may auto-dismiss after 8 s but the
     // tracker must prevent a second one from being published.
     act(() => {
@@ -102,9 +98,7 @@ describe("CredentialProfileExpiryWatcher", () => {
     });
     vi.mocked(getCredentialProfiles).mockResolvedValueOnce([initial]);
     mount();
-    await waitFor(() =>
-      expect(screen.getByText(/PROD expires in/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/PROD expires in/)).toBeInTheDocument());
 
     // Renewal: expires_at jumps to 11.5 h ahead — back inside the 1-day
     // bucket but outside 1-hour. The next 1-hour crossing must fire again.
@@ -158,7 +152,7 @@ describe("CredentialProfileExpiryWatcher", () => {
         <ToastProvider>
           <CredentialProfileExpiryWatcher pollIntervalMs={1000} onRenew={onRenew} />
         </ToastProvider>
-      </MemoryRouter>,
+      </MemoryRouter>
     );
     await waitFor(() => expect(screen.getByText(/PROD has expired/)).toBeInTheDocument());
     await user.click(screen.getByText("Renew now"));
@@ -174,9 +168,7 @@ describe("CredentialProfileExpiryWatcher", () => {
       }),
     ]);
     mount();
-    await waitFor(() =>
-      expect(screen.getByText(/PROD expires in 7 days/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/PROD expires in 7 days/)).toBeInTheDocument());
   });
 
   it("stays silent when the API call fails", async () => {

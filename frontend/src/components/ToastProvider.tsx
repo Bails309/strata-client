@@ -113,14 +113,13 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
       const timer = setTimeout(() => dismiss(id), duration);
       timersRef.current.set(id, timer);
     },
-    [dismiss],
+    [dismiss]
   );
 
   const show = useCallback(
     (opts: ToastOptions): string => {
       const variant: ToastVariant = opts.variant ?? "info";
-      const duration =
-        opts.duration === undefined ? DEFAULT_DURATIONS[variant] : opts.duration;
+      const duration = opts.duration === undefined ? DEFAULT_DURATIONS[variant] : opts.duration;
       const id = opts.key ?? nextId();
 
       // Replace-by-key semantics: cancel any existing timer for the same id
@@ -156,7 +155,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
       armAutoDismiss(id, duration);
       return id;
     },
-    [armAutoDismiss],
+    [armAutoDismiss]
   );
 
   // Cancel every outstanding timer when the provider unmounts so tests
@@ -178,7 +177,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
       warning: (opts) => show({ ...opts, variant: "warning" }),
       error: (opts) => show({ ...opts, variant: "error" }),
     }),
-    [show, dismiss],
+    [show, dismiss]
   );
 
   return (
@@ -218,7 +217,7 @@ function ToastViewport({ toasts, onDismiss }: ViewportProps) {
         <ToastCard key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
       ))}
     </div>,
-    document.body,
+    document.body
   );
 }
 
@@ -226,10 +225,7 @@ function ToastViewport({ toasts, onDismiss }: ViewportProps) {
 /*  Card                                                                       */
 /* ────────────────────────────────────────────────────────────────────────── */
 
-const VARIANT_STYLES: Record<
-  ToastVariant,
-  { color: string; dim: string; iconPath: ReactNode }
-> = {
+const VARIANT_STYLES: Record<ToastVariant, { color: string; dim: string; iconPath: ReactNode }> = {
   info: {
     color: "var(--color-accent, #8b5cf6)",
     dim: "var(--color-accent-dim, rgba(139, 92, 246, 0.12))",

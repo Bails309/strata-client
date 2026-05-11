@@ -5,6 +5,143 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] — 2026-05-11
+
+### Minor release — reusable toast notification system, credential-profile expiry warnings, SSH password-paste fix
+
+A frontend-only release whose headline is a brand-new, reusable toast
+notification system threaded through the whole authenticated tree, and
+its first consumer: a background watcher that keeps an eye on every
+credential profile the signed-in user owns and warns them — well
+before the deadline, and again at the moment of expiry — when a
+profile's TTL is about to lapse. A second, smaller fix corrects an
+SSH paste regression where pasting a password into a terminal
+password prompt was failing because the bracketed-paste markers
+applied for code blocks were also being applied to single-line
+payloads, which password prompts (sudo, ssh, passwd, mysql -p, every
+network-device CLI) ingest as part of the password rather than
+recognising them as paste framing. Drop-in upgrade from v1.7.0 — no
+schema changes, no API contract changes, no new environment
+variables, and no new runtime dependencies. Roll the frontend
+container; the backend image is byte-identical between 1.7.0 and
+1.8.0.
+
+#### Added
+
+- **`ToastProvider` + `useToast()` hook**
+  ([`frontend/src/components/ToastProvider.tsx`](frontend/src/components/ToastProvider.tsx))
+  — a single, reusable toast notification surface mounted under the
+  root `SettingsProvider` so every component beneath the auth gate
+  can publish a notification with `useToast().info / .success /
+.warning / .error`. Each toast carries a `title`, an optional
+  `description`, an optional **action button** (with built-in
+  busy-state handling), and a `key` so a long-lived consumer can
+  update the same toast in place rather than spawning duplicates.
+  Auto-dismiss timing is variant-aware (info / success: 6 s,
+  warning: 8 s, error: sticky until dismissed), overridable per
+  call. Rendered via a `document.body` portal so the stack escapes
+  any transformed / overflow-hidden ancestor; positioned in the
+  top-right (the bottom-right is reserved for the existing
+  `SessionTimeoutWarning`). ARIA: `role="region"` + `aria-live="polite"`
+  on the viewport, `role="alert"` on errors / warnings, `role="status"`
+  on info / success.
+- **`CredentialProfileExpiryWatcher`**
+  ([`frontend/src/components/CredentialProfileExpiryWatcher.tsx`](frontend/src/components/CredentialProfileExpiryWatcher.tsx))
+  — a render-null background component mounted in [`App.tsx`](frontend/src/App.tsx)
+  for every authenticated, vault-configured user. Polls
+  `/api/user/credential-profiles` every 60 s and publishes a single
+  warning toast as each pre-expiry threshold is crossed:
+  - **Standard profiles** (`extended_expiry: false`) warn at
+    **1 day**, **1 hour**, and **10 minutes** before `expires_at`.
+  - **Extended-expiry profiles** (`extended_expiry: true`, up to
+    90 days) warn at **7 days**, **1 day**, and **1 hour** before
+    `expires_at`. The wider thresholds match the longer windows
+    introduced in v1.7.0.
+
+  When a profile crosses `expires_at` the watcher publishes a
+  sticky **error** toast labelled `"<profile> has expired"` with a
+  **Renew now** action that deep-links to `/credentials`. Only the
+  tightest threshold the user has currently crossed fires — a tab
+  opened at the 30-minute mark sees only the 10-minute warning,
+  not the 1-day one too — and every wider threshold is silently
+  marked as already-fired so it cannot publish later.
+
+- **Theme-tokenised toast styling** — variants pick their colour and
+  dim background from the existing CSS custom properties
+  (`--color-accent`, `--color-success`, `--color-warning`,
+  `--color-danger`) so the new surface inherits any future palette
+  edits without a code change. Shares the existing `.card`,
+  `.btn`, and `.animate-fade-in` utilities; no new top-level CSS
+  was added.
+
+#### Changed
+
+- **SSH / telnet single-line paste is now byte-transparent**
+  ([`frontend/src/components/pastePayload.ts`](frontend/src/components/pastePayload.ts)).
+  `preparePastePayload()` previously wrapped every SSH / telnet
+  clipboard payload in bracketed-paste markers (`ESC[200~ … ESC[201~`)
+  and translated `\n` to `\r`. Bracketed paste exists to make
+  multi-line paste safe inside paste-aware shells (bash, zsh, vim,
+  tmux), but a **password prompt** (`sudo`, `ssh` password auth,
+  `passwd`, `mysql -p`, every Cisco / Juniper / Mikrotik password
+  prompt) is not running under bash — it reads stdin in raw
+  no-echo mode and treats the literal escape bytes as part of the
+  password, so authentication failed for every pasted password. The
+  helper now skips both transformations when the payload contains
+  no `\r` or `\n`. Multi-line pastes still get bracketed-paste
+  wrapping and CR translation so `nano` / `vim` / heredoc workflows
+  continue to behave.
+
+#### Fixed
+
+- Pasting a password into an SSH / telnet password prompt no longer
+  fails with an "incorrect password" response caused by silently
+  injected `ESC[200~` / `ESC[201~` framing bytes. (See **Changed**
+  above for the full rationale and the protocols affected.)
+
+#### Security
+
+- The new toast surface accepts `title` and `description` as plain
+  React children — they are rendered through React's standard text
+  escaping path, so any string a future caller passes from
+  user-controlled data is safe by construction. There is no
+  `dangerouslySetInnerHTML`, no `innerHTML` write, and no
+  HTML-string consumer in the provider.
+- The credential-profile expiry watcher reads from
+  `/api/user/credential-profiles` only; no new server endpoint, no
+  new secret exposure. The fired-threshold tracker is persisted in
+  `localStorage` under the namespaced key
+  `strata.credExpiryFired.v1` and stores only `{ "<profileId>:<thresholdSecs>":
+<expiresAtMs> }` integers — no usernames, no passwords, no
+  server-side identifiers beyond the profile's own UUID. Storage
+  entries for profiles that have been deleted on the server are
+  pruned on every poll so the record cannot grow without bound.
+- The bracketed-paste fix above is **not** a vulnerability — the
+  injected escape bytes were a UX defect, not a security boundary —
+  but it is documented here because pasted-password failures
+  routinely lead operators to write the password down or store it
+  somewhere less safe. Restoring the paste workflow removes that
+  pressure.
+
+#### Migration notes
+
+- **No schema migration.** The backend image is byte-identical
+  between 1.7.0 and 1.8.0; only the frontend container needs to be
+  rebuilt. `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build frontend`
+  is sufficient.
+- **No new environment variables, no new dependencies, no API
+  contract changes.** `frontend/package.json` and the lockfile carry
+  only the version bump; `backend/Cargo.toml` carries only the
+  version bump.
+- **Tracker reset (optional).** Operators upgrading from a build
+  predating the watcher do not need to clear browser storage; the
+  tracker key is created on first use and the `.v1` suffix in the
+  key name allows a future schema change to cleanly invalidate
+  older records.
+- **Test coverage on upgrade.** 25 new tests (7 provider, 9
+  watcher, 9 paste — 2 new + 7 existing). Full vitest suite
+  1398 / 1398 passing on the released revision.
+
 ## [1.7.0] — 2026-05-11
 
 ### Minor release — extended-expiry credential profiles, themed range slider, dependency refresh

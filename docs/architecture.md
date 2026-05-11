@@ -809,7 +809,7 @@ strata-client/
 │   └── src/
 │       ├── api.ts         Typed API client
 │       ├── App.tsx        Router + boot detection
-│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, QuickShare, SessionTimeoutWarning, ThemeProvider, WhatsNewModal)
+│       ├── components/    Shared components (Layout, Select, SessionBar, SessionManager, QuickShare, SessionTimeoutWarning, ThemeProvider, ToastProvider, CredentialProfileExpiryWatcher, WhatsNewModal)
 │       └── pages/         Page components (Dashboard, Documentation, SessionClient, AdminSettings, AuditLogs, Approvals, Login, SetupWizard, SharedViewer)
 │           ├── admin/     One module per Admin Settings tab (Security, Network, Display, SSO, Kerberos, Recordings, Vault, Tags, Health, Sessions, Passwords, AdSync, Access) plus the shared connection-form helpers
 │           └── credentials/  Credentials page child components (RequestCheckoutForm, ProfileEditor)

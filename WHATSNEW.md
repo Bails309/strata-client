@@ -1,3 +1,145 @@
+# What's New in v1.8.0
+
+> **Minor release: a brand-new toast notification system, a watcher
+> that uses it to warn you before a credential profile expires, and a
+> fix for password paste in SSH sessions.** v1.8.0 is a frontend-only
+> release. Drop-in upgrade from v1.7.0 — no schema changes, no API
+> contract changes, no new environment variables, no new runtime
+> dependencies. Only the frontend container needs to be rebuilt.
+
+## You will know before a credential profile expires
+
+Until v1.8.0 the only signal that a credential profile had expired
+was the moment a user tried to open a connection that depended on
+it — guacd would refuse the handshake with a generic error, the
+operator would scratch their head, navigate to the credentials page,
+and notice the expiry timer had already wrapped past zero. With
+extended-expiry profiles introduced in v1.7.0, that surprise could
+arrive 90 days after the credential was created, by which point the
+person who originally seeded the profile may not even be at their
+desk.
+
+v1.8.0 ships a small, render-null background watcher that lives
+inside the application shell for every signed-in operator who has
+the vault feature enabled. It polls the credential-profiles list
+once a minute and publishes a single toast as each pre-expiry
+threshold is crossed:
+
+- **Standard profiles** (the default 1–12 hour TTL) warn at
+  **1 day**, **1 hour**, and **10 minutes** before the deadline.
+- **Extended-expiry profiles** (the opt-in 1–90 day TTL introduced
+  in v1.7.0) warn at **7 days**, **1 day**, and **1 hour**. The
+  wider thresholds match the longer windows so a 90-day profile
+  doesn't get a 10-minute toast and a 12-hour profile doesn't get
+  a 7-day toast.
+
+Only the **tightest threshold** the operator has currently crossed
+fires. A tab opened at the 30-minute mark sees only the 10-minute
+warning, never the 1-day one too. Once a profile actually expires,
+a sticky red toast labelled **"&lt;profile&gt; has expired"** appears
+with a **Renew now** action that deep-links straight to the
+credentials page. Sticky because the operator genuinely cannot
+connect with that profile until they act — a 6-second flash would
+be too easy to miss.
+
+A few subtleties worth knowing about. The watcher persists "already
+fired" state in `localStorage` under a namespaced key, so closing
+the tab and reopening it does not re-fire the same warning, and two
+tabs open side-by-side do not double-up. When a profile's TTL is
+re-issued — the password is rotated, `extended_expiry` is toggled,
+or the operator bumps the slider — the new `expires_at` differs
+from the recorded one and the tracker re-arms every threshold for
+the fresh window so the next 1-hour mark fires fresh. Profiles that
+are deleted on the server are pruned from the tracker on the next
+poll, so storage cannot grow without bound. A profile bound to a
+managed-account checkout has its expiry already capped on the
+server side (the backend takes `min(profile_ttl, checkout_ttl)`),
+so trusting `profile.expires_at` is correct in both cases.
+
+The poll is cheap — a single short-lived `SELECT` per call — but
+the watcher also re-evaluates immediately on `focus` and
+`visibilitychange`, so a laptop that wakes from sleep after eight
+hours sees the "expired" toast appear within a second of the user
+clicking back into the tab, rather than waiting for the next 60-s
+poll.
+
+## A reusable toast notification system, themed to fit
+
+The toast surface that powers the watcher above is a generic
+`ToastProvider` — every component beneath the auth gate can call
+`useToast().info / .success / .warning / .error` to publish a
+notification. Each toast carries a title, an optional secondary
+description, an optional **action button** (with built-in busy-state
+handling so the button shows "Working…" while a long-running click
+handler resolves), and a `key` so a long-lived consumer can update
+the same toast in place rather than spawning duplicates.
+
+Variants are theme-tokenised — info uses the accent purple, success
+uses the existing success green, warning the warning amber, error
+the danger red — picked from the same CSS custom properties that
+drive the rest of the UI, so any future palette tweak flows through
+without a code change. Auto-dismiss timing matches the variant: 6
+seconds for info / success, 8 seconds for warning, and **error
+toasts are sticky** until dismissed (the watcher's expired toast is
+the canonical example). Every toast also carries a small ✕ close
+affordance in the corner so an actionless info toast can still be
+hidden by hand if it is in the way.
+
+The viewport renders into a `document.body` portal so the stack
+escapes any transformed or overflow-hidden ancestor, sits in the
+top-right (the bottom-right is reserved for the existing
+session-timeout warning so the two never collide visually), and
+respects screen readers via `role="region"` + `aria-live="polite"`
+on the container with `role="alert"` for warnings and errors.
+
+Future consumers — checkout-approval notifications, AD-sync
+completion, forced sign-out propagation — can hook into the same
+provider with a one-line `useToast()` call.
+
+## Pasting a password into an SSH session works again
+
+A regression introduced when bracketed-paste support was added in
+v1.6.x meant pasting a password into an SSH or telnet password
+prompt — `sudo`, `ssh` password auth, `passwd`, `mysql -p`, every
+Cisco / Juniper / Mikrotik device CLI — was failing with an
+"incorrect password" error even when the password was correct.
+
+The cause: the paste helper was wrapping every SSH / telnet
+clipboard payload in bracketed-paste markers (`ESC[200~ … ESC[201~`).
+Those markers are essential for multi-line code or config blocks
+because they tell paste-aware shells (bash, zsh, vim, tmux) to
+suspend auto-indent and per-keystroke key bindings for the duration
+of the paste. But a password prompt is not running under bash —
+it's reading stdin in raw no-echo mode and treats the literal
+escape bytes as part of the password, so the prompt was effectively
+receiving `\x1b[200~yourpassword\x1b[201~` and the hash never
+matched.
+
+v1.8.0 makes single-line SSH / telnet pastes byte-transparent. If
+the payload contains no `\r` and no `\n`, the helper returns it
+unchanged. Multi-line pastes still get bracketed-paste wrapping and
+the `\n → \r` translation that paste-aware shells rely on, so
+pasting a config block into `nano` or `vim` continues to work as
+intended. The one-line passthrough is the only change to the
+behaviour.
+
+## Upgrade
+
+Drop-in upgrade from v1.7.0. The backend image is byte-identical
+between the two releases; only the frontend container needs to be
+rebuilt:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build frontend
+```
+
+No environment variables to add, no migration to run.
+
+---
+
 # What's New in v1.7.0
 
 > **Minor release: opt-in, long-lived credential profiles for service

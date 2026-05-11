@@ -157,6 +157,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
           username: editing.username || undefined,
           password: editing.password || undefined,
           ttl_hours: editing.ttl_hours,
+          extended_expiry: editing.extended_expiry,
         });
       } else {
         if (!editing.label || !editing.username || !editing.password) {
@@ -168,7 +169,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
           editing.label,
           editing.username,
           editing.password,
-          editing.ttl_hours
+          editing.ttl_hours,
+          editing.extended_expiry
         );
       }
       setEditing(null);
@@ -456,7 +458,15 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         {tab === "profiles" && (
           <button
             className="btn-primary"
-            onClick={() => setEditing({ label: "", username: "", password: "", ttl_hours: 12 })}
+            onClick={() =>
+              setEditing({
+                label: "",
+                username: "",
+                password: "",
+                ttl_hours: 12,
+                extended_expiry: false,
+              })
+            }
           >
             <span className="flex items-center gap-2">
               <svg
@@ -889,6 +899,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 username: "",
                                 password: "",
                                 ttl_hours: profile.ttl_hours,
+                                extended_expiry: profile.extended_expiry,
                               });
                             }}
                           >

@@ -9,6 +9,7 @@ const baseEditing: EditingProfile = {
   username: "",
   password: "",
   ttl_hours: 4,
+  extended_expiry: false,
 };
 
 function makeCheckout(overrides: Partial<CheckoutRequest> = {}): CheckoutRequest {
@@ -34,6 +35,7 @@ function makeProfile(overrides: Partial<CredentialProfile> = {}): CredentialProf
     expires_at: "2099-01-01T00:00:00Z",
     expired: false,
     ttl_hours: 4,
+    extended_expiry: false,
     ...overrides,
   };
 }

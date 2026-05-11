@@ -280,6 +280,7 @@ describe("Dashboard", () => {
         expires_at: "2024-12-31T00:00:00Z",
         expired: false,
         ttl_hours: 12,
+        extended_expiry: false,
       },
     ]);
     vi.mocked(getProfileMappings).mockResolvedValue([]);
@@ -446,6 +447,7 @@ describe("Dashboard", () => {
         updated_at: "2024-01-01T00:00:00Z",
         expires_at: "2024-12-31T00:00:00Z",
         ttl_hours: 12,
+        extended_expiry: false,
         expired: false,
       },
     ]);
@@ -586,6 +588,7 @@ describe("Dashboard", () => {
         updated_at: "2024-01-01T00:00:00Z",
         expires_at: "2024-12-31T00:00:00Z",
         ttl_hours: 12,
+        extended_expiry: false,
         expired: false,
       },
     ]);
@@ -644,6 +647,7 @@ describe("Dashboard", () => {
         updated_at: "2024-01-01T00:00:00Z",
         expires_at: "2023-01-01T00:00:00Z",
         ttl_hours: 12,
+        extended_expiry: false,
         expired: true,
       },
     ]);
@@ -843,6 +847,7 @@ describe("Dashboard", () => {
         updated_at: "2024-01-01T00:00:00Z",
         expires_at: "2024-12-31T00:00:00Z",
         ttl_hours: 12,
+        extended_expiry: false,
         expired: false,
       },
     ]);
@@ -897,6 +902,7 @@ describe("Dashboard", () => {
         updated_at: "2024-01-01T00:00:00Z",
         expires_at: "2023-01-01T00:00:00Z",
         ttl_hours: 12,
+        extended_expiry: false,
         expired: true,
       },
     ]);

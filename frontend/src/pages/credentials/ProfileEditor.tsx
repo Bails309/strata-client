@@ -7,6 +7,7 @@ export interface EditingProfile {
   username: string;
   password: string;
   ttl_hours: number;
+  extended_expiry: boolean;
   managed_ad_dn?: string;
   friendly_name?: string;
 }
@@ -149,19 +150,58 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                 id="prof-ttl"
                 type="range"
                 min={1}
-                max={12}
+                max={editing.extended_expiry ? 90 : 12}
                 step={1}
-                value={editing.ttl_hours}
-                onChange={(e) => setEditing({ ...editing, ttl_hours: Number(e.target.value) })}
+                value={
+                  editing.extended_expiry
+                    ? Math.max(1, Math.round(editing.ttl_hours / 24))
+                    : editing.ttl_hours
+                }
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setEditing({
+                    ...editing,
+                    ttl_hours: editing.extended_expiry ? n * 24 : n,
+                  });
+                }}
                 className="flex-1"
                 style={{ accentColor: "var(--color-accent)" }}
               />
               <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
-                {editing.ttl_hours} {editing.ttl_hours === 1 ? "hour" : "hours"}
+                {editing.extended_expiry
+                  ? (() => {
+                      const days = Math.max(1, Math.round(editing.ttl_hours / 24));
+                      return `${days} ${days === 1 ? "day" : "days"}`;
+                    })()
+                  : `${editing.ttl_hours} ${editing.ttl_hours === 1 ? "hour" : "hours"}`}
               </span>
             </div>
+            <label
+              className="flex items-center gap-2 mt-2 text-xs text-txt-secondary cursor-pointer select-none"
+              htmlFor="prof-extended-expiry"
+            >
+              <input
+                id="prof-extended-expiry"
+                type="checkbox"
+                checked={editing.extended_expiry}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setEditing({
+                    ...editing,
+                    extended_expiry: next,
+                    // Snap to a sensible default for the new mode: 12h when
+                    // turning extended off, 30d (720h) when turning it on.
+                    ttl_hours: next ? 720 : 12,
+                  });
+                }}
+              />
+              Allow extended expiry (up to 90 days) — use only for service or break-glass accounts.
+            </label>
             <p className="text-txt-tertiary text-xs mt-1">
-              Credentials expire after this duration and must be updated. Maximum 12 hours.
+              Credentials expire after this duration and must be updated.{" "}
+              {editing.extended_expiry
+                ? "Extended expiry enabled — maximum 90 days."
+                : "Maximum 12 hours."}
             </p>
           </div>
         </>

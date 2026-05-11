@@ -21,8 +21,14 @@ pub struct CredentialProfileRow {
     pub expires_at: DateTime<Utc>,
     pub expired: bool,
     pub ttl_hours: i32,
+    pub extended_expiry: bool,
     pub checkout_id: Option<Uuid>,
 }
+
+/// Maximum TTL (in hours) when a profile opts in to extended expiry.
+/// 2160 = 90 days, matched in DB by `chk_ttl_hours`
+/// (migration 061_credential_profile_extended_expiry.sql).
+pub const EXTENDED_TTL_MAX_HOURS: i64 = 2160;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct MappingRow {
@@ -49,6 +55,17 @@ pub async fn admin_max_ttl_hours(pool: &PgPool) -> i64 {
         .clamp(1, 12)
 }
 
+/// Effective TTL upper bound for a profile, in hours. When the profile
+/// has opted in to `extended_expiry`, the cap is `EXTENDED_TTL_MAX_HOURS`
+/// (90 days); otherwise it's the admin-configured `admin_max_ttl_hours`.
+pub fn effective_ttl_max(admin_max: i64, extended: bool) -> i64 {
+    if extended {
+        EXTENDED_TTL_MAX_HOURS
+    } else {
+        admin_max
+    }
+}
+
 // ── Profiles ──────────────────────────────────────────────────────────
 
 pub async fn list_for_user(
@@ -57,7 +74,7 @@ pub async fn list_for_user(
 ) -> Result<Vec<CredentialProfileRow>, AppError> {
     let rows = sqlx::query_as(
         "SELECT id, label, created_at, updated_at, expires_at,
-                (expires_at < now()) AS expired, ttl_hours, checkout_id
+                (expires_at < now()) AS expired, ttl_hours, extended_expiry, checkout_id
          FROM credential_profiles WHERE user_id = $1 ORDER BY label",
     )
     .bind(user_id)
@@ -78,16 +95,29 @@ pub async fn user_owns(pool: &PgPool, profile_id: Uuid, user_id: Uuid) -> Result
     Ok(exists)
 }
 
+/// Fetch the current `extended_expiry` flag for a profile (used to pick
+/// the right TTL cap when an update doesn't explicitly toggle it).
+pub async fn get_extended_expiry(pool: &PgPool, profile_id: Uuid) -> Result<bool, AppError> {
+    let v: bool = sqlx::query_scalar(
+        "SELECT extended_expiry FROM credential_profiles WHERE id = $1",
+    )
+    .bind(profile_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(v)
+}
+
 pub async fn insert(
     pool: &PgPool,
     user_id: Uuid,
     label: &str,
     sealed: &SealedPayload,
     ttl_hours: i32,
+    extended_expiry: bool,
 ) -> Result<Uuid, AppError> {
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(hours => $7))
+        "INSERT INTO credential_profiles (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce, ttl_hours, extended_expiry, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(hours => $7))
          RETURNING id",
     )
     .bind(user_id)
@@ -97,6 +127,7 @@ pub async fn insert(
     .bind(&sealed.encrypted_dek)
     .bind(&sealed.nonce)
     .bind(ttl_hours)
+    .bind(extended_expiry)
     .fetch_one(pool)
     .await?;
     Ok(id)
@@ -119,18 +150,20 @@ pub async fn get_sealed(pool: &PgPool, profile_id: Uuid) -> Result<SealedPayload
     })
 }
 
-/// Replace sealed payload + bump TTL/label.
+/// Replace sealed payload + bump TTL/label/extended-expiry.
 pub async fn update_sealed(
     pool: &PgPool,
     profile_id: Uuid,
     sealed: &SealedPayload,
     ttl_hours: i32,
+    extended_expiry: bool,
     label: Option<&str>,
 ) -> Result<(), AppError> {
     sqlx::query(
         "UPDATE credential_profiles
          SET encrypted_username = $1, encrypted_password = $2, encrypted_dek = $3, nonce = $4,
-             ttl_hours = $5, updated_at = now(), expires_at = now() + make_interval(hours => $5),
+             ttl_hours = $5, extended_expiry = $8, updated_at = now(),
+             expires_at = now() + make_interval(hours => $5),
              label = COALESCE($7, label)
          WHERE id = $6",
     )
@@ -141,25 +174,28 @@ pub async fn update_sealed(
     .bind(ttl_hours)
     .bind(profile_id)
     .bind(label)
+    .bind(extended_expiry)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// Update label and/or TTL without changing encrypted payload.
+/// Update label, TTL and/or extended-expiry flag without changing encrypted payload.
 pub async fn update_metadata(
     pool: &PgPool,
     profile_id: Uuid,
     label: Option<&str>,
     ttl_hours: Option<i32>,
+    extended_expiry: Option<bool>,
 ) -> Result<(), AppError> {
-    if label.is_none() && ttl_hours.is_none() {
+    if label.is_none() && ttl_hours.is_none() && extended_expiry.is_none() {
         return Ok(());
     }
     sqlx::query(
         "UPDATE credential_profiles SET
             label = COALESCE($2, label),
             ttl_hours = COALESCE($3, ttl_hours),
+            extended_expiry = COALESCE($4, extended_expiry),
             expires_at = CASE WHEN $3 IS NOT NULL THEN now() + make_interval(hours => $3) ELSE expires_at END,
             updated_at = now()
          WHERE id = $1",
@@ -167,6 +203,7 @@ pub async fn update_metadata(
     .bind(profile_id)
     .bind(label)
     .bind(ttl_hours)
+    .bind(extended_expiry)
     .execute(pool)
     .await?;
     Ok(())

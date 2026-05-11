@@ -1024,6 +1024,8 @@ export interface CredentialProfile {
   expires_at: string;
   expired: boolean;
   ttl_hours: number;
+  /** When true, the profile may set ttl_hours up to 2160 (90 days). */
+  extended_expiry: boolean;
   checkout_id?: string;
 }
 
@@ -1040,16 +1042,23 @@ export const createCredentialProfile = (
   label: string,
   username: string,
   password: string,
-  ttl_hours?: number
+  ttl_hours?: number,
+  extended_expiry?: boolean
 ) =>
   request<{ id: string; status: string }>("/user/credential-profiles", {
     method: "POST",
-    body: JSON.stringify({ label, username, password, ttl_hours }),
+    body: JSON.stringify({ label, username, password, ttl_hours, extended_expiry }),
   });
 
 export const updateCredentialProfile = (
   profileId: string,
-  data: { label?: string; username?: string; password?: string; ttl_hours?: number }
+  data: {
+    label?: string;
+    username?: string;
+    password?: string;
+    ttl_hours?: number;
+    extended_expiry?: boolean;
+  }
 ) =>
   request<{ status: string }>(`/user/credential-profiles/${profileId}`, {
     method: "PUT",

@@ -15,7 +15,11 @@ use crate::services::{settings, vault};
 /// Falls back to `admin_max` (i.e. the existing 12 h cap) when not extended.
 pub fn resolve_profile_ttl(user_pref: Option<i32>, admin_max: i64, extended: bool) -> i32 {
     let cap = crate::services::credential_profiles::effective_ttl_max(admin_max, extended);
-    let default = if extended { cap as i32 } else { admin_max as i32 };
+    let default = if extended {
+        cap as i32
+    } else {
+        admin_max as i32
+    };
     (user_pref.unwrap_or(default) as i64).clamp(1, cap) as i32
 }
 
@@ -2470,5 +2474,4 @@ mod tests {
         let extra = Some(json!({ "ignore-cert": null }));
         assert!(!parse_ignore_cert(&extra));
     }
-
 }

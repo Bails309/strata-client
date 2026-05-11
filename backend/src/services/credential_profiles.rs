@@ -98,12 +98,11 @@ pub async fn user_owns(pool: &PgPool, profile_id: Uuid, user_id: Uuid) -> Result
 /// Fetch the current `extended_expiry` flag for a profile (used to pick
 /// the right TTL cap when an update doesn't explicitly toggle it).
 pub async fn get_extended_expiry(pool: &PgPool, profile_id: Uuid) -> Result<bool, AppError> {
-    let v: bool = sqlx::query_scalar(
-        "SELECT extended_expiry FROM credential_profiles WHERE id = $1",
-    )
-    .bind(profile_id)
-    .fetch_one(pool)
-    .await?;
+    let v: bool =
+        sqlx::query_scalar("SELECT extended_expiry FROM credential_profiles WHERE id = $1")
+            .bind(profile_id)
+            .fetch_one(pool)
+            .await?;
     Ok(v)
 }
 

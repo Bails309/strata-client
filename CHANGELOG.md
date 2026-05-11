@@ -5,6 +5,165 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] — 2026-05-11
+
+### Minor release — extended-expiry credential profiles, themed range slider, dependency refresh
+
+A small but additive feature release. The standard Strata credential
+profile keeps its existing 1–12 hour TTL ceiling and existing default;
+operators who need to keep a credential alive for service or
+break-glass accounts can now opt a single profile in to an extended
+expiry of up to **90 days (2160 hours)**. The setting is per-profile,
+defaults to off, and the relaxed limit is enforced at every layer
+(database CHECK constraint, backend resolver, frontend control). All
+existing rows continue to satisfy the new constraint without
+intervention. Drop-in upgrade from v1.6.2 — roll the backend and
+frontend images together. The migration runs unattended at backend
+startup; no environment variables, no new runtime dependencies.
+
+The release also lands a themed slider component, a refreshed
+checkbox style for the new toggle, a base-image refresh (Node
+26-alpine, refreshed Rust/Debian/nginx digests), an actions group
+bump (checkout v6, dependency-review v5, stale v10,
+release-drafter v7, codeql-action 4.35.4, cosign-installer 4.1.2,
+scorecard-action 2.4.3), and the latest npm minor/patch versions of
+react 19.2.6, react-router-dom 7.15.0, tailwindcss 4.3.0, vite
+8.0.12, i18next 26.1.0, mermaid 11.15.0, and @types/dompurify 3.2.0.
+
+#### Added
+
+- **Extended credential-profile TTL (up to 90 days), opt-in
+  per-profile.** A new boolean column
+  `credential_profiles.extended_expiry` (migration
+  [`061_credential_profile_extended_expiry.sql`](backend/migrations/061_credential_profile_extended_expiry.sql))
+  records the per-profile flag. The previous database CHECK
+  `chk_ttl_hours BETWEEN 1 AND 12` is replaced by a two-arm guard:
+  when `extended_expiry = FALSE` the limit stays at 1–12 hours
+  exactly as before; when `extended_expiry = TRUE` the limit is
+  raised to 1–2160 hours (90 days). The constraint is enforced at
+  the database layer, so a future code path that forgets to consult
+  the new resolver still cannot persist an out-of-range TTL. All
+  existing rows have `extended_expiry` defaulted to `FALSE` and
+  continue to satisfy the constraint without intervention.
+- **`pub fn resolve_profile_ttl(user_pref, admin_max, extended) -> i32`**
+  in [`backend/src/routes/user.rs`](backend/src/routes/user.rs) —
+  picks the effective TTL ceiling based on the per-profile
+  `extended_expiry` flag (admin's 12-hour cap or the 2160-hour
+  extended cap), with the same `clamp(1, cap)` lower bound as the
+  existing resolver. The non-extended branch is byte-for-byte
+  equivalent to the previous `resolve_ttl` helper, which has been
+  removed in favour of the new function. Six unit tests pin the new
+  boundary conditions.
+- **`pub async fn get_extended_expiry(pool, profile_id) -> Result<bool, AppError>`**
+  in [`backend/src/services/credential_profiles.rs`](backend/src/services/credential_profiles.rs) —
+  fetches the current flag for an existing profile so the
+  `update_credential_profile` handler can pick the correct cap when
+  the request body does not explicitly toggle `extended_expiry`. The
+  fetch is a single-column `SELECT` against the primary key.
+- **`extended_expiry` field on every credential-profile API
+  payload.** `CredentialProfileRow` now carries the boolean alongside
+  `ttl_hours`, so `GET /api/user/credential-profiles`, the create and
+  update mutators, and the audit-log payload for `credential.profile.created`
+  all include it. The frontend `CredentialProfile` interface in
+  [`frontend/src/api.ts`](frontend/src/api.ts) mirrors the new
+  field, and `createCredentialProfile` / `updateCredentialProfile`
+  accept it as an optional argument (defaulting to `false` /
+  unchanged respectively).
+- **Per-profile "Allow extended expiry" checkbox in the credentials
+  editor** ([`frontend/src/pages/credentials/ProfileEditor.tsx`](frontend/src/pages/credentials/ProfileEditor.tsx)).
+  When ticked the password-expiry slider switches from hours
+  (`1–12`) to days (`1–90`), the displayed unit follows
+  (`12 hours` → `90 days`), the helper text updates ("Extended
+  expiry enabled — maximum 90 days. Use only for service or
+  break-glass accounts."), and toggling the checkbox snaps the
+  stored TTL to a sensible default for the new mode (12 h when
+  turning extended off, 720 h / 30 d when turning it on) so users
+  cannot accidentally save a 1-hour "extended" profile or a 90-day
+  "standard" profile.
+- **Themed `range-slider` CSS utility class**
+  ([`frontend/src/index.css`](frontend/src/index.css)) — the native
+  `accent-color` slider was replaced with a CSS-driven gradient
+  track (`--range-pct` custom property) so the accent fill always
+  reaches the thumb, including at the maximum value, on every
+  Chromium and Gecko renderer. Custom thumb (white circle, accent
+  border, hover scale) matches the rest of the dark theme.
+
+#### Changed
+
+- `cp_svc::insert`, `cp_svc::update_sealed`, and
+  `cp_svc::update_metadata` now carry the `extended_expiry` flag
+  through every persistence path. `update_metadata` uses
+  `COALESCE($4, extended_expiry)` so a metadata-only update that
+  does not supply the flag preserves the stored value. By design,
+  toggling `extended_expiry` alone (without changing `ttl_hours`)
+  does **not** recompute `expires_at` — operators who actually want
+  to push expiry out must also bump the TTL, preventing accidental
+  re-extension on every label edit.
+- The `audit_logs` payload emitted by `create_credential_profile`
+  now includes both `ttl_hours` and the new `extended_expiry`
+  boolean alongside the profile label, so deployments that ship
+  audit logs to a SIEM gain immediate visibility into the
+  opt-in.
+- Replaced the unused `resolve_ttl(user_pref, admin_max)` helper
+  with the new `resolve_profile_ttl` (the previous helper had no
+  remaining call sites once the credential-profile path was
+  migrated). Behaviour for the non-extended branch is preserved
+  exactly.
+
+#### Security
+
+- The 1–12 hour CHECK on `credential_profiles.ttl_hours` is _not_
+  loosened for non-extended profiles; the relaxed 2160-hour bound
+  applies only when `extended_expiry = TRUE` for that row. A row
+  cannot bypass the standard cap by silently flipping its TTL —
+  the database refuses the write.
+- Re-encrypted updates (`PUT /api/user/credential-profiles/:id`
+  carrying a new password) compute the effective cap with
+  `resolve_profile_ttl` against the **incoming** `extended_expiry`
+  value, then pass it through to `cp_svc::update_sealed`, ensuring
+  no race window where the cap and the persisted flag disagree.
+- Existing role/ownership checks on every credential-profile
+  mutator are unchanged; the new field is just another property
+  on a row already authorised by `user_owns`.
+
+#### Dependencies
+
+- **Base images** — `rust:1.95-slim-trixie` and `debian:trixie-slim`
+  digests refreshed against current upstream; `node` bumped from
+  `25-alpine` to `26-alpine`; `nginx:alpine` digest refreshed.
+- **GitHub Actions** — `actions/checkout` v5 → v6.0.2 (in
+  `dependency-review.yml` and `scorecard.yml`; other workflows were
+  already on v6), `actions/dependency-review-action` v4.9.0 → v5.0.0,
+  `actions/stale` v9 → v10.2.0, `release-drafter/release-drafter`
+  v6.4.0 → v7.3.0, `github/codeql-action` 4.35.3 → 4.35.4,
+  `sigstore/cosign-installer` v4.1.1 → v4.1.2,
+  `ossf/scorecard-action` v2.4.0 → v2.4.3.
+- **Frontend npm** — `react` 19.2.5 → 19.2.6, `react-dom`
+  19.2.5 → 19.2.6, `react-router-dom` 7.14.2 → 7.15.0,
+  `@tailwindcss/vite` + `tailwindcss` 4.2.4 → 4.3.0, `vite`
+  8.0.10 → 8.0.12, `i18next` 26.0.10 → 26.1.0, `mermaid`
+  11.14.0 → 11.15.0, `@types/dompurify` 3.0.5 → 3.2.0.
+
+#### Migration notes
+
+- **Schema change is forwards-compatible.** The new column is
+  `NOT NULL DEFAULT FALSE`; existing rows are backfilled to `FALSE`
+  by the default. The replacement CHECK constraint accepts every
+  row that satisfied the old constraint (1–12 with
+  `extended_expiry = FALSE`).
+- **Roll-back guidance.** To revert the migration, drop the new
+  CHECK, restore the original `ttl_hours BETWEEN 1 AND 12`, then
+  drop the `extended_expiry` column. No row will need to be
+  modified provided no profile has been opted in to a TTL above
+  12; otherwise lower the offending rows' `ttl_hours` to ≤ 12
+  first.
+- **No frontend feature-flag.** The checkbox renders unconditionally
+  for any user who can see a profile editor; restricting opt-in to
+  certain operators (e.g. via role) is not enforced server-side and
+  should be layered in front of the existing
+  `/api/user/credential-profiles` mutation routes if your
+  deployment requires it.
+
 ## [1.6.2] — 2026-05-08
 
 ### Patch release — connection-folder hierarchy, tag-picker viewport, SSH credential prompt

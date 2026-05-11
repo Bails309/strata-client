@@ -14,7 +14,7 @@ COPY frontend/ .
 RUN npm run build
 
 # ── Runtime stage (nginx) ─────────────────────────────────────────────
-FROM nginx:alpine@sha256:3bcf852aed06467cf075c6105892e4d5a6ebbbafa0ce22d35062db9e90ddef4c
+FROM nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
 
 # Pull the latest Alpine package security patches. `nginx:alpine` is often
 # a few days behind on libcrypto/musl/zlib fixes — this shaves the lag so

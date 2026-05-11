@@ -23,6 +23,8 @@ import SessionBar from "./components/SessionBar";
 import WhatsNewModal from "./components/WhatsNewModal";
 import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
 import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
+import ToastProvider from "./components/ToastProvider";
+import CredentialProfileExpiryWatcher from "./components/CredentialProfileExpiryWatcher";
 import { checkAuthStatus, logout as apiLogout, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { UserPreferencesProvider } from "./components/UserPreferencesProvider";
@@ -101,7 +103,8 @@ export default function App() {
   return (
     <SettingsProvider>
       <UserPreferencesProvider>
-        <SessionManagerProvider
+        <ToastProvider>
+          <SessionManagerProvider
           canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
           canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
         >
@@ -212,10 +215,12 @@ export default function App() {
               </Routes>
               <SessionBar />
               <SessionTimeoutWarning onExpired={handleLogout} />
+              {user?.vault_configured && <CredentialProfileExpiryWatcher />}
               <WhatsNewModal userId={user?.id} />
             </CommandPaletteProvider>
           )}
         </SessionManagerProvider>
+        </ToastProvider>
       </UserPreferencesProvider>
     </SettingsProvider>
   );

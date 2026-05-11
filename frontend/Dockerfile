@@ -3,7 +3,7 @@
 # without needing a Dependabot PR every week. Dependabot (docker ecosystem)
 # still opens PRs whenever the tag itself moves, and Trivy (CI image scan)
 # gates HIGH/CRITICAL fixable CVEs so staleness cannot ship to main.
-FROM node:25-alpine@sha256:4139d71ec06d1d705b0d86fdea4fc4084c95029100bcfdfa8bab80b3328fa4ee AS builder
+FROM node:26-alpine@sha256:e71ac5e964b9201072425d59d2e876359efa25dc96bb1768cb73295728d6e4ea AS builder
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./

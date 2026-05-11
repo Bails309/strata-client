@@ -81,7 +81,7 @@ RUN touch backend/src/main.rs crates/strata-protocol/src/lib.rs crates/strata-dm
     && cargo build --release -p strata-backend
 
 # ── Runtime stage ─────────────────────────────────────────────────────
-FROM debian:trixie-slim@sha256:e18da95f66066b7c5fa31491b524e83121271eca59a3d140f4906c8d0a090367
+FROM debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b
 
 # Pull latest security patches before installing runtime deps so Trivy
 # doesn't flag CVEs that already have an upstream fix.

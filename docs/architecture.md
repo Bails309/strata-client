@@ -724,7 +724,7 @@ connections ──────── target host, protocol, port, domain, descri
 connection_groups ── folder hierarchy with parent_id self-reference
 role_connections ──── many-to-many role ↔ connection
 user_credentials ──── encrypted password + DEK + nonce per user/connection
-credential_profiles ─ saved credential profiles with optional TTL expiry and optional checkout_id link to password management
+credential_profiles ─ saved credential profiles with optional TTL expiry, optional per-profile extended_expiry flag (raises the cap from 12 h to 2160 h / 90 d, enforced by the `chk_ttl_hours` two-arm CHECK constraint), and optional checkout_id link to password management
 user_favorites ────── user ↔ connection favorites (composite PK)
 connection_shares ── temporary share links with mode (view/control); viewers observe via NVR broadcast
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)

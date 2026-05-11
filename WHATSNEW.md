@@ -1,3 +1,218 @@
+# What's New in v1.7.0
+
+> **Minor release: opt-in, long-lived credential profiles for service
+> and break-glass accounts.** v1.7.0 ships a single user-visible
+> feature (a per-profile checkbox that lifts the 12-hour TTL ceiling
+> up to 90 days), the database constraint that backs it, a themed
+> range slider, refreshed checkbox styling, and a routine refresh of
+> base images, GitHub Actions, and npm minor/patch dependencies. Drop-in
+> upgrade from v1.6.2 — the migration runs unattended at backend
+> startup, no environment variables, no new runtime dependencies, and
+> no API contract removals.
+
+## A credential profile can now last up to 90 days, when you ask it to
+
+The standard credential profile in Strata has always been governed by
+a 12-hour TTL ceiling — a deliberate guardrail that keeps stored
+passwords short-lived for ordinary users and matches the cadence
+operators expect for an active session's worth of work. That ceiling
+is right for almost every profile, but it does not fit every profile.
+Service accounts whose passwords are rotated centrally on a 30- or
+90-day cadence, break-glass accounts that need to remain usable for
+the duration of an incident, and lab accounts whose stored passwords
+are simply long-lived all collided with the 12-hour limit and forced
+operators to re-enter the same credential several times a day.
+
+v1.7.0 introduces a single new control on the credential-profile
+editor — **Allow extended expiry (up to 90 days) — use only for
+service or break-glass accounts** — that opts a profile into a
+relaxed limit of 1–90 days (1–2160 hours). The setting is per-profile
+and defaults to off. When ticked, the password-expiry slider switches
+from hours to days, the displayed unit follows (`12 hours` → `90 days`),
+and the helper text updates to remind operators why this lever
+exists. Toggling the checkbox snaps the stored TTL to a sensible
+default for the new mode (12 h when turning extended off, 720 h /
+30 d when turning it on) so a single misclick cannot accidentally
+save a 1-hour "extended" profile or a 90-day "standard" profile.
+
+The relaxed ceiling is enforced at every layer. The database CHECK
+constraint introduced by migration
+[`061_credential_profile_extended_expiry.sql`](backend/migrations/061_credential_profile_extended_expiry.sql)
+is a two-arm guard:
+
+```sql
+ttl_hours >= 1
+  AND ((extended_expiry = FALSE AND ttl_hours <= 12)
+    OR (extended_expiry = TRUE  AND ttl_hours <= 2160))
+```
+
+so a profile that is _not_ opted in cannot persist a TTL above 12
+hours even if a future code path forgets to consult the new resolver.
+A profile that **is** opted in cannot exceed 2160 hours either. The
+backend resolver `resolve_profile_ttl(user_pref, admin_max, extended)`
+in [`backend/src/routes/user.rs`](backend/src/routes/user.rs) picks
+the right cap and clamps the request through the same `[1, cap]`
+range as the previous resolver — six new unit tests pin the boundary
+conditions. Existing rows are backfilled to `extended_expiry = FALSE`
+by the column default and continue to satisfy the new CHECK without
+intervention.
+
+A subtle but deliberate behaviour: toggling `extended_expiry` on its
+own (without changing `ttl_hours`) does **not** recompute
+`expires_at`. Operators who actually want to push the expiry out
+must also bump the TTL itself, which prevents accidental
+re-extension on every label edit and keeps the audit timeline
+honest.
+
+## Themed range slider
+
+The native `accent-color` range slider stopped short of the line on
+the right end at the maximum value, leaving a small gap between the
+purple fill and the slider thumb. The new `range-slider` utility
+class in [`frontend/src/index.css`](frontend/src/index.css) replaces
+the browser default with a CSS-driven gradient track driven by a
+`--range-pct` custom property, so the accent fill always reaches
+the thumb regardless of the slider's value or the renderer (Chromium
+and Gecko verified). The thumb is now a white circle with an accent
+border and a small hover scale, matching the rest of the dark theme.
+The same component drives both the standard and the extended-expiry
+slider so their behaviour is identical.
+
+## Themed checkbox
+
+The browser-default checkbox used by the new "Allow extended expiry"
+toggle stood out against the rest of the form like a sore thumb. It
+now picks up the existing `.checkbox` class shared with the request-
+checkout form so its size, border radius, and accent colour match
+every other checkbox in the application.
+
+## Audit trail covers the new flag
+
+The `audit_logs` payload emitted by `create_credential_profile` now
+includes both `ttl_hours` and the new `extended_expiry` boolean
+alongside the profile label. Deployments that ship audit logs to a
+SIEM gain immediate visibility into who opted a profile into the
+relaxed cap and when. Update mutators continue to emit
+`credential.profile.updated`; the diff between successive log entries
+will now expose `extended_expiry` transitions explicitly.
+
+## Refreshed dependencies
+
+A routine refresh of base images, CI actions, and npm modules.
+Nothing in this list changed user-visible behaviour; it is included
+here for transparency.
+
+- **Base images** — `rust:1.95-slim-trixie` and `debian:trixie-slim`
+  digests refreshed against current upstream; `node:25-alpine` →
+  `node:26-alpine`; `nginx:alpine` digest refreshed.
+- **GitHub Actions** — `actions/checkout` v5 → v6.0.2 (in
+  `dependency-review.yml` and `scorecard.yml`; other workflows were
+  already on v6), `actions/dependency-review-action` v4.9.0 → v5.0.0,
+  `actions/stale` v9 → v10.2.0, `release-drafter/release-drafter`
+  v6.4.0 → v7.3.0, `github/codeql-action` 4.35.3 → 4.35.4,
+  `sigstore/cosign-installer` v4.1.1 → v4.1.2,
+  `ossf/scorecard-action` v2.4.0 → v2.4.3.
+- **Frontend npm** — `react` 19.2.5 → 19.2.6, `react-dom`
+  19.2.5 → 19.2.6, `react-router-dom` 7.14.2 → 7.15.0,
+  `@tailwindcss/vite` + `tailwindcss` 4.2.4 → 4.3.0, `vite`
+  8.0.10 → 8.0.12, `i18next` 26.0.10 → 26.1.0, `mermaid`
+  11.14.0 → 11.15.0, `@types/dompurify` 3.0.5 → 3.2.0.
+
+## Upgrade
+
+Drop-in upgrade from v1.6.2. Roll the backend and frontend container
+images together — the new `extended_expiry` column is added by the
+backend at startup and the frontend `CredentialProfile` interface
+requires the new field on every payload. There are no environment
+variables, no new runtime dependencies, and no API contract
+removals.
+
+---
+
+# What's New in v1.6.2
+
+> **Patch release: drop-in fixes against the v1.6.1 deployment.**
+> Six independent UX/correctness fixes raised against the v1.6.1
+> production deployment. No API contract changes, no database
+> migrations, no new environment variables, and no new runtime
+> dependencies. Drop-in upgrade from v1.6.1 — roll the backend and
+> frontend images together.
+
+## Connection-folder hierarchy renders properly on the dashboard
+
+Operators creating a folder hierarchy of e.g.
+`Root → Switches → Coventry` and adding a connection inside
+`Coventry` previously saw the connection only when they expanded
+`Coventry` directly; the tree was a one-level-deep group list rather
+than a recursive tree, and the per-row indent collapsed every
+connection to the same visual depth regardless of its real folder.
+The Dashboard now builds a recursive `folderTree` model with
+descendant-inclusive count badges (so the parent folder header
+shows the total count even while collapsed), depth-proportional
+indentation (`8 + depth * 16` px on the connection row name,
+description, and tag pills), per-folder open/closed chevron + folder
+icon, and toolbar **Expand all** / **Collapse all** buttons (visible
+only in folder view with a non-empty tree). When a search filter is
+active every folder containing a match is auto-expanded so hits
+never hide behind a collapsed parent.
+
+## All folder pickers across the app sort hierarchically
+
+The connection-edit Folder dropdown, the role-folder assignment
+checklist, the folder management table, and the AD-sync default-folder
+picker previously listed folders alphabetically with no nesting
+visible, scattering children away from their parents and making it
+hard to tell where a connection would actually be placed. They now
+share a single new helper, `orderFoldersByHierarchy()`, which
+performs a depth-first preorder traversal with alphabetic sibling
+ordering and an orphan-as-root fallback (so a folder whose parent
+has been deleted out from under it still appears at the top level
+rather than vanishing). Children are indented with non-breaking-
+space padding inside `<select>` options or with `paddingLeft:
+depth * 16px` on HTML controls.
+
+## Tag picker no longer overflows the viewport on rows low on the page
+
+The per-row tag-picker dropdown was anchored to the pill button with
+a fixed `top` position, so opening it on a connection low on the page
+pushed the dropdown below the fold. The picker now opens **above**
+the pill row when there is insufficient space below, with a 16 px
+viewport margin and a hard-cap `max-height` so its contents always
+stay scrollable inside the viewport.
+
+## SSH credential prompt now always appears when guacd asks for one
+
+When a connection has no stored credentials and `guacd` requests
+SSH/Telnet credentials via the `onrequired` protocol message, the
+client must prompt the operator for the username — even if the JWT
+has one — because the remote SSH server expects the username to
+match the **remote** account, not the Strata operator. The previous
+implementation populated the field with the JWT username and skipped
+the prompt; v1.6.2 always shows the prompt for SSH/Telnet `onrequired`
+events and pre-fills it only when the operator has explicitly
+requested a "remember last" preference.
+
+## Expired-credential renewal accepts a username-less re-encrypt
+
+The "renew expired credential" path inside the credential editor
+required a non-empty `username` even though the renewal flow only
+re-encrypts the password against the existing username. The form now
+keeps the username field optional during renewals and fails with a
+clearer error when both fields are absent.
+
+## New `GET /api/user/connection-folders` endpoint
+
+The Dashboard tree view and the global Command Palette previously
+fell back to "ungrouped" for every nested connection because the
+only folder-listing endpoint required `can_manage_connections`. The
+new read-only endpoint is gated by the same auth middleware as
+`/api/user/connections` and returns the full folder list so any
+authenticated user can render the same hierarchy the admins
+authored. Documented in
+[`docs/api-reference.md`](docs/api-reference.md).
+
+---
+
 # What's New in v1.6.1
 
 > **Patch release: production hardening.** v1.6.1 is a focused patch

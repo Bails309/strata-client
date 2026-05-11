@@ -1315,6 +1315,113 @@ The password is envelope-encrypted via Vault Transit before storage. The plainte
 { "status": "credential_saved" }
 ```
 
+### Credential Profiles
+
+A **credential profile** is a named, vault-encrypted username/password
+pair that an operator can map to one or more connections (or use as a
+one-off injection at tunnel time, see `credential_profile_id` on
+`POST /api/tickets`). Profiles carry a per-row TTL after which the
+stored secret is treated as expired and ignored by the tunnel.
+
+#### `GET /api/user/credential-profiles`
+
+List the authenticated user's credential profiles.
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "label": "PROD",
+    "created_at": "2026-05-11T08:00:00Z",
+    "updated_at": "2026-05-11T08:00:00Z",
+    "expires_at": "2026-05-11T20:00:00Z",
+    "expired": false,
+    "ttl_hours": 12,
+    "extended_expiry": false,
+    "checkout_id": null
+  }
+]
+```
+
+| Field             | Type           | Description                                                                                                                                                                                                                                                                                                                  |
+| ----------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ttl_hours`       | integer        | Effective TTL in hours. Limited to **1–12** when `extended_expiry` is `false` (the default), or **1–2160** (1 hour – 90 days) when `extended_expiry` is `true`. The bound is enforced by the database CHECK constraint `chk_ttl_hours`, the `resolve_profile_ttl` helper, and the frontend slider — bypass at any one layer is rejected at the next. |
+| `extended_expiry` | boolean        | Opt-in flag introduced in v1.7.0. When `true`, the profile's `ttl_hours` may be set anywhere from 1 to 2160 hours (90 days) instead of the standard 12-hour cap. Toggling the flag on its own does **not** recompute `expires_at` — `ttl_hours` must also change for the expiry to move.                                                                          |
+| `checkout_id`     | UUID \| null   | If non-null, the profile was populated from an active password checkout and its expiry is bounded by the checkout duration regardless of `ttl_hours`.                                                                                                                                                                                                                |
+| `expires_at`      | timestamp      | `created_at + ttl_hours`. After this point the profile is no longer considered a valid credential source by the tunnel and a renewal is required.                                                                                                                                                                                                                    |
+| `expired`         | boolean        | Server-computed convenience field equivalent to `expires_at <= now()`.                                                                                                                                                                                                                                                                                                |
+
+#### `POST /api/user/credential-profiles`
+
+Create a new credential profile.
+
+**Request Body**
+
+```json
+{
+  "label": "PROD",
+  "username": "svc_prod",
+  "password": "plaintext-password",
+  "ttl_hours": 12,
+  "extended_expiry": false
+}
+```
+
+| Field             | Type     | Required | Default                                                                                          |
+| ----------------- | -------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `label`           | string   | Yes      | —                                                                                                |
+| `username`        | string   | Yes      | —                                                                                                |
+| `password`        | string   | Yes      | —                                                                                                |
+| `ttl_hours`       | integer  | No       | Admin's configured cap (12) when `extended_expiry` is `false`; **2160** (90 d) when `true`. Clamped to `[1, cap]`. |
+| `extended_expiry` | boolean  | No       | `false`                                                                                          |
+
+The password is envelope-encrypted with Vault Transit before storage.
+The plaintext is never persisted. The audit log entry
+`credential.profile.created` includes the chosen `label`, `ttl_hours`,
+and `extended_expiry`.
+
+**Response** `200 OK` — the new profile row, in the same shape as the
+list endpoint.
+
+#### `PUT /api/user/credential-profiles/:id`
+
+Update a credential profile. All body fields are optional; pass only
+the fields you want to change.
+
+**Request Body**
+
+```json
+{
+  "label": "PROD",
+  "username": "svc_prod",
+  "password": "new-plaintext-password",
+  "ttl_hours": 720,
+  "extended_expiry": true
+}
+```
+
+When `password` (and optionally `username`) is present the row is
+re-encrypted and `expires_at` is recomputed using
+`resolve_profile_ttl(ttl_hours, admin_max, extended_expiry)`. When the
+request body contains no credential fields the call falls through to
+a metadata-only update that uses
+`COALESCE($4, extended_expiry)` so omitting the flag preserves the
+stored value. Toggling `extended_expiry` alone (without
+changing `ttl_hours`) does **not** recompute `expires_at` — the
+operator must also bump the TTL to actually push the expiry out.
+
+**Response** `200 OK` — the updated profile row.
+
+#### `DELETE /api/user/credential-profiles/:id`
+
+Delete a credential profile. Any connection mappings that referenced
+the profile are cascaded by FK constraint and are no longer counted
+as a credential source by the tunnel.
+
+**Response** `204 No Content`
+
 ### `GET /api/recordings/:filename`
 
 Download a session recording file.

@@ -79,7 +79,7 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 
 - **Bundled HashiCorp Vault** — auto-initialized, auto-unsealed Vault 1.19 with the Transit engine; zero-config on first boot, swappable for an external Vault at any time through the UI.
 - **Envelope encryption** — user credentials sealed with AES-256-GCM; Data Encryption Keys wrapped via Vault Transit.
-- **Credential profiles** — per-user saved profiles with optional TTL, in-line renewal at connect time when expired.
+- **Credential profiles** — per-user saved profiles with optional TTL (1–12 h by default, or 1–90 d per profile when **extended expiry** is opted in for service / break-glass accounts; v1.7.0+) and in-line renewal at connect time when expired.
 - **Privileged Account Password Management** — full checkout / approval / rotation workflow for AD service accounts. Vault-sealed storage, LDAP `unicodePwd` reset, scoped approver mappings, configurable generation policy, voluntary early check-in, automatic rotation on expiry or check-in, dedicated Approvals UI.
 - **Reusable Trusted CA bundles for Web Sessions** — admins upload PEM bundles once; kiosks attach them via per-session NSS DB so Chromium trusts internal roots without `--ignore-certificate-errors`.
 

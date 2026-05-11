@@ -10,12 +10,6 @@ use crate::services::app_state::{BootPhase, SharedState};
 use crate::services::middleware::AuthUser;
 use crate::services::{settings, vault};
 
-/// Resolve effective TTL: user preference capped by `admin_max`.
-/// Both inputs and output are clamped to [1, admin_max].
-pub fn resolve_ttl(user_pref: Option<i32>, admin_max: i64) -> i32 {
-    (user_pref.unwrap_or(admin_max as i32) as i64).clamp(1, admin_max) as i32
-}
-
 /// Resolve TTL for a credential profile, picking the effective upper
 /// bound based on whether the profile opts in to extended expiry.
 /// Falls back to `admin_max` (i.e. the existing 12 h cap) when not extended.
@@ -2377,40 +2371,6 @@ mod tests {
         assert!(!is_safe_recording_filename("C:\\Windows\\System32"));
     }
 
-    // ── resolve_ttl ────────────────────────────────────────────────────
-
-    #[test]
-    fn resolve_ttl_uses_user_pref_within_range() {
-        assert_eq!(resolve_ttl(Some(6), 12), 6);
-    }
-
-    #[test]
-    fn resolve_ttl_clamps_above_max() {
-        assert_eq!(resolve_ttl(Some(24), 12), 12);
-    }
-
-    #[test]
-    fn resolve_ttl_clamps_below_one() {
-        assert_eq!(resolve_ttl(Some(0), 12), 1);
-        assert_eq!(resolve_ttl(Some(-5), 12), 1);
-    }
-
-    #[test]
-    fn resolve_ttl_defaults_to_admin_max() {
-        assert_eq!(resolve_ttl(None, 8), 8);
-    }
-
-    #[test]
-    fn resolve_ttl_none_with_small_admin_max() {
-        assert_eq!(resolve_ttl(None, 1), 1);
-    }
-
-    #[test]
-    fn resolve_ttl_exact_boundary() {
-        assert_eq!(resolve_ttl(Some(12), 12), 12);
-        assert_eq!(resolve_ttl(Some(1), 12), 1);
-    }
-
     // ── resolve_profile_ttl (extended-expiry aware) ────────────────────
 
     #[test]
@@ -2511,9 +2471,4 @@ mod tests {
         assert!(!parse_ignore_cert(&extra));
     }
 
-    #[test]
-    fn resolve_ttl_boundary_clamping() {
-        // Assuming resolve_ttl(input, min, max)
-        // Let's find the function first to be sure
-    }
 }

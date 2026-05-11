@@ -29,6 +29,65 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.8.0",
+    subtitle:
+      "Reusable toast notifications, credential-profile expiry warnings, SSH password-paste fix",
+    sections: [
+      {
+        title: "You will know before a credential profile expires",
+        description:
+          "A new background watcher polls your credential profiles once a minute and surfaces a toast as each pre-expiry threshold is crossed — at **1 day**, **1 hour**, and **10 minutes** before a standard profile lapses, or at **7 days**, **1 day**, and **1 hour** for the longer-lived extended-expiry profiles introduced in v1.7.0. Only the tightest threshold you have currently crossed fires (a tab opened at the 30-minute mark sees only the 10-minute warning, never the 1-day one too), and once a profile actually expires, a sticky red toast labelled **`<profile> has expired`** appears with a **Renew now** action that deep-links straight to the credentials page. Sticky because if the profile is needed for an active connection, you genuinely cannot reconnect with it until it has been renewed — a 6-second flash would be too easy to miss.",
+      },
+      {
+        title: "Cross-tab, sleep-aware, and self-cleaning",
+        description:
+          "Already-fired thresholds are persisted in `localStorage` under a namespaced key, so closing the tab and reopening it does not re-fire the same warning, and two tabs open side-by-side do not double-up. When a profile's TTL is re-issued (the password is rotated, `extended_expiry` is toggled, or the slider is bumped) every threshold for the new window re-arms automatically. Profiles deleted on the server are pruned from the tracker on the next poll. The watcher also re-evaluates on `focus` and `visibilitychange`, so a laptop that wakes from sleep after eight hours sees the expired toast within a second of clicking back into the tab rather than waiting for the next 60-second poll. Operators on a non-vault deployment pay no cost — the watcher only mounts when `vault_configured` is true on the signed-in user.",
+      },
+      {
+        title: "A reusable toast notification system, themed to fit",
+        description:
+          'The toast surface that powers the watcher above is a generic provider — every component beneath the auth gate can call `useToast().info / .success / .warning / .error` to publish a notification. Each toast carries a title, an optional secondary description, an optional **action button** (with built-in busy-state handling so the button shows `Working…` while a long-running click handler resolves), and a `key` so a long-lived consumer can update the same toast in place rather than spawning duplicates. Variants pick their accent and dim background from the existing CSS custom properties, so any future palette tweak flows through without a code change. Auto-dismiss timing matches the variant: 6 s for info / success, 8 s for warning, and **error toasts are sticky** until dismissed. The viewport mounts via a `document.body` portal in the top-right (the bottom-right is reserved for the existing session-timeout warning) and respects screen readers via `aria-live="polite"` plus per-variant `role="alert"` / `role="status"`.',
+      },
+      {
+        title: "Pasting a password into an SSH session works again",
+        description:
+          "Pasting a password into an SSH or telnet password prompt — `sudo`, `ssh` password auth, `passwd`, `mysql -p`, every Cisco / Juniper / Mikrotik device CLI — was failing with an `incorrect password` response even when the password was correct. The cause: the paste helper was wrapping every SSH / telnet clipboard payload in bracketed-paste markers (`ESC [ 200 ~ … ESC [ 201 ~`) so paste-aware shells like bash, zsh and vim could keep auto-indent off for the duration of a multi-line paste. But a password prompt is not running under bash — it reads stdin in raw no-echo mode and treats the literal escape bytes as part of the password. Single-line SSH / telnet pastes are now byte-transparent; multi-line pastes still get the bracketed-paste wrapping and the `\\n → \\r` translation that paste-aware shells rely on, so pasting a config block into `nano` or `vim` continues to work as intended.",
+      },
+      {
+        title: "Drop-in upgrade — frontend rebuild only",
+        description:
+          "No database migrations, no new environment variables, no API contract changes, no new runtime dependencies. The backend image is byte-identical between v1.7.0 and v1.8.0 — only the frontend container needs to be rebuilt: `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build frontend`.",
+      },
+    ],
+  },
+  {
+    version: "1.7.0",
+    subtitle:
+      "Extended-expiry credential profiles for service / break-glass accounts, themed range slider, dependency refresh",
+    sections: [
+      {
+        title: "Opt a single credential profile in to a longer expiry window",
+        description:
+          "The standard credential profile keeps its existing 1–12 hour TTL ceiling and existing default — operators who need to keep a credential alive for a service or break-glass account can now tick a per-profile **Extended expiry** checkbox that lifts the cap to 90 days (2160 hours). The opt-in is per-profile, not per-deployment, so the standard short-lived TTL remains the policy default; an extended profile is a deliberate exception that has to be opted in to one row at a time. Existing profiles are unaffected; the new column defaults to `FALSE`.",
+      },
+      {
+        title: "Server-side guarantees on the cap",
+        description:
+          "The 12-hour vs. 90-day choice is not an honour-system frontend toggle. A two-arm `CHECK` constraint on `credential_profiles.ttl_hours` enforces `1 ≤ ttl ≤ 12` when `extended_expiry = FALSE` and `1 ≤ ttl ≤ 2160` when `extended_expiry = TRUE`, so the relaxed bound is unreachable for a row that has not been opted in regardless of any code path that bypasses the API resolver. The backend resolver `resolve_profile_ttl(user_pref, admin_max, extended_expiry)` selects the correct cap and clamps the request, and re-encrypted profile updates compute the cap against the **incoming** `extended_expiry` value (not the persisted one), eliminating any race window where a request could persist a TTL above the cap implied by its own flag.",
+      },
+      {
+        title: "A themed range slider replaces the native browser control",
+        description:
+          'Every TTL input across the credential-profile editor and the request-checkout form now renders the same accent-tinted custom slider — built once in `frontend/src/components/RangeSlider.tsx` — instead of the native `<input type="range">` whose appearance differs across Chromium, Firefox, and Safari and clashes with the rest of the dark-theme surface. Track, fill, thumb, and focus ring all derive from the same CSS custom properties as the buttons and form fields beside them, so a future palette tweak flows through without a code change.',
+      },
+      {
+        title: "Drop-in upgrade with one schema migration",
+        description:
+          "Migration `061_credential_profile_extended_expiry.sql` adds the `extended_expiry BOOLEAN NOT NULL DEFAULT FALSE` column and the two-arm `CHECK` constraint above. No environment-variable changes, no new runtime dependencies, no API contract changes (the new field is additive on every credential-profile request and response). Roll backend and frontend together for the cleanest upgrade; running an older frontend against the new backend is supported but the **Extended expiry** checkbox will not be visible until the frontend image is rolled.",
+      },
+    ],
+  },
+  {
     version: "1.6.2",
     subtitle:
       "Connection folder hierarchy everywhere, tag-picker viewport overflow, SSH credential prompt",

@@ -146,27 +146,36 @@ export default function ProfileEditor(props: ProfileEditorProps) {
           <div className="form-group">
             <label htmlFor="prof-ttl">Password Expiry</label>
             <div className="flex items-center gap-3">
-              <input
-                id="prof-ttl"
-                type="range"
-                min={1}
-                max={editing.extended_expiry ? 90 : 12}
-                step={1}
-                value={
-                  editing.extended_expiry
-                    ? Math.max(1, Math.round(editing.ttl_hours / 24))
-                    : editing.ttl_hours
-                }
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  setEditing({
-                    ...editing,
-                    ttl_hours: editing.extended_expiry ? n * 24 : n,
-                  });
-                }}
-                className="flex-1"
-                style={{ accentColor: "var(--color-accent)" }}
-              />
+              {(() => {
+                const max = editing.extended_expiry ? 90 : 12;
+                const val = editing.extended_expiry
+                  ? Math.max(1, Math.round(editing.ttl_hours / 24))
+                  : editing.ttl_hours;
+                const pct = max > 1 ? ((val - 1) / (max - 1)) * 100 : 0;
+                return (
+                  <input
+                    id="prof-ttl"
+                    type="range"
+                    min={1}
+                    max={max}
+                    step={1}
+                    value={val}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      setEditing({
+                        ...editing,
+                        ttl_hours: editing.extended_expiry ? n * 24 : n,
+                      });
+                    }}
+                    className="range-slider flex-1"
+                    style={
+                      {
+                        "--range-pct": `${pct}%`,
+                      } as React.CSSProperties
+                    }
+                  />
+                );
+              })()}
               <span className="text-txt-primary font-semibold tabular-nums w-16 text-right">
                 {editing.extended_expiry
                   ? (() => {

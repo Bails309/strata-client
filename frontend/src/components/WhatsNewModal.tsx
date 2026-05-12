@@ -29,6 +29,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.8.1",
+    subtitle: "Credential-profile expiry watcher no longer toasts on profile creation",
+    sections: [
+      {
+        title: "What was wrong",
+        description:
+          'The default standard credential-profile TTL is 12 hours, so every freshly-saved profile started life with `secsLeft = 43 200` \u2014 already inside the watcher\'s 24-hour ("1 day") warning window. As soon as the next 60-second poll fired, the watcher published a toast labelled `<profile> expires in 1 day`, which is technically true but carries no information: the user had just chosen a 12-hour TTL on purpose. The same shape of bug existed for any extended-expiry profile created with a TTL shorter than 7 days.',
+      },
+      {
+        title: "What changed",
+        description:
+          "The watcher now filters its threshold list against each profile's own `ttl_hours * 3600` window before evaluating, dropping any threshold that is wider than (or equal to) the profile's whole lifetime. A 12-hour standard profile now sees only the `1 hour` and `10 minutes` warnings; a 25-hour profile sees `1 day`, `1 hour`, and `10 minutes` (the 1-day toast still fires when ~1 hour of the window has elapsed, as intended); a 7-day extended profile sees `1 day` and `1 hour`; a 90-day extended profile is unchanged. A regression test was added to the watcher suite to lock the behaviour in.",
+      },
+      {
+        title: "Drop-in upgrade \u2014 frontend rebuild only",
+        description:
+          "No database migration, no API contract change, no environment-variable change, no new runtime dependencies. The backend image is byte-identical between v1.8.0 and v1.8.1. Tracker entries written by the v1.8.0 watcher are harmless under the new code path and clear themselves the next time the profile is renewed or deleted \u2014 no manual `localStorage` cleanup required.",
+      },
+    ],
+  },
+  {
     version: "1.8.0",
     subtitle:
       "Reusable toast notifications, credential-profile expiry warnings, SSH password-paste fix",

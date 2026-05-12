@@ -56,6 +56,25 @@ describe("CredentialProfileExpiryWatcher", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("does not fire the 1-day toast on a freshly-created 12 h profile", async () => {
+    // Default standard TTL is 12 h, so on creation `secsLeft` (43 200 s)
+    // is already inside the 1-day (86 400 s) warning window. The watcher
+    // must skip thresholds wider than the profile's own TTL or every new
+    // standard profile would publish a 1-day toast immediately.
+    vi.mocked(getCredentialProfiles).mockResolvedValue([
+      profile({
+        ttl_hours: 12,
+        expires_at: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      }),
+    ]);
+    mount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("fires a warning toast when a standard profile crosses the 1-hour threshold", async () => {
     vi.mocked(getCredentialProfiles).mockResolvedValue([
       profile({ expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }),

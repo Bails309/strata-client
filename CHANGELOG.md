@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] — 2026-05-12
+
+### Patch release — credential-profile expiry watcher no longer toasts on profile creation
+
+Tightens the credential-profile expiry watcher introduced in v1.8.0 so
+its pre-expiry warning thresholds are filtered against the profile's
+own TTL window. Without this fix, every freshly-created standard
+profile (default 12 h TTL, but anything below the 24 h "1 day"
+threshold) published a `<profile> expires in 1 day` warning toast on
+the very next poll because `secsLeft` was already inside the 24 h
+warning window the moment the profile was saved. The same shape of
+defect would have appeared for any extended-expiry profile created
+with a TTL shorter than 7 days. The watcher now drops any threshold
+that is wider than (or equal to) the profile's `ttl_hours * 3600`
+seconds before evaluating, so warnings only fire as the deadline
+genuinely approaches. Frontend-only patch, drop-in upgrade from
+v1.8.0; the backend image is byte-identical between the two
+releases.
+
+#### Fixed
+
+- **Watcher no longer toasts the moment a profile is created**
+  ([`frontend/src/components/CredentialProfileExpiryWatcher.tsx`](frontend/src/components/CredentialProfileExpiryWatcher.tsx)).
+  The `STANDARD_THRESHOLDS` and `EXTENDED_THRESHOLDS` arrays are now
+  filtered with `t.secs < profile.ttl_hours * 3600` before iteration,
+  removing thresholds the user could never reach as a meaningful
+  pre-expiry signal:
+  - 12 h standard profile → effective thresholds `[1 h, 10 m]`
+    (no spurious 1-day toast on first poll).
+  - 24 h standard profile → effective thresholds `[1 h, 10 m]`.
+  - 25 h standard profile → effective thresholds `[1 d, 1 h, 10 m]`
+    (the 1-day toast fires when ~1 h has elapsed, as intended).
+  - 7 d extended profile → effective thresholds `[1 d, 1 h]`
+    (no spurious 7-day toast on creation).
+  - 90 d extended profile → all three thresholds apply, unchanged.
+
+#### Added
+
+- **Regression test**
+  ([`frontend/src/__tests__/CredentialProfileExpiryWatcher.test.tsx`](frontend/src/__tests__/CredentialProfileExpiryWatcher.test.tsx))
+  — `does not fire the 1-day toast on a freshly-created 12 h profile`.
+  Mounts the watcher with a `ttl_hours: 12` profile whose
+  `expires_at` is 12 h ahead and asserts neither `role="alert"` nor
+  `role="status"` appears. Watcher suite is now 10 / 10 (1396 base
+  - 25 v1.8.0 toast / paste tests + 1 new = 1399 frontend tests
+    total at the released revision; full suite 1399 / 1399 passing).
+
+#### Migration notes
+
+- **Frontend rebuild only.** No database migration, no API contract
+  change, no environment-variable change, no new runtime
+  dependencies. Roll the frontend container:
+  `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build frontend`.
+- **Tracker entries written by v1.8.0 are not invalidated.** If the
+  v1.8.0 watcher already fired a spurious 1-day toast for a
+  short-TTL profile, the corresponding `<profileId>:86400` entry
+  in `localStorage["strata.credExpiryFired.v1"]` is now harmless —
+  the new code simply ignores thresholds it has filtered out, so
+  the entry sits idle until the profile is deleted or its expiry
+  is re-issued (at which point the re-arm path drops it
+  automatically). No manual cleanup required.
+
 ## [1.8.0] — 2026-05-11
 
 ### Minor release — reusable toast notification system, credential-profile expiry warnings, SSH password-paste fix

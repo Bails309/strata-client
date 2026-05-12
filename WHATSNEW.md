@@ -1,3 +1,63 @@
+# What's New in v1.8.1
+
+> **Patch release: the credential-profile expiry watcher introduced
+> in v1.8.0 no longer fires a `1 day` warning toast the moment a new
+> standard credential profile is created.** Frontend-only, drop-in
+> upgrade from v1.8.0; the backend image is byte-identical.
+
+## What was wrong
+
+The default standard credential-profile TTL is 12 hours, so every
+freshly-saved profile started life with `secsLeft = 43 200` — already
+inside the watcher's 24-hour ("1 day") warning window. As soon as the
+next 60-second poll fired, the warning published a toast labelled
+`<profile> expires in 1 day`, which is true but not useful: the user
+had just chosen a 12-hour TTL on purpose, so a "1 day" warning at
+T+0 carried no information. The same shape of bug existed for any
+extended-expiry profile created with a TTL shorter than 7 days.
+
+## What changed
+
+The watcher now filters its threshold list against each profile's
+own `ttl_hours * 3600` window before evaluating, dropping any
+threshold that is wider than (or equal to) the profile's whole
+lifetime. Concretely:
+
+- **12 h standard profile** → effective thresholds `[1 h, 10 m]`
+  (no spurious 1-day toast on first poll).
+- **24 h standard profile** → effective thresholds `[1 h, 10 m]`.
+- **25 h standard profile** → effective thresholds `[1 d, 1 h, 10 m]`
+  (the 1-day toast still fires when ~1 hour of the window has
+  elapsed, exactly as intended).
+- **7 d extended profile** → effective thresholds `[1 d, 1 h]`
+  (no spurious 7-day toast on creation).
+- **90 d extended profile** → all three thresholds apply, unchanged.
+
+A regression test (`does not fire the 1-day toast on a freshly-created
+12 h profile`) was added to the watcher suite to lock the behaviour
+in.
+
+## Upgrade
+
+Drop-in from v1.8.0. The backend image is byte-identical between
+the two releases; only the frontend container needs to be rebuilt:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build frontend
+```
+
+If the v1.8.0 watcher had already published a spurious 1-day toast
+for a short-TTL profile, the corresponding
+`localStorage["strata.credExpiryFired.v1"]` entry is harmless under
+the new code path and will be cleared automatically the next time
+the profile is renewed or deleted. No manual storage cleanup is
+required.
+
+---
+
 # What's New in v1.8.0
 
 > **Minor release: a brand-new toast notification system, a watcher

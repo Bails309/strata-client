@@ -133,7 +133,16 @@ export default function CredentialProfileExpiryWatcher({
         if (!Number.isFinite(expiresAtMs)) continue;
 
         const secsLeft = Math.floor((expiresAtMs - now) / 1000);
-        const thresholds = profile.extended_expiry ? EXTENDED_THRESHOLDS : STANDARD_THRESHOLDS;
+        const allThresholds = profile.extended_expiry ? EXTENDED_THRESHOLDS : STANDARD_THRESHOLDS;
+
+        // Drop thresholds that are wider than (or equal to) the profile's
+        // own TTL window — those would be "crossed" the moment the profile
+        // is created, which is not what the user means by a pre-expiry
+        // warning. e.g. a freshly-created 12-hour standard profile must
+        // not get a 1-day toast on first poll; the 1-hour and 10-minute
+        // warnings still fire as the deadline approaches.
+        const ttlSecs = profile.ttl_hours * 3600;
+        const thresholds = allThresholds.filter((t) => t.secs < ttlSecs);
 
         // Re-arm: if the profile's expires_at has shifted (TTL re-issued,
         // extended_expiry toggled, password rotated) drop every prior

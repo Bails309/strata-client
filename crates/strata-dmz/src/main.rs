@@ -38,6 +38,10 @@ use config::DmzConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|a| a == "--healthcheck") {
+        std::process::exit(run_healthcheck().await);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .json()
@@ -246,4 +250,52 @@ async fn main() -> anyhow::Result<()> {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn run_healthcheck() -> i32 {
+    let operator_bind = std::env::var("STRATA_DMZ_OPERATOR_BIND")
+        .unwrap_or_else(|_| crate::config::DEFAULT_OPERATOR_BIND.to_string());
+    let token = match std::env::var("STRATA_DMZ_OPERATOR_TOKEN") {
+        Ok(t) => t,
+        Err(_) => {
+            eprintln!("STRATA_DMZ_OPERATOR_TOKEN not set");
+            return 1;
+        }
+    };
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = match tokio::net::TcpStream::connect(&operator_bind).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Healthcheck failed to connect to {}: {}", operator_bind, e);
+            return 1;
+        }
+    };
+
+    let req = format!("GET /status HTTP/1.0\r\nAuthorization: Bearer {}\r\n\r\n", token);
+    if let Err(e) = stream.write_all(req.as_bytes()).await {
+        eprintln!("Healthcheck failed to write request: {}", e);
+        return 1;
+    }
+
+    let mut buf = [0; 1024];
+    match stream.read(&mut buf).await {
+        Ok(n) if n > 0 => {
+            let response = String::from_utf8_lossy(&buf[..n]);
+            if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
+                0
+            } else {
+                eprintln!("Healthcheck received non-200 response: {}", response.lines().next().unwrap_or(""));
+                1
+            }
+        }
+        Ok(_) => {
+            eprintln!("Healthcheck received empty response");
+            1
+        }
+        Err(e) => {
+            eprintln!("Healthcheck failed to read response: {}", e);
+            1
+        }
+    }
 }

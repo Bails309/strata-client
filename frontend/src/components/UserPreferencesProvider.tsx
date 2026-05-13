@@ -3,7 +3,7 @@
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import { getUserPreferences, updateUserPreferences, UserPreferences as Prefs } from "../api";
+import { getUserPreferences, updateUserPreferences, readCookie, UserPreferences as Prefs } from "../api";
 import { DEFAULT_COMMAND_PALETTE_BINDING } from "../utils/keybindings";
 
 interface PreferencesContextValue {
@@ -28,6 +28,16 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    // Skip fetching preferences when not authenticated — avoids noisy
+    // 401 errors in the browser console on the login page. The
+    // access_token cookie is HttpOnly so we can't read it from JS; the
+    // csrf_token cookie is set alongside it and is JS-readable, so we
+    // use its presence as a "session live" signal.
+    if (!readCookie("csrf_token")) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {

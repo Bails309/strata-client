@@ -32,6 +32,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 15s
 
   # ── 1b. Additional guacd sidecar
   # To use, set GUACD_INSTANCES=guacd-2:4822 in your .env file.
@@ -148,8 +149,8 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 8
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -160,6 +161,9 @@ services:
         condition: service_healthy
       vault:
         condition: service_healthy
+      postgres-local:
+        condition: service_healthy
+        required: false
 
   # ── 3. Frontend SPA ─────────────────────────────────────────────────
   frontend:
@@ -191,11 +195,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 15s
     volumes:
       - ./certs:/etc/nginx/ssl:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 
   # ── 5. Local PostgreSQL ─────────────────────────────────────────────

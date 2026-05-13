@@ -70,7 +70,8 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 
 - **OIDC / SSO** — full OpenID Connect with dynamic JWKS validation (Keycloak, Entra ID, Okta, etc.).
 - **Local username/password** — built-in auth for environments without an OIDC provider, with 12-character minimum password policy.
-- **Access + refresh tokens** — short-lived 20-minute access tokens, 8-hour `HttpOnly` refresh cookies, proactive activity-based silent refresh that captures both DOM input and Guacamole-hijacked in-session input via the `sessionActivity` bus, pre-expiry warning toast — aligned with OWASP session-timeout guidance.
+- **Access + refresh tokens** — short-lived 20-minute access tokens, 8-hour `HttpOnly` refresh cookies, proactive activity-based silent refresh that captures both DOM input and Guacamole-hijacked in-session input via the `sessionActivity` bus, pre-expiry warning toast — aligned with OWASP session-timeout guidance. Cookies use a 60-second buffer relative to token expiry to ensure SPA metadata access.
+- **Global Cache-Control** — all API responses enforce `no-store, no-cache, must-revalidate` to prevent sensitive data caching in browsers and proxies.
 - **Granular RBAC** — ten-permission role model (manage system / users / connections, audit, view sessions, create users / roles / connections / sharing profiles, Quick Share); enforced at every admin endpoint.
 - **Active Directory LDAP sync** — scheduled computer-account import (LDAPS, multiple search bases, gMSA exclusion, simple-bind or Kerberos-keytab auth, custom CA cert).
 - **Per-user session tracking** — JTI, IP, UA, expiry recorded for every active login.
@@ -111,15 +112,14 @@ If you have used Guacamole's reference web app and wished it had real auth, real
 - **DNS configuration in admin UI** — admin-managed DNS servers and search domains pushed to `guacd` containers without editing `docker-compose.yml`.
 - **Recording disclaimer / Terms of Service** — mandatory first-login acceptance modal, timestamped in the database, declining logs the user out.
 - **Production-grade nginx gateway** — embedded-DNS resolver with per-request upstream resolution; nginx survives a backend outage and recovers automatically.
-- **CI/CD** — GitHub Actions workflow for automated weekly upstream `guacd` rebuilds, Trivy scans, and CodeQL.
+- **CI/CD** — GitHub Actions workflow for automated weekly upstream `guacd` rebuilds, Trivy image scans (v1.8.2 fix), and CodeQL.
 - **Apache 2.0 licensed** — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 For the full per-version history of how these capabilities were built and the bug fixes shipped along the way, see [CHANGELOG.md](CHANGELOG.md) and the in-app **What's New** carousel ([WHATSNEW.md](WHATSNEW.md)).
 
 ## 🆕 What's new
 
-| Version | Date       | Highlight                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.8.2   | 2026-05-13 | **Security Hardening & CI/CD maintenance** — global `Cache-Control: no-store` header policy implemented; session cookie TTLs adjusted with a 60s buffer for improved SPA reliability during token refresh; Trivy image scanning fixed in GitHub Actions. ([details](CHANGELOG.md#182--2026-05-13)) |
 | 1.8.1   | 2026-05-12 | **Credential-profile expiry watcher fix** — the v1.8.0 watcher no longer publishes a `1 day` warning toast the moment a fresh 12-hour standard profile is created (the default TTL was already inside the 1-day warning window on first poll). Watcher now filters threshold list against each profile's own TTL so warnings only fire as the deadline genuinely approaches. Frontend-only, drop-in from v1.8.0. ([details](CHANGELOG.md#181--2026-05-12))                                                                                                                                                                                            |
 | 1.8.0   | 2026-05-11 | **Reusable toast notification system + credential-profile expiry warnings + SSH password-paste fix** — new `ToastProvider` / `useToast()` hook with theme-tokenised variants, replace-by-key semantics and sticky errors; `CredentialProfileExpiryWatcher` polls `/api/user/credential-profiles` once a minute and warns at 1 d / 1 h / 10 m (standard) or 7 d / 1 d / 1 h (extended-expiry), with a sticky red **Renew now** toast at expiry; SSH / telnet single-line paste is now byte-transparent so password prompts (`sudo`, `ssh`, `passwd`, network-device CLIs) accept pasted passwords correctly. ([details](CHANGELOG.md#180--2026-05-11)) |
 | 1.7.0   | 2026-05-11 | **Extended-expiry credential profiles** — opt-in per-profile checkbox lifts the standard 12-hour TTL ceiling up to 90 days for service / break-glass accounts; themed range slider replaces the native browser control on every TTL input; weekly dependency refresh. Drop-in upgrade with one schema migration. ([details](CHANGELOG.md#170--2026-05-11))                                                                                                                                                                                                                                                                                            |
@@ -225,7 +225,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.5.3                                  # or "latest"
+export STRATA_VERSION=1.8.2                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```

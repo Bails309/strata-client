@@ -11,11 +11,12 @@ gzip_types text/plain text/css text/xml application/json application/javascript 
 
 # Security headers
 add_header X-Content-Type-Options "nosniff" always;
-add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 server_tokens off;
+more_clear_headers Server;
+more_clear_headers X-Powered-By;
 
 # Request size limits (500 MB for Quick Share uploads)
 client_max_body_size 500M;

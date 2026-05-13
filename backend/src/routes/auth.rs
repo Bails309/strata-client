@@ -415,7 +415,8 @@ pub async fn login(
             "Set-Cookie",
             format!(
                 "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
-                csrf_token, ACCESS_TOKEN_TTL + 60
+                csrf_token,
+                ACCESS_TOKEN_TTL + 60
             ),
         )
         // session_expires cookie — surfaces the access-token expiry to
@@ -425,7 +426,8 @@ pub async fn login(
             "Set-Cookie",
             format!(
                 "session_expires={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
-                session_expires_at, ACCESS_TOKEN_TTL + 60
+                session_expires_at,
+                ACCESS_TOKEN_TTL + 60
             ),
         )
         .body(axum::body::Body::from(
@@ -1028,14 +1030,16 @@ pub async fn refresh(
             "Set-Cookie",
             format!(
                 "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
-                csrf_token, ACCESS_TOKEN_TTL + 60
+                csrf_token,
+                ACCESS_TOKEN_TTL + 60
             ),
         )
         .header(
             "Set-Cookie",
             format!(
                 "session_expires={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
-                session_expires_at, ACCESS_TOKEN_TTL + 60
+                session_expires_at,
+                ACCESS_TOKEN_TTL + 60
             ),
         )
         .body(axum::body::Body::from(

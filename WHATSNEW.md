@@ -1,3 +1,91 @@
+# What's New in v1.8.2
+
+> **Patch release: global security headers, session-timeout reliability,
+> and CI hardening.** v1.8.2 hardens the application's security posture
+> by enforcing non-cacheable API responses globally and tightening the
+> session-lifecycle state sync between the frontend and backend. Drop-in
+> upgrade from v1.8.1 — roll both the backend and frontend containers
+> together.
+
+## Sensitive data is never cached
+
+Until v1.8.2, API responses were relying on browser defaults for
+caching. While most modern browsers do not cache authenticated XHR
+requests by default, certain proxies, shared workstations, or
+misconfigured browser environments could potentially persist sensitive
+authenticated data to disk.
+
+v1.8.2 implements a global security header policy on every API response:
+
+```http
+Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate
+```
+
+The `no-store` directive is the most important: it explicitly forbids
+the browser and any intermediate proxies from storing any part of the
+response in any cache (persistent or volatile). This ensures that
+once a user signs out or closes their session, no sensitive data remains
+reachable in the browser's local cache.
+
+## Modern framing protection
+  
+v1.8.2 replaces the legacy `X-Frame-Options: DENY` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive. 
+
+While `X-Frame-Options` served us well, modern browsers now prioritize the CSP `frame-ancestors` directive. By moving to the CSP standard, we ensure that anti-framing protection is handled more predictably across modern user agents while remaining explicitly secure against clickjacking attacks.
+
+## Zero technology disclosure
+
+To further harden our public surface, v1.8.2 now strips the `Server` and `X-Powered-By` headers entirely from all responses. By installing the `headers-more` module in our frontend gateway, we've eliminated the "Server: nginx" fingerprint, making it harder for automated scanners to identify and target our stack's specific technology.
+
+## Session timeout is now more reliable
+
+We identified a race condition in the session-timeout warning system.
+The `csrf_token` and `session_expires` cookies (which the SPA needs to
+read to trigger a session extension) were expiring at the exact same
+second as the `access_token` itself.
+
+If the user clicked "Extend session" during the final few seconds of
+their session, the browser might have already purged the CSRF token
+cookie, causing the refresh request to fail with a `403 Forbidden` and
+leaving the UI in a "zombie" state where the warning was still visible
+but the session was dead.
+
+v1.8.2 fixes this by issuing the `csrf_token` and `session_expires`
+cookies with a **60-second buffer** relative to the access token. The
+SPA can now reliably read its session metadata right up to the hard
+deadline. We've also updated the "Extend session" button to handle
+refresh failures gracefully — if a refresh fails (e.g. because the
+session was revoked on the server), the UI now forces an immediate
+logout rather than hanging.
+
+## Restored security scanning in CI
+
+The Trivy container-scanning pipeline in our GitHub Actions was
+failing to locate the locally built Docker images. This left a blind
+spot in our automated security auditing.
+
+v1.8.2 corrects the `.github/workflows/trivy.yml` configuration by
+forcing the `docker` driver in the Buildx setup and explicitly informing
+Trivy to scan the resulting image. Our images are once again
+automatically audited for vulnerabilities on every push.
+
+## Upgrade
+
+Drop-in upgrade from v1.8.1. Roll both the backend and frontend
+containers together:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+No database migrations, no environment variables to add, and no API
+contract changes.
+
+---
+
 # What's New in v1.8.1
 
 > **Patch release: the credential-profile expiry watcher introduced

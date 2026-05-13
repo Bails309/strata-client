@@ -4,6 +4,9 @@ Base URL: `http://localhost:8080/api` (or via nginx at `http://localhost:3000/ap
 
 All authenticated endpoints require an `Authorization: Bearer <token>` header with a valid OIDC access token.
 
+> [!NOTE]
+> **Global Security Headers (v1.8.2)**: All API responses under `/api/*` carry `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to prevent sensitive data caching.
+
 ---
 
 ## Public Endpoints
@@ -102,7 +105,13 @@ Standard local username/password login. Only available if `local_auth_enabled` i
 }
 ```
 
-**Set-Cookie**: `refresh_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh; Max-Age=28800`
+**Set-Cookie**: `access_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=1200`
+**Set-Cookie**: `refresh_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=28800`
+**Set-Cookie**: `csrf_token=<uuid>; Secure; SameSite=Strict; Path=/; Max-Age=1260` (v1.8.2: Access TTL + 60s)
+**Set-Cookie**: `session_expires=<timestamp>; Secure; SameSite=Strict; Path=/; Max-Age=1260` (v1.8.2: Access TTL + 60s)
+
+> [!NOTE]
+> The `access_token` is returned in both the JSON response body and as an `HttpOnly` cookie. This allows the SPA to use cookies (more secure against XSS) while supporting legacy or non-browser clients that prefer the `Authorization` header.
 
 ### `GET /api/auth/sso/login`
 
@@ -123,7 +132,7 @@ The handler for the OIDC provider's callback. Exchanges the authorization code f
 - `code`: The authorization code from the issuer.
 - `state`: The CSRF state token.
 
-**Success**: `303 See Other` redirect back to the frontend dashboard, with the same `Set-Cookie` (refresh token) and `Cache-Control: no-store` semantics as `POST /api/auth/login`.
+**Success**: `303 See Other` redirect back to the frontend dashboard, with the same `Set-Cookie` (refresh token, CSRF, and expiry) and global `Cache-Control: no-store` semantics.
 
 **Performance** (since v1.6.1): on a warm OIDC discovery + JWKS cache (10-minute TTL inside `services::auth`) the handler performs a single upstream HTTP round-trip to the IdP (the token-endpoint POST). On the very first sign-in after backend process start it performs two (discovery + token POST). All upstream calls have a 5-second connect / 10-second overall timeout.
 
@@ -141,11 +150,16 @@ Exchange a valid refresh cookie for a new access token. The refresh token is sen
 **Request**: No body required. The refresh token cookie is sent automatically by the browser.
 
 **Response** `200 OK`
+**Set-Cookie**: `access_token=<jwt>; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age=1200`
+**Set-Cookie**: `csrf_token=<uuid>; Secure; SameSite=Strict; Path=/; Max-Age=1260`
+**Set-Cookie**: `session_expires=<timestamp>; Secure; SameSite=Strict; Path=/; Max-Age=1260`
 
 ```json
 {
-  "access_token": "eyJ...",
-  "expires_in": 1200
+  "access_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 1200,
+  "csrf_token": "..."
 }
 ```
 

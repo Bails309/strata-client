@@ -20,7 +20,9 @@ FROM nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b19
 # a few days behind on libcrypto/musl/zlib fixes — this shaves the lag so
 # Trivy doesn't flag HIGH CVEs with an upstream fix already available.
 # shellcheck disable=SC2155
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache && \
+    apk add --no-cache nginx-mod-http-headers-more && \
+    sed -i '1i load_module modules/ngx_http_headers_more_filter_module.so;' /etc/nginx/nginx.conf
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 

@@ -454,10 +454,8 @@ pub fn build_router(state: SharedState) -> Router {
                         .level(tracing::Level::INFO)
                         .include_headers(false),
                 )
-                .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
-                .on_response(
-                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
-                ),
+                .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
+                .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
         )
         .with_state(state)
 }

@@ -5,7 +5,9 @@ Base URL: `http://localhost:8080/api` (or via nginx at `http://localhost:3000/ap
 All authenticated endpoints require an `Authorization: Bearer <token>` header with a valid OIDC access token.
 
 > [!NOTE]
-> **Global Security Headers (v1.8.2)**: All API responses under `/api/*` carry `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to prevent sensitive data caching.
+> **Global Security Headers (v1.8.3)**: 
+> - All API responses under `/api/*` carry `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to prevent sensitive data caching.
+> - The Nginx gateway (via NJS) enforces `Content-Security-Policy: frame-ancestors 'none'`, masks the `Server` header to "Strata", and removes `X-Powered-By`.
 
 ---
 

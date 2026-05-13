@@ -47,6 +47,8 @@ Authentication uses a **dual-token architecture** aligned with OWASP session tim
 | `csrf_token`  | Access + 60s| `Secure`, `SameSite=Strict` cookie             | CSRF for refresh & logout   |
 | `session_exp` | Access + 60s| `Secure`, `SameSite=Strict` cookie             | Expiry display for SPA      |
 
+**Persistent JWT Signing (v1.8.3)**: Both the access and refresh tokens are signed using a persistent `JWT_SECRET` configured in the `.env` file. This ensures that user sessions remain valid across backend container restarts, providing a seamless experience during maintenance windows. If `JWT_SECRET` is not provided, the backend generates a random one on every startup, which invalidates all existing sessions (legacy behavior).
+
 The 60-second buffer on `csrf_token` and `session_expires` (implemented in v1.8.2) ensures the SPA can access these values to perform a refresh even at the exact deadline of the access token, preventing "locked out" states where the CSRF token would otherwise expire before the final refresh request could be sent.
 
 **Flow:**
@@ -96,7 +98,14 @@ Since v1.8.2, a global middleware policy in `backend/src/routes/mod.rs` applies 
 
 - **`Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate`** — Prevents sensitive JSON payloads, user metadata, or tunnel secrets from being cached by the browser's disk/memory cache or intermediary forward/reverse proxies.
 
-This policy ensures that session-specific data never remains available in a browser's history or a shared proxy cache after the user has navigated away or logged out.
+#### Nginx NJS Header Masking (v1.8.3)
+
+To prevent technology fingerprinting, the Nginx gateway is configured with **Nginx JavaScript (njs)** to intercept and modify response headers globally:
+- **`Server`** header is masked to "Strata".
+- **`X-Powered-By`** header is removed entirely.
+- **`Content-Security-Policy: frame-ancestors 'none'`** is enforced globally to prevent clickjacking.
+
+This NJS-based approach ensures that even error pages generated internally by Nginx (which normally bypass the backend's header logic) adhere to the project's security standards.
 
 #### SSO callback hardening (v1.6.1; revised v1.8.2)
 

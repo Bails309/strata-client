@@ -119,6 +119,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 ## 🆕 What's new
 
+| 1.8.3   | 2026-05-13 | **Security Hardening & Session Stability** — NJS-based Nginx header masking; CSP `frame-ancestors 'none'`; persistent `JWT_SECRET` for cross-restart session stability; silent 401 log noise reduction during unauthenticated states. ([details](CHANGELOG.md#183--2026-05-13)) |
 | 1.8.2   | 2026-05-13 | **Security Hardening & CI/CD maintenance** — global `Cache-Control: no-store` header policy implemented; session cookie TTLs adjusted with a 60s buffer for improved SPA reliability during token refresh; Trivy image scanning fixed in GitHub Actions. ([details](CHANGELOG.md#182--2026-05-13)) |
 | 1.8.1   | 2026-05-12 | **Credential-profile expiry watcher fix** — the v1.8.0 watcher no longer publishes a `1 day` warning toast the moment a fresh 12-hour standard profile is created (the default TTL was already inside the 1-day warning window on first poll). Watcher now filters threshold list against each profile's own TTL so warnings only fire as the deadline genuinely approaches. Frontend-only, drop-in from v1.8.0. ([details](CHANGELOG.md#181--2026-05-12))                                                                                                                                                                                            |
 | 1.8.0   | 2026-05-11 | **Reusable toast notification system + credential-profile expiry warnings + SSH password-paste fix** — new `ToastProvider` / `useToast()` hook with theme-tokenised variants, replace-by-key semantics and sticky errors; `CredentialProfileExpiryWatcher` polls `/api/user/credential-profiles` once a minute and warns at 1 d / 1 h / 10 m (standard) or 7 d / 1 d / 1 h (extended-expiry), with a sticky red **Renew now** toast at expiry; SSH / telnet single-line paste is now byte-transparent so password prompts (`sudo`, `ssh`, `passwd`, network-device CLIs) accept pasted passwords correctly. ([details](CHANGELOG.md#180--2026-05-11)) |
@@ -225,7 +226,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.8.2                                  # or "latest"
+export STRATA_VERSION=1.8.3                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```

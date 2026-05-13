@@ -1,4 +1,51 @@
-# What's New in v1.8.2
+# What's New in v1.8.3
+
+> **Patch release: NJS-based security hardening, CSP frame-ancestors, and
+> auth stabilization.** v1.8.3 hardens the application's security posture
+> by transitioning from legacy security headers to modern standards and
+> stabilizing the authentication lifecycle. Drop-in upgrade from v1.8.2 —
+> roll both the backend and frontend containers together.
+
+## Modern Anti-Clickjacking Protection
+
+v1.8.3 completes our transition to modern security headers by replacing the legacy `X-Frame-Options` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive across all responses.
+
+While `X-Frame-Options` was a useful first-generation guard, the CSP `frame-ancestors` directive is the modern standard for preventing clickjacking. By making this transition, we ensure that anti-framing protection is handled more predictably and securely by modern browsers.
+
+## Persistent Sessions Across Restarts
+
+Until now, the Strata backend generated a fresh, random JWT signing secret every time the container started. While secure, this had a significant UX drawback: any time the backend container was restarted (for an upgrade, a configuration change, or a routine health-check recycle), all active user sessions were immediately invalidated. Users would find themselves unexpectedly logged out and forced to sign in again.
+
+v1.8.3 introduces a mandatory `JWT_SECRET` environment variable. By providing a persistent secret in your `.env` file, you ensure that user sessions (both access and refresh tokens) remain valid across backend restarts. This results in a much smoother experience for operators, especially in environments with frequent deployment cycles.
+
+## Zero Technology Fingerprinting
+
+Following our work in v1.8.2 to remove the `Server` header, v1.8.3 implements a more robust, NJS-powered filter that masks the `Server` header as "Strata" and removes the `X-Powered-By` header globally. This applies to every response, including those generated internally by Nginx, ensuring that no technical details about our stack are disclosed to potential attackers or automated scanners.
+
+## Cleaner Browser Console
+
+We've optimized the frontend application's startup sequence to eliminate the "401 Unauthorized" errors that previously appeared in the browser console during the login phase. By relocating the preference and settings providers inside the application's authentication gate, we ensure that these components only attempt to fetch data once the user is successfully signed in. The result is a cleaner, more professional diagnostic experience for operators.
+
+## Improved CORS and CSRF Stability
+
+We've refined the Nginx proxy configuration to handle port-specific Host headers more accurately. This fix resolves sporadic CORS and CSRF validation failures that could occur when Strata was deployed behind certain load balancers or on non-standard ports.
+
+## Upgrade
+
+Drop-in upgrade from v1.8.2. Roll both the backend and frontend
+containers together:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+**Important:** You must set a `JWT_SECRET` in your `.env` file to take advantage of session persistence. See `.env.example` for a template.
+
+---
+
 
 > **Patch release: global security headers, session-timeout reliability,
 > and CI hardening.** v1.8.2 hardens the application's security posture

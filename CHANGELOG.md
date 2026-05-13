@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] — 2026-05-13
+
+### Patch release — NJS-based security hardening, CSP frame-ancestors, and auth stabilization
+
+This release further hardens the application's security posture by
+transitioning from legacy security headers to modern standards and
+stabilizing the authentication lifecycle during backend restarts. It also
+eliminates noisy 401 errors in the browser console during the initial
+login phase. Drop-in upgrade from v1.8.2; roll the backend and frontend
+containers together. **Note: `JWT_SECRET` is now a mandatory environment
+variable for persistent sessions.**
+
+#### Security
+
+- **Transitioned to `Content-Security-Policy: frame-ancestors 'none'`**
+  ([`frontend/common.fragment`](frontend/common.fragment)).
+  Replaced the legacy `X-Frame-Options` header with the modern CSP
+  `frame-ancestors` directive. This provides superior anti-clickjacking
+  protection while aligning with modern browser security standards.
+- **Implemented NJS-based `Server` header masking**
+  ([`frontend/remove_server.js`](frontend/remove_server.js), [`frontend/common.fragment`](frontend/common.fragment)).
+  The `Server` header is now masked as "Strata" and the `X-Powered-By`
+  header is removed across all responses (SPA and API). This prevents
+  technology fingerprinting and satisfies security audits that require
+  the removal of standard server identifiers.
+- **Persistent JWT signing with mandatory `JWT_SECRET`**
+  ([`.env`](.env), [`.env.example`](.env.example)).
+  Added a mandatory `JWT_SECRET` environment variable. Previously, the
+  backend generated a random secret on every startup, which invalidated
+  all active sessions (access and refresh tokens) whenever a container
+  restarted. Persistent secrets ensure session stability across backend
+  reloads.
+
+#### Fixed
+
+- **Eliminated noisy 401 errors on the login screen**
+  ([`frontend/src/App.tsx`](frontend/src/App.tsx), [`frontend/src/components/UserPreferencesProvider.tsx`](frontend/src/components/UserPreferencesProvider.tsx)).
+  Relocated the `UserPreferencesProvider` and `SettingsProvider` inside
+  the application's authentication boundary. These providers now only
+  mount (and fire their initial API calls) after a successful login,
+  ensuring the browser console stays clean during the unauthenticated
+  phase.
+- **Corrected Proxy Host header for CORS stability**
+  ([`frontend/common.fragment`](frontend/common.fragment)).
+  Updated Nginx `proxy_set_header Host` to use `$http_host` instead of
+  `$host`. This ensures the backend receives the exact port used by the
+  client, preventing origin mismatches that were causing sporadic CSRF
+  and CORS failures in multi-port deployment scenarios.
+
+#### Migration notes
+
+- **Persistent JWT Secret required.** You MUST set a secure `JWT_SECRET`
+  in your `.env` file to prevent session invalidation on restart. A
+  default is provided in `.env.example`.
+- **No database migration.** Roll both containers together:
+  `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build`
+- **Full test suite 1401 / 1401 passing** on the released revision.
+
+
 ## [1.8.2] — 2026-05-13
 
 ### Patch release — global security headers, session-timeout reliability, and CI hardening

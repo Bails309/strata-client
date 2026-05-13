@@ -12,9 +12,10 @@ Older minor lines do **not** receive backports — please upgrade.
 
 | Version    | Supported          |
 | ---------- | ------------------ |
-| `1.4.x`    | :white_check_mark: |
-| `1.3.x`    | :white_check_mark: (critical fixes only, until 2026-08) |
-| `< 1.3.0`  | :x:                |
+| `1.8.x`    | :white_check_mark: |
+| `1.7.x`    | :white_check_mark: |
+| `1.6.x`    | :white_check_mark: (critical fixes only, until 2026-09) |
+| `< 1.6.0`  | :x:                |
 
 ## Reporting a vulnerability
 

@@ -41,9 +41,9 @@ backend and frontend containers together.
 - **Stripped `Server` and `X-Powered-By` headers**
   ([`frontend/Dockerfile`](frontend/Dockerfile), [`frontend/common.fragment`](frontend/common.fragment)).
   The `Server` header is now completely removed from all responses
-  to prevent technology disclosure. This was achieved by installing
-  the `nginx-mod-http-headers-more` module and using the
-  `more_clear_headers` directive.
+  to prevent technology disclosure. This was achieved by upgrading
+  to **Nginx 1.30.0 (Stable)**, installing the `nginx-module-njs`
+  package, and implementing a custom `js_header_filter` script.
 
 #### Fixed
 

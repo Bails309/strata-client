@@ -35,7 +35,7 @@ While `X-Frame-Options` served us well, modern browsers now prioritize the CSP `
 
 ## Zero technology disclosure
 
-To further harden our public surface, v1.8.2 now strips the `Server` and `X-Powered-By` headers entirely from all responses. By installing the `headers-more` module in our frontend gateway, we've eliminated the "Server: nginx" fingerprint, making it harder for automated scanners to identify and target our stack's specific technology.
+To further harden our public surface, v1.8.2 now strips the `Server` and `X-Powered-By` headers entirely from all responses. By upgrading to **Nginx 1.30.0 (Stable)** and implementing a custom **njs (Nginx JavaScript)** header filter, we've eliminated the "Server: nginx" fingerprint, making it harder for automated scanners to identify and target our stack's specific technology.
 
 ## Session timeout is now more reliable
 

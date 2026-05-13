@@ -15,6 +15,13 @@ TARGET_CONF="/etc/nginx/conf.d/default.conf"
 COMMON_SRC="/etc/nginx/common.fragment"
 COMMON_DST="/etc/nginx/conf.d/common.fragment"
 
+# ── 0. Restore files into the tmpfs conf.d mount ─────────────────────
+# The container runs with read_only=true and /etc/nginx/conf.d on tmpfs,
+# so any files the Dockerfile placed there are invisible at runtime.
+# Copy the njs support files from their build-time staging directory.
+cp /etc/nginx/njs/njs.conf          /etc/nginx/conf.d/njs.conf
+cp /etc/nginx/njs/remove_server.js  /etc/nginx/conf.d/remove_server.js
+
 # ── 1. HTTP vs HTTPS server block ─────────────────────────────────────
 echo "Checking for SSL certificates..."
 

@@ -439,13 +439,6 @@ pub fn build_router(state: SharedState) -> Router {
         .layer(middleware::from_fn(
             crate::services::edge_header::verify_edge_headers,
         ))
-        .layer(
-            TraceLayer::new_for_http().make_span_with(
-                DefaultMakeSpan::new()
-                    .level(tracing::Level::INFO)
-                    .include_headers(false),
-            ),
-        )
         .layer(prom_layer)
         .layer(cors)
         .layer(SetResponseHeaderLayer::overriding(
@@ -454,6 +447,13 @@ pub fn build_router(state: SharedState) -> Router {
                 "no-store, no-cache, must-revalidate, proxy-revalidate",
             ),
         ))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(
+                DefaultMakeSpan::new()
+                    .level(tracing::Level::INFO)
+                    .include_headers(false),
+            ),
+        )
         .with_state(state)
 }
 

@@ -56,10 +56,17 @@ export async function refreshAccessToken(): Promise<boolean> {
     try {
       const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
+        headers: buildHeaders("POST"),
         credentials: "include",
       });
+      if (!res.ok) {
+        console.error(`[refreshAccessToken] Failed with status: ${res.status} ${res.statusText}`);
+      } else {
+        console.log(`[refreshAccessToken] Success: ${res.status} ${res.statusText}`);
+      }
       return res.ok;
-    } catch {
+    } catch (e) {
+      console.error(`[refreshAccessToken] Fetch threw an error:`, e);
       return false;
     } finally {
       isRefreshing = false;

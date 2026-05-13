@@ -400,8 +400,9 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    tracing::info!("Listening on {addr}");
+    tracing::info!("Attempting to bind to {addr} ...");
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("Listening on {addr} — starting axum::serve");
 
     let shutdown_signal_token = shutdown.clone();
     axum::serve(

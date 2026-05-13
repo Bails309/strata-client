@@ -144,6 +144,12 @@ services:
       # VDI (docker-spawned desktops) — DISABLED at this layer; flip
       # to true via docker-compose.vdi.yml which also mounts docker.sock.
       - STRATA_VDI_ENABLED=${STRATA_VDI_ENABLED:-false}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -180,6 +186,12 @@ services:
       - "${HTTPS_PORT:-443}:443"
     networks:
       - guac-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     volumes:
       - ./certs:/etc/nginx/ssl:ro
     depends_on:

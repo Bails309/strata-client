@@ -19,8 +19,14 @@ COMMON_DST="/etc/nginx/conf.d/common.fragment"
 # The container runs with read_only=true and /etc/nginx/conf.d on tmpfs,
 # so any files the Dockerfile placed there are invisible at runtime.
 # Copy the njs support files from their build-time staging directory.
-cp /etc/nginx/njs/njs.conf          /etc/nginx/conf.d/njs.conf
-cp /etc/nginx/njs/remove_server.js  /etc/nginx/conf.d/remove_server.js
+NJS_AVAILABLE=true
+if [ -f /etc/nginx/njs/njs.conf ] && [ -f /etc/nginx/njs/remove_server.js ]; then
+    cp /etc/nginx/njs/njs.conf          /etc/nginx/conf.d/njs.conf
+    cp /etc/nginx/njs/remove_server.js  /etc/nginx/conf.d/remove_server.js
+else
+    echo "ssl-init: njs support files not found, disabling js_header_filter"
+    NJS_AVAILABLE=false
+fi
 
 # ── 1. HTTP vs HTTPS server block ─────────────────────────────────────
 echo "Checking for SSL certificates..."
@@ -56,6 +62,14 @@ sed \
     -e "s|__STRATA_API_UPSTREAM__|${API_UPSTREAM}|g" \
     -e "s|__STRATA_API_SCHEME__|${API_SCHEME}|g" \
     "$COMMON_SRC" > "$COMMON_DST"
+
+# If njs module is not available, strip js_header_filter from the
+# templated fragment and remove the njs conf so nginx can still start.
+if [ "$NJS_AVAILABLE" = "false" ] || ! grep -q 'load_module.*ngx_http_js_module' /etc/nginx/nginx.conf 2>/dev/null; then
+    echo "ssl-init: stripping njs directives from config (module not loaded)"
+    sed -i '/js_header_filter/d' "$COMMON_DST"
+    rm -f /etc/nginx/conf.d/njs.conf /etc/nginx/conf.d/remove_server.js
+fi
 
 # ── 3. proxy_ssl_* directives for HTTPS upstreams ─────────────────────
 # When the upstream is the DMZ relay (https), nginx must validate the

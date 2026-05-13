@@ -1,5 +1,5 @@
 function clearServer(r) {
-    delete r.headersOut['Server'];
+    r.headersOut['Server'] = 'Strata';
     delete r.headersOut['X-Powered-By'];
 }
 

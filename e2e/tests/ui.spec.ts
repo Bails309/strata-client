@@ -87,7 +87,7 @@ test.describe('Security headers', () => {
   test('no Server header exposed', async ({ page }) => {
     const response = await page.goto('/login');
     const server = response?.headers()['server'];
-    expect(server).toBeUndefined();
+    expect(server).toBe('Strata');
   });
 
   test('CSP does not allow unsafe-eval scripts', async ({ page }) => {

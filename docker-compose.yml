@@ -198,6 +198,11 @@ services:
       start_period: 15s
     volumes:
       - ./certs:/etc/nginx/ssl:ro
+      - ./frontend/common.fragment:/etc/nginx/common.fragment:ro
+      - ./frontend/http_only.conf:/etc/nginx/http_only.conf:ro
+      - ./frontend/https_enabled.conf:/etc/nginx/https_enabled.conf:ro
+      - ./frontend/njs.conf:/etc/nginx/njs/njs.conf:ro
+      - ./frontend/remove_server.js:/etc/nginx/njs/remove_server.js:ro
     depends_on:
       backend:
         condition: service_healthy

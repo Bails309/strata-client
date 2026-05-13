@@ -80,6 +80,11 @@ location / {
     try_files $uri $uri/ /index.html;
 }
 
+# Explicitly handle index.html internal redirects to ensure filters apply
+location = /index.html {
+    js_header_filter remove_server.clearServer;
+}
+
 # Cache hashed static assets aggressively
 location ~* \.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
     js_header_filter remove_server.clearServer;

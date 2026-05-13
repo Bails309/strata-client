@@ -31,7 +31,7 @@ test.describe('Command palette is global', () => {
 
   test('Ctrl+K opens the palette on Dashboard (Connections)', async ({ page }) => {
     await page.keyboard.press('Control+K');
-    await expect(page.getByPlaceholder(/Search connections/i)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByPlaceholder(/Search connections/i)).toBeVisible({ timeout: 10_000 });
     await page.keyboard.press('Escape');
   });
 

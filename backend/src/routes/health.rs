@@ -12,6 +12,7 @@ pub struct HealthResponse {
 }
 
 pub async fn health_check() -> Json<HealthResponse> {
+    tracing::info!("Health check requested");
     Json(HealthResponse { status: "ok" })
 }
 

@@ -19,7 +19,7 @@ use axum::{
 use axum_prometheus::PrometheusMetricLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 
 use crate::services::app_state::SharedState;
 use crate::services::middleware::{require_admin, require_auth, require_csrf};
@@ -448,11 +448,16 @@ pub fn build_router(state: SharedState) -> Router {
             ),
         ))
         .layer(
-            TraceLayer::new_for_http().make_span_with(
-                DefaultMakeSpan::new()
-                    .level(tracing::Level::INFO)
-                    .include_headers(false),
-            ),
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(tracing::Level::INFO)
+                        .include_headers(false),
+                )
+                .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
+                .on_response(
+                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
+                ),
         )
         .with_state(state)
 }

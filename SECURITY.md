@@ -12,9 +12,10 @@ Older minor lines do **not** receive backports — please upgrade.
 
 | Version    | Supported          |
 | ---------- | ------------------ |
-| `1.4.x`    | :white_check_mark: |
-| `1.3.x`    | :white_check_mark: (critical fixes only, until 2026-08) |
-| `< 1.3.0`  | :x:                |
+| `1.8.x`    | :white_check_mark: |
+| `1.7.x`    | :white_check_mark: |
+| `1.6.x`    | :white_check_mark: (critical fixes only, until 2026-09) |
+| `< 1.6.0`  | :x:                |
 
 ## Reporting a vulnerability
 
@@ -61,8 +62,7 @@ Please include, where possible:
   compromised endpoint.
 - Findings on *example*, *test*, or *demo* deployments unless they reveal a
   defect that would also affect a hardened production deployment.
-- Missing security headers on the bundled Nginx config that are explicitly
-  documented as operator-tunable in [docs/deployment.md](docs/deployment.md).
+- Missing security headers that are explicitly documented as operator-tunable in [docs/deployment.md](docs/deployment.md) (though most core headers like CSP and Cache-Control are now enforced by the application gateway and middleware).
 - Self-XSS, social-engineering vectors, and clickjacking on pages that
   legitimately render user-controlled HTML inside an `iframe sandbox`.
 

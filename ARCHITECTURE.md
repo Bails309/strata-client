@@ -8,7 +8,7 @@ boundary — see [docs/architecture.md](docs/architecture.md).
 
 Strata Client replaces the legacy Java/Tomcat + AngularJS Apache Guacamole
 stack with a Rust proxy and a React 19 SPA. It runs as a small set of Docker
-containers behind a single Nginx gateway:
+containers behind a single Nginx gateway (hardened with NJS):
 
 ```mermaid
 flowchart LR
@@ -47,7 +47,7 @@ flowchart LR
 
 ## Key data flows
 
-- **Authentication** — OIDC (Authorization Code + PKCE) or local username/password. Access token (20 min) + refresh cookie (8 h, `HttpOnly`). Tokens validated by JWT middleware on every privileged route. See [docs/security.md](docs/security.md).
+- **Authentication** — OIDC (Authorization Code + PKCE) or local username/password. Access token (20 min) + refresh cookie (8 h, `HttpOnly`). Tokens signed with a persistent `JWT_SECRET` for stability across restarts. Tokens validated by JWT middleware on every privileged route. See [docs/security.md](docs/security.md).
 - **Connection tunnel** — Browser opens a WebSocket to `/api/tunnel/...`; backend authenticates the JWT, materialises a `connections` row + per-user credential profile, builds the guacd handshake (`select` → `connect` arguments), forwards bytes both ways, mirrors the stream into the recording writer, and runs the auth watchdog (revocation polling + `MAX_TUNNEL_DURATION = 8h`). See [docs/architecture.md](docs/architecture.md#connection-tunnel) and [docs/security.md](docs/security.md#websocket-tunnel-auth-watchdog-v132-revised-v141).
 - **Credential checkout (PAM)** — Request → approver decision → LDAP `unicodePwd` reset → Vault-sealed return → user reveal → check-in or expiry → automatic rotation. See [docs/security.md](docs/security.md) § Privileged Account Password Management.
 - **Audit log** — Every privileged action writes one row to the append-only, SHA-256 hash-chained `audit_logs` table. The previous row's hash feeds into the next row's hash so a tampering attempt is detectable on read.

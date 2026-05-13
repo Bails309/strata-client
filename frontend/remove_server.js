@@ -1,6 +1,6 @@
 function clearServer(r) {
-    r.headersOut['Server'] = '';
-    r.headersOut['X-Powered-By'] = '';
+    r.headersOut['Server'] = 'Strata';
+    delete r.headersOut['X-Powered-By'];
 }
 
 export default { clearServer };

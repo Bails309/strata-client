@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 
 // Mock the api module
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getMe: vi.fn().mockResolvedValue({
     username: "testadmin",
     role: "admin",

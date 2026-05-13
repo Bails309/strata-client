@@ -11,6 +11,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getActiveSessions: vi.fn(),
   getMyActiveSessions: vi.fn(),
   killSessions: vi.fn(),

@@ -5,6 +5,7 @@ import { getAuditLogs } from "../api";
 
 // Mock the api module
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getAuditLogs: vi.fn(),
 }));
 

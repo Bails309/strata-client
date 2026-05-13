@@ -13,7 +13,7 @@ test.describe('Security headers & rate-limits', () => {
 
     // Security headers must always be present on public responses.
     expect(h['x-content-type-options']).toBe('nosniff');
-    expect(h['x-frame-options']).toBeTruthy();
+    expect(h['content-security-policy']).toContain("frame-ancestors 'none'");
     expect(h['referrer-policy']).toBeTruthy();
   });
 

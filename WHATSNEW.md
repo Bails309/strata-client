@@ -1,4 +1,88 @@
+# What's New in v1.8.4
+
+> **Patch release: Vitest test suite stabilization and environment
+> hardening.** v1.8.4 resolves critical test suite regressions by
+> implementing a robust global fetch polyfill and synchronizing
+> authentication mocks across the entire frontend codebase.
+
+
+## Robust and Stable Testing Environment
+
+v1.8.4 focuses on the long-term reliability of our development workflow by stabilizing the Vitest test suite. As the application has moved towards more secure, cookie-based authentication, our testing environment needed to be updated to match.
+
+Key improvements include:
+
+- **Global Fetch Polyfill**: We've implemented a custom fetch polyfill in our test setup that correctly handles relative URL paths (e.g., `/api/...`) by automatically resolving them to `http://localhost`. This eliminates the "Invalid URL" errors that previously plagued the Node-based test environment.
+- **Synchronized Authentication Mocks**: All component tests have been updated to include the necessary authentication utilities in their mocks. This prevents unhandled promise rejections and component crashes during testing, ensuring that developers can rely on the test suite for accurate feedback.
+- **Improved React Compatibility**: We've refined how we handle asynchronous state updates in our tests, resolving numerous React "act" warnings and ensuring our testing patterns align with current best practices.
+
+## Upgrade
+
+Drop-in upgrade from v1.8.3. Roll both the backend and frontend
+containers together:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+v1.8.4 is focused on development environment reliability and testing stability. It inherits the `JWT_SECRET` requirement introduced in v1.8.3.
+
+---
+
+# What's New in v1.8.3
+
+> **Patch release: NJS-based security hardening, CSP frame-ancestors, and
+> auth stabilization.** v1.8.3 hardens the application's security posture
+> by transitioning to modern security headers and stabilizing the
+> authentication lifecycle during backend restarts. **Note: `JWT_SECRET`
+> is now a mandatory environment variable for persistent sessions.**
+
+## Modern Anti-Clickjacking Protection
+
+
+Recent security hardening completes our transition to modern security headers by replacing the legacy `X-Frame-Options` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive across all responses.
+
+While `X-Frame-Options` was a useful first-generation guard, the CSP `frame-ancestors` directive is the modern standard for preventing clickjacking. By making this transition, we ensure that anti-framing protection is handled more predictably and securely by modern browsers.
+
+## Persistent Sessions Across Restarts
+
+Until now, the Strata backend generated a fresh, random JWT signing secret every time the container started. While secure, this had a significant UX drawback: any time the backend container was restarted (for an upgrade, a configuration change, or a routine health-check recycle), all active user sessions were immediately invalidated. Users would find themselves unexpectedly logged out and forced to sign in again.
+
+The current architecture utilizes a mandatory `JWT_SECRET` environment variable. By providing a persistent secret in your `.env` file, you ensure that user sessions (both access and refresh tokens) remain valid across backend restarts. This results in a much smoother experience for operators, especially in environments with frequent deployment cycles.
+
+## Zero Technology Fingerprinting
+
+Following our work in v1.8.2 to remove the `Server` header, we have implemented a more robust, NJS-powered filter that masks the `Server` header as "Strata" and removes the `X-Powered-By` header globally. This applies to every response, including those generated internally by Nginx, ensuring that no technical details about our stack are disclosed to potential attackers or automated scanners.
+
+## Cleaner Browser Console
+
+We've optimized the frontend application's startup sequence to eliminate the "401 Unauthorized" errors that previously appeared in the browser console during the login phase. By relocating the preference and settings providers inside the application's authentication gate, we ensure that these components only attempt to fetch data once the user is successfully signed in. The result is a cleaner, more professional diagnostic experience for operators.
+
+## Improved CORS and CSRF Stability
+
+We've refined the Nginx proxy configuration to handle port-specific Host headers more accurately. This fix resolves sporadic CORS and CSRF validation failures that could occur when Strata was deployed behind certain load balancers or on non-standard ports.
+
+## Upgrade
+
+Drop-in upgrade from v1.8.2. Roll both the backend and frontend
+containers together:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+**Important:** You must set a `JWT_SECRET` in your `.env` file to take advantage of session persistence. See `.env.example` for a template.
+
+---
+
 # What's New in v1.8.2
+
 
 > **Patch release: global security headers, session-timeout reliability,
 > and CI hardening.** v1.8.2 hardens the application's security posture

@@ -65,6 +65,7 @@ flowchart LR
 | **S** CSRF | Cross-site form post | Access tokens stored in `httpOnly; Secure; SameSite=Strict; Path=/api` cookies; double-submit `csrf_token` cookie + `X-CSRF-Token` header validated in constant time on every cookie-authenticated mutating request; GET/HEAD/OPTIONS, WS upgrades, and Bearer-authed requests are exempt. **W4-3 complete.** | OK — covered by `e2e/tests/rbac.spec.ts` CSRF suite |
 | **T** Stored XSS | User-supplied HTML in connection names, tags, descriptions | All UI uses React's escaping; no `dangerouslySetInnerHTML` outside vendored Guacamole client; CSP policy in `frontend/common.fragment` | Audit CSP regularly |
 | **T** DOM XSS | `eval`, dynamic URLs | ESLint `security/*` rules enforced; no `eval`, no `new Function` | OK |
+| **I** Clickjacking | Framing the SPA | NJS-enforced `Content-Security-Policy: frame-ancestors 'none'` at the gateway | OK |
 | **R** Action origin denial | "I didn't click that" | Every state-changing API call audit-logged server-side with actor + IP | OK |
 | **I** Token theft via XSS | localStorage access | Access + refresh tokens both `httpOnly` cookies; never readable from JS. **W4-3 complete.** | OK |
 | **D** Resource exhaustion | Large response renders | Pagination on all list endpoints; virtualization for session lists | Audit per page |
@@ -74,7 +75,7 @@ flowchart LR
 
 | Threat | Vector | Mitigation | Residual |
 |---|---|---|---|
-| **S** JWT forgery | Algorithm confusion, weak secret | RS256 for OIDC (verifies against IdP JWKS); HS256 for local with persisted random secret ≥256 bits, refused to start if missing | OK |
+| **S** JWT forgery | Algorithm confusion, weak secret | RS256 for OIDC (verifies against IdP JWKS); HS256 for local with mandatory persistent secret ≥256 bits, refused to start if missing (v1.8.3) | OK |
 | **S** Token replay after revoke | Stolen token used post-logout | Revocation list (`revoked_tokens` table) checked on every request | OK |
 | **T** SQL injection | Crafted query params | sqlx compile-time checked queries everywhere | OK |
 | **T** Mass-assignment | Extra JSON fields update protected columns | Each handler explicitly destructures input DTO; no `serde(flatten)` from request → DB row | OK |

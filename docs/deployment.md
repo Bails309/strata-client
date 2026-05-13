@@ -114,6 +114,18 @@ Edit `.env` or set environment variables:
 HTTP_PORT=80             # Nginx HTTP listener (host mapping)
 HTTPS_PORT=443           # Nginx HTTPS listener (host mapping)
 RUST_LOG=info            # Log level: trace, debug, info, warn, error
+
+#### Mandatory JWT Secret (v1.8.3)
+
+Since v1.8.3, you **must** provide a persistent `JWT_SECRET` in your `.env` file to ensure session stability across container restarts.
+
+```bash
+JWT_SECRET=your-random-32-character-secret-string
+```
+
+- **Why?** Without a persistent secret, the backend generates a random one on every startup. This invalidates all active user sessions (access and refresh tokens) whenever the backend container restarts, forcing all users to log in again.
+- **Security:** Use a cryptographically strong random string. You can generate one using `openssl rand -base64 32`.
+- **Note:** If you change this secret in the future, all existing sessions will be invalidated.
 ```
 
 ### 2. Build & run
@@ -543,6 +555,43 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 ## Upgrading
 
 ### Version-specific upgrade notes
+
+#### v1.8.3 → v1.8.4 (Frontend test suite stabilization)
+
+v1.8.4 is a maintenance release focused on the reliability of the frontend testing environment. It resolves widespread regressions in the Vitest suite caused by relative API path usage and missing authentication mocks.
+
+- **Frontend rebuild mandatory**: The `frontend` image must be rebuilt to include the updated test setup and component mocks.
+- **Backend rebuild recommended**: The backend version has been bumped to v1.8.4 for consistency with the workspace.
+- **No database migrations**.
+
+```bash
+cd strata-client
+git pull
+docker compose pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+Verify post-upgrade:
+1. Run frontend tests: `cd frontend && npm run test`. All tests should pass without `ERR_INVALID_URL` errors.
+
+#### v1.8.2 → v1.8.3 (Security Hardening & Session Stability)
+
+v1.8.3 introduces mandatory `JWT_SECRET` and NJS-based security hardening.
+
+- **`JWT_SECRET` is now mandatory**: You must add a `JWT_SECRET` to your `.env` file to ensure session persistence across restarts.
+- **NJS Header Masking**: The `frontend` image now requires the `njs` module (included in the default build).
+- **Backend changes**: Updated auth middleware to require `JWT_SECRET`.
+
+```bash
+# Add JWT_SECRET to .env if not present
+echo "JWT_SECRET=$(openssl rand -base64 32)" >> .env
+
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
 
 #### v1.4.0 → v1.4.1 (drop-in image rebuild — backend + frontend)
 

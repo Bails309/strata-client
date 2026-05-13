@@ -35,6 +35,7 @@ vi.mock("../components/ThemeProvider", () => ({
 }));
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getMyConnections: vi.fn(),
   getConnectionInfo: vi.fn(),
   getFavorites: vi.fn(),

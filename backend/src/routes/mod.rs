@@ -19,7 +19,7 @@ use axum::{
 use axum_prometheus::PrometheusMetricLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 
 use crate::services::app_state::SharedState;
 use crate::services::middleware::{require_admin, require_auth, require_csrf};
@@ -439,13 +439,6 @@ pub fn build_router(state: SharedState) -> Router {
         .layer(middleware::from_fn(
             crate::services::edge_header::verify_edge_headers,
         ))
-        .layer(
-            TraceLayer::new_for_http().make_span_with(
-                DefaultMakeSpan::new()
-                    .level(tracing::Level::INFO)
-                    .include_headers(false),
-            ),
-        )
         .layer(prom_layer)
         .layer(cors)
         .layer(SetResponseHeaderLayer::overriding(
@@ -454,6 +447,16 @@ pub fn build_router(state: SharedState) -> Router {
                 "no-store, no-cache, must-revalidate, proxy-revalidate",
             ),
         ))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(tracing::Level::INFO)
+                        .include_headers(false),
+                )
+                .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
+                .on_response(DefaultOnResponse::new().level(tracing::Level::INFO)),
+        )
         .with_state(state)
 }
 

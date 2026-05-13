@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getPendingApprovals: vi.fn(),
   decideCheckout: vi.fn(),
 }));

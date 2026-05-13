@@ -45,7 +45,7 @@ The previous Java/Tomcat + AngularJS stack is a maintenance burden and the SPA h
 git clone https://github.com/Bails309/strata-client.git
 cd strata-client
 cp .env.example .env
-export STRATA_VERSION=1.4.1
+export STRATA_VERSION=1.8.4
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -173,7 +173,7 @@ No. There is no telemetry, no analytics, no auto-update beacon. All outbound tra
 
 ### How do I set up a local dev environment?
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md). Backend needs Rust 1.95; frontend needs Node 24+ (the Dockerfile uses Node 25).
+See [CONTRIBUTING.md](../CONTRIBUTING.md). Backend needs Rust 1.95; frontend needs Node 26+ (the Dockerfile uses Node 26).
 
 ### Do you accept feature PRs from outside contributors?
 

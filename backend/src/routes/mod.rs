@@ -18,6 +18,7 @@ use axum::{
 };
 use axum_prometheus::PrometheusMetricLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 
 use crate::services::app_state::SharedState;
@@ -447,6 +448,10 @@ pub fn build_router(state: SharedState) -> Router {
         )
         .layer(prom_layer)
         .layer(cors)
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        ))
         .with_state(state)
 }
 
@@ -503,6 +508,7 @@ fn build_cors_layer() -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(origin)
+        .allow_credentials(true)
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -514,6 +520,7 @@ fn build_cors_layer() -> CorsLayer {
             axum::http::header::AUTHORIZATION,
             axum::http::header::CONTENT_TYPE,
             axum::http::header::ACCEPT,
+            "X-CSRF-Token".parse().unwrap(),
         ])
 }
 

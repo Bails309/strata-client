@@ -16,6 +16,30 @@ Key improvements include:
 - **Synchronized Authentication Mocks**: All component tests have been updated to include the necessary authentication utilities in their mocks. This prevents unhandled promise rejections and component crashes during testing, ensuring that developers can rely on the test suite for accurate feedback.
 - **Improved React Compatibility**: We've refined how we handle asynchronous state updates in our tests, resolving numerous React "act" warnings and ensuring our testing patterns align with current best practices.
 
+## Upgrade
+
+Drop-in upgrade from v1.8.3. Roll both the backend and frontend
+containers together:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+v1.8.4 is focused on development environment reliability and testing stability. It inherits the `JWT_SECRET` requirement introduced in v1.8.3.
+
+---
+
+# What's New in v1.8.3
+
+> **Patch release: NJS-based security hardening, CSP frame-ancestors, and
+> auth stabilization.** v1.8.3 hardens the application's security posture
+> by transitioning to modern security headers and stabilizing the
+> authentication lifecycle during backend restarts. **Note: `JWT_SECRET`
+> is now a mandatory environment variable for persistent sessions.**
+
 ## Modern Anti-Clickjacking Protection
 
 
@@ -56,6 +80,8 @@ docker compose --env-file .env \
 **Important:** You must set a `JWT_SECRET` in your `.env` file to take advantage of session persistence. See `.env.example` for a template.
 
 ---
+
+# What's New in v1.8.2
 
 
 > **Patch release: global security headers, session-timeout reliability,

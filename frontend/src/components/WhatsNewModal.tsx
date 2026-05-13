@@ -29,6 +29,79 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.8.4",
+    subtitle: "Vitest test suite stabilization and environment hardening",
+    sections: [
+      {
+        title: "Robust and Stable Testing Environment",
+        description:
+          "v1.8.4 stabilizes the Vitest test suite by implementing a global fetch polyfill that correctly handles relative API paths and synchronizing authentication mocks across the entire frontend codebase. This ensures reliable feedback for developers and resolves regressions related to Node-based test environment limitations.",
+      },
+      {
+        title: "Improved Mock Synchronization",
+        description:
+          "All component tests are now synchronized with the modern cookie-based authentication utilities, preventing unhandled promise rejections and component crashes during initialization in the testing environment.",
+      },
+      {
+        title: "Drop-in upgrade \u2014 rebuild required",
+        description:
+          "No database migrations, no API contract changes. v1.8.4 is focused on development environment reliability and testing stability. Roll both backend and frontend containers together to ensure full synchronization across the workspace.",
+      },
+    ],
+  },
+  {
+    version: "1.8.3",
+    subtitle: "NJS-based security hardening, CSP frame-ancestors, and persistent sessions",
+    sections: [
+      {
+        title: "Modern Anti-Clickjacking Protection",
+        description:
+          "Transitioned to `Content-Security-Policy: frame-ancestors 'none'` across all responses, replacing legacy `X-Frame-Options` with modern standards for superior anti-clickjacking protection.",
+      },
+      {
+        title: "Technology Masking (NJS)",
+        description:
+          "Implemented a robust NJS-powered filter that masks the `Server` header as 'Strata' and removes `X-Powered-By` globally, preventing technology fingerprinting and satisfying security audits.",
+      },
+      {
+        title: "Persistent Sessions Across Restarts",
+        description:
+          "Added a mandatory `JWT_SECRET` environment variable to ensure user sessions remain valid across backend restarts. This results in a much smoother experience for operators, especially in environments with frequent deployment cycles.",
+      },
+      {
+        title: "Clean Browser Console",
+        description:
+          "Optimized the frontend startup sequence to eliminate noisy 401 errors during the login phase by gating preference and settings providers behind the authentication boundary.",
+      },
+      {
+        title: "Drop-in upgrade \u2014 JWT_SECRET mandatory",
+        description:
+          "No database migrations. You MUST set a secure `JWT_SECRET` in your `.env` file to prevent session invalidation on restart. Roll both backend and frontend containers together for the cleanest upgrade.",
+      },
+    ],
+  },
+  {
+    version: "1.8.2",
+    subtitle: "Global security headers, session-timeout reliability, and CI hardening",
+    sections: [
+      {
+        title: "Sensitive data is never cached",
+        description:
+          "Implemented a global security header policy (`Cache-Control: no-store`) on every API response to ensure authenticated data is never persisted to disk by browsers or proxies, hardening the application against local data leakage.",
+      },
+      {
+        title: "Session-lifecycle stabilization",
+        description:
+          "Hardened the session-timeout warning system to prevent race conditions and ensure consistent state synchronization between the frontend and backend, ensuring users are never logged out mid-session.",
+      },
+      {
+        title: "Drop-in upgrade \u2014 frontend rebuild only",
+        description:
+          "No database migrations, no environment-variable changes. v1.8.2 is a security and stability patch. Backend and frontend images should be rolled together but each remains backwards-compatible with v1.8.1 peers.",
+      },
+    ],
+  },
+  {
     version: "1.8.1",
     subtitle: "Credential-profile expiry watcher no longer toasts on profile creation",
     sections: [

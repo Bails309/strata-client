@@ -29,6 +29,8 @@ RUN apk upgrade --no-cache && \
     else \
         echo "njs module already configured in nginx.conf"; \
     fi && \
+    # Suppress 'user' directive warning (container runs as non-root nginx user)
+    sed -i 's/^user /#user /' /etc/nginx/nginx.conf && \
     # Verify module exists (diagnostic)
     echo "=== Module files ===" && \
     (ls -la /etc/nginx/modules/ngx_http_js_module.so 2>/dev/null || \

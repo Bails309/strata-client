@@ -21,7 +21,7 @@ COMMON_DST="/etc/nginx/conf.d/common.fragment"
 # Copy the njs support files from their build-time staging directory.
 NJS_AVAILABLE=true
 if [ -f /etc/nginx/njs/njs.conf ] && [ -f /etc/nginx/njs/remove_server.js ]; then
-    cp /etc/nginx/njs/njs.conf          /etc/nginx/conf.d/njs.conf
+    cp /etc/nginx/njs/njs.conf          /etc/nginx/conf.d/00-njs.conf
     cp /etc/nginx/njs/remove_server.js  /etc/nginx/conf.d/remove_server.js
 else
     echo "ssl-init: njs support files not found, disabling js_header_filter"
@@ -68,7 +68,7 @@ sed \
 if [ "$NJS_AVAILABLE" = "false" ] || ! grep -q 'load_module.*ngx_http_js_module' /etc/nginx/nginx.conf 2>/dev/null; then
     echo "ssl-init: stripping njs directives from config (module not loaded)"
     sed -i '/js_header_filter/d' "$COMMON_DST"
-    rm -f /etc/nginx/conf.d/njs.conf /etc/nginx/conf.d/remove_server.js
+    rm -f /etc/nginx/conf.d/00-njs.conf /etc/nginx/conf.d/remove_server.js
 fi
 
 # ── 3. proxy_ssl_* directives for HTTPS upstreams ─────────────────────

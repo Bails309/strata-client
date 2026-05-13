@@ -19,7 +19,7 @@ Key improvements include:
 ## Modern Anti-Clickjacking Protection
 
 
-v1.8.3 completes our transition to modern security headers by replacing the legacy `X-Frame-Options` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive across all responses.
+Recent security hardening completes our transition to modern security headers by replacing the legacy `X-Frame-Options` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive across all responses.
 
 While `X-Frame-Options` was a useful first-generation guard, the CSP `frame-ancestors` directive is the modern standard for preventing clickjacking. By making this transition, we ensure that anti-framing protection is handled more predictably and securely by modern browsers.
 
@@ -27,11 +27,11 @@ While `X-Frame-Options` was a useful first-generation guard, the CSP `frame-ance
 
 Until now, the Strata backend generated a fresh, random JWT signing secret every time the container started. While secure, this had a significant UX drawback: any time the backend container was restarted (for an upgrade, a configuration change, or a routine health-check recycle), all active user sessions were immediately invalidated. Users would find themselves unexpectedly logged out and forced to sign in again.
 
-v1.8.3 introduces a mandatory `JWT_SECRET` environment variable. By providing a persistent secret in your `.env` file, you ensure that user sessions (both access and refresh tokens) remain valid across backend restarts. This results in a much smoother experience for operators, especially in environments with frequent deployment cycles.
+The current architecture utilizes a mandatory `JWT_SECRET` environment variable. By providing a persistent secret in your `.env` file, you ensure that user sessions (both access and refresh tokens) remain valid across backend restarts. This results in a much smoother experience for operators, especially in environments with frequent deployment cycles.
 
 ## Zero Technology Fingerprinting
 
-Following our work in v1.8.2 to remove the `Server` header, v1.8.3 implements a more robust, NJS-powered filter that masks the `Server` header as "Strata" and removes the `X-Powered-By` header globally. This applies to every response, including those generated internally by Nginx, ensuring that no technical details about our stack are disclosed to potential attackers or automated scanners.
+Following our work in v1.8.2 to remove the `Server` header, we have implemented a more robust, NJS-powered filter that masks the `Server` header as "Strata" and removes the `X-Powered-By` header globally. This applies to every response, including those generated internally by Nginx, ensuring that no technical details about our stack are disclosed to potential attackers or automated scanners.
 
 ## Cleaner Browser Console
 

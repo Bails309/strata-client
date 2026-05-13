@@ -119,6 +119,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 ## 🆕 What's new
 
+| 1.8.4   | 2026-05-13 | **Vitest Test Suite Stabilization** — implemented global fetch polyfill for relative URL resolution; synchronized authentication mocks across the entire test suite; resolved React state update warnings in profile tests. ([details](CHANGELOG.md#184--2026-05-13)) |
 | 1.8.3   | 2026-05-13 | **Security Hardening & Session Stability** — NJS-based Nginx header masking; CSP `frame-ancestors 'none'`; persistent `JWT_SECRET` for cross-restart session stability; silent 401 log noise reduction during unauthenticated states. ([details](CHANGELOG.md#183--2026-05-13)) |
 | 1.8.2   | 2026-05-13 | **Security Hardening & CI/CD maintenance** — global `Cache-Control: no-store` header policy implemented; session cookie TTLs adjusted with a 60s buffer for improved SPA reliability during token refresh; Trivy image scanning fixed in GitHub Actions. ([details](CHANGELOG.md#182--2026-05-13)) |
 | 1.8.1   | 2026-05-12 | **Credential-profile expiry watcher fix** — the v1.8.0 watcher no longer publishes a `1 day` warning toast the moment a fresh 12-hour standard profile is created (the default TTL was already inside the 1-day warning window on first poll). Watcher now filters threshold list against each profile's own TTL so warnings only fire as the deadline genuinely approaches. Frontend-only, drop-in from v1.8.0. ([details](CHANGELOG.md#181--2026-05-12))                                                                                                                                                                                            |
@@ -226,7 +227,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.8.3                                  # or "latest"
+export STRATA_VERSION=1.8.4                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -242,7 +243,7 @@ Images:
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.5.3 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.8.4 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -250,7 +251,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.5.3 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.5.3 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.8.4 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

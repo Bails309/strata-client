@@ -9,7 +9,7 @@ flowchart LR
     Browser([Browser])
     Browser -->|HTTPS / WSS| Frontend
     subgraph Net["Docker Compose network (guac-internal bridge)"]
-        Frontend["frontend (nginx)<br/><sub>:80 / :443</sub>"]
+        Frontend["frontend (nginx + njs)<br/><sub>:80 / :443<br/>header masking</sub>"]
         Backend["backend (Rust / Axum)<br/><sub>:8080</sub>"]
         Guacd["guacd<br/><sub>FreeRDP 3 + H.264</sub>"]
         Guacd2["guacd-2… (optional sidecars)"]

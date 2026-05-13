@@ -276,9 +276,39 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Build and start all services
-        run: docker compose --profile local-db up -d --build --wait
-        timeout-minutes: 20
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Build and load guacd
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: ./guacd
+          file: ./guacd/Dockerfile
+          tags: strata/custom-guacd:latest
+          load: true
+          cache-from: type=gha,scope=guacd
+
+      - name: Build and load backend
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          file: ./backend/Dockerfile
+          tags: strata/backend:latest
+          load: true
+          cache-from: type=gha,scope=backend
+
+      - name: Build and load frontend
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          file: ./frontend/Dockerfile
+          tags: strata/frontend:latest
+          load: true
+          cache-from: type=gha,scope=frontend
+
+      - name: Start all services
+        run: docker compose --profile local-db up -d --wait
+        timeout-minutes: 10
         env:
           DEFAULT_ADMIN_PASSWORD: admin
 
@@ -372,7 +402,7 @@ jobs:
     needs: [backend-check, frontend-check]
     strategy:
       matrix:
-        service: [backend, frontend]
+        service: [backend, frontend, guacd]
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -383,7 +413,7 @@ jobs:
       - name: Build ${{ matrix.service }} image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
         with:
-          context: .
+          context: ${{ matrix.service == 'guacd' && './guacd' || '.' }}
           file: ./${{ matrix.service }}/Dockerfile
           push: false
           cache-from: type=gha,scope=${{ matrix.service }}

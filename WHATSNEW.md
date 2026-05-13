@@ -1,12 +1,23 @@
-# What's New in v1.8.3
+# What's New in v1.8.4
 
-> **Patch release: NJS-based security hardening, CSP frame-ancestors, and
-> auth stabilization.** v1.8.3 hardens the application's security posture
-> by transitioning from legacy security headers to modern standards and
-> stabilizing the authentication lifecycle. Drop-in upgrade from v1.8.2 —
-> roll both the backend and frontend containers together.
+> **Patch release: Vitest test suite stabilization and environment
+> hardening.** v1.8.4 resolves critical test suite regressions by
+> implementing a robust global fetch polyfill and synchronizing
+> authentication mocks across the entire frontend codebase.
+
+
+## Robust and Stable Testing Environment
+
+v1.8.4 focuses on the long-term reliability of our development workflow by stabilizing the Vitest test suite. As the application has moved towards more secure, cookie-based authentication, our testing environment needed to be updated to match.
+
+Key improvements include:
+
+- **Global Fetch Polyfill**: We've implemented a custom fetch polyfill in our test setup that correctly handles relative URL paths (e.g., `/api/...`) by automatically resolving them to `http://localhost`. This eliminates the "Invalid URL" errors that previously plagued the Node-based test environment.
+- **Synchronized Authentication Mocks**: All component tests have been updated to include the necessary authentication utilities in their mocks. This prevents unhandled promise rejections and component crashes during testing, ensuring that developers can rely on the test suite for accurate feedback.
+- **Improved React Compatibility**: We've refined how we handle asynchronous state updates in our tests, resolving numerous React "act" warnings and ensuring our testing patterns align with current best practices.
 
 ## Modern Anti-Clickjacking Protection
+
 
 v1.8.3 completes our transition to modern security headers by replacing the legacy `X-Frame-Options` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive across all responses.
 

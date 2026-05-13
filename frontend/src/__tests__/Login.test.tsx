@@ -11,6 +11,7 @@ vi.mock("../components/ThemeProvider", () => ({
 
 // Mock the api module
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getStatus: vi.fn(),
   login: vi.fn(),
 }));

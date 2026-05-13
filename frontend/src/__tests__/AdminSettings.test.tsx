@@ -12,7 +12,9 @@ vi.mock("../components/ThemeProvider", () => ({
 }));
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getSettings: vi.fn(),
+
   updateSettings: vi.fn(),
   updateSso: vi.fn(),
   getKerberosRealms: vi.fn(),

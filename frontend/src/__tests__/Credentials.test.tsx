@@ -9,6 +9,7 @@ vi.mock("../components/ThemeProvider", () => ({
 }));
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getCredentialProfiles: vi.fn(),
   createCredentialProfile: vi.fn(),
   updateCredentialProfile: vi.fn(),

@@ -3,7 +3,9 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn().mockReturnValue("test-csrf"),
   getMe: vi.fn(),
+
   getUserPreferences: vi.fn(),
   updateUserPreferences: vi.fn(),
   getMyConnections: vi.fn().mockResolvedValue([]),
@@ -100,7 +102,7 @@ describe("Profile page", () => {
     const recorder = await screen.findByLabelText("Record command palette shortcut");
     await userEvent.click(recorder);
     expect(recorder).toHaveTextContent("Press a shortcut…");
-    act(() => {
+    await act(async () => {
       document.dispatchEvent(
         new KeyboardEvent("keydown", { key: "j", ctrlKey: true, bubbles: true })
       );
@@ -112,7 +114,7 @@ describe("Profile page", () => {
     renderWithProvider();
     const recorder = await screen.findByLabelText("Record command palette shortcut");
     await userEvent.click(recorder);
-    act(() => {
+    await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     await waitFor(() => expect(screen.getByText("Recording cancelled.")).toBeInTheDocument());
@@ -123,7 +125,7 @@ describe("Profile page", () => {
     renderWithProvider();
     const recorder = await screen.findByLabelText("Record command palette shortcut");
     await userEvent.click(recorder);
-    act(() => {
+    await act(async () => {
       document.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Control", ctrlKey: true, bubbles: true })
       );

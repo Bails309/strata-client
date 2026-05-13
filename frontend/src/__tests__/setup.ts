@@ -27,3 +27,14 @@ afterEach(() => {
 
 // Increase timeout for slow CI environments
 vi.setConfig({ testTimeout: 15000 });
+
+// Polyfill global fetch to handle relative URLs (Node 20+ undici fetch
+// doesn't resolve them against a base automatically like browser fetch does).
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input: string | Request | URL, init?: RequestInit) => {
+  let url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  if (url.startsWith("/")) {
+    url = `http://localhost${url}`;
+  }
+  return originalFetch(url, init);
+};

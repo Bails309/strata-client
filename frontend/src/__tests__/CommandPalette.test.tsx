@@ -8,6 +8,7 @@ Element.prototype.scrollIntoView = vi.fn();
 
 // Mock the API
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getMyConnections: vi.fn(),
   getTags: vi.fn(),
   getConnectionTags: vi.fn(),

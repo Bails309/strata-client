@@ -5,7 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] — 2026-05-13
+
+### Patch release — Vitest suite stabilization, relative URL parsing, and mock synchronization
+
+This release stabilizes the frontend test suite by hardening the Vitest
+environment and synchronizing component mocks with the modern
+cookie-based authentication utilities. It resolves regressions related to
+relative API URL parsing in JSDOM and unhandled promise rejections
+during test component initialization.
+
+#### Fixed
+
+- **Hardened Vitest environment for relative URL parsing**
+  ([`frontend/src/__tests__/setup.ts`](frontend/src/__tests__/setup.ts)).
+  Implemented a global `fetch` polyfill that automatically resolves
+  relative API paths to `http://localhost`. This prevents
+  `ERR_INVALID_URL` failures in the Node-based test environment while
+  maintaining parity with modern browser behavior.
+- **Synchronized API mocks for cookie-based authentication**
+  (Various test files in `frontend/src/__tests__/`).
+  Updated all component test mocks to include the `readCookie` export
+  from the `api.ts` module. This resolves crashes in components (like
+  `UserPreferencesProvider`) that depend on the existence of this
+  utility during their initial mount lifecycle.
+- **Improved test reliability for React state updates**
+  ([`frontend/src/__tests__/Profile.test.tsx`](frontend/src/__tests__/Profile.test.tsx)).
+  Migrated synchronous `act()` calls to asynchronous `await act(async () => ...)`
+  patterns. This resolves React warnings regarding state updates not
+  being wrapped in `act(...)` and ensures better test suite compliance.
+
 ## [1.8.3] — 2026-05-13
+
 
 ### Patch release — NJS-based security hardening, CSP frame-ancestors, and auth stabilization
 

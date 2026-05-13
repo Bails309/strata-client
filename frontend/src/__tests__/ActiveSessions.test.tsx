@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 
 vi.mock("../api", () => ({
+  readCookie: vi.fn(),
   getActiveSessions: vi.fn(),
   killSessions: vi.fn(),
 }));

@@ -57,6 +57,8 @@ location /api/ {
     proxy_set_header X-Forwarded-Proto $scheme;
     
     js_header_filter remove_server.clearServer;
+    proxy_hide_header Server;
+    proxy_hide_header X-Powered-By;
 
     # Optional proxy_ssl_* directives — empty in HTTP mode, populated
     # by ssl-init.sh when STRATA_API_SCHEME=https. Required so nginx
@@ -83,5 +85,10 @@ location ~* \.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
     js_header_filter remove_server.clearServer;
     expires 365d;
     add_header Cache-Control "public, immutable";
+    
+    # Re-apply security headers (nginx add_header inheritance rules)
     add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 }

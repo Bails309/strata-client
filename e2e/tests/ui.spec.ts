@@ -70,7 +70,7 @@ test.describe('Authenticated navigation', () => {
 });
 
 test.describe('Security headers', () => {
-  test('CSP header is present on HTML pages', async ({ page }) => {
+  test('CSP header is present on HTML pages and prevents framing', async ({ page }) => {
     const response = await page.goto('/login');
     const csp = response?.headers()['content-security-policy'];
     expect(csp).toBeTruthy();
@@ -84,16 +84,10 @@ test.describe('Security headers', () => {
     expect(response?.headers()['x-content-type-options']).toBe('nosniff');
   });
 
-  test('X-Frame-Options is DENY', async ({ page }) => {
+  test('no Server header exposed', async ({ page }) => {
     const response = await page.goto('/login');
-    expect(response?.headers()['x-frame-options']).toBe('DENY');
-  });
-
-  test('no Server version exposed', async ({ page }) => {
-    const response = await page.goto('/login');
-    const server = response?.headers()['server'] || '';
-    // server_tokens off hides the version; ensure no version number is leaked
-    expect(server).not.toMatch(/\d/);
+    const server = response?.headers()['server'];
+    expect(server).toBeUndefined();
   });
 
   test('CSP does not allow unsafe-eval scripts', async ({ page }) => {

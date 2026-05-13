@@ -109,7 +109,8 @@ The central orchestrator. Responsibilities:
 - **Auth** — multi-method authentication system:
   - **SSO/OIDC** — dynamic IdP discovery via JWKS, secure client secret storage in Vault, and automatic session establishment.
   - **Local Auth** — built-in credentials (Argon2id) with global enable/disable toggle, minimum 12-character password policy, and dedicated password change / admin reset endpoints.
-  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), proactive activity-based silent refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast.
+  - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), proactive activity-based silent refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast. Cookies (`csrf_token`, `session_expires`) include a 60s buffer (v1.8.2) for improved SPA refresh reliability.
+  - **Global Security Headers (v1.8.2)** — implements a global `tower-http` middleware that applies `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to every API response to prevent sensitive data caching.
   - **Enforcement** — strict backend policy check on every login attempt ensures disabled methods cannot be accessed.
 - **Vault** — envelope encryption for stored credentials via Vault Transit
 - **Tunnel** — bidirectional WebSocket ↔ TCP proxy to guacd with protocol handshake injection; supports H.264 GFX pipeline parameters for RDP
@@ -138,7 +139,7 @@ The frontend nginx container serves as the primary gateway for all external traf
 
 - **Reverse proxying** — routes `/api/*` to the Rust backend (including WebSocket upgrades for tunnel connections). The shared `common.fragment` declares `resolver 127.0.0.11 valid=10s ipv6=off;` (Docker's embedded DNS) and uses a `set $backend_upstream "backend:8080";` variable as the `proxy_pass` target so the upstream is re-resolved per request rather than cached at process start. **(v1.3.0+)** This avoids the historical `[emerg] host not found in upstream "backend"` boot failure when the backend container was briefly unreachable during `docker compose up -d --build`; nginx now stays up and returns `502 Bad Gateway` for the duration of any backend outage, recovering automatically when the upstream comes back
 - **SSL termination** — when TLS certificates are mounted at `/etc/nginx/ssl/`, nginx serves HTTPS on port 443 with Mozilla Intermediate cipher configuration, HSTS, and automatic HTTP→HTTPS redirection
-- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Content-Security-Policy`, and `Permissions-Policy` on every response
+- **Security headers** — `X-Content-Type-Options`, `Referrer-Policy`, `Content-Security-Policy` (including `frame-ancestors 'none'`), and `Permissions-Policy` on every response. API-specific security headers (notably `Cache-Control: no-store`) are enforced by the Rust backend middleware for all `/api/*` routes (v1.8.2).
 - **Compression** — gzip for text, CSS, JS, JSON, and SVG assets
 - **SPA fallback** — `try_files` to `index.html` for client-side routing
 

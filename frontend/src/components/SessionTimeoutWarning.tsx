@@ -101,15 +101,25 @@ export default function SessionTimeoutWarning({ onExpired }: { onExpired?: () =>
 
   const handleExtend = useCallback(async () => {
     setExtending(true);
+    console.log("[SessionTimeoutWarning] Manual extension requested");
     try {
       const ok = await refreshAccessToken();
       if (ok) {
+        console.log("[SessionTimeoutWarning] Extension successful");
         setDismissed(true);
+      } else {
+        console.error("[SessionTimeoutWarning] Extension failed (refresh returned false)");
+        // Extension failed (e.g. session already purged on server) — force logout
+        // instead of leaving the user in a broken state.
+        onExpired?.();
       }
+    } catch (e) {
+      console.error("[SessionTimeoutWarning] Extension failed with error:", e);
+      onExpired?.();
     } finally {
       setExtending(false);
     }
-  }, []);
+  }, [onExpired]);
 
   // Don't render when there's no expiry, user dismissed it, or outside the warning window
   if (secondsLeft === null || dismissed || secondsLeft > WARNING_LEAD_SECS) {

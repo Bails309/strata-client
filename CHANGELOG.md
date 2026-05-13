@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] — 2026-05-13
+
+### Patch release — global security headers, session-timeout reliability, and CI hardening
+
+Hardens the application's security posture by enforcing non-cacheable API
+responses globally and tightening the session-lifecycle state sync between
+the frontend and backend. Also restores the integrity of the Trivy
+security scanning pipeline. Drop-in upgrade from v1.8.1; roll the
+backend and frontend containers together.
+
+#### Security
+
+- **Global `Cache-Control: no-store` header**
+  ([`backend/src/routes/mod.rs`](backend/src/routes/mod.rs)).
+  All API responses now carry `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate`. This prevents sensitive authenticated data from being persisted to disk by browser caches or intermediate proxies.
+- **Extended session-cookie TTL buffer**
+  ([`backend/src/routes/auth.rs`](backend/src/routes/auth.rs)).
+  The `csrf_token` and `session_expires` cookies are now issued with a
+  TTL 60 seconds longer than the `access_token` itself. This ensures the
+  SPA can still read its own session metadata (the CSRF token and expiry
+  timestamp) during the final minute of a session's life, allowing it to
+  successfully trigger a `refreshAccessToken` call before the hard
+  deadline.
+- **Hardened CORS policy.**
+  Re-asserted `allow_credentials(true)` and explicit `X-CSRF-Token`
+  header support in the global middleware stack to ensure cookie-based
+  authentication remains stable across all supported deployment
+  topologies.
+- **Removed deprecated `X-Frame-Options` header**
+  ([`frontend/common.fragment`](frontend/common.fragment)).
+  Replaced `X-Frame-Options: DENY` with the modern `Content-Security-Policy: frame-ancestors 'none'`
+  directive. This ensures anti-framing protection is handled by the
+  modern CSP standard while maintaining broad browser compatibility.
+- **Stripped `Server` and `X-Powered-By` headers**
+  ([`frontend/Dockerfile`](frontend/Dockerfile), [`frontend/common.fragment`](frontend/common.fragment)).
+  The `Server` header is now completely removed from all responses
+  to prevent technology disclosure. This was achieved by upgrading
+  to **Nginx 1.30.0 (Stable)**, installing the `nginx-module-njs`
+  package, and implementing a custom `js_header_filter` script.
+
+#### Fixed
+
+- **Immediate logout on session-extension failure**
+  ([`frontend/src/components/SessionTimeoutWarning.tsx`](frontend/src/components/SessionTimeoutWarning.tsx)).
+  When an operator clicks "Extend session" but the refresh token has
+  already been invalidated (e.g. by a sign-out in another tab or a
+  backend session revocation), the UI now forces an immediate logout
+  rather than leaving the warning modal in a "zombie" state.
+- **Restored Trivy security scanning**
+  ([`.github/workflows/trivy.yml`](.github/workflows/trivy.yml)).
+  Fixed the container scanning pipeline by forcing the `docker` driver
+  in the Buildx setup and explicitly setting `scan-type: 'image'`. This
+  resolves a regression where Trivy could not locate the locally built
+  Docker image for analysis.
+
+#### Added
+
+- **Diagnostic session logging**
+  ([`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/components/SessionTimeoutWarning.tsx`](frontend/src/components/SessionTimeoutWarning.tsx)).
+  Added detailed `console.debug` logging tracking the presence of CSRF
+  tokens during refresh calls and the outcome of manual extension
+  requests to aid in future troubleshooting of complex session-lifecycle
+  issues.
+
+#### Migration notes
+
+- **No database migration.** Roll both containers together to pick up
+   the backend header changes and the frontend session-reliability
+   fixes.
+  `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build`
+- **Full test suite 1401 / 1401 passing** on the released revision.
+
 ## [1.8.1] — 2026-05-12
 
 ### Patch release — credential-profile expiry watcher no longer toasts on profile creation

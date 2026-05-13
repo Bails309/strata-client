@@ -42,17 +42,22 @@ Authentication uses a **dual-token architecture** aligned with OWASP session tim
 
 | Token         | TTL        | Storage                                        | Purpose                     |
 | ------------- | ---------- | ---------------------------------------------- | --------------------------- |
-| Access token  | 20 minutes | `localStorage` (Bearer header)                 | API authentication          |
+| Access token  | 20 minutes | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | API authentication          |
 | Refresh token | 8 hours    | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | Silent access token renewal |
+| `csrf_token`  | Access + 60s| `Secure`, `SameSite=Strict` cookie             | CSRF for refresh & logout   |
+| `session_exp` | Access + 60s| `Secure`, `SameSite=Strict` cookie             | Expiry display for SPA      |
+
+The 60-second buffer on `csrf_token` and `session_expires` (implemented in v1.8.2) ensures the SPA can access these values to perform a refresh even at the exact deadline of the access token, preventing "locked out" states where the CSRF token would otherwise expire before the final refresh request could be sent.
 
 **Flow:**
 
-1. On login, the backend issues both an access token (in the JSON response) and a refresh token (as an `HttpOnly` cookie scoped to `/api/auth/refresh`)
-2. The frontend uses the access token for all API requests via `Authorization: Bearer`
-3. When the access token expires (401 response), the frontend silently calls `POST /api/auth/refresh` with the cookie
-4. If refresh succeeds, a new access token is issued and the original request is retried transparently
-5. If refresh fails (cookie expired or revoked), the user is redirected to the login page
-6. A **session timeout warning** toast appears 2 minutes before access token expiry, offering an "Extend Session" button
+1. On login, the backend issues an **access token**, a **refresh token**, a **CSRF token**, and a **session expiry** timestamp, all as cookies.
+2. The access and refresh tokens use the `HttpOnly` attribute, meaning they cannot be read or modified by client-side JavaScript, significantly mitigating the risk of token theft via XSS.
+3. The frontend uses the browser's native `credentials: "include"` fetch behavior to send these cookies automatically on every `/api/*` request.
+4. When the access token expires (401 response), the frontend silently calls `POST /api/auth/refresh` (which sends the refresh cookie).
+5. If refresh succeeds, a new access token cookie is issued and the original request is retried transparently.
+6. If refresh fails (cookie expired or revoked), the user is redirected to the login page.
+7. A **session timeout warning** toast appears 2 minutes before access token expiry, offering an "Extend Session" button.
 
 **Token claims:** Both tokens include a `token_type` claim (`"access"` or `"refresh"`). The auth middleware rejects refresh tokens used as access tokens. A `default_token_type()` provides backward compatibility for pre-existing tokens during upgrade.
 
@@ -85,12 +90,21 @@ callbacks in `SessionManager.tsx`, `SessionClient.tsx`,
 events. The result is a single in-process invariant —
 **as long as the user is interacting with any window of any session, they cannot be silently signed out** — and the 8-hour refresh-token ceiling is the only hard cap on session length. See [docs/architecture.md § Session-activity bus and proactive token refresh (v1.6.1)](architecture.md#session-activity-bus-and-proactive-token-refresh-v161) for the full call-site table and design rationale.
 
-#### SSO callback hardening (v1.6.1)
+#### Global Cache-Control Headers (v1.8.2)
 
-Two defensive changes ride along on the v1.6.1 SSO-latency fix:
+Since v1.8.2, a global middleware policy in `backend/src/routes/mod.rs` applies consistent security headers to every API response:
 
-- **`Cache-Control: no-store` on the SSO redirect.** `GET /api/auth/sso/login` previously responded with a bare 303 to the IdP; the browser was free to BFCache the response. A user who navigated forward, then back to the SSO landing, could replay an already-consumed single-use `state` UUID, which the callback's nonce store correctly rejected — but the failure mode (an "Invalid or expired token" page after a back-button) was a poor UX. The redirect is now built explicitly as a `Response` with a `Cache-Control: no-store` header so BFCache treats it as ineligible, eliminating the back-button replay path.
-- **Diagnostic timing trace.** Every successful SSO callback emits an info-level tracing line on the `strata::auth::sso` target with `discovery_ms`, `token_exchange_ms`, `token_validate_ms`, and `total_so_far_ms`. The line is the canonical signal for triaging "SSO is slow" reports — the values either add up to the user-perceived wait (in which case Strata is the bottleneck and the OIDC discovery / JWKS cache hit/miss can be reasoned about — see [architecture.md § OIDC discovery and JWKS cache consolidation (v1.6.1)](architecture.md#oidc-discovery-and-jwks-cache-consolidation-v161)) or they are small while the user still waited minutes (in which case the time was spent inside Keycloak's broker path or a federated upstream IdP, and the trail continues outside the Strata logs).
+- **`Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate`** — Prevents sensitive JSON payloads, user metadata, or tunnel secrets from being cached by the browser's disk/memory cache or intermediary forward/reverse proxies.
+
+This policy ensures that session-specific data never remains available in a browser's history or a shared proxy cache after the user has navigated away or logged out.
+
+#### SSO callback hardening (v1.6.1; revised v1.8.2)
+
+The OIDC callback handler is hardened against replay attacks and Chromium's BFCache:
+
+- **State UUID validation**: the `state` parameter is a cryptographically strong UUIDv4, validated exactly once.
+- **Global Cache-Control**: Prior to v1.8.2, `no-store` was applied specifically to SSO redirects. It is now part of the global middleware policy, ensuring the OIDC `code` and `state` transition never enters the browser's navigation history cache.
+- **Diagnostic timing trace.** Every successful SSO callback emits an info-level tracing line on the `strata::auth::sso` target with `discovery_ms`, `token_exchange_ms`, `token_validate_ms`, and `total_so_far_ms`.
 
 ### WebSocket-tunnel auth watchdog (v1.3.2; revised v1.4.1)
 
@@ -995,9 +1009,9 @@ When TLS is enabled the gateway provides:
 - **Automatic HTTP-to-HTTPS redirect** — enabled when certs are
   present.
 - **Security headers** — `X-Content-Type-Options: nosniff`,
-  `X-Frame-Options: DENY`,
-  `Referrer-Policy: strict-origin-when-cross-origin`, and the
-  `Server` header stripped.
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Content-Security-Policy: frame-ancestors 'none'`, and the
+  `Server` and `X-Powered-By` headers stripped entirely.
 - **Compression** — gzip on static assets and API responses.
 
 The nginx container runs unprivileged with `cap_drop: ALL` and

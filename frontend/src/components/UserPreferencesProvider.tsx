@@ -3,7 +3,12 @@
    decoration, or render-time time/derivation patterns. See
    eslint.config.js W4-1 commentary. */
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import { getUserPreferences, updateUserPreferences, readCookie, UserPreferences as Prefs } from "../api";
+import {
+  getUserPreferences,
+  updateUserPreferences,
+  readCookie,
+  UserPreferences as Prefs,
+} from "../api";
 import { DEFAULT_COMMAND_PALETTE_BINDING } from "../utils/keybindings";
 
 interface PreferencesContextValue {

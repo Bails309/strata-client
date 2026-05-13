@@ -450,7 +450,9 @@ pub fn build_router(state: SharedState) -> Router {
         .layer(cors)
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("no-store, no-cache, must-revalidate, proxy-revalidate"),
+            axum::http::HeaderValue::from_static(
+                "no-store, no-cache, must-revalidate, proxy-revalidate",
+            ),
         ))
         .with_state(state)
 }

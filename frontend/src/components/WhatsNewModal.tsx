@@ -30,12 +30,17 @@ export interface ReleaseCard {
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.9.1",
-    subtitle: "SSO Connection Editor fixes and CodeQL variable cleanup",
+    subtitle: "SSO Connection Editor fixes, Cache-Busting, and CodeQL variable cleanup",
     sections: [
       {
         title: "SSO Provider Edit Fixes",
         description:
           "Editing an existing SSO provider configuration (e.g., Entra ID, Okta) now correctly preserves existing client secrets when saving. The test connection utility also now accurately uses existing secrets to validate edited configurations, ensuring robust testing prior to saving.",
+      },
+      {
+        title: "SPA Cache Invalidation (Cache-Busting)",
+        description:
+          "Configured Nginx's SPA routing to serve the main index.html entry point with strict cache-invalidation headers. This guarantees that browsers always pull the newest UI deployment files on reload, preventing clients from running legacy cached layouts.",
       },
       {
         title: "Code Quality and Technical Debt",

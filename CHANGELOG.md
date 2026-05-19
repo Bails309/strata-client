@@ -18,6 +18,9 @@ This patch release addresses a critical deserialization error that occurred when
 - **SSO Provider Test Connection Secret Lookup**
   ([`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/admin/SsoTab.tsx`](frontend/src/pages/admin/SsoTab.tsx)).
   Added the `id` field to the `testSsoConnection` payload. This allows the backend to accurately identify and decrypt the existing client secret when validating an edited SSO configuration.
+- **SPA Entry Point Caching Invalidation (Cache-Busting)**
+  ([`frontend/common.fragment`](frontend/common.fragment)).
+  Added explicit `Cache-Control: "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"` headers to Nginx configurations for the `/` and `/index.html` locations. This guarantees that browsers always fetch the current `index.html` with correct content hashes, preventing stale UI version loading.
 - **Removed Unused Variables (CodeQL Detections)**
   ([`backend/src/tunnel.rs`](backend/src/tunnel.rs), [`backend/src/services/user_preferences.rs`](backend/src/services/user_preferences.rs), [`backend/src/services/middleware.rs`](backend/src/services/middleware.rs), [`backend/src/services/notifications.rs`](backend/src/services/notifications.rs), [`backend/src/routes/user.rs`](backend/src/routes/user.rs), [`backend/src/routes/auth.rs`](backend/src/routes/auth.rs), [`backend/src/routes/admin/recordings.rs`](backend/src/routes/admin/recordings.rs)).
   Cleaned up multiple unused variable warnings across the backend to improve code maintainability and execution flow.

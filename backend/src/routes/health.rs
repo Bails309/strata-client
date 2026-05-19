@@ -45,16 +45,20 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
             .unwrap_or(None)
             .map(|v| v == "true")
             .unwrap_or(true); // Default to local auth enabled
-            
-        let provider_rows: Vec<(uuid::Uuid, String)> = sqlx::query_as("SELECT id, name FROM sso_providers ORDER BY created_at ASC")
-            .fetch_all(&db.pool)
-            .await
-            .unwrap_or_default();
-            
-        let providers: Vec<SsoProviderInfo> = provider_rows.into_iter().map(|(id, name)| SsoProviderInfo {
-            id: id.to_string(),
-            name,
-        }).collect();
+
+        let provider_rows: Vec<(uuid::Uuid, String)> =
+            sqlx::query_as("SELECT id, name FROM sso_providers ORDER BY created_at ASC")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap_or_default();
+
+        let providers: Vec<SsoProviderInfo> = provider_rows
+            .into_iter()
+            .map(|(id, name)| SsoProviderInfo {
+                id: id.to_string(),
+                name,
+            })
+            .collect();
 
         (sso, local, providers)
     } else {

@@ -1083,11 +1083,12 @@ pub async fn sso_login(
         return Err(AppError::Auth("SSO is disabled".into()));
     }
 
-    let provider_row: Option<(String, String)> = sqlx::query_as("SELECT issuer_url, client_id FROM sso_providers WHERE id = $1")
-        .bind(params.provider)
-        .fetch_optional(&db.pool)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+    let provider_row: Option<(String, String)> =
+        sqlx::query_as("SELECT issuer_url, client_id FROM sso_providers WHERE id = $1")
+            .bind(params.provider)
+            .fetch_optional(&db.pool)
+            .await
+            .map_err(|e| AppError::Database(e))?;
 
     let (issuer_url, client_id) = match provider_row {
         Some(r) => r,
@@ -1188,11 +1189,13 @@ pub async fn sso_callback(
         (db, vault)
     };
 
-    let provider_row: Option<(String, String, String)> = sqlx::query_as("SELECT issuer_url, client_id, client_secret FROM sso_providers WHERE id = $1")
-        .bind(provider_id)
-        .fetch_optional(&db.pool)
-        .await
-        .map_err(|e| AppError::Database(e))?;
+    let provider_row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT issuer_url, client_id, client_secret FROM sso_providers WHERE id = $1",
+    )
+    .bind(provider_id)
+    .fetch_optional(&db.pool)
+    .await
+    .map_err(|e| AppError::Database(e))?;
 
     let (issuer_url, client_id, client_secret_raw) = match provider_row {
         Some(r) => r,

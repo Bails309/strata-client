@@ -393,10 +393,11 @@ pub async fn list_sso_providers(
 ) -> Result<Json<Vec<SsoProvider>>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    let mut providers: Vec<SsoProvider> = sqlx::query_as("SELECT * FROM sso_providers ORDER BY created_at ASC")
-        .fetch_all(&db.pool)
-        .await?;
-    
+    let mut providers: Vec<SsoProvider> =
+        sqlx::query_as("SELECT * FROM sso_providers ORDER BY created_at ASC")
+            .fetch_all(&db.pool)
+            .await?;
+
     // Mask secrets
     for p in &mut providers {
         if !p.client_secret.is_empty() {
@@ -421,16 +422,16 @@ pub async fn create_sso_provider(
 ) -> Result<Json<SsoProvider>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    
+
     if !body.issuer_url.starts_with("https://") {
         return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
     }
-    
+
     let vault_cfg = {
         let s = state.read().await;
         s.config.as_ref().and_then(|c| c.vault.clone())
     };
-    
+
     let encrypted_secret = if let Some(ref vc) = vault_cfg {
         let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes())
             .await
@@ -457,10 +458,16 @@ pub async fn create_sso_provider(
     .bind(&encrypted_secret)
     .fetch_one(&db.pool)
     .await?;
-    
+
     p.client_secret = "********".into();
-    
-    audit::log(&db.pool, Some(user.id), "sso_provider.created", &json!({ "id": p.id, "name": p.name })).await?;
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "sso_provider.created",
+        &json!({ "id": p.id, "name": p.name }),
+    )
+    .await?;
     Ok(Json(p))
 }
 
@@ -480,22 +487,23 @@ pub async fn update_sso_provider(
 ) -> Result<Json<SsoProvider>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    
+
     if !body.issuer_url.starts_with("https://") {
         return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
     }
-    
+
     let vault_cfg = {
         let s = state.read().await;
         s.config.as_ref().and_then(|c| c.vault.clone())
     };
-    
+
     let encrypted_secret = if body.client_secret == "********" || body.client_secret.is_empty() {
         // Keep existing secret
-        let existing: (String,) = sqlx::query_as("SELECT client_secret FROM sso_providers WHERE id = $1")
-            .bind(id)
-            .fetch_one(&db.pool)
-            .await?;
+        let existing: (String,) =
+            sqlx::query_as("SELECT client_secret FROM sso_providers WHERE id = $1")
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await?;
         existing.0
     } else if let Some(ref vc) = vault_cfg {
         let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes())
@@ -524,10 +532,16 @@ pub async fn update_sso_provider(
     .bind(id)
     .fetch_one(&db.pool)
     .await?;
-    
+
     p.client_secret = "********".into();
-    
-    audit::log(&db.pool, Some(user.id), "sso_provider.updated", &json!({ "id": p.id, "name": p.name })).await?;
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "sso_provider.updated",
+        &json!({ "id": p.id, "name": p.name }),
+    )
+    .await?;
     Ok(Json(p))
 }
 
@@ -538,13 +552,19 @@ pub async fn delete_sso_provider(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::services::middleware::check_system_permission(&user)?;
     let db = require_running(&state).await?;
-    
+
     sqlx::query("DELETE FROM sso_providers WHERE id = $1")
         .bind(id)
         .execute(&db.pool)
         .await?;
-        
-    audit::log(&db.pool, Some(user.id), "sso_provider.deleted", &json!({ "id": id })).await?;
+
+    audit::log(
+        &db.pool,
+        Some(user.id),
+        "sso_provider.deleted",
+        &json!({ "id": id }),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -571,15 +591,16 @@ pub async fn test_sso_connection(
     if client_secret == "********" || client_secret.is_empty() {
         let db = require_running(&state).await?;
         let saved_opt = if let Some(id) = body.id {
-            let row: Option<(String,)> = sqlx::query_as("SELECT client_secret FROM sso_providers WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&db.pool)
-                .await?;
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT client_secret FROM sso_providers WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&db.pool)
+                    .await?;
             row.map(|r| r.0)
         } else {
             None
         };
-        
+
         if let Some(saved) = saved_opt {
             if saved.starts_with("vault:") {
                 let vault_cfg = {

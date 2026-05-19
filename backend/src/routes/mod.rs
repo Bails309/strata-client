@@ -68,10 +68,22 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/settings/auth-methods",
             put(admin::update_auth_methods),
         )
-        .route("/api/admin/settings/sso-providers", get(admin::list_sso_providers))
-        .route("/api/admin/settings/sso-providers", post(admin::create_sso_provider))
-        .route("/api/admin/settings/sso-providers/{id}", put(admin::update_sso_provider))
-        .route("/api/admin/settings/sso-providers/{id}", delete(admin::delete_sso_provider))
+        .route(
+            "/api/admin/settings/sso-providers",
+            get(admin::list_sso_providers),
+        )
+        .route(
+            "/api/admin/settings/sso-providers",
+            post(admin::create_sso_provider),
+        )
+        .route(
+            "/api/admin/settings/sso-providers/{id}",
+            put(admin::update_sso_provider),
+        )
+        .route(
+            "/api/admin/settings/sso-providers/{id}",
+            delete(admin::delete_sso_provider),
+        )
         .route(
             "/api/admin/settings/sso/test",
             post(admin::test_sso_connection),

@@ -80,13 +80,9 @@ describe("VersionWatcher", () => {
     mount();
 
     await waitFor(() => expect(screen.getByText(/New Update Available/)).toBeInTheDocument());
-<<<<<<< HEAD
-    expect(screen.getByText(/A new version of Strata Client is available \(v1.9.2\)/)).toBeInTheDocument();
-=======
     expect(
       screen.getByText(/A new version of Strata Client is available \(v1.9.2\)/)
     ).toBeInTheDocument();
->>>>>>> origin/main
   });
 
   it("does not repeat notification if session has already dismissed/seen it", async () => {

@@ -109,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) =
             link_server::serve_link(link_cfg, acceptor, registry_for_link, shutdown_for_link).await
         {
-            tracing::error!(error = %e, "DMZ link server exited with error");
+            tracing::error!("DMZ link server exited with error: {}", e);
         }
     });
 
@@ -134,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
             .with_graceful_shutdown(async move { operator_shutdown.cancelled().await })
             .await;
         if let Err(e) = res {
-            tracing::error!(error = %e, "DMZ operator listener exited with error");
+            tracing::error!("DMZ operator listener exited with error: {}", e);
         }
     });
 
@@ -230,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
     let public_handle = tokio::spawn(async move {
         if let Err(e) = public_server::serve_public(public_bind, app, public_tls, public_shutdown.clone()).await
         {
-            tracing::error!(error = %e, "DMZ public listener exited with error");
+            tracing::error!("DMZ public listener exited with error: {}", e);
         }
     });
 

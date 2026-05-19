@@ -276,12 +276,12 @@ pub(crate) async fn proxy_websocket(
         let upgraded = match on_upgrade.await {
             Ok(u) => u,
             Err(e) => {
-                tracing::warn!(error = %e, "public websocket upgrade future errored");
+                tracing::warn!("public websocket upgrade future errored: {}", e);
                 return;
             }
         };
         if let Err(e) = pump(upgraded, recv_body, send_stream).await {
-            tracing::debug!(error = %e, "DMZ websocket bridge ended");
+            tracing::debug!("DMZ websocket bridge ended: {}", e);
         }
     });
 
@@ -382,7 +382,7 @@ async fn pump(
         loop {
             let n = match tokio::time::timeout(IO_TIMEOUT, tcp_r.read(&mut buf)).await {
                 Ok(Ok(n)) => n,
-                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {e}")),
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {}", e)),
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: public→link read idle for 60s")),
             };
             if n == 0 {
@@ -418,7 +418,7 @@ async fn pump(
             }
             match tokio::time::timeout(IO_TIMEOUT, tcp_w.write_all(&chunk)).await {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {e}")),
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {}", e)),
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: public write idle for 60s")),
             }
         }

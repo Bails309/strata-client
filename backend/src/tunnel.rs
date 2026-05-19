@@ -444,6 +444,7 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
 }
 
 /// Proxy frames between a WebSocket (frontend) and a TCP stream (guacd).
+#[allow(clippy::too_many_arguments)]
 pub async fn proxy(
     ws: WebSocket,
     guacd_host: &str,
@@ -451,6 +452,8 @@ pub async fn proxy(
     handshake: HandshakeParams,
     nvr: Option<NvrContext>,
     display_timezone: String,
+    watchdog_token: Option<String>,
+    user_id: uuid::Uuid,
 ) -> Result<(), AppError> {
     // Connect to guacd
     let addr = format!("{guacd_host}:{guacd_port}");
@@ -458,7 +461,16 @@ pub async fn proxy(
         .await
         .map_err(|e| AppError::Internal(format!("guacd connect ({addr}): {e}")))?;
 
-    handle_guac_handshake(stream, ws, handshake, nvr, display_timezone).await
+    handle_guac_handshake(
+        stream,
+        ws,
+        handshake,
+        nvr,
+        display_timezone,
+        watchdog_token,
+        user_id,
+    )
+    .await
 }
 
 // CodeQL note: `rust/unused-variable` misfires on the `res` binding used by
@@ -470,6 +482,8 @@ async fn handle_guac_handshake(
     handshake: HandshakeParams,
     nvr: Option<NvrContext>,
     display_timezone: String,
+    watchdog_token: Option<String>,
+    user_id: uuid::Uuid,
 ) -> Result<(), AppError> {
     let (mut tcp_read, mut tcp_write) = tokio::io::split(stream);
 
@@ -676,6 +690,12 @@ async fn handle_guac_handshake(
     ping_interval.tick().await; // consume the first immediate tick
     let mut last_pong = tokio::time::Instant::now();
 
+    // Session watchdog timer (polled every 30s)
+    let mut watchdog_interval = tokio::time::interval(Duration::from_secs(30));
+    watchdog_interval.tick().await; // consume the first immediate tick
+    let tunnel_started_at = tokio::time::Instant::now();
+    const MAX_TUNNEL_DURATION: Duration = Duration::from_secs(8 * 60 * 60); // 8 hours
+
     let (bandwidth, mut kill_rx) =
         if let Some((_, _, ref registry, ref mut rx_opt, ref mut input_opt)) = nvr_handles {
             if let Some(ref ctx) = nvr {
@@ -707,6 +727,65 @@ async fn handle_guac_handshake(
                 let text = String::from_utf8_lossy(&inst).into_owned();
                 let _ = ws_tx.send(Message::Text(text.into())).await;
                 break;
+            }
+
+            // Periodic session watchdog (check revoked token and max duration)
+            _ = watchdog_interval.tick() => {
+                let mut is_revoked = false;
+                if let Some(ref t) = watchdog_token {
+                    if crate::services::token_revocation::is_revoked(t) {
+                        is_revoked = true;
+                    }
+                }
+                if is_revoked {
+                    tracing::info!(
+                        "Tunnel watchdog: access token revoked, closing tunnel for user {}",
+                        user_id
+                    );
+                    if let Some(ref ctx) = nvr {
+                        let _ = crate::services::audit::log(
+                            &ctx.db_pool,
+                            Some(user_id),
+                            "tunnel.watchdog_closed",
+                            &serde_json::json!({
+                                "connection_id": ctx.connection_id.to_string(),
+                                "reason": "revoked",
+                            }),
+                        )
+                        .await;
+                    }
+                    // Notify the client before closing
+                    let msg = "Session closed: token revoked";
+                    let inst = guac_instruction("error", &[msg, "521"]);
+                    let text = String::from_utf8_lossy(&inst).into_owned();
+                    let _ = ws_tx.send(Message::Text(text.into())).await;
+                    break;
+                }
+                if tunnel_started_at.elapsed() >= MAX_TUNNEL_DURATION {
+                    tracing::info!(
+                        "Tunnel watchdog: max session duration ({}h) reached, closing tunnel for user {}",
+                        MAX_TUNNEL_DURATION.as_secs() / 3600,
+                        user_id
+                    );
+                    if let Some(ref ctx) = nvr {
+                        let _ = crate::services::audit::log(
+                            &ctx.db_pool,
+                            Some(user_id),
+                            "tunnel.watchdog_closed",
+                            &serde_json::json!({
+                                "connection_id": ctx.connection_id.to_string(),
+                                "reason": "max_duration",
+                            }),
+                        )
+                        .await;
+                    }
+                    // Notify the client before closing
+                    let msg = "Session closed: maximum duration reached";
+                    let inst = guac_instruction("error", &[msg, "521"]);
+                    let text = String::from_utf8_lossy(&inst).into_owned();
+                    let _ = ws_tx.send(Message::Text(text.into())).await;
+                    break;
+                }
             }
 
             // Writer task exit (browser disconnected or sink errored)
@@ -780,7 +859,7 @@ async fn handle_guac_handshake(
                         // else: no complete instruction yet, keep buffering
                     }
                     Err(e) => {
-                        tracing::error!("guacd TCP read error: {e}");
+                        tracing::error!("guacd TCP read error: {}", e);
                         // Tell the browser so it doesn't auto-reconnect
                         let disc = guac_instruction("disconnect", &[]);
                         let text = String::from_utf8_lossy(&disc).into_owned();
@@ -828,7 +907,7 @@ async fn handle_guac_handshake(
                         break;
                     }
                     Some(Err(e)) => {
-                        tracing::error!("WebSocket recv error: {e}");
+                        tracing::error!("WebSocket recv error: {}", e);
                         break;
                     }
                     None => {

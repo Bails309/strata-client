@@ -188,10 +188,18 @@ pub async fn list_recordings(
     Ok(Json(recordings))
 }
 
-/// Stream a historical recording via WebSocket with pacing
-// CodeQL note: `rust/unused-variable` misfires on `e` interpolated in
-// `tracing::error!("… {e}")` inside the `on_upgrade` closure (alert #69).
-#[allow(unused_variables)]
+async fn stream_recording_handler(
+    socket: axum::extract::ws::WebSocket,
+    state: SharedState,
+    recording: Recording,
+    seek_ms: u64,
+    speed: f64,
+) {
+    if let Err(e) = handle_recording_stream(socket, state, recording, seek_ms, speed).await {
+        tracing::error!("Recording stream error: {}", e);
+    }
+}
+
 pub async fn stream_recording(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
@@ -216,14 +224,9 @@ pub async fn stream_recording(
     let seek_ms = query.seek.unwrap_or(0);
     let speed = query.speed.unwrap_or(1.0).clamp(0.25, 16.0);
 
-    Ok(ws
-        .protocols(["guacamole"])
-        .on_upgrade(move |socket| async move {
-            if let Err(e) = handle_recording_stream(socket, state, recording, seek_ms, speed).await
-            {
-                tracing::error!("Recording stream error: {}", e);
-            }
-        }))
+    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| {
+        stream_recording_handler(socket, state, recording, seek_ms, speed)
+    }))
 }
 
 /// Public wrapper so the user recording route can reuse the stream logic.

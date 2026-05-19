@@ -195,12 +195,11 @@ fn require_uuid(
     key: &str,
     i: usize,
 ) -> Result<(), AppError> {
-    let s = args.get(key).and_then(Value::as_str).ok_or_else(|| {
-        AppError::Validation(format!("commandMappings[{}].args.{} required", i, key))
-    })?;
-    Uuid::parse_str(s).map(|_| ()).map_err(|_| {
-        AppError::Validation(format!("commandMappings[{}].args.{} not a UUID", i, key))
-    })
+    let err_required = AppError::Validation(format!("commandMappings[{i}].args.{key} required"));
+    let err_not_uuid = AppError::Validation(format!("commandMappings[{i}].args.{key} not a UUID"));
+
+    let s = args.get(key).and_then(Value::as_str).ok_or(err_required)?;
+    Uuid::parse_str(s).map(|_| ()).map_err(|_| err_not_uuid)
 }
 
 /// Fetch the preferences object for a user, or `{}` if no row exists.

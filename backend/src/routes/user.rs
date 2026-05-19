@@ -1207,9 +1207,22 @@ pub async fn my_recordings(
 }
 
 /// GET /api/user/recordings/:id/stream — stream a recording that belongs to the authenticated user.
-// CodeQL note: `rust/unused-variable` misfires on `e` interpolated into
-// `tracing::error!("… {e}")` inside the `on_upgrade` closure (alert #75).
-#[allow(unused_variables)]
+async fn my_recording_stream_handler(
+    socket: axum::extract::ws::WebSocket,
+    state: SharedState,
+    recording: crate::db::Recording,
+    seek_ms: u64,
+    speed: f64,
+) {
+    if let Err(e) = crate::routes::admin::recordings::handle_user_recording_stream(
+        socket, state, recording, seek_ms, speed,
+    )
+    .await
+    {
+        tracing::error!("User recording stream error: {}", e);
+    }
+}
+
 pub async fn my_recording_stream(
     ws: axum::extract::ws::WebSocketUpgrade,
     State(state): State<SharedState>,
@@ -1227,17 +1240,9 @@ pub async fn my_recording_stream(
         .await?
         .ok_or_else(|| AppError::NotFound("Recording not found".into()))?;
 
-    Ok(ws
-        .protocols(["guacamole"])
-        .on_upgrade(move |socket| async move {
-            if let Err(e) = crate::routes::admin::recordings::handle_user_recording_stream(
-                socket, state, recording, seek_ms, speed,
-            )
-            .await
-            {
-                tracing::error!("User recording stream error: {}", e);
-            }
-        }))
+    Ok(ws.protocols(["guacamole"]).on_upgrade(move |socket| {
+        my_recording_stream_handler(socket, state, recording, seek_ms, speed)
+    }))
 }
 
 // ════════════════════════════════════════════════════════════════════════

@@ -144,16 +144,15 @@ pub fn extract_token_from_query(query: &str) -> Option<String> {
 /// value (URL-decoding is the caller's responsibility — none of our cookies
 /// carry encoded characters).
 pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|pair| {
-                pair.trim()
-                    .strip_prefix(&format!("{}=", name))
-                    .map(String::from)
-            })
-        })
+    let cookie_header = headers.get(http::header::COOKIE)?.to_str().ok()?;
+    let prefix = format!("{name}=");
+    for pair in cookie_header.split(';') {
+        let trimmed = pair.trim();
+        if let Some(val) = trimmed.strip_prefix(&prefix) {
+            return Some(val.to_string());
+        }
+    }
+    None
 }
 
 /// CSRF protection middleware for cookie-authenticated requests (W4-3).

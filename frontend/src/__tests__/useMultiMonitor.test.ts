@@ -77,10 +77,12 @@ vi.mock("../utils/winKeyProxy", () => ({
 // ── Import the hook ───────────────────────────────────────────────────
 import { useMultiMonitor } from "../components/useMultiMonitor";
 
+let activeSessions: any[] = [];
+
 function makeSession(overrides: Record<string, any> = {}) {
   const tunnel = new Guacamole.WebSocketTunnel("ws://test");
   const client = new Guacamole.Client(tunnel);
-  return {
+  const session = {
     id: "sess-1",
     connectionId: "conn-1",
     name: "Test Session",
@@ -97,6 +99,8 @@ function makeSession(overrides: Record<string, any> = {}) {
     _multiMonitor: undefined,
     ...overrides,
   } as any;
+  activeSessions.push(session);
+  return session;
 }
 
 function makeContainerRef() {
@@ -115,6 +119,17 @@ describe("useMultiMonitor", () => {
   });
 
   afterEach(() => {
+    for (const session of activeSessions) {
+      if (session._multiMonitor) {
+        try {
+          session._multiMonitor.cleanup();
+        } catch {
+          // ignore
+        }
+      }
+    }
+    activeSessions = [];
+
     if (originalGetScreenDetails !== undefined) {
       (window as any).getScreenDetails = originalGetScreenDetails;
     } else {

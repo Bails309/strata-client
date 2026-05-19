@@ -29,6 +29,7 @@ pub struct StatusResponse {
     pub local_auth_enabled: bool,
     pub vault_configured: bool,
     pub sso_providers: Vec<SsoProviderInfo>,
+    pub version: String,
 }
 
 pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
@@ -76,6 +77,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
         local_auth_enabled: local,
         vault_configured,
         sso_providers: providers,
+        version: env!("STRATA_VERSION").to_string(),
     })
 }
 
@@ -286,6 +288,7 @@ mod tests {
             local_auth_enabled: false,
             vault_configured: true,
             sso_providers: vec![],
+            version: "1.9.1".into(),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "running");
@@ -406,6 +409,7 @@ mod tests {
             local_auth_enabled: true,
             vault_configured: false,
             sso_providers: vec![],
+            version: "1.9.1".into(),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "setup");

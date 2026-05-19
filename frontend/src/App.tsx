@@ -25,6 +25,7 @@ import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
 import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
 import ToastProvider from "./components/ToastProvider";
 import CredentialProfileExpiryWatcher from "./components/CredentialProfileExpiryWatcher";
+import VersionWatcher from "./components/VersionWatcher";
 import { checkAuthStatus, logout as apiLogout, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
 import { UserPreferencesProvider } from "./components/UserPreferencesProvider";
@@ -218,6 +219,7 @@ export default function App() {
                   <SessionTimeoutWarning onExpired={handleLogout} />
                   {user?.vault_configured && <CredentialProfileExpiryWatcher />}
                   <WhatsNewModal userId={user?.id} />
+                  <VersionWatcher />
                 </CommandPaletteProvider>
               )}
             </UserPreferencesProvider>

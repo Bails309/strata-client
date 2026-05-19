@@ -19,7 +19,7 @@ describe("VersionWatcher", () => {
     vi.mocked(getStatus).mockReset();
 
     // Define __APP_VERSION__ on global/window if not present, or override it
-    (global as any).__APP_VERSION__ = "1.9.1";
+    (window as any).__APP_VERSION__ = "1.9.1";
 
     // Mock window.location.reload
     Object.defineProperty(window, "location", {

@@ -459,6 +459,7 @@ export const deleteSsoProvider = (id: string) =>
   request<{ status: string }>(`/admin/settings/sso-providers/${id}`, { method: "DELETE" });
 
 export const testSsoConnection = (data: {
+  id?: string;
   issuer_url: string;
   client_id: string;
   client_secret: string;

@@ -85,7 +85,7 @@ export default function SsoTab({
           name,
           issuer_url: issuer,
           client_id: clientId,
-          ...(clientSecret ? { client_secret: clientSecret } : {}),
+          client_secret: clientSecret,
         });
       } else {
         await createSsoProvider({
@@ -108,6 +108,7 @@ export default function SsoTab({
     setTestResult(null);
     try {
       const res = await testSsoConnection({
+        id: editingId ?? undefined,
         issuer_url: issuer,
         client_id: clientId,
         client_secret: clientSecret,

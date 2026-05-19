@@ -236,7 +236,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       # ESLint runs as a hard gate. The historical 198-error baseline of
       # `jsx-a11y/label-has-associated-control` and `no-autofocus` issues has
@@ -351,7 +351,7 @@ jobs:
       - name: Install E2E dependencies
         working-directory: e2e
         run: |
-          npm ci
+          npm ci --legacy-peer-deps
           npx playwright install --with-deps chromium
 
       # Silent test deletion guard: Playwright happily passes when

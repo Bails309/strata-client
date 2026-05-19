@@ -757,8 +757,7 @@ fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
             cookies.split(';').find_map(|pair| {
-                let pair = pair.trim();
-                pair.strip_prefix(&format!("{}=", name))
+                pair.trim().strip_prefix(&format!("{}=", name))
             })
         })
 }

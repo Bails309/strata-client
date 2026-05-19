@@ -2016,13 +2016,15 @@ pub async fn observe_session_ws(
     // receive the base-state drawing instructions (initial PNG tiles,
     // terminal background, etc.) that were sent earlier.  The replay is
     // then split into a fast base-state dump + a paced replay window.
-    let (size_inst, all_frames, mut rx) = {
+    let size_inst;
+    let all_frames;
+    let mut rx;
+    {
         let buffer = session.buffer.read().await;
-        let size = buffer.last_size().map(|s| s.to_string());
-        let timed = buffer.frames_with_timing(300); // full buffer
-        let rx = session.broadcast_tx.subscribe();
-        (size, timed, rx)
-    };
+        size_inst = buffer.last_size().map(|s| s.to_string());
+        all_frames = buffer.frames_with_timing(300); // full buffer
+        rx = session.broadcast_tx.subscribe();
+    }
 
     // Total duration of the full buffer in ms
     let total_buffer_ms = all_frames.last().map(|(t, _)| *t).unwrap_or(0);

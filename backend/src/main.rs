@@ -659,8 +659,9 @@ fn schedule_admin_password_deletion(path: std::path::PathBuf, ttl: std::time::Du
             ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => { /* already gone */ }
             Err(e) => tracing::warn!(
-                "Failed to auto-delete transient admin password file {}: {e}",
-                path.display()
+                "Failed to auto-delete transient admin password file {}: {}",
+                path.display(),
+                e
             ),
         }
     });

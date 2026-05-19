@@ -43,7 +43,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .json()
         .init();
 
@@ -109,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) =
             link_server::serve_link(link_cfg, acceptor, registry_for_link, shutdown_for_link).await
         {
-            tracing::error!(error = %e, "DMZ link server exited with error");
+            tracing::error!("DMZ link server exited with error: {}", e);
         }
     });
 
@@ -134,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
             .with_graceful_shutdown(async move { operator_shutdown.cancelled().await })
             .await;
         if let Err(e) = res {
-            tracing::error!(error = %e, "DMZ operator listener exited with error");
+            tracing::error!("DMZ operator listener exited with error: {}", e);
         }
     });
 
@@ -160,12 +162,9 @@ async fn main() -> anyhow::Result<()> {
     // load), request timeout (slow-loris), body limit (memory
     // exhaustion).
     let limiter = limits::PerIpRateLimiter::new(cfg.public_rate_rps, cfg.public_rate_burst);
-    let body_cap_policy = body_caps::BodyCapPolicy::new(
-        cfg.public_body_limit_bytes,
-        cfg.public_body_caps.clone(),
-    );
-    let request_timeout =
-        std::time::Duration::from_millis(cfg.public_header_timeout_ms.max(1_000));
+    let body_cap_policy =
+        body_caps::BodyCapPolicy::new(cfg.public_body_limit_bytes, cfg.public_body_caps.clone());
+    let request_timeout = std::time::Duration::from_millis(cfg.public_header_timeout_ms.max(1_000));
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -228,9 +227,10 @@ async fn main() -> anyhow::Result<()> {
     let public_bind = cfg.public_bind;
     let public_shutdown = shutdown.clone();
     let public_handle = tokio::spawn(async move {
-        if let Err(e) = public_server::serve_public(public_bind, app, public_tls, public_shutdown.clone()).await
+        if let Err(e) =
+            public_server::serve_public(public_bind, app, public_tls, public_shutdown.clone()).await
         {
-            tracing::error!(error = %e, "DMZ public listener exited with error");
+            tracing::error!("DMZ public listener exited with error: {}", e);
         }
     });
 
@@ -272,7 +272,10 @@ async fn run_healthcheck() -> i32 {
         }
     };
 
-    let req = format!("GET /status HTTP/1.0\r\nAuthorization: Bearer {}\r\n\r\n", token);
+    let req = format!(
+        "GET /status HTTP/1.0\r\nAuthorization: Bearer {}\r\n\r\n",
+        token
+    );
     if let Err(e) = stream.write_all(req.as_bytes()).await {
         eprintln!("Healthcheck failed to write request: {}", e);
         return 1;
@@ -285,7 +288,10 @@ async fn run_healthcheck() -> i32 {
             if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
                 0
             } else {
-                eprintln!("Healthcheck received non-200 response: {}", response.lines().next().unwrap_or(""));
+                eprintln!(
+                    "Healthcheck received non-200 response: {}",
+                    response.lines().next().unwrap_or("")
+                );
                 1
             }
         }

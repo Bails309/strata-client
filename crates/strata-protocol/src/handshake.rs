@@ -164,8 +164,7 @@ pub fn compute_response(
         &challenge.psk_id,
     );
 
-    let mut mac = HmacSha256::new_from_slice(psk)
-        .expect("HMAC-SHA-256 accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(psk).expect("HMAC-SHA-256 accepts any key length");
     mac.update(&input);
     Ok(AuthResponse {
         mac_b64: B64.encode(mac.finalize().into_bytes()),
@@ -215,8 +214,7 @@ pub fn verify_response(
         &challenge.psk_id,
     );
 
-    let mut mac = HmacSha256::new_from_slice(psk)
-        .expect("HMAC-SHA-256 accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(psk).expect("HMAC-SHA-256 accepts any key length");
     mac.update(&input);
     mac.verify_slice(&tag)
         .map_err(|_| ProtocolError::AuthFailed("response mac mismatch".into()))

@@ -100,17 +100,11 @@ pub enum ConfigError {
     /// A variable was set but failed parsing (bad number, bad CIDR,
     /// bad SocketAddr, ...).
     #[error("env var {var} could not be parsed: {reason}")]
-    Parse {
-        var: &'static str,
-        reason: String,
-    },
+    Parse { var: &'static str, reason: String },
     /// A variable was set but the value is structurally malformed
     /// (e.g. PSK list with no entries, key shorter than minimum).
     #[error("env var {var} is malformed: {reason}")]
-    Malformed {
-        var: &'static str,
-        reason: String,
-    },
+    Malformed { var: &'static str, reason: String },
     /// Failed to read a file referenced by the configuration.
     #[error("failed to read file referenced by {var} ({path}): {source}")]
     Io {
@@ -206,7 +200,10 @@ impl std::fmt::Debug for DmzConfig {
         f.debug_struct("DmzConfig")
             .field("public_bind", &self.public_bind)
             .field("link_bind", &self.link_bind)
-            .field("public_tls", &self.public_tls.as_ref().map(|_| "<redacted>"))
+            .field(
+                "public_tls",
+                &self.public_tls.as_ref().map(|_| "<redacted>"),
+            )
             .field("link_tls", &"<redacted>")
             .field("link_ca_bundle_pem_len", &self.link_ca_bundle_pem.len())
             .field("link_psk_ids", &self.link_psks.keys().collect::<Vec<_>>())
@@ -269,8 +266,8 @@ impl DmzConfig {
         let (link_psks, link_psk_active_id) = parse_psks_env()?;
         let edge_hmac_key = parse_b64_key_env("STRATA_DMZ_EDGE_HMAC_KEY")?;
 
-        let cluster_id =
-            std::env::var("STRATA_DMZ_CLUSTER_ID").map_err(|_| ConfigError::Missing("STRATA_DMZ_CLUSTER_ID"))?;
+        let cluster_id = std::env::var("STRATA_DMZ_CLUSTER_ID")
+            .map_err(|_| ConfigError::Missing("STRATA_DMZ_CLUSTER_ID"))?;
         if cluster_id.is_empty() {
             return Err(ConfigError::Malformed {
                 var: "STRATA_DMZ_CLUSTER_ID",
@@ -291,11 +288,9 @@ impl DmzConfig {
         )?;
         let public_body_caps = match std::env::var("STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP") {
             Err(_) => Vec::new(),
-            Ok(raw) => crate::body_caps::parse(&raw).map_err(|reason| {
-                ConfigError::Parse {
-                    var: "STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP",
-                    reason,
-                }
+            Ok(raw) => crate::body_caps::parse(&raw).map_err(|reason| ConfigError::Parse {
+                var: "STRATA_DMZ_PUBLIC_BODY_LIMITS_BY_IP",
+                reason,
             })?,
         };
         let public_header_timeout_ms = parse_u64_env(
@@ -303,10 +298,8 @@ impl DmzConfig {
             DEFAULT_PUBLIC_HEADER_TIMEOUT_MS,
         )?;
         let public_rate_rps = parse_u32_env("STRATA_DMZ_PUBLIC_RATE_RPS", 0)?;
-        let public_rate_burst = parse_u32_env(
-            "STRATA_DMZ_PUBLIC_RATE_BURST",
-            DEFAULT_PUBLIC_RATE_BURST,
-        )?;
+        let public_rate_burst =
+            parse_u32_env("STRATA_DMZ_PUBLIC_RATE_BURST", DEFAULT_PUBLIC_RATE_BURST)?;
         let public_max_inflight = parse_usize_env(
             "STRATA_DMZ_PUBLIC_MAX_INFLIGHT",
             DEFAULT_PUBLIC_MAX_INFLIGHT,
@@ -328,9 +321,7 @@ impl DmzConfig {
         if operator_token_raw.len() < MIN_OPERATOR_TOKEN_LEN {
             return Err(ConfigError::Malformed {
                 var: "STRATA_DMZ_OPERATOR_TOKEN",
-                reason: format!(
-                    "must be at least {MIN_OPERATOR_TOKEN_LEN} bytes"
-                ),
+                reason: format!("must be at least {MIN_OPERATOR_TOKEN_LEN} bytes"),
             });
         }
         let operator_token = Zeroizing::new(operator_token_raw.into_bytes());
@@ -444,17 +435,18 @@ fn parse_b64_key_env(var: &'static str) -> Result<Zeroizing<Vec<u8>>, ConfigErro
     Ok(Zeroizing::new(bytes))
 }
 
-fn parse_psks_env(
-) -> Result<(HashMap<String, Zeroizing<Vec<u8>>>, String), ConfigError> {
+fn parse_psks_env() -> Result<(HashMap<String, Zeroizing<Vec<u8>>>, String), ConfigError> {
     const VAR: &str = "STRATA_DMZ_LINK_PSKS";
     let raw = std::env::var(VAR).map_err(|_| ConfigError::Missing(VAR))?;
     let mut out = HashMap::new();
     let mut active: Option<String> = None;
     for entry in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        let (id, b64) = entry.split_once(':').ok_or_else(|| ConfigError::Malformed {
-            var: VAR,
-            reason: format!("entry {entry:?} is missing 'id:base64' separator"),
-        })?;
+        let (id, b64) = entry
+            .split_once(':')
+            .ok_or_else(|| ConfigError::Malformed {
+                var: VAR,
+                reason: format!("entry {entry:?} is missing 'id:base64' separator"),
+            })?;
         let id = id.trim().to_string();
         if id.is_empty() {
             return Err(ConfigError::Malformed {
@@ -558,10 +550,7 @@ mod tests {
             std::env::set_var("STRATA_DMZ_LINK_TLS_CERT", &cert);
             std::env::set_var("STRATA_DMZ_LINK_TLS_KEY", &key);
             std::env::set_var("STRATA_DMZ_LINK_CA_BUNDLE", &ca);
-            std::env::set_var(
-                "STRATA_DMZ_LINK_PSKS",
-                format!("current:{}", b64_key(32)),
-            );
+            std::env::set_var("STRATA_DMZ_LINK_PSKS", format!("current:{}", b64_key(32)));
             std::env::set_var("STRATA_DMZ_EDGE_HMAC_KEY", b64_key(32));
             std::env::set_var("STRATA_DMZ_CLUSTER_ID", "production");
             std::env::set_var(
@@ -673,13 +662,19 @@ mod tests {
         cleanup_env();
         set_minimum_valid_env();
         unsafe {
-            std::env::set_var(
-                "STRATA_DMZ_LINK_PSKS",
-                format!("current:{}", b64_key(8)),
-            );
+            std::env::set_var("STRATA_DMZ_LINK_PSKS", format!("current:{}", b64_key(8)));
         }
         let err = DmzConfig::from_env().unwrap_err();
-        assert!(matches!(err, ConfigError::Malformed { var: "STRATA_DMZ_LINK_PSKS", .. }), "got: {err:?}");
+        assert!(
+            matches!(
+                err,
+                ConfigError::Malformed {
+                    var: "STRATA_DMZ_LINK_PSKS",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
         cleanup_env();
     }
 
@@ -695,7 +690,16 @@ mod tests {
             );
         }
         let err = DmzConfig::from_env().unwrap_err();
-        assert!(matches!(err, ConfigError::Malformed { var: "STRATA_DMZ_LINK_PSKS", .. }), "got: {err:?}");
+        assert!(
+            matches!(
+                err,
+                ConfigError::Malformed {
+                    var: "STRATA_DMZ_LINK_PSKS",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
         cleanup_env();
     }
 
@@ -708,7 +712,16 @@ mod tests {
             std::env::set_var("STRATA_DMZ_LINK_PSKS", b64_key(32));
         }
         let err = DmzConfig::from_env().unwrap_err();
-        assert!(matches!(err, ConfigError::Malformed { var: "STRATA_DMZ_LINK_PSKS", .. }), "got: {err:?}");
+        assert!(
+            matches!(
+                err,
+                ConfigError::Malformed {
+                    var: "STRATA_DMZ_LINK_PSKS",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
         cleanup_env();
     }
 
@@ -721,7 +734,16 @@ mod tests {
             std::env::set_var("STRATA_DMZ_EDGE_HMAC_KEY", b64_key(8));
         }
         let err = DmzConfig::from_env().unwrap_err();
-        assert!(matches!(err, ConfigError::Malformed { var: "STRATA_DMZ_EDGE_HMAC_KEY", .. }), "got: {err:?}");
+        assert!(
+            matches!(
+                err,
+                ConfigError::Malformed {
+                    var: "STRATA_DMZ_EDGE_HMAC_KEY",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
         cleanup_env();
     }
 
@@ -734,7 +756,16 @@ mod tests {
             std::env::set_var("STRATA_DMZ_PUBLIC_BIND", "not-a-socket-addr");
         }
         let err = DmzConfig::from_env().unwrap_err();
-        assert!(matches!(err, ConfigError::Parse { var: "STRATA_DMZ_PUBLIC_BIND", .. }), "got: {err:?}");
+        assert!(
+            matches!(
+                err,
+                ConfigError::Parse {
+                    var: "STRATA_DMZ_PUBLIC_BIND",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
         cleanup_env();
     }
 

@@ -27,8 +27,8 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
-    let body = serde_json::to_vec(msg)
-        .map_err(|e| ProtocolError::Malformed(format!("serialize: {e}")))?;
+    let body =
+        serde_json::to_vec(msg).map_err(|e| ProtocolError::Malformed(format!("serialize: {e}")))?;
     if body.len() > MAX_FRAME_PAYLOAD {
         return Err(ProtocolError::Malformed(format!(
             "frame too large: {} > {}",
@@ -69,8 +69,7 @@ where
     r.read_exact(&mut body)
         .await
         .map_err(|e| ProtocolError::Malformed(format!("read body: {e}")))?;
-    serde_json::from_slice(&body)
-        .map_err(|e| ProtocolError::Malformed(format!("deserialize: {e}")))
+    serde_json::from_slice(&body).map_err(|e| ProtocolError::Malformed(format!("deserialize: {e}")))
 }
 
 #[cfg(test)]

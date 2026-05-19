@@ -92,7 +92,10 @@ mod tests {
         b.reset();
         // After reset the next sample's upper bound is `prev * 3` = `base * 3` = 300ms.
         let d = b.next_delay(&mut rng);
-        assert!(d <= Duration::from_millis(300), "reset did not shrink window: {d:?}");
+        assert!(
+            d <= Duration::from_millis(300),
+            "reset did not shrink window: {d:?}"
+        );
     }
 
     #[test]

@@ -75,11 +75,7 @@ pub fn router(state: OperatorState) -> Router {
         .with_state(state)
 }
 
-async fn require_bearer(
-    State(state): State<OperatorState>,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn require_bearer(State(state): State<OperatorState>, req: Request, next: Next) -> Response {
     let presented: Option<&[u8]> = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)
@@ -94,7 +90,12 @@ async fn require_bearer(
     };
 
     if !ok {
-        let mut resp = (StatusCode::UNAUTHORIZED, Json(ErrorBody { error: "unauthorized" }))
+        let mut resp = (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "unauthorized",
+            }),
+        )
             .into_response();
         resp.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
@@ -172,7 +173,11 @@ async fn disconnect_link(
 ) -> Response {
     // We don't have a "link existed" probe separate from snapshot;
     // the snapshot lookup is cheap.
-    let existed = state.registry.snapshot().iter().any(|s| s.link_id == link_id);
+    let existed = state
+        .registry
+        .snapshot()
+        .iter()
+        .any(|s| s.link_id == link_id);
     state.registry.remove(&link_id);
     tracing::info!(
         link_id = %link_id,

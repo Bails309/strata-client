@@ -1053,7 +1053,7 @@ pub async fn ws_tunnel(
             };
 
             if let Err(e) = proxy_result {
-                tracing::error!("Tunnel error: {e}");
+                tracing::error!("Tunnel error: {}", e);
                 // Audit log the tunnel failure
                 let _ = crate::services::audit::log(
                     &audit_pool,

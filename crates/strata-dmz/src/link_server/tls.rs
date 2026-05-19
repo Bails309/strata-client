@@ -32,11 +32,13 @@ pub fn build_acceptor(
             .collect::<Result<Vec<_>, _>>()
             .context("parse DMZ link server cert PEM")?;
     if server_chain.is_empty() {
-        return Err(anyhow!("DMZ link server cert PEM contained no certificates"));
+        return Err(anyhow!(
+            "DMZ link server cert PEM contained no certificates"
+        ));
     }
 
-    let server_key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(server_key_pem)
-        .context("parse DMZ link server key PEM")?;
+    let server_key: PrivateKeyDer<'static> =
+        PrivateKeyDer::from_pem_slice(server_key_pem).context("parse DMZ link server key PEM")?;
 
     let mut roots = RootCertStore::empty();
     let cas: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(client_ca_bundle_pem)
@@ -96,7 +98,10 @@ mod tests {
         // failure modes.
         match name {
             "empty" => Vec::new(),
-            "junk" => b"-----BEGIN CERTIFICATE-----\nnot-base64-at-all\n-----END CERTIFICATE-----\n".to_vec(),
+            "junk" => {
+                b"-----BEGIN CERTIFICATE-----\nnot-base64-at-all\n-----END CERTIFICATE-----\n"
+                    .to_vec()
+            }
             _ => unreachable!(),
         }
     }

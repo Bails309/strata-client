@@ -947,7 +947,7 @@ async fn handle_guac_handshake(
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::error!("Failed to update recording duration: {e}");
+                    tracing::error!("Failed to update recording duration: {}", e);
                 }
             }
         });

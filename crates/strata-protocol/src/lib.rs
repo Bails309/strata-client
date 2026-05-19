@@ -15,13 +15,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod handshake;
+pub mod backoff;
 pub mod edge_header;
-pub mod resume_token;
-pub mod versioning;
 pub mod errors;
 pub mod frame;
-pub mod backoff;
+pub mod handshake;
 pub mod link;
+pub mod resume_token;
+pub mod versioning;
 
 pub use errors::ProtocolError;

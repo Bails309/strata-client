@@ -128,9 +128,10 @@ pub(crate) enum WsProxyError {
 impl IntoResponse for WsProxyError {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
-            WsProxyError::NoLinkUp => {
-                (StatusCode::SERVICE_UNAVAILABLE, "no internal links available")
-            }
+            WsProxyError::NoLinkUp => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no internal links available",
+            ),
             WsProxyError::LinkSendUnavailable => {
                 (StatusCode::BAD_GATEWAY, "link session lost during upgrade")
             }
@@ -227,9 +228,7 @@ pub(crate) async fn proxy_websocket(
         }
         forward_headers.append(name.clone(), value.clone());
     }
-    state
-        .signer
-        .sign(&mut forward_headers, peer, &method, &uri);
+    state.signer.sign(&mut forward_headers, peer, &method, &uri);
 
     // Pick a link sender. Try twice on a stale-pick failure — same
     // pattern as the REST proxy.
@@ -276,12 +275,12 @@ pub(crate) async fn proxy_websocket(
         let upgraded = match on_upgrade.await {
             Ok(u) => u,
             Err(e) => {
-                tracing::warn!(error = %e, "public websocket upgrade future errored");
+                tracing::warn!("public websocket upgrade future errored: {}", e);
                 return;
             }
         };
         if let Err(e) = pump(upgraded, recv_body, send_stream).await {
-            tracing::debug!(error = %e, "DMZ websocket bridge ended");
+            tracing::debug!("DMZ websocket bridge ended: {}", e);
         }
     });
 
@@ -328,9 +327,7 @@ async fn start_extended_connect(
         .uri(upstream_uri.clone())
         .version(http::Version::HTTP_2);
     {
-        let h = up_req
-            .headers_mut()
-            .expect("fresh builder has headers map");
+        let h = up_req.headers_mut().expect("fresh builder has headers map");
         for (k, v) in headers.iter() {
             h.append(k.clone(), v.clone());
         }
@@ -382,7 +379,7 @@ async fn pump(
         loop {
             let n = match tokio::time::timeout(IO_TIMEOUT, tcp_r.read(&mut buf)).await {
                 Ok(Ok(n)) => n,
-                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {e}")),
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {}", e)),
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: public→link read idle for 60s")),
             };
             if n == 0 {
@@ -391,7 +388,7 @@ async fn pump(
             let chunk = Bytes::copy_from_slice(&buf[..n]);
             send.reserve_capacity(chunk.len());
             send.send_data(chunk, false)
-                .map_err(|e| anyhow::anyhow!("h2 send_data: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("h2 send_data: {}", e))?;
         }
         let _ = send.send_data(Bytes::new(), true);
         anyhow::Ok(())
@@ -405,7 +402,7 @@ async fn pump(
                 Ok(None) => break,
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: link→public read idle for 60s")),
             };
-            let chunk = next.map_err(|e| anyhow::anyhow!("h2 recv data: {e}"))?;
+            let chunk = next.map_err(|e| anyhow::anyhow!("h2 recv data: {}", e))?;
             let _ = recv.flow_control().release_capacity(chunk.len());
             if chunk.is_empty() {
                 continue;
@@ -418,7 +415,7 @@ async fn pump(
             }
             match tokio::time::timeout(IO_TIMEOUT, tcp_w.write_all(&chunk)).await {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {e}")),
+                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {}", e)),
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: public write idle for 60s")),
             }
         }

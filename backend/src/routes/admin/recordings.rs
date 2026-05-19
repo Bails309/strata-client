@@ -221,7 +221,7 @@ pub async fn stream_recording(
         .on_upgrade(move |socket| async move {
             if let Err(e) = handle_recording_stream(socket, state, recording, seek_ms, speed).await
             {
-                tracing::error!("Recording stream error: {e}");
+                tracing::error!("Recording stream error: {}", e);
             }
         }))
 }

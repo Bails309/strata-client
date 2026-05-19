@@ -149,9 +149,7 @@ impl hyper::service::Service<http::Request<hyper::body::Incoming>> for HyperRout
             // Inject the connect-info extension so axum extractors
             // such as `ConnectInfo<SocketAddr>` and the per-IP body-cap
             // / rate-limit middleware can observe the real peer.
-            parts
-                .extensions
-                .insert(axum::extract::ConnectInfo(peer));
+            parts.extensions.insert(axum::extract::ConnectInfo(peer));
             let req = http::Request::from_parts(parts, Body::new(body));
             <Router as Service<http::Request<Body>>>::call(&mut router, req).await
         })

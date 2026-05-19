@@ -156,7 +156,10 @@ enum ProxyError {
 impl IntoResponse for ProxyError {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
-            ProxyError::NoLinkUp => (StatusCode::SERVICE_UNAVAILABLE, "no internal links available"),
+            ProxyError::NoLinkUp => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no internal links available",
+            ),
             ProxyError::LinkSendUnavailable => {
                 (StatusCode::BAD_GATEWAY, "link session lost during request")
             }
@@ -316,12 +319,10 @@ async fn forward_one(
         send_stream.reserve_capacity(body.len());
         // We send the entire pre-buffered body as a single DATA frame;
         // h2 will fragment per the negotiated MAX_FRAME_SIZE.
-        send_stream
-            .send_data(body.clone(), true)
-            .map_err(|e| {
-                tracing::debug!(error = %e, "send_data failed");
-                ProxyError::UpstreamProtocol
-            })?;
+        send_stream.send_data(body.clone(), true).map_err(|e| {
+            tracing::debug!(error = %e, "send_data failed");
+            ProxyError::UpstreamProtocol
+        })?;
     }
 
     // Receive the response head.
@@ -363,12 +364,10 @@ async fn forward_one(
             }
         }
     }
-    public
-        .body(Body::from(buf.freeze()))
-        .map_err(|e| {
-            tracing::warn!(error = %e, "failed to build public response");
-            ProxyError::UpstreamProtocol
-        })
+    public.body(Body::from(buf.freeze())).map_err(|e| {
+        tracing::warn!(error = %e, "failed to build public response");
+        ProxyError::UpstreamProtocol
+    })
 }
 
 fn is_hop_by_hop(name: &HeaderName) -> bool {
@@ -457,7 +456,10 @@ mod tests {
     #[test]
     fn strip_hop_by_hop_removes_standard_set() {
         let mut h = HeaderMap::new();
-        h.insert(http::header::CONNECTION, "close, x-private".parse().unwrap());
+        h.insert(
+            http::header::CONNECTION,
+            "close, x-private".parse().unwrap(),
+        );
         h.insert(http::header::TE, "trailers".parse().unwrap());
         h.insert(http::header::HOST, "example.com".parse().unwrap());
         h.insert(http::header::TRANSFER_ENCODING, "chunked".parse().unwrap());
@@ -488,7 +490,10 @@ mod tests {
         let uri: Uri = "/foo".parse().unwrap();
         signer.sign(&mut h, None, &http::Method::GET, &uri);
         assert_eq!(h.len(), 1);
-        assert_eq!(h.get("x-existing").map(|v| v.as_bytes()), Some(b"1".as_ref()));
+        assert_eq!(
+            h.get("x-existing").map(|v| v.as_bytes()),
+            Some(b"1".as_ref())
+        );
     }
 
     // ── End-to-end round-trip ────────────────────────────────────────
@@ -739,7 +744,10 @@ mod tests {
         // link-id MUST be the proxy's configured node_id, not the
         // attacker's "spoofed-node".
         assert_eq!(
-            parts.headers.get("x-strata-edge-link-id").map(|v| v.as_bytes()),
+            parts
+                .headers
+                .get("x-strata-edge-link-id")
+                .map(|v| v.as_bytes()),
             Some(b"real-dmz-node".as_ref()),
         );
         // user-agent MUST be the honest client's, not "attacker/1.0".
@@ -817,10 +825,8 @@ mod tests {
         // internal-side replay window is asserted by
         // strata-protocol::edge_header::check_timestamp; here we
         // only need the proxy to never reuse a stamp.)
-        let (state1, rx1, st1, ct1) =
-            make_proxy_with_fake_internal("real-dmz-node", &[]).await;
-        let (state2, rx2, st2, ct2) =
-            make_proxy_with_fake_internal("real-dmz-node", &[]).await;
+        let (state1, rx1, st1, ct1) = make_proxy_with_fake_internal("real-dmz-node", &[]).await;
+        let (state2, rx2, st2, ct2) = make_proxy_with_fake_internal("real-dmz-node", &[]).await;
 
         let make_req = || {
             http::Request::builder()

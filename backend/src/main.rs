@@ -223,7 +223,7 @@ async fn main() -> anyhow::Result<()> {
         jwt_secret: Some(jwt_secret.clone()),
     };
     cfg.save(&config_path)
-        .map_err(|e| anyhow::anyhow!("Failed to save config: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to save config: {}", e))?;
 
     // Clone the pool before `db` is moved into state (needed by background tasks)
     let db_pool = db.pool.clone();
@@ -578,7 +578,7 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
         argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
     let hash = argon2::Argon2::default()
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow::anyhow!("Password hashing failed: {e}"))?
+        .map_err(|e| anyhow::anyhow!("Password hashing failed: {}", e))?
         .to_string();
 
     // Get the admin role ID
@@ -659,8 +659,9 @@ fn schedule_admin_password_deletion(path: std::path::PathBuf, ttl: std::time::Du
             ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => { /* already gone */ }
             Err(e) => tracing::warn!(
-                "Failed to auto-delete transient admin password file {}: {e}",
-                path.display()
+                "Failed to auto-delete transient admin password file {}: {}",
+                path.display(),
+                e
             ),
         }
     });

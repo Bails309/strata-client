@@ -113,10 +113,10 @@ where
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
-                    tracing::warn!("{}: iteration failed: {e}", cfg.label);
+                    tracing::warn!("{}: iteration failed: {}", cfg.label, e);
                     sleep_with_jitter(cfg.error_backoff_base, &shutdown).await;
                 }
-                Err(_elapsed) => {
+                Err(_) => {
                     tracing::warn!(
                         "{}: iteration exceeded {}s budget — dropped",
                         cfg.label,

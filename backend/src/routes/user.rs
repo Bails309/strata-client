@@ -1235,7 +1235,7 @@ pub async fn my_recording_stream(
             )
             .await
             {
-                tracing::error!("User recording stream error: {e}");
+                tracing::error!("User recording stream error: {}", e);
             }
         }))
 }

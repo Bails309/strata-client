@@ -444,6 +444,7 @@ fn parse_instruction(raw: &str) -> Result<(String, Vec<String>), AppError> {
 }
 
 /// Proxy frames between a WebSocket (frontend) and a TCP stream (guacd).
+#[allow(clippy::too_many_arguments)]
 pub async fn proxy(
     ws: WebSocket,
     guacd_host: &str,

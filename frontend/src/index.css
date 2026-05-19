@@ -248,6 +248,19 @@ html.light {
   --color-ambient-1: rgba(139, 92, 246, 0.02);
   --color-ambient-2: rgba(139, 92, 246, 0.015);
   --color-ambient-3: rgba(167, 139, 250, 0.01);
+  --color-accent-light: #7c3aed;
+}
+
+/* ── Light Theme: Session Bar Overrides ── */
+html.light .session-bar {
+  background: rgba(255, 255, 255, 0.75);
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.06);
+}
+
+html.light .session-bar-toggle {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: rgba(0, 0, 0, 0.08);
 }
 
 /* ── Light Theme: Recent Card Overrides ── */
@@ -1032,6 +1045,15 @@ html.light .recent-card-btn:hover {
     border-left: 1px solid rgba(255, 255, 255, 0.08);
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Toggle Tab */
+  .session-bar-toggle {
+    background: rgba(15, 15, 20, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-right: none;
   }
 
   .session-thumbs-container {

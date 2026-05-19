@@ -273,14 +273,10 @@ export default function SessionBar() {
         {/* Toggle Tab — draggable vertically when collapsed */}
         <button
           ref={tabButtonRef}
-          className={`absolute -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl ${isDragging ? "" : "transition-all duration-200"}`}
+          className={`session-bar-toggle absolute -left-8 w-8 h-24 flex flex-col items-center justify-center rounded-l-xl ${isDragging ? "" : "transition-all duration-200"}`}
           style={{
             top: `calc(50% + ${tabOffsetY}px)`,
             transform: "translateY(-50%)",
-            background: "rgba(15, 15, 20, 0.75)",
-            backdropFilter: "blur(16px)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
-            borderRight: "none",
             cursor: sessionBarCollapsed ? "grab" : "pointer",
             touchAction: "none",
           }}

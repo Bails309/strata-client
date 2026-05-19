@@ -19,7 +19,7 @@ describe("VersionWatcher", () => {
     vi.mocked(getStatus).mockReset();
 
     // Define __APP_VERSION__ on global/window if not present, or override it
-    (global as any).__APP_VERSION__ = "1.9.1";
+    (window as any).__APP_VERSION__ = "1.9.1";
 
     // Mock window.location.reload
     Object.defineProperty(window, "location", {
@@ -80,7 +80,13 @@ describe("VersionWatcher", () => {
     mount();
 
     await waitFor(() => expect(screen.getByText(/New Update Available/)).toBeInTheDocument());
+<<<<<<< HEAD
     expect(screen.getByText(/A new version of Strata Client is available \(v1.9.2\)/)).toBeInTheDocument();
+=======
+    expect(
+      screen.getByText(/A new version of Strata Client is available \(v1.9.2\)/)
+    ).toBeInTheDocument();
+>>>>>>> origin/main
   });
 
   it("does not repeat notification if session has already dismissed/seen it", async () => {

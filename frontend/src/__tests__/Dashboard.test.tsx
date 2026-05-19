@@ -100,6 +100,7 @@ const baseStatus = {
   local_auth_enabled: true,
   vault_configured: false,
   sso_providers: [],
+  version: "1.9.1",
 };
 
 function renderDashboard() {

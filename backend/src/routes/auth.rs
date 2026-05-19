@@ -750,16 +750,16 @@ pub async fn change_password(
 /// the request-passing path needs.
 // CodeQL note: `rust/unused-variable` misfires on the `pair` rebinding in the
 // `find_map` closure (alert #71). The rebinding shadows to strip whitespace.
-#[allow(unused_variables)]
 fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|pair| pair.trim().strip_prefix(&format!("{}=", name)))
-        })
+    let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    let prefix = format!("{name}=");
+    for pair in cookie_header.split(';') {
+        let trimmed = pair.trim();
+        if let Some(val) = trimmed.strip_prefix(&prefix) {
+            return Some(val);
+        }
+    }
+    None
 }
 
 /// GET /api/auth/check – token validation that **always returns 200**.

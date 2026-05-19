@@ -152,14 +152,16 @@ async fn fetch_users(
 
 // ── Public API ────────────────────────────────────────────────────────
 
+async fn dispatch_and_log(pool: Pool<Postgres>, vault: Option<VaultConfig>, event: CheckoutEvent) {
+    if let Err(e) = dispatch(&pool, vault.as_ref(), event).await {
+        tracing::error!("notification dispatch failed: {}", e);
+    }
+}
+
 /// Fire-and-forget dispatch — spawns onto the current Tokio runtime so
 /// the calling handler returns immediately.
 pub fn spawn_dispatch(pool: Pool<Postgres>, vault: Option<VaultConfig>, event: CheckoutEvent) {
-    tokio::spawn(async move {
-        if let Err(e) = dispatch(&pool, vault.as_ref(), event).await {
-            tracing::error!("notification dispatch failed: {}", e);
-        }
-    });
+    tokio::spawn(dispatch_and_log(pool, vault, event));
 }
 
 /// Synchronous dispatch (tests, retry worker).

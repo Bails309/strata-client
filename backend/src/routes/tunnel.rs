@@ -987,70 +987,17 @@ pub async fn ws_tunnel(
             //
             // Revocation covers: manual logout, idle-timeout logout
             // (frontend calls /auth/logout which revokes both access &
-            // refresh tokens), and admin-side token invalidation.
-            //
-            // The hard cap is measured from this very `upgrade` point,
-            // so token-rotation that happens during the session is
-            // irrelevant. Polled every 30s.
-            const MAX_TUNNEL_DURATION: std::time::Duration =
-                std::time::Duration::from_secs(8 * 60 * 60); // 8 hours
-            let tunnel_started_at = std::time::Instant::now();
-            let watchdog_token_inner = watchdog_token.clone();
-            let watchdog = async move {
-                let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
-                tick.tick().await; // discard immediate first tick
-                loop {
-                    tick.tick().await;
-                    if let Some(ref t) = watchdog_token_inner {
-                        if crate::services::token_revocation::is_revoked(t) {
-                            tracing::info!(
-                                "Tunnel watchdog: access token revoked, closing tunnel for user {}",
-                                user_id
-                            );
-                            return "revoked";
-                        }
-                    }
-                    if tunnel_started_at.elapsed() >= MAX_TUNNEL_DURATION {
-                        tracing::info!(
-                            "Tunnel watchdog: max session duration ({}h) reached, closing tunnel for user {}",
-                            MAX_TUNNEL_DURATION.as_secs() / 3600,
-                            user_id
-                        );
-                        return "max_duration";
-                    }
-                }
-            };
-
-            let proxy_fut = tunnel::proxy(
+            let proxy_result = tunnel::proxy(
                 socket,
                 &guacd_host,
                 guacd_port,
                 handshake,
                 Some(nvr),
                 display_timezone,
-            );
-
-            let proxy_result = tokio::select! {
-                r = proxy_fut => r,
-                reason = watchdog => {
-                    // The unselected `proxy_fut` is dropped by `select!`
-                    // when this arm wins; that drops the WebSocket
-                    // (owned by the future) → guacd TCP connection
-                    // closes → session_registry entry is removed and
-                    // the recording is finalized via normal teardown.
-                    let _ = crate::services::audit::log(
-                        &audit_pool,
-                        Some(user_id),
-                        "tunnel.watchdog_closed",
-                        &serde_json::json!({
-                            "connection_id": connection_id.to_string(),
-                            "reason": reason,
-                        }),
-                    )
-                    .await;
-                    Ok(())
-                }
-            };
+                watchdog_token.clone(),
+                user_id,
+            )
+            .await;
 
             if let Err(e) = proxy_result {
                 let err_str = e.to_string();

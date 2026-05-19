@@ -388,7 +388,7 @@ async fn pump(
             let chunk = Bytes::copy_from_slice(&buf[..n]);
             send.reserve_capacity(chunk.len());
             send.send_data(chunk, false)
-                .map_err(|e| anyhow::anyhow!("h2 send_data: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("h2 send_data: {}", e))?;
         }
         let _ = send.send_data(Bytes::new(), true);
         anyhow::Ok(())
@@ -402,7 +402,7 @@ async fn pump(
                 Ok(None) => break,
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: link→public read idle for 60s")),
             };
-            let chunk = next.map_err(|e| anyhow::anyhow!("h2 recv data: {e}"))?;
+            let chunk = next.map_err(|e| anyhow::anyhow!("h2 recv data: {}", e))?;
             let _ = recv.flow_control().release_capacity(chunk.len());
             if chunk.is_empty() {
                 continue;

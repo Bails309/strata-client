@@ -205,8 +205,11 @@ export default function Layout({
             onClick={() => setSessionHidden(false)}
             title="Show menu"
             aria-label="Show menu"
-            className="fixed top-1/2 left-0 z-[60] -translate-y-1/2 flex items-center justify-center w-6 h-16 rounded-r-md border border-l-0 border-white/10 bg-nav-bg text-txt-secondary hover:text-txt-primary hover:bg-white/5 shadow-lg transition-all duration-150"
-            style={{ background: "var(--color-nav-bg)" }}
+            className="fixed top-1/2 left-0 z-[60] -translate-y-1/2 flex items-center justify-center w-6 h-16 rounded-r-md border border-l-0 text-txt-secondary hover:text-txt-primary hover:bg-[var(--color-btn-hover-bg)] shadow-lg transition-all duration-150"
+            style={{
+              background: "var(--color-nav-bg)",
+              borderColor: "var(--color-nav-border)",
+            }}
           >
             <svg
               width="14"
@@ -237,10 +240,13 @@ export default function Layout({
             className="fixed top-1/2 z-[60] -translate-y-1/2 w-8 h-24 flex items-center justify-center rounded-r-xl text-txt-secondary hover:text-txt-primary transition-all duration-200"
             style={{
               left: sidebarWidth,
-              background: "rgba(15, 15, 20, 0.75)",
+              background: theme === "dark" ? "rgba(15, 15, 20, 0.75)" : "rgba(255, 255, 255, 0.75)",
               backdropFilter: "blur(16px)",
               WebkitBackdropFilter: "blur(16px)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
+              border:
+                theme === "dark"
+                  ? "1px solid rgba(255, 255, 255, 0.08)"
+                  : "1px solid rgba(0, 0, 0, 0.08)",
               borderLeft: "none",
             }}
           >
@@ -269,13 +275,19 @@ export default function Layout({
             // canvas — use the same translucent + blurred surface that
             // the right-side SessionBar uses so it reads as an overlay
             // rather than an opaque side rail.
-            background: inSession ? "rgba(15, 15, 20, 0.75)" : "var(--color-nav-bg)",
+            background: inSession
+              ? theme === "dark"
+                ? "rgba(15, 15, 20, 0.75)"
+                : "rgba(255, 255, 255, 0.75)"
+              : "var(--color-nav-bg)",
             backdropFilter: inSession ? "blur(16px)" : undefined,
             WebkitBackdropFilter: inSession ? "blur(16px)" : undefined,
             borderRight: hidden
               ? "none"
               : inSession
-                ? "1px solid rgba(255, 255, 255, 0.08)"
+                ? theme === "dark"
+                  ? "1px solid rgba(255, 255, 255, 0.08)"
+                  : "1px solid rgba(0, 0, 0, 0.08)"
                 : "1px solid var(--color-nav-border)",
             boxShadow: inSession && !hidden ? "10px 0 30px rgba(0, 0, 0, 0.4)" : undefined,
           }}

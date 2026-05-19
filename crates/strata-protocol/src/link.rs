@@ -78,15 +78,12 @@ where
         write_frame(stream, &hello).await?;
 
         let challenge: AuthChallenge = read_frame(stream).await?;
-        let psk = cfg
-            .psks
-            .get(&challenge.psk_id)
-            .ok_or_else(|| {
-                ProtocolError::AuthFailed(format!(
-                    "DMZ requested psk_id={:?}, not configured",
-                    challenge.psk_id
-                ))
-            })?;
+        let psk = cfg.psks.get(&challenge.psk_id).ok_or_else(|| {
+            ProtocolError::AuthFailed(format!(
+                "DMZ requested psk_id={:?}, not configured",
+                challenge.psk_id
+            ))
+        })?;
 
         let response = compute_response(&hello, &challenge, psk)?;
         write_frame(stream, &response).await?;
@@ -257,14 +254,8 @@ mod tests {
         let server = tokio::spawn(async move { server_handshake(&mut b, &sc).await });
 
         let (cr, sr) = tokio::join!(client, server);
-        assert!(matches!(
-            cr.unwrap(),
-            Err(ProtocolError::AuthFailed(_))
-        ));
-        assert!(matches!(
-            sr.unwrap(),
-            Err(ProtocolError::AuthFailed(_))
-        ));
+        assert!(matches!(cr.unwrap(), Err(ProtocolError::AuthFailed(_))));
+        assert!(matches!(sr.unwrap(), Err(ProtocolError::AuthFailed(_))));
     }
 
     #[tokio::test]
@@ -281,9 +272,6 @@ mod tests {
         let server = tokio::spawn(async move { server_handshake(&mut b, &sc).await });
 
         let (cr, _sr) = tokio::join!(client, server);
-        assert!(matches!(
-            cr.unwrap(),
-            Err(ProtocolError::AuthFailed(_))
-        ));
+        assert!(matches!(cr.unwrap(), Err(ProtocolError::AuthFailed(_))));
     }
 }

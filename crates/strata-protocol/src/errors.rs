@@ -51,7 +51,10 @@ mod tests {
             ProtocolError::Malformed("x".into()).to_string(),
             "malformed message: x"
         );
-        assert_eq!(ProtocolError::BadMac.to_string(), "hmac verification failed");
+        assert_eq!(
+            ProtocolError::BadMac.to_string(),
+            "hmac verification failed"
+        );
         assert_eq!(
             ProtocolError::AuthFailed("bad psk".into()).to_string(),
             "authentication failed: bad psk"

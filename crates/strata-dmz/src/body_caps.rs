@@ -285,8 +285,7 @@ mod tests {
 
     #[test]
     fn lookup_longest_prefix_wins() {
-        let rules =
-            parse("10.0.0.0/8=10M, 10.1.0.0/16=20M, 10.1.2.3/32=30M").unwrap();
+        let rules = parse("10.0.0.0/8=10M, 10.1.0.0/16=20M, 10.1.2.3/32=30M").unwrap();
         assert_eq!(lookup(&rules, ip("10.1.2.3")), Some(30 * 1024 * 1024));
         assert_eq!(lookup(&rules, ip("10.1.2.4")), Some(20 * 1024 * 1024));
         assert_eq!(lookup(&rules, ip("10.2.0.1")), Some(10 * 1024 * 1024));
@@ -296,10 +295,7 @@ mod tests {
     #[test]
     fn lookup_v6_works() {
         let rules = parse("2001:db8::/32=16M").unwrap();
-        assert_eq!(
-            lookup(&rules, ip("2001:db8::1")),
-            Some(16 * 1024 * 1024)
-        );
+        assert_eq!(lookup(&rules, ip("2001:db8::1")), Some(16 * 1024 * 1024));
         assert_eq!(lookup(&rules, ip("2001:db9::1")), None);
     }
 

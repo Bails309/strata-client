@@ -31,8 +31,8 @@ pub fn build_public_acceptor(
         return Err(anyhow!("DMZ public TLS cert PEM contained no certificates"));
     }
 
-    let server_key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(server_key_pem)
-        .context("parse DMZ public TLS key PEM")?;
+    let server_key: PrivateKeyDer<'static> =
+        PrivateKeyDer::from_pem_slice(server_key_pem).context("parse DMZ public TLS key PEM")?;
 
     let mut cfg = ServerConfig::builder()
         .with_no_client_auth()

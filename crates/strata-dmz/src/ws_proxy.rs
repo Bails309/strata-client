@@ -128,9 +128,10 @@ pub(crate) enum WsProxyError {
 impl IntoResponse for WsProxyError {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
-            WsProxyError::NoLinkUp => {
-                (StatusCode::SERVICE_UNAVAILABLE, "no internal links available")
-            }
+            WsProxyError::NoLinkUp => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no internal links available",
+            ),
             WsProxyError::LinkSendUnavailable => {
                 (StatusCode::BAD_GATEWAY, "link session lost during upgrade")
             }
@@ -227,9 +228,7 @@ pub(crate) async fn proxy_websocket(
         }
         forward_headers.append(name.clone(), value.clone());
     }
-    state
-        .signer
-        .sign(&mut forward_headers, peer, &method, &uri);
+    state.signer.sign(&mut forward_headers, peer, &method, &uri);
 
     // Pick a link sender. Try twice on a stale-pick failure — same
     // pattern as the REST proxy.
@@ -328,9 +327,7 @@ async fn start_extended_connect(
         .uri(upstream_uri.clone())
         .version(http::Version::HTTP_2);
     {
-        let h = up_req
-            .headers_mut()
-            .expect("fresh builder has headers map");
+        let h = up_req.headers_mut().expect("fresh builder has headers map");
         for (k, v) in headers.iter() {
             h.append(k.clone(), v.clone());
         }

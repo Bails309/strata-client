@@ -127,7 +127,10 @@ impl TlsLinkConnector {
                 let now = mtimes(&self.cert_path, &self.key_path, &self.ca_path);
                 if now != last && now.iter().all(Option::is_some) {
                     if let Err(e) = self.reload() {
-                        tracing::warn!("dmz link cert reload failed: {}; keeping previous config", e);
+                        tracing::warn!(
+                            "dmz link cert reload failed: {}; keeping previous config",
+                            e
+                        );
                     }
                     last = now;
                 }

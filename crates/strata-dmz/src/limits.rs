@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn separate_ips_have_separate_buckets() {
         let l = PerIpRateLimiter::new(0, 1); // rps=0 → unlimited per spec
-        // Even with rps=0 the limiter should not reject — branch is exercised.
+                                             // Even with rps=0 the limiter should not reject — branch is exercised.
         for _ in 0..1000 {
             assert!(l.check(ip(1, 1, 1, 1)));
             assert!(l.check(ip(2, 2, 2, 2)));

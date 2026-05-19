@@ -139,9 +139,8 @@ impl EdgeSigner for HmacEdgeSigner {
                 // log-field separators.
                 !s.is_empty()
                     && s.len() <= MAX_REQUEST_ID_LEN
-                    && s.bytes().all(|b| {
-                        b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
-                    })
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
             })
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -153,7 +152,8 @@ impl EdgeSigner for HmacEdgeSigner {
             .to_string();
 
         // Step 3: build the canonical map (TLS fields empty until 2e).
-        let mut canon: HashMap<String, String> = HashMap::with_capacity(EDGE_HEADERS_CANONICAL.len());
+        let mut canon: HashMap<String, String> =
+            HashMap::with_capacity(EDGE_HEADERS_CANONICAL.len());
         canon.insert("x-strata-edge-client-ip".into(), client_ip);
         canon.insert("x-strata-edge-tls-version".into(), String::new());
         canon.insert("x-strata-edge-tls-cipher".into(), String::new());
@@ -370,11 +370,7 @@ mod tests {
             &http::Method::GET,
             &"/".parse().unwrap(),
         );
-        let id = h
-            .get("x-strata-edge-request-id")
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let id = h.get("x-strata-edge-request-id").unwrap().to_str().unwrap();
         // UUID v4 is 36 chars with dashes.
         assert_eq!(id.len(), 36);
     }
@@ -402,14 +398,7 @@ mod tests {
         // public client smuggle log-field separators (=, ,, ;, etc.)
         // into the trusted edge audit context. Each of these MUST now
         // be rejected and replaced with a freshly minted UUID.
-        for bad in [
-            "a=b",
-            "foo,bar",
-            "foo;bar",
-            "foo bar",
-            "foo/bar",
-            "foo:bar",
-        ] {
+        for bad in ["a=b", "foo,bar", "foo;bar", "foo bar", "foo/bar", "foo:bar"] {
             let s = signer();
             let mut h = HeaderMap::new();
             h.insert("x-request-id", bad.parse().unwrap());
@@ -419,11 +408,7 @@ mod tests {
                 &http::Method::GET,
                 &"/".parse().unwrap(),
             );
-            let id = h
-                .get("x-strata-edge-request-id")
-                .unwrap()
-                .to_str()
-                .unwrap();
+            let id = h.get("x-strata-edge-request-id").unwrap().to_str().unwrap();
             assert_ne!(id, bad, "rejected id {bad:?} should not be echoed");
             assert_eq!(
                 id.len(),
@@ -463,11 +448,7 @@ mod tests {
             &http::Method::GET,
             &"/".parse().unwrap(),
         );
-        let ua = h
-            .get("x-strata-edge-user-agent")
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let ua = h.get("x-strata-edge-user-agent").unwrap().to_str().unwrap();
         assert_eq!(ua.len(), MAX_UA_LEN);
     }
 

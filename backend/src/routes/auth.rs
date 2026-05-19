@@ -756,9 +756,9 @@ fn extract_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
-            cookies.split(';').find_map(|pair| {
-                pair.trim().strip_prefix(&format!("{}=", name))
-            })
+            cookies
+                .split(';')
+                .find_map(|pair| pair.trim().strip_prefix(&format!("{}=", name)))
         })
 }
 

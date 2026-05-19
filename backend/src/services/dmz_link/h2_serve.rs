@@ -158,7 +158,8 @@ where
                 // upgrade handler owns its own idle/keepalive logic
                 // and we must not bound it from the outside.
                 if let Err(e) = upgrade.handle(request, respond).await {
-                    tracing::warn!("DMZ link h2 upgrade stream errored: {}", e);
+                    let err_str = e.to_string();
+                    tracing::warn!("DMZ link h2 upgrade stream errored: {}", err_str);
                 }
             } else {
                 // Cap regular request handling so a stalled handler
@@ -178,7 +179,8 @@ where
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
-                        tracing::warn!("DMZ link h2 stream errored: {}", e);
+                        let err_str = e.to_string();
+                        tracing::warn!("DMZ link h2 stream errored: {}", err_str);
                     }
                     Err(_) => {
                         tracing::warn!(

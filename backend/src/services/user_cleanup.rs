@@ -85,13 +85,23 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
                     "local" => {
                         let full_path = format!("{rdir}/{path}");
                         if let Err(e) = tokio::fs::remove_file(&full_path).await {
-                            tracing::warn!("Failed to delete local recording {}: {}", path, e);
+                            let err_str = e.to_string();
+                            tracing::warn!(
+                                "Failed to delete local recording {}: {}",
+                                path,
+                                err_str
+                            );
                         }
                     }
                     "azure" | "azure_blob" => {
                         if let Some(ref cfg) = cfg {
                             if let Err(e) = recordings::delete_from_azure(cfg, &path).await {
-                                tracing::warn!("Failed to delete Azure recording {}: {}", path, e);
+                                let err_str = e.to_string();
+                                tracing::warn!(
+                                    "Failed to delete Azure recording {}: {}",
+                                    path,
+                                    err_str
+                                );
                             }
                         }
                     }

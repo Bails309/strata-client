@@ -113,7 +113,8 @@ where
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
-                    tracing::warn!("{}: iteration failed: {}", cfg.label, e);
+                    let err_str = e.to_string();
+                    tracing::warn!("{}: iteration failed: {}", cfg.label, err_str);
                     sleep_with_jitter(cfg.error_backoff_base, &shutdown).await;
                 }
                 Err(_) => {

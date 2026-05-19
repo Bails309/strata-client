@@ -275,12 +275,14 @@ pub(crate) async fn proxy_websocket(
         let upgraded = match on_upgrade.await {
             Ok(u) => u,
             Err(e) => {
-                tracing::warn!("public websocket upgrade future errored: {}", e);
+                let err_str = e.to_string();
+                tracing::warn!("public websocket upgrade future errored: {}", err_str);
                 return;
             }
         };
         if let Err(e) = pump(upgraded, recv_body, send_stream).await {
-            tracing::debug!("DMZ websocket bridge ended: {}", e);
+            let err_str = e.to_string();
+            tracing::debug!("DMZ websocket bridge ended: {}", err_str);
         }
     });
 
@@ -379,7 +381,10 @@ async fn pump(
         loop {
             let n = match tokio::time::timeout(IO_TIMEOUT, tcp_r.read(&mut buf)).await {
                 Ok(Ok(n)) => n,
-                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp read: {}", e)),
+                Ok(Err(e)) => {
+                    let err_str = e.to_string();
+                    return Err(anyhow::anyhow!("public tcp read: {}", err_str));
+                }
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: public→link read idle for 60s")),
             };
             if n == 0 {
@@ -415,7 +420,10 @@ async fn pump(
             }
             match tokio::time::timeout(IO_TIMEOUT, tcp_w.write_all(&chunk)).await {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(anyhow::anyhow!("public tcp write: {}", e)),
+                Ok(Err(e)) => {
+                    let err_str = e.to_string();
+                    return Err(anyhow::anyhow!("public tcp write: {}", err_str));
+                }
                 Err(_) => return Err(anyhow::anyhow!("ws bridge: public write idle for 60s")),
             }
         }

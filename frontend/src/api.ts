@@ -158,6 +158,7 @@ export interface StatusResponse {
   sso_enabled: boolean;
   local_auth_enabled: boolean;
   vault_configured: boolean;
+  sso_providers: { id: string; name: string }[];
 }
 
 export const getStatus = () => request<StatusResponse>("/status");
@@ -418,8 +419,44 @@ export const updateAuthMethods = (data: AuthMethodsRequest) =>
     body: JSON.stringify(data),
   });
 
-export const updateSso = (data: { issuer_url: string; client_id: string; client_secret: string }) =>
-  request("/admin/settings/sso", { method: "PUT", body: JSON.stringify(data) });
+export interface SsoProvider {
+  id: string;
+  name: string;
+  issuer_url: string;
+  client_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const getSsoProviders = () => request<SsoProvider[]>("/admin/settings/sso-providers");
+
+export const createSsoProvider = (data: {
+  name: string;
+  issuer_url: string;
+  client_id: string;
+  client_secret: string;
+}) =>
+  request<{ id: string; status: string }>("/admin/settings/sso-providers", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateSsoProvider = (
+  id: string,
+  data: {
+    name?: string;
+    issuer_url?: string;
+    client_id?: string;
+    client_secret?: string;
+  }
+) =>
+  request<{ status: string }>(`/admin/settings/sso-providers/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const deleteSsoProvider = (id: string) =>
+  request<{ status: string }>(`/admin/settings/sso-providers/${id}`, { method: "DELETE" });
 
 export const testSsoConnection = (data: {
   issuer_url: string;

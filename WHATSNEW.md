@@ -1,3 +1,41 @@
+# What's New in v1.9.0
+
+> **Minor release: Multiple SSO/OIDC connections, dynamic login branding,
+> Vault transit secrets, and BASE_URL port integrity.** v1.9.0 introduces
+> the highly requested capability to run multiple OIDC identity providers
+> simultaneously, complete with dynamic login branding, robust thread-safe
+> state routing, and individual Vault transit unsealing.
+
+
+## Multiple SSO & OpenID Connect Connections
+
+v1.9.0 adds full multi-tenant OIDC architecture to Strata Client. Administrators can now configure, manage, and audit multiple Single Sign-On (SSO) connections simultaneously (e.g. Entra ID, Okta, and Keycloak side-by-side) using the newly expanded admin settings panel.
+
+Key improvements include:
+
+- **Dynamic Login Buttons**: The login page dynamically fetches all active identity providers and renders a dedicated sign-in button for each one.
+- **Custom Branded Labels**: Admins can configure custom display names/labels for each SSO connection to clearly guide operators to their respective identity provider.
+- **Multi-Tenant State Resolution (`SSO_STATE_STORE`)**: Rather than registering distinct callback URLs for every configured provider, all configurations share a single callback endpoint (`/api/auth/sso/callback`). The backend securely routes incoming OAuth2 callbacks by tracking random CSRF state tokens against an in-memory, thread-safe, time-bounded store (`SSO_STATE_STORE`) mapping to the originating provider ID.
+- **Individual Vault-Sealed Client Secrets**: Stored client secrets are encrypted at rest using separate HashiCorp Vault transit keys dynamically per database row, preventing credential leakage in database dumps.
+- **Port Integrity via `BASE_URL`**: Introduced a new `BASE_URL` configuration override in `.env` and `.env.example`. This prevents downstream proxies or SSL terminators from stripping non-standard ports (e.g., `:8443`) from redirect URIs, resolving callback mismatches during OIDC authorization code exchanges.
+- **Robust Database Migration and UX**: Database migration `062_sso_providers.sql` seamlessly migrates old single-SSO environments to the new multi-provider schema at startup. Furthermore, saving an OIDC provider while Vault is unconfigured now returns a helpful HTTP 400 Bad Request instruction rather than an unhelpful HTTP 500 error, guiding the operator to initialize Vault first.
+
+
+## Upgrade
+
+Upgrade from v1.8.4. Rebuild and roll both the backend and frontend containers together to apply the new database migration and environment configurations:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+**Important:** If your deployment runs on a non-standard port or sits behind a proxy that strips ports, make sure to add `BASE_URL=https://<your-host>:<port>` to your `.env` file to ensure correct redirect callbacks.
+
+---
+
 # What's New in v1.8.4
 
 > **Patch release: Vitest test suite stabilization and environment

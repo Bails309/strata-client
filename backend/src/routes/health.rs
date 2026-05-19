@@ -17,17 +17,24 @@ pub async fn health_check() -> Json<HealthResponse> {
 }
 
 #[derive(Serialize)]
+pub struct SsoProviderInfo {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Serialize)]
 pub struct StatusResponse {
     pub phase: String,
     pub sso_enabled: bool,
     pub local_auth_enabled: bool,
     pub vault_configured: bool,
+    pub sso_providers: Vec<SsoProviderInfo>,
 }
 
 pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
     let s = state.read().await;
 
-    let (sso, local) = if let Some(ref db) = s.db {
+    let (sso, local, providers) = if let Some(ref db) = s.db {
         let sso = settings::get(&db.pool, "sso_enabled")
             .await
             .unwrap_or(None)
@@ -38,9 +45,24 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
             .unwrap_or(None)
             .map(|v| v == "true")
             .unwrap_or(true); // Default to local auth enabled
-        (sso, local)
+
+        let provider_rows: Vec<(uuid::Uuid, String)> =
+            sqlx::query_as("SELECT id, name FROM sso_providers ORDER BY created_at ASC")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap_or_default();
+
+        let providers: Vec<SsoProviderInfo> = provider_rows
+            .into_iter()
+            .map(|(id, name)| SsoProviderInfo {
+                id: id.to_string(),
+                name,
+            })
+            .collect();
+
+        (sso, local, providers)
     } else {
-        (false, true)
+        (false, true, vec![])
     };
 
     let vault_configured = { s.config.as_ref().and_then(|c| c.vault.as_ref()).is_some() };
@@ -53,6 +75,7 @@ pub async fn status(State(state): State<SharedState>) -> Json<StatusResponse> {
         sso_enabled: sso,
         local_auth_enabled: local,
         vault_configured,
+        sso_providers: providers,
     })
 }
 
@@ -262,6 +285,7 @@ mod tests {
             sso_enabled: true,
             local_auth_enabled: false,
             vault_configured: true,
+            sso_providers: vec![],
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "running");
@@ -381,6 +405,7 @@ mod tests {
             sso_enabled: false,
             local_auth_enabled: true,
             vault_configured: false,
+            sso_providers: vec![],
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "setup");

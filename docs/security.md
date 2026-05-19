@@ -6,23 +6,26 @@ This document describes the security model, encryption architecture, and authent
 
 ## Authentication
 
-### OIDC / OpenID Connect
+### OIDC / OpenID Connect (Multi-SSO support since v1.9.0)
 
-Strata Client supports standard OpenID Connect for user authentication. The identity provider (IdP) is configured dynamic via the Admin UI, with client secrets stored securely in HashiCorp Vault.
+Strata Client supports configuring **multiple standard OpenID Connect (OIDC) identity providers (IdPs)** simultaneously. The active providers are rendered dynamically as custom-labeled, branded buttons on the login screen. Client secrets for all providers are encrypted at rest with HashiCorp Vault's Transit Secrets Engine under the dedicated transit key path `transit/encrypt/strata-sso` before being written to the PostgreSQL database.
+
+An in-memory cache/state tracking system is introduced to hold discovery clients and handle connection tests safely.
 
 **Flow:**
 
-1. Frontend redirects the user to the IdP's authorization endpoint
-2. User authenticates with the IdP (e.g., Keycloak, Entra ID)
-3. IdP redirects back with an authorization code
-4. Frontend exchanges the code for an access token
-5. Frontend sends the access token as `Authorization: Bearer <token>` on all API requests
-6. Backend validates the token:
+1. Frontend queries `/api/auth/sso/providers` to fetch the active list of providers and renders custom sign-in buttons.
+2. When the user clicks a button, a request is sent to `/api/auth/sso/login?provider=<id>` which generates a unique authorization URL for that specific provider.
+3. The user is redirected to the target IdP's authorization endpoint.
+4. User authenticates with the IdP (e.g., Keycloak, Entra ID).
+5. IdP redirects back to the backend callback (`GET /api/auth/sso/callback`) with an authorization code and a state UUID.
+6. The backend retrieves the matching provider UUID from its state cache, decrypts the provider's `client_secret` via Vault, and exchanges the authorization code for an ID/access token.
+7. Backend validates the token:
    - Fetches the IdP's `/.well-known/openid-configuration`
    - Downloads the JWKS (JSON Web Key Set)
    - Verifies the token signature (RS256) using the matching `kid`
    - Validates `iss` (issuer), `aud` (audience/client_id), and `exp` (expiry)
-   - Extracts the `sub` (subject) claim
+   - Extracts the `sub` (subject) claim to resolve or provision the local user profile.
 
 ### Local Authentication
 
@@ -107,11 +110,11 @@ To prevent technology fingerprinting, the Nginx gateway is configured with **Ngi
 
 This NJS-based approach ensures that even error pages generated internally by Nginx (which normally bypass the backend's header logic) adhere to the project's security standards.
 
-#### SSO callback hardening (v1.6.1; revised v1.8.2)
+#### SSO callback hardening (v1.6.1; revised v1.8.2, v1.9.0)
 
-The OIDC callback handler is hardened against replay attacks and Chromium's BFCache:
+The OIDC callback handler is hardened against replay attacks, provider mismatch vulnerabilities, and Chromium's BFCache:
 
-- **State UUID validation**: the `state` parameter is a cryptographically strong UUIDv4, validated exactly once.
+- **State and Provider Tracking (v1.9.0)**: The `state` parameter is a cryptographically strong UUIDv4. To support multiple OIDC providers concurrently, the backend stores a mapping of the generated `state` UUID to the target provider's UUID in an in-memory TTL-expiring cache (`sso_state_cache`) during initiation. Upon callback, the backend validates and consumes this `state` parameter exactly once. This securely maps the authentication callback back to the correct provider configuration for token exchange and validation, eliminating mismatch vulnerability vectors.
 - **Global Cache-Control**: Prior to v1.8.2, `no-store` was applied specifically to SSO redirects. It is now part of the global middleware policy, ensuring the OIDC `code` and `state` transition never enters the browser's navigation history cache.
 - **Diagnostic timing trace.** Every successful SSO callback emits an info-level tracing line on the `strata::auth::sso` target with `discovery_ms`, `token_exchange_ms`, `token_validate_ms`, and `total_so_far_ms`.
 

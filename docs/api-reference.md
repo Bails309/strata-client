@@ -115,15 +115,38 @@ Standard local username/password login. Only available if `local_auth_enabled` i
 > [!NOTE]
 > The `access_token` is returned in both the JSON response body and as an `HttpOnly` cookie. This allows the SPA to use cookies (more secure against XSS) while supporting legacy or non-browser clients that prefer the `Authorization` header.
 
+### `GET /api/auth/sso/providers`
+
+Returns the list of active, registered OIDC/SSO identity providers configured by administrators. Used by the login page to dynamically render branded sign-in buttons.
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "id": "e2a0b12a-432d-4bf2-be91-231a789bcde3",
+    "name": "Corporate Keycloak"
+  },
+  {
+    "id": "7bc901a2-345e-678f-90ab-cdef12345678",
+    "name": "Microsoft Entra ID"
+  }
+]
+```
+
 ### `GET /api/auth/sso/login`
 
-Initiates the OIDC Single Sign-On flow. Redirects the user to the configured OIDC issuer's authorization endpoint. Only available if `sso_enabled` is true and properly configured.
+Initiates the OIDC Single Sign-On flow. Redirects the user to the target OIDC issuer's authorization endpoint.
+
+**Query Parameters**
+
+- `provider`: The UUID of the OIDC provider to authenticate with (refer to `/api/auth/sso/providers`).
 
 **Success**: `303 See Other` redirect to the issuer.
 
 **Response headers** (since v1.6.1):
 
-- `Cache-Control: no-store` — set explicitly so browsers (notably Chromium's BFCache) do not retain the redirect. Preventing replay of the single-use `state` UUID across forward/back navigation.
+- `Cache-Control: no-store` — set explicitly so browsers (notably Chromium's BFCache) do not retain the redirect, preventing replay of the single-use `state` UUID across forward/back navigation.
 
 ### `GET /api/auth/sso/callback`
 
@@ -287,19 +310,114 @@ Migrate to an external database.
 { "database_url": "postgresql://user:pass@db.example.com:5432/strata" }
 ```
 
-#### `PUT /api/admin/settings/sso`
+#### `GET /api/admin/settings/sso-providers`
 
-Configure OIDC / SSO.
+List all configured OIDC/SSO identity providers. (Client secret values are masked/omitted in the response).
+
+**Response** `200 OK`
+
+```json
+[
+  {
+    "id": "e2a0b12a-432d-4bf2-be91-231a789bcde3",
+    "name": "Corporate Keycloak",
+    "issuer_url": "https://keycloak.capita-ic.com/realms/Capita",
+    "client_id": "test capita",
+    "created_at": "2026-05-19T10:00:00Z",
+    "updated_at": "2026-05-19T10:00:00Z"
+  }
+]
+```
+
+#### `POST /api/admin/settings/sso-providers`
+
+Create/Register a new OIDC/SSO provider configuration. Client secrets are encrypted with Vault Transit engine before being stored in the database.
 
 **Request Body**
 
 ```json
 {
-  "issuer_url": "https://keycloak.example.com/realms/strata",
-  "client_id": "strata-client",
-  "client_secret": "secret"
+  "name": "Corporate Keycloak",
+  "issuer_url": "https://keycloak.capita-ic.com/realms/Capita",
+  "client_id": "test capita",
+  "client_secret": "my-client-secret"
 }
 ```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Display label/name of the identity provider for branding the login screen |
+| `issuer_url` | string | Yes | OIDC Issuer discovery URL |
+| `client_id` | string | Yes | OIDC client identifier |
+| `client_secret`| string | Yes | OIDC client secret |
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "e2a0b12a-432d-4bf2-be91-231a789bcde3",
+  "name": "Corporate Keycloak",
+  "issuer_url": "https://keycloak.capita-ic.com/realms/Capita",
+  "client_id": "test capita",
+  "created_at": "2026-05-19T10:00:00Z",
+  "updated_at": "2026-05-19T10:00:00Z"
+}
+```
+
+**Errors:**
+- `400 Bad Request` — Vault is unconfigured or sealed, client secret cannot be encrypted.
+- `400 Bad Request` — Invalid OIDC Issuer URL format.
+
+#### `PUT /api/admin/settings/sso-providers/:id`
+
+Update an existing OIDC/SSO provider configuration.
+
+**Request Body**
+
+```json
+{
+  "name": "Corporate Keycloak Updated",
+  "issuer_url": "https://keycloak.capita-ic.com/realms/Capita",
+  "client_id": "test capita",
+  "client_secret": "optional-new-secret-if-changing"
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "e2a0b12a-432d-4bf2-be91-231a789bcde3",
+  "name": "Corporate Keycloak Updated",
+  "issuer_url": "https://keycloak.capita-ic.com/realms/Capita",
+  "client_id": "test capita",
+  "created_at": "2026-05-19T10:00:00Z",
+  "updated_at": "2026-05-19T10:20:00Z"
+}
+```
+
+#### `DELETE /api/admin/settings/sso-providers/:id`
+
+Delete an OIDC/SSO provider configuration.
+
+**Response** `200 OK`
+
+```json
+{ "status": "deleted" }
+```
+
+#### `POST /api/admin/settings/sso-providers/:id/test`
+
+Perform a live connection test to verify connection to the OIDC provider's discovery metadata.
+
+**Response** `200 OK`
+
+```json
+{ "status": "success", "message": "Successfully retrieved OIDC discovery configuration." }
+```
+
+**Errors:**
+- `400 Bad Request` — Failed to fetch OIDC discovery configuration from issuer.
 
 #### `PUT /api/admin/settings/auth-methods`
 

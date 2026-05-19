@@ -1211,7 +1211,7 @@ async fn my_recording_stream_handler(
     socket: axum::extract::ws::WebSocket,
     state: SharedState,
     recording: crate::db::Recording,
-    seek_ms: i32,
+    seek_ms: u64,
     speed: f64,
 ) {
     if let Err(e) = crate::routes::admin::recordings::handle_user_recording_stream(

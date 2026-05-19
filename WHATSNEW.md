@@ -10,6 +10,10 @@ Editing an existing SSO provider configuration (e.g., Entra ID, Okta) now correc
 
 Resolved multiple CodeQL detections related to unused variables across the backend application components, ensuring cleaner execution flows and more maintainable code.
 
+## SPA Caching and Versioning Reliability
+
+Configured Nginx's SPA routing to serve the main `index.html` file with strict cache-invalidation headers (`Cache-Control: no-store, no-cache, must-revalidate...`). This ensures that clients always load the absolute newest deployment configuration on reload, eliminating the issue of stale browser-cached websites while maintaining fast performance for hashed immutable assets.
+
 ---
 
 # What's New in v1.9.0

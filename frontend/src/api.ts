@@ -159,6 +159,7 @@ export interface StatusResponse {
   local_auth_enabled: boolean;
   vault_configured: boolean;
   sso_providers: { id: string; name: string }[];
+  version: string;
 }
 
 export const getStatus = () => request<StatusResponse>("/status");

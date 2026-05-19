@@ -77,12 +77,31 @@ location /api/ {
 # SPA fallback
 location / {
     js_header_filter remove_server.clearServer;
+    
+    # Disable caching for index.html to ensure clients always get the newest deployment mapping
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    
+    # Re-apply security headers (nginx add_header inheritance rules)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
     try_files $uri $uri/ /index.html;
 }
 
 # Explicitly handle index.html internal redirects to ensure filters apply
 location = /index.html {
     js_header_filter remove_server.clearServer;
+    
+    # Disable caching for index.html explicitly
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
+    
+    # Re-apply security headers (nginx add_header inheritance rules)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 }
 
 # Cache hashed static assets aggressively

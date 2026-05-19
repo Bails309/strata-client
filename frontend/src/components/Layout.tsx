@@ -243,7 +243,10 @@ export default function Layout({
               background: theme === "dark" ? "rgba(15, 15, 20, 0.75)" : "rgba(255, 255, 255, 0.75)",
               backdropFilter: "blur(16px)",
               WebkitBackdropFilter: "blur(16px)",
-              border: theme === "dark" ? "1px solid rgba(255, 255, 255, 0.08)" : "1px solid rgba(0, 0, 0, 0.08)",
+              border:
+                theme === "dark"
+                  ? "1px solid rgba(255, 255, 255, 0.08)"
+                  : "1px solid rgba(0, 0, 0, 0.08)",
               borderLeft: "none",
             }}
           >

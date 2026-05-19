@@ -715,7 +715,8 @@ orphaned pop-out windows.
 ## Database Schema
 
 ```
-system_settings ──── key/value config store
+system_settings ──── key/value config store (now excluding OIDC settings)
+sso_providers ────── multi-tenant OIDC configurations (provider_id, name, issuer, client_id, vault-sealed client_secret)
 users ──────────────── OIDC subject, username, role FK
 roles ────────────── granular permissions (can_manage_system, can_manage_users, can_manage_connections,
                        can_view_audit_logs, can_view_sessions, can_create_users, can_create_user_groups,
@@ -743,7 +744,7 @@ users.notifications_opt_out ─ boolean column; honoured by every transactional 
 user_preferences ──── per-user UI preferences blob (JSONB, schema owned by the frontend, validated server-side); keys: `commandPaletteBinding` (default `"Ctrl+K"`, added v0.30.1), `commandMappings` (default `[]`, added v0.31.0 — array of typed `:command` palette mappings, max 50 entries, validated by `services::user_preferences::validate_command_mappings`)
 ```
 
-See `backend/migrations/001_initial_schema.sql` through `058_user_preferences.sql` for the full DDL.
+See `backend/migrations/001_initial_schema.sql` through `062_sso_providers.sql` for the full DDL.
 
 ## Directory Structure
 

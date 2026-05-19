@@ -1,3 +1,17 @@
+# What's New in v1.9.1
+
+> **Patch release: SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup.** v1.9.1 fixes a deserialization bug that prevented the saving of edited SSO configurations when the client secret field was omitted to signify "no change."
+
+## SSO Edit Fixes
+
+Editing an existing SSO provider configuration (e.g., Entra ID, Okta) now correctly preserves existing client secrets when saving. The test connection utility also now accurately uses existing secrets to validate edited configurations, ensuring robust testing prior to saving.
+
+## Code Quality and Technical Debt
+
+Resolved multiple CodeQL detections related to unused variables across the backend application components, ensuring cleaner execution flows and more maintainable code.
+
+---
+
 # What's New in v1.9.0
 
 > **Minor release: Multiple SSO/OIDC connections, dynamic login branding,

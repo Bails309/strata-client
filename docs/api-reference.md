@@ -406,9 +406,27 @@ Delete an OIDC/SSO provider configuration.
 { "status": "deleted" }
 ```
 
-#### `POST /api/admin/settings/sso-providers/:id/test`
+#### `POST /api/admin/settings/sso/test`
 
 Perform a live connection test to verify connection to the OIDC provider's discovery metadata.
+
+**Request Body**
+
+```json
+{
+  "id": "e2a0b12a-432d-4bf2-be91-231a789bcde3",
+  "issuer_url": "https://keycloak.capita-ic.com/realms/Capita",
+  "client_id": "test capita",
+  "client_secret": "optional-secret-if-testing-new-values"
+}
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `id` | string | No | UUID of an existing provider to lookup stored secrets. |
+| `issuer_url` | string | Yes | OIDC Issuer discovery URL |
+| `client_id` | string | Yes | OIDC client identifier |
+| `client_secret` | string | No | OIDC client secret. Required if `id` is omitted. |
 
 **Response** `200 OK`
 

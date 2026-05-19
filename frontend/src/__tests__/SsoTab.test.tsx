@@ -113,6 +113,7 @@ describe("SsoTab", () => {
       name: "Keycloak Custom",
       issuer_url: "https://idp.example.com/realms/strata",
       client_id: "strata",
+      client_secret: "",
     });
     expect(onSave).toHaveBeenCalled();
   });

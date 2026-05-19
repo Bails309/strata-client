@@ -121,6 +121,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date | Description |
 | :--- | :--- | :--- |
+| 1.9.1 | 2026-05-19 | **Patch Release — SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup** — fixes a deserialization bug that prevented the saving of edited SSO configurations when the client secret field was omitted to signify "no change." Resolves multiple technical debt items flagged by CodeQL related to unused variables across the backend codebase. ([details](CHANGELOG.md#191--2026-05-19)) |
 | 1.9.0 | 2026-05-19 | **Multiple SSO / OIDC Connections & Dynamic Login Branding** — administrative settings tab supporting CRUD and live connection tests for multiple concurrent identity providers (Entra ID, Okta, Keycloak); dynamic branded buttons on the login screen; multi-tenant state resolution via thread-safe `SSO_STATE_STORE` mapping; individually Vault-sealed client secrets; `BASE_URL` override for proxy port integrity. ([details](CHANGELOG.md#190--2026-05-19)) |
 | 1.8.4 | 2026-05-13 | **Vitest Test Suite Stabilization** — implemented global fetch polyfill for relative URL resolution; synchronized authentication mocks across the entire test suite; resolved React state update warnings in profile tests. ([details](CHANGELOG.md#184--2026-05-13)) |
 | 1.8.3 | 2026-05-13 | **Security Hardening & Session Stability** — NJS-based Nginx header masking; CSP `frame-ancestors 'none'`; persistent `JWT_SECRET` for cross-restart session stability; silent 401 log noise reduction during unauthenticated states. ([details](CHANGELOG.md#183--2026-05-13)) |
@@ -230,7 +231,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.9.0                                  # or "latest"
+export STRATA_VERSION=1.9.1                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -246,7 +247,7 @@ Images:
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.9.0 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.9.1 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -254,7 +255,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.9.0 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.9.0 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.9.1 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

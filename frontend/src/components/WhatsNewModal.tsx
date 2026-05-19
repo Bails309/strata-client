@@ -30,7 +30,8 @@ export interface ReleaseCard {
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.9.0",
-    subtitle: "Multiple SSO / OIDC connections, dynamic login branding, Vault transit secrets, and BASE_URL port integrity",
+    subtitle:
+      "Multiple SSO / OIDC connections, dynamic login branding, Vault transit secrets, and BASE_URL port integrity",
     sections: [
       {
         title: "Multiple SSO / OIDC Connections Support",

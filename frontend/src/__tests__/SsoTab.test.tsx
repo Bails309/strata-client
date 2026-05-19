@@ -68,7 +68,9 @@ describe("SsoTab", () => {
     expect(screen.getByLabelText("Client Secret")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Provider Name"), { target: { value: "Okta" } });
-    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://okta.example.com" } });
+    fireEvent.change(screen.getByLabelText("Issuer URL"), {
+      target: { value: "https://okta.example.com" },
+    });
     fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "okta-client" } });
     fireEvent.change(screen.getByLabelText("Client Secret"), { target: { value: "okta-secret" } });
 
@@ -96,10 +98,14 @@ describe("SsoTab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     expect(screen.getByLabelText("Provider Name")).toHaveValue("Keycloak");
-    expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://idp.example.com/realms/strata");
+    expect(screen.getByLabelText("Issuer URL")).toHaveValue(
+      "https://idp.example.com/realms/strata"
+    );
     expect(screen.getByLabelText("Client ID")).toHaveValue("strata");
 
-    fireEvent.change(screen.getByLabelText("Provider Name"), { target: { value: "Keycloak Custom" } });
+    fireEvent.change(screen.getByLabelText("Provider Name"), {
+      target: { value: "Keycloak Custom" },
+    });
     await userEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(api.updateSsoProvider).toHaveBeenCalled());

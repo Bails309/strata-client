@@ -435,7 +435,7 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("SSO / OIDC"));
-    
+
     // Switch to OIDC / SSO tab, click Edit on our preloaded Keycloak provider
     const editBtn = await screen.findByRole("button", { name: "Edit" });
     await user.click(editBtn);
@@ -454,7 +454,7 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
-    
+
     const editBtn = await screen.findByRole("button", { name: "Edit" });
     await user.click(editBtn);
 

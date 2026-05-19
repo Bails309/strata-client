@@ -3990,9 +3990,9 @@ mod tests {
     // ── Struct deserialization ──────────────────────────────────────
     #[test]
     fn sso_update_request_deser() {
-        let json =
-            r#"{"issuer_url":"https://sso.example.com","client_id":"id","client_secret":"s"}"#;
-        let r: SsoUpdateRequest = serde_json::from_str(json).unwrap();
+        let json = r#"{"name":"Google","issuer_url":"https://sso.example.com","client_id":"id","client_secret":"s"}"#;
+        let r: SsoProviderUpdateRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(r.name, "Google");
         assert_eq!(r.issuer_url, "https://sso.example.com");
         assert_eq!(r.client_id, "id");
     }

@@ -1088,7 +1088,7 @@ pub async fn sso_login(
             .bind(params.provider)
             .fetch_optional(&db.pool)
             .await
-            .map_err(|e| AppError::Database(e))?;
+            .map_err(AppError::Database)?;
 
     let (issuer_url, client_id) = match provider_row {
         Some(r) => r,
@@ -1195,7 +1195,7 @@ pub async fn sso_callback(
     .bind(provider_id)
     .fetch_optional(&db.pool)
     .await
-    .map_err(|e| AppError::Database(e))?;
+    .map_err(AppError::Database)?;
 
     let (issuer_url, client_id, client_secret_raw) = match provider_row {
         Some(r) => r,

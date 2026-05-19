@@ -107,7 +107,7 @@ The central orchestrator. Responsibilities:
 - **Bootstrap & config** — detects `config.toml` on startup; enters setup mode if missing
 - **Database** — connects to local or external PostgreSQL; runs advisory-lock-protected migrations
 - **Auth** — multi-method authentication system:
-  - **SSO/OIDC** — dynamic IdP discovery via JWKS, secure client secret storage in Vault, and automatic session establishment.
+  - **SSO/OIDC (v1.9.0)** — multi-tenant OIDC configurations managed dynamically, allowing multiple custom-labeled sign-in buttons on the login screen. It features dynamic IdP discovery via JWKS, in-memory state tracking to prevent provider mismatches, secure client secret envelope encryption via Vault Transit, and automated session establishment.
   - **Local Auth** — built-in credentials (Argon2id) with global enable/disable toggle, minimum 12-character password policy, and dedicated password change / admin reset endpoints.
   - **Session tokens** — short-lived access tokens (20 min) with `HttpOnly` refresh cookies (8 hr), proactive activity-based silent refresh, per-user session tracking (`active_sessions` table), and a pre-expiry countdown warning toast. Cookies (`csrf_token`, `session_expires`) include a 60s buffer (v1.8.2) for improved SPA refresh reliability. Tokens are signed with a persistent `JWT_SECRET` (v1.8.3) to maintain sessions across container restarts.
   - **Global Security Headers (v1.8.2/1.8.3)** — implements a global `tower-http` middleware that applies `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to every API response. Public-facing headers (`Server`, `X-Powered-By`, and `Content-Security-Policy: frame-ancestors`) are managed at the Nginx gateway layer via NJS (v1.8.3).

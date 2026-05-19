@@ -34,6 +34,7 @@ describe("Login page", () => {
       sso_enabled: false,
       local_auth_enabled: true,
       vault_configured: false,
+      sso_providers: [{ id: "1", name: "Okta" }],
     });
   });
 
@@ -160,10 +161,11 @@ describe("Login page", () => {
       sso_enabled: true,
       local_auth_enabled: true,
       vault_configured: false,
+      sso_providers: [{ id: "1", name: "Okta" }],
     });
 
     renderLogin();
-    expect(await screen.findByText(/sign in with sso/i)).toBeInTheDocument();
+    expect(await screen.findByText(/sign in with Okta/i)).toBeInTheDocument();
   });
 
   it("hides local login when local_auth_enabled is false", async () => {
@@ -172,10 +174,11 @@ describe("Login page", () => {
       sso_enabled: true,
       local_auth_enabled: false,
       vault_configured: false,
+      sso_providers: [{ id: "1", name: "Okta" }],
     });
 
     renderLogin();
-    await screen.findByText(/sign in with sso/i);
+    await screen.findByText(/sign in with Okta/i);
     expect(screen.queryByPlaceholderText("admin")).not.toBeInTheDocument();
   });
 

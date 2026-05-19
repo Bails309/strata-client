@@ -556,6 +556,29 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v1.8.4 → v1.9.0 (Multiple SSO/OIDC Connections & Dynamic Login Branding)
+
+v1.9.0 introduces multi-tenant OIDC/SSO capabilities, allowing operators to run multiple identity provider configurations side-by-side. 
+
+- **Rebuild mandatory**: Both `backend` and `frontend` images must be rebuilt to include multi-provider routes, database models, individual Vault encryption pathways, and dynamic login page branded buttons.
+- **New `.env` configuration**: If you are using reverse proxies or non-standard ports, you must add `BASE_URL=https://<your-host>:<port>` to your `.env` file to prevent downstreams from stripping ports from redirect URIs.
+- **Automatic database migration**: Migration `062_sso_providers.sql` runs automatically on backend boot, migrating old single-SSO configuration columns in `system_settings` to a separate relational table (`sso_providers`) with a backward-compatible auto-backfill.
+
+```bash
+cd strata-client
+git pull
+
+# Verify/add BASE_URL in .env (example setup)
+# BASE_URL=https://127.0.0.1:8443
+
+docker compose build backend frontend
+docker compose up -d
+```
+
+Verify post-upgrade:
+1. Verify the migration: Check that the table `sso_providers` is created and populated with any pre-existing configuration.
+2. Verify the login page: If you have active SSO configurations, confirm separate login buttons are dynamically displayed with their corresponding branded labels.
+
 #### v1.8.3 → v1.8.4 (Frontend test suite stabilization)
 
 v1.8.4 is a maintenance release focused on the reliability of the frontend testing environment. It resolves widespread regressions in the Vitest suite caused by relative API path usage and missing authentication mocks.

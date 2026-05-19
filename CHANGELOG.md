@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-05-19
+
+### Minor Release — Multiple SSO/OIDC Providers, Dynamic Login Branding, and Vault transit security
+
+This minor release introduces the highly anticipated support for configuring and using multiple OpenID Connect (OIDC) / Single Sign-On (SSO) providers concurrently. Users are greeted with separate branded login buttons matching each active configuration. Client secrets are individually sealed in HashiCorp Vault transit keys, and the new `BASE_URL` override ensures seamless integration through downstream proxies or SSL terminators.
+
+#### Added
+- **Multi-tenant OIDC administrative CRUD API**
+  ([`backend/src/routes/admin.rs`](backend/src/routes/admin.rs)).
+  Created new admin-only routes to list (`GET /api/admin/settings/sso-providers`), create (`POST /api/admin/settings/sso-providers`), update (`PUT /api/admin/settings/sso-providers/:id`), and delete (`DELETE /api/admin/settings/sso-providers/:id`) multiple SSO providers.
+- **Dynamic OIDC Provider configuration test endpoint**
+  ([`backend/src/routes/admin.rs`](backend/src/routes/admin.rs)).
+  Added a settings-test action endpoint (`POST /api/admin/settings/sso-providers/:id/test`) enabling administrators to test connection parameters to the identity provider prior to saving.
+- **Active provider discovery public endpoint**
+  ([`backend/src/routes/auth.rs`](backend/src/routes/auth.rs)).
+  Exposed `GET /api/auth/sso/providers` returning client-safe OIDC registration data (IDs and names) dynamically to the frontend for the login form.
+- **Support for dynamic OIDC provider login redirects**
+  ([`backend/src/routes/auth.rs`](backend/src/routes/auth.rs)).
+  Updated `GET /api/auth/sso/login` to accept a `provider` query parameter (UUID) to handle target authorization flows correctly.
+- **`BASE_URL` environment configuration override**
+  ([`.env`](.env), [`.env.example`](.env.example)).
+  Defined `BASE_URL` in environment files to supply the absolute origin (including ports like `:8443`) for OIDC callbacks, neutralizing downstream proxy port-stripping issues.
+
+#### Changed
+- **OIDC Database schema migration to sso_providers table**
+  ([`backend/migrations/062_sso_providers.sql`](backend/migrations/062_sso_providers.sql)).
+  Created database schema migration `062_sso_providers.sql` which drops the old single-SSO settings column definitions and transitions configurations into a dedicated relational table `sso_providers` with backwards-compatible automated backfills.
+- **Multi-tenant state handshaking via SSO_STATE_STORE**
+  ([`backend/src/routes/auth.rs`](backend/src/routes/auth.rs)).
+  Implemented a secure, thread-safe in-memory mapping in `SSO_STATE_STORE` (a `LazyLock<Mutex<HashMap<String, (Uuid, Instant)>>>`) storing CSRF state UUIDs and their target provider ID, allowing all OIDC connections to safely share the same `/api/auth/sso/callback` callback endpoint.
+- **Individual Vault secret sealing per provider**
+  ([`backend/src/routes/admin.rs`](backend/src/routes/admin.rs)).
+  Encrypted individual OIDC client secrets dynamically in Vault via distinct transit key paths before storing them in the `sso_providers` database table.
+- **Enhanced unconfigured Vault handling**
+  ([`backend/src/routes/admin.rs`](backend/src/routes/admin.rs)).
+  Modified admin validation paths to return a clear HTTP 400 Bad Request message when saving providers if HashiCorp Vault remains unconfigured, instead of surfacing a generic HTTP 500 error.
+
+#### Fixed
+- **Synchronized Vitest mocks for OIDC CRUD**
+  ([`frontend/src/__tests__/AdminSettings.test.tsx`](frontend/src/__tests__/AdminSettings.test.tsx), [`frontend/src/__tests__/api.test.ts`](frontend/src/__tests__/api.test.ts)).
+  Aligned mock definitions and mock network configurations inside the test suite to target the new multiple-provider model, maintaining continuous test greenness across Vitest runs.
+
+#### Migration notes
+- **Automatic Database Migration.** On container startup, migration `062_sso_providers.sql` will run unattended, creating the `sso_providers` table and backfilling any pre-existing single-SSO configuration.
+- **Verify `BASE_URL` in `.env`.** Ensure your `.env` contains a correct, absolute `BASE_URL` if you are accessing Strata Client through a reverse proxy (e.g. Caddy) or a non-standard HTTPS port.
+
 ## [1.8.4] — 2026-05-13
 
 ### Patch release — Vitest suite stabilization, relative URL parsing, and mock synchronization

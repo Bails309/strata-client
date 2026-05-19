@@ -24,7 +24,7 @@ static IP_RATE_LIMIT: std::sync::LazyLock<Mutex<HashMap<String, Vec<Instant>>>> 
 
 /// In-memory store for SSO CSRF state parameters.
 /// Each entry has a creation time; entries older than SSO_STATE_TTL are pruned.
-static SSO_STATE_STORE: std::sync::LazyLock<Mutex<HashMap<String, Instant>>> =
+static SSO_STATE_STORE: std::sync::LazyLock<Mutex<HashMap<String, (uuid::Uuid, Instant)>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 const SSO_STATE_TTL_SECS: u64 = 300; // 5 minutes
 /// Hard cap on SSO state entries to prevent OOM from unauthenticated floods.
@@ -1058,10 +1058,16 @@ pub async fn refresh(
 
 // ── SSO / OIDC ─────────────────────────────────────────────────────────
 
+#[derive(Deserialize)]
+pub struct SsoLoginParams {
+    pub provider: uuid::Uuid,
+}
+
 /// GET /api/auth/sso/login – redirect to the OIDC provider.
 pub async fn sso_login(
     State(state): State<SharedState>,
     headers: HeaderMap,
+    Query(params): Query<SsoLoginParams>,
 ) -> Result<axum::response::Response, AppError> {
     let db = {
         let s = state.read().await;
@@ -1077,12 +1083,16 @@ pub async fn sso_login(
         return Err(AppError::Auth("SSO is disabled".into()));
     }
 
-    let issuer_url = settings::get(&db.pool, "sso_issuer_url")
-        .await?
-        .unwrap_or_default();
-    let client_id = settings::get(&db.pool, "sso_client_id")
-        .await?
-        .unwrap_or_default();
+    let provider_row: Option<(String, String)> = sqlx::query_as("SELECT issuer_url, client_id FROM sso_providers WHERE id = $1")
+        .bind(params.provider)
+        .fetch_optional(&db.pool)
+        .await
+        .map_err(|e| AppError::Database(e))?;
+
+    let (issuer_url, client_id) = match provider_row {
+        Some(r) => r,
+        None => return Err(AppError::Auth("SSO provider not found".into())),
+    };
 
     if issuer_url.is_empty() || client_id.is_empty() {
         return Err(AppError::Auth("SSO is not properly configured".into()));
@@ -1100,7 +1110,7 @@ pub async fn sso_login(
         let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
         // Prune expired entries
         let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
-        store.retain(|_, created| *created > cutoff);
+        store.retain(|_, (_, created)| *created > cutoff);
         // Hard cap to prevent OOM from unauthenticated floods
         if store.len() >= MAX_SSO_STATE_ENTRIES {
             tracing::warn!("SSO state store at capacity ({MAX_SSO_STATE_ENTRIES}) — rejecting");
@@ -1108,7 +1118,7 @@ pub async fn sso_login(
                 "Too many pending SSO requests. Please try again later.".into(),
             ));
         }
-        store.insert(state.clone(), Instant::now());
+        store.insert(state.clone(), (params.provider, Instant::now()));
     }
 
     let auth_url = format!(
@@ -1155,19 +1165,19 @@ pub async fn sso_callback(
     let callback_started = Instant::now();
     // Validate CSRF state parameter
     let state_value = &params.state;
-    {
+    let provider_id = {
         let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
         let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
-        store.retain(|_, created| *created > cutoff);
+        store.retain(|_, (_, created)| *created > cutoff);
         match store.remove(state_value.as_str()) {
-            Some(_) => {} // valid — consumed
+            Some((pid, _)) => pid,
             None => {
                 return Err(AppError::Auth(
                     "Invalid or expired SSO state parameter".into(),
                 ))
             }
         }
-    }
+    };
 
     let (db, vault) = {
         let s = state.read().await;
@@ -1178,15 +1188,16 @@ pub async fn sso_callback(
         (db, vault)
     };
 
-    let issuer_url = settings::get(&db.pool, "sso_issuer_url")
-        .await?
-        .unwrap_or_default();
-    let client_id = settings::get(&db.pool, "sso_client_id")
-        .await?
-        .unwrap_or_default();
-    let client_secret_raw = settings::get(&db.pool, "sso_client_secret")
-        .await?
-        .unwrap_or_default();
+    let provider_row: Option<(String, String, String)> = sqlx::query_as("SELECT issuer_url, client_id, client_secret FROM sso_providers WHERE id = $1")
+        .bind(provider_id)
+        .fetch_optional(&db.pool)
+        .await
+        .map_err(|e| AppError::Database(e))?;
+
+    let (issuer_url, client_id, client_secret_raw) = match provider_row {
+        Some(r) => r,
+        None => return Err(AppError::Auth("SSO provider no longer exists".into())),
+    };
 
     if issuer_url.is_empty() || client_id.is_empty() || client_secret_raw.is_empty() {
         return Err(AppError::Auth("SSO configuration is incomplete".into()));

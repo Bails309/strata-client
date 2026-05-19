@@ -29,6 +29,42 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.0",
+    subtitle: "Multiple SSO / OIDC connections, dynamic login branding, Vault transit secrets, and BASE_URL port integrity",
+    sections: [
+      {
+        title: "Multiple SSO / OIDC Connections Support",
+        description:
+          "Organizations can now configure, manage, and run multiple OpenID Connect (OIDC) / Single Sign-On (SSO) connections simultaneously. Operators can configure separate identity providers such as Microsoft Entra ID, Okta, and Keycloak side-by-side using the newly expanded admin SSO tab.",
+      },
+      {
+        title: "Dynamic Login Screen Branding",
+        description:
+          "The login screen dynamically detects all active, configured OIDC providers and renders a branded sign-in button for each one. Admins can customize the labeling of each login button to guide users to the correct corporate identity provider.",
+      },
+      {
+        title: "Multi-Tenant State Resolution (SSO_STATE_STORE)",
+        description:
+          "Rather than registering separate callback URLs for every OIDC provider, all configurations share a single callback endpoint (`/api/auth/sso/callback`). The backend securely routes incoming OAuth2 callbacks by matching state tokens against an in-memory, thread-safe, time-bounded store mapping to the originating provider ID.",
+      },
+      {
+        title: "Individual Vault-Sealed Client Secrets",
+        description:
+          "Maintains Strata's strict security posture by dynamically sealing and unsealing each provider's client secret using separate HashiCorp Vault transit keys. Client secrets are never stored in plaintext in the database.",
+      },
+      {
+        title: "Port Integrity via BASE_URL Configuration",
+        description:
+          "Added the `BASE_URL` configuration override to both `.env` and `.env.example`. This prevents downstream proxies or SSL terminators from stripping non-standard ports (e.g. `:8443`) from redirect URIs, resolving callback mismatches.",
+      },
+      {
+        title: "Robust Database Migration and Error UX",
+        description:
+          "Migration `062_sso_providers.sql` seamlessly handles transitioning single-SSO environments to the new multi-provider schema. If HashiCorp Vault is unconfigured when saving an SSO provider, the backend now returns a clear HTTP 400 Bad Request instruction rather than a generic 500 error.",
+      },
+    ],
+  },
+  {
     version: "1.8.4",
     subtitle: "Vitest test suite stabilization and environment hardening",
     sections: [

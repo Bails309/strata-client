@@ -10,6 +10,60 @@ import jsxA11y from "eslint-plugin-jsx-a11y";
 import security from "eslint-plugin-security";
 import globals from "globals";
 
+function compatPlugin(plugin) {
+  if (!plugin) return plugin;
+  const newRules = {};
+  for (const [key, rule] of Object.entries(plugin.rules || {})) {
+    if (typeof rule === "object" && rule !== null && typeof rule.create === "function") {
+      newRules[key] = {
+        ...rule,
+        create(context) {
+          const proxy = new Proxy(context, {
+            get(target, prop) {
+              if (prop === "getFilename") {
+                return () => target.filename;
+              }
+              if (prop === "getSourceCode") {
+                return () => target.sourceCode;
+              }
+              return target[prop];
+            }
+          });
+          return rule.create(proxy);
+        }
+      };
+    } else if (typeof rule === "function") {
+      const wrappedRule = function (context) {
+        const proxy = new Proxy(context, {
+          get(target, prop) {
+            if (prop === "getFilename") {
+              return () => target.filename;
+            }
+            if (prop === "getSourceCode") {
+              return () => target.sourceCode;
+            }
+            return target[prop];
+          }
+        });
+        return rule(proxy);
+      };
+      Object.assign(wrappedRule, rule);
+      newRules[key] = wrappedRule;
+    } else {
+      newRules[key] = rule;
+    }
+  }
+  return {
+    ...plugin,
+    rules: newRules,
+  };
+}
+
+const compatReact = compatPlugin(react);
+const compatReactHooks = compatPlugin(reactHooks);
+const compatJsxA11y = compatPlugin(jsxA11y);
+const compatSecurity = compatPlugin(security);
+
 export default [
   {
     ignores: [
@@ -43,10 +97,10 @@ export default [
       },
     },
     plugins: {
-      react,
-      "react-hooks": reactHooks,
-      "jsx-a11y": jsxA11y,
-      security,
+      react: compatReact,
+      "react-hooks": compatReactHooks,
+      "jsx-a11y": compatJsxA11y,
+      security: compatSecurity,
     },
     settings: {
       react: { version: "detect" },

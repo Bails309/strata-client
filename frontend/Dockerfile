@@ -7,14 +7,14 @@ FROM node:26-alpine@sha256:e71ac5e964b9201072425d59d2e876359efa25dc96bb1768cb732
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 COPY VERSION ../VERSION
 COPY docs/ ../docs/
 COPY frontend/ .
 RUN npm run build
 
 # ── Runtime stage (nginx) ─────────────────────────────────────────────
-FROM nginx:1.30.0-alpine@sha256:0272e4604ed93c1792f03695a033a6e8546840f86e0de20a884bb17d2c924883
+FROM nginx:1.31.0-alpine@sha256:dc48b7a872a79fb541ba5081d320b11b549231bc63ba465a7495afaa7d2ebcb8
 
 # Pull the latest Alpine package security patches. `nginx:alpine` is often
 # a few days behind on libcrypto/musl/zlib fixes — this shaves the lag so

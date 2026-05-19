@@ -375,8 +375,182 @@ pub async fn update_settings(
 
 // ── SSO ────────────────────────────────────────────────────────────────
 
+#[derive(serde::Serialize, sqlx::FromRow)]
+pub struct SsoProvider {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub issuer_url: String,
+    pub client_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub client_secret: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn list_sso_providers(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<SsoProvider>>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    let mut providers: Vec<SsoProvider> = sqlx::query_as("SELECT * FROM sso_providers ORDER BY created_at ASC")
+        .fetch_all(&db.pool)
+        .await?;
+    
+    // Mask secrets
+    for p in &mut providers {
+        if !p.client_secret.is_empty() {
+            p.client_secret = "********".into();
+        }
+    }
+    Ok(Json(providers))
+}
+
+#[derive(Deserialize)]
+pub struct SsoProviderCreateRequest {
+    pub name: String,
+    pub issuer_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+pub async fn create_sso_provider(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<SsoProviderCreateRequest>,
+) -> Result<Json<SsoProvider>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    
+    if !body.issuer_url.starts_with("https://") {
+        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
+    }
+    
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config.as_ref().and_then(|c| c.vault.clone())
+    };
+    
+    let encrypted_secret = if let Some(ref vc) = vault_cfg {
+        let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes())
+            .await
+            .map_err(|e| AppError::Vault(format!("Failed to encrypt SSO secret: {e}")))?;
+        use base64::Engine;
+        let encoded = serde_json::json!({
+            "ct": base64::engine::general_purpose::STANDARD.encode(&sealed.ciphertext),
+            "dek": base64::engine::general_purpose::STANDARD.encode(&sealed.encrypted_dek),
+            "n": base64::engine::general_purpose::STANDARD.encode(&sealed.nonce),
+        });
+        format!("vault:{}", encoded)
+    } else {
+        return Err(AppError::Validation(
+            "Vault must be configured before adding SSO providers. Client secrets require encrypted storage.".into(),
+        ));
+    };
+
+    let mut p: SsoProvider = sqlx::query_as(
+        "INSERT INTO sso_providers (name, issuer_url, client_id, client_secret) VALUES ($1, $2, $3, $4) RETURNING *"
+    )
+    .bind(&body.name)
+    .bind(&body.issuer_url)
+    .bind(&body.client_id)
+    .bind(&encrypted_secret)
+    .fetch_one(&db.pool)
+    .await?;
+    
+    p.client_secret = "********".into();
+    
+    audit::log(&db.pool, Some(user.id), "sso_provider.created", &json!({ "id": p.id, "name": p.name })).await?;
+    Ok(Json(p))
+}
+
+#[derive(Deserialize)]
+pub struct SsoProviderUpdateRequest {
+    pub name: String,
+    pub issuer_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+pub async fn update_sso_provider(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(body): Json<SsoProviderUpdateRequest>,
+) -> Result<Json<SsoProvider>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    
+    if !body.issuer_url.starts_with("https://") {
+        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
+    }
+    
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config.as_ref().and_then(|c| c.vault.clone())
+    };
+    
+    let encrypted_secret = if body.client_secret == "********" || body.client_secret.is_empty() {
+        // Keep existing secret
+        let existing: (String,) = sqlx::query_as("SELECT client_secret FROM sso_providers WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
+        existing.0
+    } else if let Some(ref vc) = vault_cfg {
+        let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes())
+            .await
+            .map_err(|e| AppError::Vault(format!("Failed to encrypt SSO secret: {e}")))?;
+        use base64::Engine;
+        let encoded = serde_json::json!({
+            "ct": base64::engine::general_purpose::STANDARD.encode(&sealed.ciphertext),
+            "dek": base64::engine::general_purpose::STANDARD.encode(&sealed.encrypted_dek),
+            "n": base64::engine::general_purpose::STANDARD.encode(&sealed.nonce),
+        });
+        format!("vault:{}", encoded)
+    } else {
+        return Err(AppError::Validation(
+            "Vault must be configured to encrypt client secrets.".into(),
+        ));
+    };
+
+    let mut p: SsoProvider = sqlx::query_as(
+        "UPDATE sso_providers SET name = $1, issuer_url = $2, client_id = $3, client_secret = $4, updated_at = now() WHERE id = $5 RETURNING *"
+    )
+    .bind(&body.name)
+    .bind(&body.issuer_url)
+    .bind(&body.client_id)
+    .bind(&encrypted_secret)
+    .bind(id)
+    .fetch_one(&db.pool)
+    .await?;
+    
+    p.client_secret = "********".into();
+    
+    audit::log(&db.pool, Some(user.id), "sso_provider.updated", &json!({ "id": p.id, "name": p.name })).await?;
+    Ok(Json(p))
+}
+
+pub async fn delete_sso_provider(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::services::middleware::check_system_permission(&user)?;
+    let db = require_running(&state).await?;
+    
+    sqlx::query("DELETE FROM sso_providers WHERE id = $1")
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
+        
+    audit::log(&db.pool, Some(user.id), "sso_provider.deleted", &json!({ "id": id })).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
 #[derive(Deserialize)]
 pub struct SsoTestRequest {
+    pub id: Option<uuid::Uuid>,
     pub issuer_url: String,
     pub client_id: String,
     pub client_secret: String,
@@ -396,7 +570,17 @@ pub async fn test_sso_connection(
     // If secret is masked or empty, try to recover from saved settings
     if client_secret == "********" || client_secret.is_empty() {
         let db = require_running(&state).await?;
-        if let Some(saved) = settings::get(&db.pool, "sso_client_secret").await? {
+        let saved_opt = if let Some(id) = body.id {
+            let row: Option<(String,)> = sqlx::query_as("SELECT client_secret FROM sso_providers WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&db.pool)
+                .await?;
+            row.map(|r| r.0)
+        } else {
+            None
+        };
+        
+        if let Some(saved) = saved_opt {
             if saved.starts_with("vault:") {
                 let vault_cfg = {
                     let s = state.read().await;
@@ -482,56 +666,6 @@ pub async fn test_sso_connection(
     })))
 }
 
-#[derive(Deserialize)]
-pub struct SsoUpdateRequest {
-    pub issuer_url: String,
-    pub client_id: String,
-    pub client_secret: String,
-}
-
-pub async fn update_sso(
-    State(state): State<SharedState>,
-    Extension(user): Extension<AuthUser>,
-    Json(body): Json<SsoUpdateRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    crate::services::middleware::check_system_permission(&user)?;
-    let db = require_running(&state).await?;
-
-    // Validate issuer URL uses HTTPS
-    if !body.issuer_url.starts_with("https://") {
-        return Err(AppError::Validation("SSO issuer URL must use HTTPS".into()));
-    }
-
-    settings::set(&db.pool, "sso_enabled", "true").await?;
-    settings::set(&db.pool, "sso_issuer_url", &body.issuer_url).await?;
-    settings::set(&db.pool, "sso_client_id", &body.client_id).await?;
-
-    // Encrypt client secret before storing — require Vault
-    let vault_cfg = {
-        let s = state.read().await;
-        s.config.as_ref().and_then(|c| c.vault.clone())
-    };
-    if let Some(ref vc) = vault_cfg {
-        let sealed = crate::services::vault::seal(vc, body.client_secret.as_bytes())
-            .await
-            .map_err(|e| AppError::Vault(format!("Failed to encrypt SSO secret: {e}")))?;
-        use base64::Engine;
-        let encoded = serde_json::json!({
-            "ct": base64::engine::general_purpose::STANDARD.encode(&sealed.ciphertext),
-            "dek": base64::engine::general_purpose::STANDARD.encode(&sealed.encrypted_dek),
-            "n": base64::engine::general_purpose::STANDARD.encode(&sealed.nonce),
-        });
-        settings::set(&db.pool, "sso_client_secret", &format!("vault:{}", encoded)).await?;
-    } else {
-        return Err(AppError::Config(
-            "Vault must be configured before enabling SSO. Client secrets require encrypted storage.".into(),
-        ));
-    }
-
-    audit::log(&db.pool, Some(user.id), "sso.configured", &json!({})).await?;
-    Ok(Json(json!({ "status": "sso_updated" })))
-}
-
 // ── Auth Methods ────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -557,15 +691,12 @@ pub async fn update_auth_methods(
 
     // If enabling SSO, verify it has been configured (issuer_url and client_id exist)
     if body.sso_enabled {
-        let issuer = settings::get(&db.pool, "sso_issuer_url")
-            .await?
-            .unwrap_or_default();
-        let client_id = settings::get(&db.pool, "sso_client_id")
-            .await?
-            .unwrap_or_default();
-        if issuer.is_empty() || client_id.is_empty() {
+        let provider_count: (i64,) = sqlx::query_as("SELECT count(*) FROM sso_providers")
+            .fetch_one(&db.pool)
+            .await?;
+        if provider_count.0 == 0 {
             return Err(AppError::Validation(
-                "SSO cannot be enabled until it is configured in the SSO tab.".into(),
+                "SSO cannot be enabled until at least one SSO provider is configured in the SSO tab.".into(),
             ));
         }
     }

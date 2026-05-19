@@ -14,9 +14,12 @@ vi.mock("../components/ThemeProvider", () => ({
 vi.mock("../api", () => ({
   readCookie: vi.fn(),
   getSettings: vi.fn(),
-
   updateSettings: vi.fn(),
-  updateSso: vi.fn(),
+
+  getSsoProviders: vi.fn(),
+  createSsoProvider: vi.fn(),
+  deleteSsoProvider: vi.fn(),
+  updateSsoProvider: vi.fn(),
   getKerberosRealms: vi.fn(),
   createKerberosRealm: vi.fn(),
   updateKerberosRealm: vi.fn(),
@@ -108,7 +111,10 @@ import {
   getServiceHealth,
   getMetrics,
   testSsoConnection,
-  updateSso,
+  getSsoProviders,
+  createSsoProvider,
+  deleteSsoProvider,
+  updateSsoProvider,
   updateRecordings,
   updateVault,
   getKerberosRealms,
@@ -206,7 +212,21 @@ function renderAdmin() {
   );
 }
 
+const mockSsoProviders = [
+  {
+    id: "1",
+    name: "Keycloak",
+    issuer_url: "https://keycloak.example.com/realms/test",
+    client_id: "strata-client",
+    created_at: "2026-05-19T00:00:00Z",
+    updated_at: "2026-05-19T00:00:00Z",
+  },
+];
+
 function setupDefaults() {
+  vi.mocked(getSsoProviders).mockResolvedValue(mockSsoProviders);
+  vi.mocked(createSsoProvider).mockResolvedValue({ id: "1", status: "success" });
+  vi.mocked(deleteSsoProvider).mockResolvedValue({ status: "success" });
   vi.mocked(getSettings).mockResolvedValue({});
   vi.mocked(getRoles).mockResolvedValue([]);
   vi.mocked(getConnections).mockResolvedValue([]);
@@ -407,10 +427,7 @@ describe("HealthTab", () => {
 describe("SsoTab", () => {
   beforeEach(() => {
     setupDefaults();
-    vi.mocked(getSettings).mockResolvedValue({
-      sso_issuer_url: "https://keycloak.example.com/realms/test",
-      sso_client_id: "strata-client",
-    });
+    vi.mocked(getSsoProviders).mockResolvedValue(mockSsoProviders);
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -418,6 +435,11 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("SSO / OIDC"));
+    
+    // Switch to OIDC / SSO tab, click Edit on our preloaded Keycloak provider
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
     expect(
       await screen.findByDisplayValue("https://keycloak.example.com/realms/test")
     ).toBeInTheDocument();
@@ -432,7 +454,10 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
-    await screen.findByDisplayValue("strata-client");
+    
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
     const secretInput = screen.getByLabelText("Client Secret");
     await user.type(secretInput, "new-secret");
     await user.click(screen.getByRole("button", { name: "Test Connection" }));
@@ -444,7 +469,10 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
-    await screen.findByDisplayValue("strata-client");
+
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
     const secretInput = screen.getByLabelText("Client Secret");
     await user.type(secretInput, "new-secret");
     await user.click(screen.getByRole("button", { name: "Test Connection" }));
@@ -452,22 +480,29 @@ describe("SsoTab", () => {
   });
 
   it("saves SSO settings", async () => {
-    vi.mocked(updateSso).mockResolvedValue(undefined);
+    vi.mocked(updateSsoProvider).mockResolvedValue({ status: "success" });
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("SSO / OIDC"));
-    await screen.findByDisplayValue("strata-client");
-    await user.click(screen.getByText("Save SSO Settings"));
-    expect(updateSso).toHaveBeenCalled();
+
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(updateSsoProvider).toHaveBeenCalled();
   });
 
   it("disables test button when fields are empty", async () => {
-    vi.mocked(getSettings).mockResolvedValue({});
+    vi.mocked(getSsoProviders).mockResolvedValue([]);
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("SSO / OIDC"));
+
+    const addBtn = await screen.findByRole("button", { name: /Add Provider/i });
+    await user.click(addBtn);
+
     await waitFor(() => {
-      expect(screen.getByText("Test Connection")).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Test Connection" })).toBeDisabled();
     });
   });
 
@@ -476,7 +511,10 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
-    await screen.findByDisplayValue("strata-client");
+
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
     const secretInput = screen.getByLabelText("Client Secret");
     await user.type(secretInput, "new-secret");
     await user.click(screen.getByRole("button", { name: "Test Connection" }));
@@ -487,6 +525,10 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("SSO / OIDC"));
+
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
     expect(await screen.findByText(/\/api\/auth\/sso\/callback/)).toBeInTheDocument();
   });
 
@@ -495,9 +537,10 @@ describe("SsoTab", () => {
     const user = userEvent.setup();
     renderAdmin();
     await user.click(screen.getByText("SSO / OIDC"));
-    await screen.findByDisplayValue("strata-client");
-    await user.click(screen.getByRole("button", { name: "SSO / OIDC" }));
-    await screen.findByDisplayValue("strata-client");
+
+    const editBtn = await screen.findByRole("button", { name: "Edit" });
+    await user.click(editBtn);
+
     const secretInput = screen.getByLabelText("Client Secret");
     await user.type(secretInput, "new-secret");
     await user.click(screen.getByRole("button", { name: "Test Connection" }));

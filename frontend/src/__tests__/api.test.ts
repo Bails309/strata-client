@@ -9,7 +9,10 @@ import {
   getSettings,
   updateSettings,
   updateAuthMethods,
-  updateSso,
+  getSsoProviders,
+  createSsoProvider,
+  updateSsoProvider,
+  deleteSsoProvider,
   testSsoConnection,
   updateKerberos,
   getKerberosRealms,
@@ -283,11 +286,48 @@ describe("API endpoint functions", () => {
     expect(c.method).toBe("PUT");
   });
 
-  it("updateSso sends PUT /api/admin/settings/sso", async () => {
+  it("getSsoProviders sends GET /api/admin/settings/sso-providers", async () => {
+    const fn = mockFetch([]);
+    await getSsoProviders();
+    expect(lastCall(fn).url).toBe("/api/admin/settings/sso-providers");
+    expect(lastCall(fn).method).toBe("GET");
+  });
+
+  it("createSsoProvider sends POST /api/admin/settings/sso-providers", async () => {
+    const fn = mockFetch({ id: "p1", status: "ok" });
+    await createSsoProvider({
+      name: "Okta",
+      issuer_url: "https://idp",
+      client_id: "cid",
+      client_secret: "cs",
+    });
+    const c = lastCall(fn);
+    expect(c.url).toBe("/api/admin/settings/sso-providers");
+    expect(c.method).toBe("POST");
+    expect(JSON.parse(c.body!)).toEqual({
+      name: "Okta",
+      issuer_url: "https://idp",
+      client_id: "cid",
+      client_secret: "cs",
+    });
+  });
+
+  it("updateSsoProvider sends PUT /api/admin/settings/sso-providers/:id", async () => {
     const fn = mockFetch({});
-    await updateSso({ issuer_url: "https://idp", client_id: "cid", client_secret: "cs" });
-    expect(lastCall(fn).url).toBe("/api/admin/settings/sso");
+    await updateSsoProvider("dummy-id", {
+      issuer_url: "https://idp",
+      client_id: "cid",
+      client_secret: "cs",
+    });
+    expect(lastCall(fn).url).toBe("/api/admin/settings/sso-providers/dummy-id");
     expect(lastCall(fn).method).toBe("PUT");
+  });
+
+  it("deleteSsoProvider sends DELETE /api/admin/settings/sso-providers/:id", async () => {
+    const fn = mockFetch({});
+    await deleteSsoProvider("dummy-id");
+    expect(lastCall(fn).url).toBe("/api/admin/settings/sso-providers/dummy-id");
+    expect(lastCall(fn).method).toBe("DELETE");
   });
 
   it("testSsoConnection sends POST /api/admin/settings/sso/test", async () => {

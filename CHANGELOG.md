@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] — 2026-05-19
+
+### Patch Release — SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup
+
+This patch release addresses a critical deserialization error that occurred when saving an edited Single Sign-On (SSO) configuration, which caused the "Save Changes" button to become inoperable. It also resolves multiple technical debt items flagged by CodeQL related to unused variables across the backend codebase.
+
+#### Fixed
+- **SSO Provider Edit Form Deserialization Bug**
+  ([`frontend/src/pages/admin/SsoTab.tsx`](frontend/src/pages/admin/SsoTab.tsx)).
+  Modified the form submission logic to explicitly include the `client_secret` key in the JSON payload, even when empty. This satisfies the Axum backend's strict `SsoProviderUpdateRequest` schema requirements and prevents a 400 Bad Request error upon saving.
+- **SSO Provider Test Connection Secret Lookup**
+  ([`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/admin/SsoTab.tsx`](frontend/src/pages/admin/SsoTab.tsx)).
+  Added the `id` field to the `testSsoConnection` payload. This allows the backend to accurately identify and decrypt the existing client secret when validating an edited SSO configuration.
+- **Removed Unused Variables (CodeQL Detections)**
+  ([`backend/src/tunnel.rs`](backend/src/tunnel.rs), [`backend/src/services/user_preferences.rs`](backend/src/services/user_preferences.rs), [`backend/src/services/middleware.rs`](backend/src/services/middleware.rs), [`backend/src/services/notifications.rs`](backend/src/services/notifications.rs), [`backend/src/routes/user.rs`](backend/src/routes/user.rs), [`backend/src/routes/auth.rs`](backend/src/routes/auth.rs), [`backend/src/routes/admin/recordings.rs`](backend/src/routes/admin/recordings.rs)).
+  Cleaned up multiple unused variable warnings across the backend to improve code maintainability and execution flow.
+
+#### Migration notes
+- **Frontend rebuild only.** No database migration, no environment-variable changes.
+
 ## [1.9.0] — 2026-05-19
 
 ### Minor Release — Multiple SSO/OIDC Providers, Dynamic Login Branding, and Vault transit security

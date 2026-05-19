@@ -29,6 +29,22 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.1",
+    subtitle: "SSO Connection Editor fixes and CodeQL variable cleanup",
+    sections: [
+      {
+        title: "SSO Provider Edit Fixes",
+        description:
+          "Editing an existing SSO provider configuration (e.g., Entra ID, Okta) now correctly preserves existing client secrets when saving. The test connection utility also now accurately uses existing secrets to validate edited configurations, ensuring robust testing prior to saving.",
+      },
+      {
+        title: "Code Quality and Technical Debt",
+        description:
+          "Resolved multiple CodeQL detections related to unused variables across the backend application components, ensuring cleaner execution flows and more maintainable code.",
+      },
+    ],
+  },
+  {
     version: "1.9.0",
     subtitle:
       "Multiple SSO / OIDC connections, dynamic login branding, Vault transit secrets, and BASE_URL port integrity",

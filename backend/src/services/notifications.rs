@@ -157,7 +157,7 @@ async fn fetch_users(
 pub fn spawn_dispatch(pool: Pool<Postgres>, vault: Option<VaultConfig>, event: CheckoutEvent) {
     tokio::spawn(async move {
         if let Err(e) = dispatch(&pool, vault.as_ref(), event).await {
-            tracing::error!("notification dispatch failed: {e}");
+            tracing::error!("notification dispatch failed: {}", e);
         }
     });
 }

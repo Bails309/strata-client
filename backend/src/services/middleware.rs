@@ -149,8 +149,9 @@ pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<Str
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
             cookies.split(';').find_map(|pair| {
-                let pair = pair.trim();
-                pair.strip_prefix(&format!("{}=", name)).map(String::from)
+                pair.trim()
+                    .strip_prefix(&format!("{}=", name))
+                    .map(String::from)
             })
         })
 }

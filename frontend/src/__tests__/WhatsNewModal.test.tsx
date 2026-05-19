@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import WhatsNewModal, { WHATS_NEW_VERSION, RELEASE_CARDS } from "../components/WhatsNewModal";
 
@@ -160,7 +160,7 @@ describe("WhatsNewModal", () => {
 
     // Navigate to last card
     for (let i = 0; i < RELEASE_CARDS.length - 1; i++) {
-      await userEvent.click(screen.getByLabelText("Older release"));
+      fireEvent.click(screen.getByLabelText("Older release"));
     }
 
     // On last card, older should be disabled

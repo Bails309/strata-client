@@ -1365,7 +1365,7 @@ pub async fn emergency_bypass_allowed(
             AND ar.allow_emergency_bypass = false
          ))
          FROM ad_sync_configs c
-         WHERE c.id = $1"
+         WHERE c.id = $1",
     )
     .bind(cfg_id)
     .bind(managed_ad_dn)
@@ -1697,11 +1697,13 @@ pub async fn update_approval_role_bypass(
     role_id: Uuid,
     allow_emergency_bypass: bool,
 ) -> Result<(), crate::error::AppError> {
-    sqlx::query("UPDATE approval_roles SET allow_emergency_bypass = $1, updated_at = now() WHERE id = $2")
-        .bind(allow_emergency_bypass)
-        .bind(role_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE approval_roles SET allow_emergency_bypass = $1, updated_at = now() WHERE id = $2",
+    )
+    .bind(allow_emergency_bypass)
+    .bind(role_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

@@ -360,10 +360,9 @@ export default function PasswordsTab({
                       standard approval flows.
                     </p>
                     <p className="text-txt-tertiary text-xs italic mb-2">
-                      Note: a managed account must be added to this role&apos;s scope (below)
-                      for this toggle to take effect for that account. If an account is covered
-                      by multiple roles, bypass is shown only when every covering role has it
-                      enabled.
+                      Note: a managed account must be added to this role&apos;s scope (below) for
+                      this toggle to take effect for that account. If an account is covered by
+                      multiple roles, bypass is shown only when every covering role has it enabled.
                     </p>
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input

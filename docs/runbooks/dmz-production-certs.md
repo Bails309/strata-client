@@ -30,7 +30,7 @@ To simplify production certificate creation, a robust generator script is availa
 This mode automatically generates a secure, standalone Private CA key and certificate, then immediately generates and signs both the DMZ server and backend client mTLS certificates.
 
 1. Select **Option 1** when prompted by the script.
-2. Enter the DNS name or IP the internal host will dial to reach the DMZ (e.g., `strata-edge.capita-ic.com`). 
+2. Enter the DNS name or IP the internal host will dial to reach the DMZ (e.g., `strata-edge.example.com`). 
    > [!TIP]
    > The script automatically attempts to scan `./.env` or `.env.dmz` files in parent/current paths for `STRATA_DMZ_ENDPOINTS` and parses out the host name as the default suggestion (e.g., `strata-dmz`), preventing typing and alignment errors!
 3. The script outputs:

@@ -157,9 +157,15 @@ pub async fn my_connections(
 /// are not sensitive — admin-only mutations stay on `/api/admin/...`.
 pub async fn my_connection_folders(
     State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<crate::services::connections::ConnectionFolderRow>>, AppError> {
     let db = require_running(&state).await?;
-    let rows = crate::services::connections::list_folders(&db.pool).await?;
+    let rows = crate::services::connections::list_folders_for_user(
+        &db.pool,
+        user.id,
+        user.can_access_all_connections(),
+    )
+    .await?;
     Ok(Json(rows))
 }
 

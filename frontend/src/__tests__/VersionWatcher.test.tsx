@@ -19,7 +19,7 @@ describe("VersionWatcher", () => {
     vi.mocked(getStatus).mockReset();
 
     // Define __APP_VERSION__ on global/window if not present, or override it
-    (window as any).__APP_VERSION__ = "1.9.1";
+    (window as any).__APP_VERSION__ = "1.9.2";
 
     // Mock window.location.reload
     Object.defineProperty(window, "location", {
@@ -54,7 +54,7 @@ describe("VersionWatcher", () => {
       local_auth_enabled: true,
       vault_configured: false,
       sso_providers: [],
-      version: "1.9.1",
+      version: "1.9.2",
     });
 
     mount();
@@ -74,14 +74,14 @@ describe("VersionWatcher", () => {
       local_auth_enabled: true,
       vault_configured: false,
       sso_providers: [],
-      version: "1.9.2",
+      version: "1.9.3",
     });
 
     mount();
 
     await waitFor(() => expect(screen.getByText(/New Update Available/)).toBeInTheDocument());
     expect(
-      screen.getByText(/A new version of Strata Client is available \(v1.9.2\)/)
+      screen.getByText(/A new version of Strata Client is available \(v1.9.3\)/)
     ).toBeInTheDocument();
   });
 
@@ -92,11 +92,11 @@ describe("VersionWatcher", () => {
       local_auth_enabled: true,
       vault_configured: false,
       sso_providers: [],
-      version: "1.9.2",
+      version: "1.9.3",
     });
 
     // Preset sessionStorage
-    window.sessionStorage.setItem("strata.lastNotifiedVersion.v1", "1.9.2");
+    window.sessionStorage.setItem("strata.lastNotifiedVersion.v1", "1.9.3");
 
     mount();
 
@@ -114,7 +114,7 @@ describe("VersionWatcher", () => {
       local_auth_enabled: true,
       vault_configured: false,
       sso_providers: [],
-      version: "1.9.2",
+      version: "1.9.3",
     });
 
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -129,7 +129,7 @@ describe("VersionWatcher", () => {
 
     await user.click(screen.getByText("Update now"));
 
-    expect(window.sessionStorage.getItem("strata.lastNotifiedVersion.v1")).toBe("1.9.2");
+    expect(window.sessionStorage.getItem("strata.lastNotifiedVersion.v1")).toBe("1.9.3");
     expect(window.location.reload).toHaveBeenCalled();
   });
 

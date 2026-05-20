@@ -556,6 +556,45 @@ When notifications stop arriving, follow [docs/runbooks/smtp-troubleshooting.md]
 
 ### Version-specific upgrade notes
 
+#### v1.9.1 → v1.9.2 (Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast)
+
+v1.9.2 resolves layout and user experience issues in active RDP/VNC sessions, including a top-left click deadzone, dragging lag on the collapsible sidebar toggle, and visibility contrast of the right-hand chevron button in dark theme.
+
+- **Frontend rebuild mandatory**: The `frontend` image must be rebuilt to apply the CSS transition, contrast, and pointer-event fixes.
+- **Backend rebuild recommended**: The backend version has been bumped to v1.9.2 for consistency with the workspace.
+- **No database migrations**.
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+Verify post-upgrade:
+1. Dragging the collapsible session sidebar handle should feel instantaneous and responsive with no lag.
+2. The session bar toggle should remain clearly visible and high-contrast in both light and dark themes.
+3. Active RDP/VNC sessions should be 100% interactive across the entire viewport (no top-left click deadzone).
+
+#### v1.9.0 → v1.9.1 (SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup)
+
+v1.9.1 addresses a critical deserialization error that occurred when saving an edited Single Sign-On (SSO) configuration, which caused the "Save Changes" button to become inoperable. It also resolves multiple technical debt items flagged by CodeQL related to unused variables across the backend codebase.
+
+- **Frontend rebuild mandatory**: The `frontend` image must be rebuilt to include the updated test connection payloads and corrected SSO form submissions.
+- **Backend rebuild recommended**: The backend image must be rebuilt to pick up the CodeQL technical debt cleanup fixes.
+- **No database migrations**.
+
+```bash
+cd strata-client
+git pull
+docker compose build backend frontend
+docker compose up -d
+```
+
+Verify post-upgrade:
+1. Saving changes to an existing SSO provider should succeed.
+2. Testing the connection of an existing SSO provider with a hidden client secret should succeed.
+
 #### v1.8.4 → v1.9.0 (Multiple SSO/OIDC Connections & Dynamic Login Branding)
 
 v1.9.0 introduces multi-tenant OIDC/SSO capabilities, allowing operators to run multiple identity provider configurations side-by-side. 

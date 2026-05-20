@@ -1,3 +1,40 @@
+# What's New in v1.9.2
+
+> **Patch release: Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast.** v1.9.2 addresses several layout and user experience issues in active RDP/VNC sessions, including a top-left click deadzone, dragging lag on the collapsible sidebar toggle, and visibility contrast of the right-hand chevron button in dark theme.
+
+## Collapsible Sidebar Dragging Lag Resolved
+
+Interactive elements that are dynamically updated via cursor drag gestures (such as the RDP collapsible session bar) must respond instantaneously to preserve a premium, fluid user experience. In previous versions, the toggle button registered a CSS `transition: all 0.2s` rule, which caused a 200ms animation delay to interpolate layout positioning coordinates (such as `top` or `transform`).
+
+In v1.9.2, we isolated the CSS transitions for `.session-bar-toggle` inside `frontend/src/index.css` to target only non-layout properties: `color`, `background`, and `border-color`. Pointer-driven dragging is now buttery smooth, responsive, and completely free of lag.
+
+## Session Toggle Visibility and Dark Mode Contrast
+
+In the Dark Theme, a duplicate `.session-bar-toggle` class block was inadvertently declaring transparent backgrounds and zero borders, overriding glassmorphic styling and rendering the right chevron toggle completely invisible when overlays were active.
+
+We consolidated the class blocks, restored the semi-transparent dark background, borders, and premium backdrop-blur filter under dark theme, and added rich high-contrast hover states for both light and dark modes.
+
+## Active Session Top-Left Click Deadzone Fixed
+
+When an active remote desktop session (RDP or VNC) was running, a collapsed sidebar (`hidden === true`) still physically occupied space at the top-left of the viewport. Because the sidebar container `<aside>` remained in the DOM layout without pointer event suppression, the top-left quadrant of the remote desktop screen was unresponsive to clicks or hover events.
+
+We resolved this by dynamically applying `pointer-events: none` directly to the sidebar container when it is collapsed, and restoring `pointer-events: auto` when expanded. Active remote sessions are now 100% interactive across the entire viewport.
+
+## Upgrade
+
+Drop-in upgrade from v1.9.1. Rebuild and roll the frontend container:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build frontend
+```
+
+No database migrations, backend changes, or configuration changes are required for this release.
+
+---
+
 # What's New in v1.9.1
 
 > **Patch release: SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup.** v1.9.1 fixes a deserialization bug that prevented the saving of edited SSO configurations when the client secret field was omitted to signify "no change."

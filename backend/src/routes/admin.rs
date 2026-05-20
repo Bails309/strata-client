@@ -3179,6 +3179,7 @@ pub async fn list_approval_roles(
 pub struct CreateApprovalRoleRequest {
     pub name: String,
     pub description: Option<String>,
+    pub allow_emergency_bypass: Option<bool>,
 }
 
 pub async fn create_approval_role(
@@ -3198,6 +3199,7 @@ pub async fn create_approval_role(
         &db.pool,
         name,
         body.description.as_deref().unwrap_or(""),
+        body.allow_emergency_bypass.unwrap_or(true),
     )
     .await?;
     audit::log(
@@ -3214,6 +3216,7 @@ pub async fn create_approval_role(
 pub struct UpdateApprovalRoleRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub allow_emergency_bypass: Option<bool>,
 }
 
 pub async fn update_approval_role(
@@ -3236,6 +3239,9 @@ pub async fn update_approval_role(
     if let Some(ref desc) = body.description {
         crate::services::checkouts::update_approval_role_description(&db.pool, role_id, desc)
             .await?;
+    }
+    if let Some(v) = body.allow_emergency_bypass {
+        crate::services::checkouts::update_approval_role_bypass(&db.pool, role_id, v).await?;
     }
     Ok(Json(json!({ "status": "updated" })))
 }

@@ -26,6 +26,7 @@ import {
   setRoleAccounts,
   setRoleAssignments as apiSetRoleAssignments,
   updateAccountMapping,
+  updateApprovalRole,
 } from "../../api";
 
 function parseDN(dn: string): string {
@@ -61,6 +62,7 @@ export default function PasswordsTab({
   const [roles, setRoles] = useState<ApprovalRole[]>([]);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDesc, setNewRoleDesc] = useState("");
+  const [newRoleAllowBypass, setNewRoleAllowBypass] = useState(true);
   const [roleAssignments, setRoleAssignments] = useState<
     Record<string, { id: string; username: string }[]>
   >({});
@@ -144,9 +146,14 @@ export default function PasswordsTab({
   // ── Handlers ──
   const handleCreateRole = async () => {
     if (!newRoleName.trim()) return;
-    await createApprovalRole({ name: newRoleName, description: newRoleDesc || undefined });
+    await createApprovalRole({
+      name: newRoleName,
+      description: newRoleDesc || undefined,
+      allow_emergency_bypass: newRoleAllowBypass,
+    });
     setNewRoleName("");
     setNewRoleDesc("");
+    setNewRoleAllowBypass(true);
     loadRoles();
     onSave();
   };
@@ -288,6 +295,17 @@ export default function PasswordsTab({
                 onChange={(e) => setNewRoleDesc(e.target.value)}
               />
             </div>
+            <div className="mb-3">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="checkbox"
+                  checked={newRoleAllowBypass}
+                  onChange={(e) => setNewRoleAllowBypass(e.target.checked)}
+                />
+                Allow Break Glass emergency approval bypass
+              </label>
+            </div>
             <button className="btn btn-primary btn-sm" onClick={handleCreateRole}>
               Create Role
             </button>
@@ -333,6 +351,44 @@ export default function PasswordsTab({
 
               {expandedRole === role.id && (
                 <div className="mt-4 border-t border-border/10 pt-4 space-y-6">
+                  {/* Emergency Bypass Option */}
+                  <div>
+                    <h4 className="text-sm font-semibold mb-1">Emergency Bypass</h4>
+                    <p className="text-txt-secondary text-xs mb-2">
+                      When enabled, users with accounts covered by this approval group are allowed
+                      to use the Break Glass emergency approval bypass. Turn this off to enforce
+                      standard approval flows.
+                    </p>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="checkbox"
+                        checked={role.allow_emergency_bypass}
+                        onChange={async (e) => {
+                          const nextVal = e.target.checked;
+                          // Optimistic update
+                          setRoles((prev) =>
+                            prev.map((r) =>
+                              r.id === role.id ? { ...r, allow_emergency_bypass: nextVal } : r
+                            )
+                          );
+                          try {
+                            await updateApprovalRole(role.id, { allow_emergency_bypass: nextVal });
+                            onSave();
+                          } catch {
+                            // Revert
+                            setRoles((prev) =>
+                              prev.map((r) =>
+                                r.id === role.id ? { ...r, allow_emergency_bypass: !nextVal } : r
+                              )
+                            );
+                          }
+                        }}
+                      />
+                      Allow Break Glass emergency approval bypass
+                    </label>
+                  </div>
+
                   {/* Section 1: Managed Account Scope — which discovered accounts this role covers */}
                   <div>
                     <h4 className="text-sm font-semibold mb-1">Managed Account Scope</h4>

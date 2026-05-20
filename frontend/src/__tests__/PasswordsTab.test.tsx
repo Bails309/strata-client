@@ -42,6 +42,7 @@ const role = (over: Partial<ApprovalRole> = {}): ApprovalRole => ({
   id: "r1",
   name: "DBAs",
   description: "Database admins",
+  allow_emergency_bypass: true,
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
   ...over,

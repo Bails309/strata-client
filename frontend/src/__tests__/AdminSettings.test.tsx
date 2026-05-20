@@ -3219,6 +3219,7 @@ describe("PasswordsTab", () => {
       expect(createApprovalRole).toHaveBeenCalledWith({
         name: "Admins",
         description: "Admin approvers",
+        allow_emergency_bypass: true,
       });
     });
   });
@@ -3226,7 +3227,14 @@ describe("PasswordsTab", () => {
   it("renders existing approval roles", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: "r1", name: "IT Admins", description: "IT team", created_at: "", updated_at: "" },
+      {
+        id: "r1",
+        name: "IT Admins",
+        description: "IT team",
+        allow_emergency_bypass: true,
+        created_at: "",
+        updated_at: "",
+      },
     ]);
     renderAdmin();
     await screen.findByText("Admin Settings");
@@ -3238,7 +3246,14 @@ describe("PasswordsTab", () => {
   it("deletes an approval role", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: "r1", name: "IT Admins", description: "", created_at: "", updated_at: "" },
+      {
+        id: "r1",
+        name: "IT Admins",
+        description: "",
+        allow_emergency_bypass: true,
+        created_at: "",
+        updated_at: "",
+      },
     ]);
     vi.mocked(deleteApprovalRole).mockResolvedValue(undefined as any);
     renderAdmin();
@@ -3257,7 +3272,14 @@ describe("PasswordsTab", () => {
   it("expands a role to show configure options", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: "r1", name: "IT Admins", description: "", created_at: "", updated_at: "" },
+      {
+        id: "r1",
+        name: "IT Admins",
+        description: "",
+        allow_emergency_bypass: true,
+        created_at: "",
+        updated_at: "",
+      },
     ]);
     renderAdmin();
     await screen.findByText("Admin Settings");
@@ -3271,7 +3293,14 @@ describe("PasswordsTab", () => {
   it("collapses expanded role", async () => {
     const user = userEvent.setup();
     vi.mocked(getApprovalRoles).mockResolvedValue([
-      { id: "r1", name: "IT Admins", description: "", created_at: "", updated_at: "" },
+      {
+        id: "r1",
+        name: "IT Admins",
+        description: "",
+        allow_emergency_bypass: true,
+        created_at: "",
+        updated_at: "",
+      },
     ]);
     renderAdmin();
     await screen.findByText("Admin Settings");

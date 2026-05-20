@@ -288,7 +288,7 @@ mod tests {
             local_auth_enabled: false,
             vault_configured: true,
             sso_providers: vec![],
-            version: "1.9.2".into(),
+            version: "1.9.3".into(),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "running");
@@ -409,7 +409,7 @@ mod tests {
             local_auth_enabled: true,
             vault_configured: false,
             sso_providers: vec![],
-            version: "1.9.2".into(),
+            version: "1.9.3".into(),
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["phase"], "setup");

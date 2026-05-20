@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.3] — 2026-05-20
+
+### Patch Release — Option to disable Break Glass emergency bypass, dynamic empty connection folders pruning, and package cleanup
+
+This patch release introduces critical operational controls and navigation refinements across the application. It adds a security-hardening option to disable the Break Glass emergency approval bypass within Approval Roles, dynamically hides empty folders on the Dashboard navigation tree to remove clutter, unifies style formatting guidelines across Rust and frontend codebases, and prunes residual version references to guarantee build stability.
+
+#### Added
+- **Break Glass Emergency Bypass Toggle on Approval Roles**
+  ([`backend/migrations/063_role_break_glass_bypass.sql`](backend/migrations/063_role_break_glass_bypass.sql), [`backend/src/routes/admin.rs`](backend/src/routes/admin.rs), [`frontend/src/pages/admin/AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx)).
+  Added an administrative toggle to completely disable the Break Glass emergency bypass for specific Approval Roles. When disabled, operators are strictly prevented from self-approving or bypassing credentials checkout, guaranteeing forced dual-operator checkouts.
+
+#### Changed
+- **Dynamic Empty Folders Pruning in Dashboard tree**
+  ([`frontend/src/utils/folderTree.ts`](frontend/src/utils/folderTree.ts), [`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx)).
+  Updated the preorder traversal folder hierarchy model to recursively prune folders that contain neither active connections nor subfolders with connections. Hides noise and guarantees that folders visible on the Dashboard side menu actually lead to connection items.
+
+#### Fixed
+- **CI Formatting and Code Style Alignments**
+  ([`backend/src/services/connections.rs`](backend/src/services/connections.rs), [`frontend/src/__tests__/AdminSettings.test.tsx`](frontend/src/__tests__/AdminSettings.test.tsx), [`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/admin/PasswordsTab.tsx`](frontend/src/pages/admin/PasswordsTab.tsx)).
+  Resolved codebase formatting inconsistencies flagged during automated pipeline checkups. Unified cargo fmt parameters and ran Prettier to format source and test suites.
+
+#### Migration notes
+- **Automatic Database Migration.** On container startup, migration `063_role_break_glass_bypass.sql` runs unattended to add the `break_glass_bypass` toggle column (defaulting to true to preserve existing roles' behavior) and updates constraints safely.
+- **Frontend rebuild only** required for visual layout updates.
+
 ## [1.9.2] — 2026-05-20
 
 ### Patch Release — Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast

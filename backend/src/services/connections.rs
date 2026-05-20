@@ -261,7 +261,6 @@ pub async fn list_folders_for_user(
     Ok(rows)
 }
 
-
 pub async fn create_folder(
     pool: &Pool<Postgres>,
     body: &FolderRequest,

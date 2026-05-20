@@ -35,7 +35,7 @@ describe("Login page", () => {
       local_auth_enabled: true,
       vault_configured: false,
       sso_providers: [{ id: "1", name: "Okta" }],
-      version: "1.9.2",
+      version: "1.9.3",
     });
   });
 
@@ -163,7 +163,7 @@ describe("Login page", () => {
       local_auth_enabled: true,
       vault_configured: false,
       sso_providers: [{ id: "1", name: "Okta" }],
-      version: "1.9.2",
+      version: "1.9.3",
     });
 
     renderLogin();
@@ -177,7 +177,7 @@ describe("Login page", () => {
       local_auth_enabled: false,
       vault_configured: false,
       sso_providers: [{ id: "1", name: "Okta" }],
-      version: "1.9.2",
+      version: "1.9.3",
     });
 
     renderLogin();

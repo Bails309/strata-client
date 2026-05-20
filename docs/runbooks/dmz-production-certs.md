@@ -102,9 +102,14 @@ sudo chmod 600 ./certs/dmz/*.key
 ```
 
 ### On the Internal Host
-The `strata-backend` container runs as the custom `strata` user (**UID 999**). Lock down the keys:
+The `strata-backend` container runs as the custom `strata` user (typically **UID 996** inside the Debian slim container, though dynamically assigned). To ensure correct permissions:
+
 ```bash
-sudo chown -R 999:999 ./certs/dmz
+# Auto-detect the backend's correct container UID:
+BACKEND_UID=$(docker compose run --rm --entrypoint gosu backend strata id -u)
+
+# Apply ownership and strict file-permissions:
+sudo chown -R ${BACKEND_UID}:${BACKEND_UID} ./certs/dmz
 sudo chmod 644 ./certs/dmz/*.crt
 sudo chmod 600 ./certs/dmz/*.key
 ```
@@ -131,7 +136,13 @@ docker compose up -d --force-recreate backend
 
 ### A. Container Crash-Loops with `Permission Denied`
 * **Symptoms:** Container logs show `Permission denied (os error 13) while reading server.key` (or `client.key`).
-* **Fix:** Re-run the permission commands in **Section 4**. Ensure you are applying the commands to the actual host directory that is mounted into the container.
+* **Cause:** The dynamically assigned UID for the `strata` user inside the backend image is typically **996** (due to system packages taking prior slots in Debian slim), but the host permissions were set to a different UID (like `999`). With a `600` permission mask, the container process cannot read the key.
+* **Fix:** Query the container's exact UID and run the correct ownership commands:
+  ```bash
+  BACKEND_UID=$(docker compose run --rm --entrypoint gosu backend strata id -u)
+  sudo chown -R ${BACKEND_UID}:${BACKEND_UID} ./certs/dmz
+  sudo chmod 600 ./certs/dmz/*.key
+  ```
 
 ### B. Internal Backend Logs `certificate not valid for name "<hostname>"`
 * **Symptoms:** The DMZ link remains down, and the backend logs show rustls rejecting the server's certificate.

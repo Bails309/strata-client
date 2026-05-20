@@ -1290,6 +1290,19 @@ pub type ManagedAccountRow = (
 
 /// Managed-account mappings for a user, joined with their AD-sync config
 /// to expose `pm_allow_emergency_bypass`.
+///
+/// As of v1.9.5 the per-account `pm_allow_emergency_bypass` flag exposed
+/// to the frontend uses a strict role-gating model:
+///
+/// 1. The AD-sync config must permit bypass (`c.pm_allow_emergency_bypass`).
+/// 2. At least one approval role must explicitly cover the managed account
+///    (i.e. it appears in `approval_role_accounts`).
+/// 3. **Every** covering role must have `allow_emergency_bypass = true`.
+///
+/// If any covering role has the toggle turned off, or no role covers the
+/// account at all, the requester is not shown the Break-Glass option.
+/// Self-approve accounts (`can_self_approve = true`) never need the
+/// bypass and are gated on the frontend.
 pub async fn list_managed_accounts_for_user(
     pool: &PgPool,
     user_id: Uuid,
@@ -1297,12 +1310,19 @@ pub async fn list_managed_accounts_for_user(
     let rows = sqlx::query_as(
         "SELECT m.id, m.user_id, m.managed_ad_dn, m.can_self_approve, m.ad_sync_config_id,
                 m.created_at, m.friendly_name,
-                (c.pm_allow_emergency_bypass AND NOT EXISTS (
+                (c.pm_allow_emergency_bypass
+                 AND EXISTS (
+                    SELECT 1 FROM approval_role_accounts ara
+                    JOIN approval_roles ar ON ar.id = ara.role_id
+                    WHERE ara.managed_ad_dn = m.managed_ad_dn
+                    AND ar.allow_emergency_bypass = true
+                 )
+                 AND NOT EXISTS (
                     SELECT 1 FROM approval_role_accounts ara
                     JOIN approval_roles ar ON ar.id = ara.role_id
                     WHERE ara.managed_ad_dn = m.managed_ad_dn
                     AND ar.allow_emergency_bypass = false
-                )) AS pm_allow_emergency_bypass
+                 )) AS pm_allow_emergency_bypass
          FROM user_account_mappings m
          LEFT JOIN ad_sync_configs c ON c.id = m.ad_sync_config_id
          WHERE m.user_id = $1
@@ -1348,7 +1368,13 @@ pub async fn has_open_checkout(
 }
 
 /// Returns whether emergency bypass is allowed for the given AD-sync config and account DN.
-/// Returns `false` if the config is missing or the flag is unset or any covering approval role has bypass disabled.
+///
+/// Uses the strict role-gating model (see
+/// [`list_managed_accounts_for_user`]): returns `false` unless
+///
+/// 1. The AD-sync config has `pm_allow_emergency_bypass = true`, AND
+/// 2. At least one approval role explicitly covers the account, AND
+/// 3. Every covering approval role has `allow_emergency_bypass = true`.
 pub async fn emergency_bypass_allowed(
     pool: &PgPool,
     ad_sync_config_id: Option<Uuid>,
@@ -1358,7 +1384,14 @@ pub async fn emergency_bypass_allowed(
         return Ok(false);
     };
     let allow: Option<bool> = sqlx::query_scalar(
-        "SELECT (c.pm_allow_emergency_bypass AND NOT EXISTS (
+        "SELECT (c.pm_allow_emergency_bypass
+         AND EXISTS (
+            SELECT 1 FROM approval_role_accounts ara
+            JOIN approval_roles ar ON ar.id = ara.role_id
+            WHERE ara.managed_ad_dn = $2
+            AND ar.allow_emergency_bypass = true
+         )
+         AND NOT EXISTS (
             SELECT 1 FROM approval_role_accounts ara
             JOIN approval_roles ar ON ar.id = ara.role_id
             WHERE ara.managed_ad_dn = $2

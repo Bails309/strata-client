@@ -355,8 +355,9 @@ export default function PasswordsTab({
                   <div>
                     <h4 className="text-sm font-semibold mb-1">Emergency Bypass</h4>
                     <p className="text-txt-secondary text-xs mb-2">
-                      When enabled, users with accounts covered by this approval group are allowed to use
-                      the Break Glass emergency approval bypass. Turn this off to enforce standard approval flows.
+                      When enabled, users with accounts covered by this approval group are allowed
+                      to use the Break Glass emergency approval bypass. Turn this off to enforce
+                      standard approval flows.
                     </p>
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input

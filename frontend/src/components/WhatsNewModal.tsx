@@ -29,6 +29,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.3",
+    subtitle:
+      "Option to disable Break Glass emergency bypass, dynamic empty connection folders pruning, and package cleanup",
+    sections: [
+      {
+        title: "Break Glass Emergency Bypass Control",
+        description:
+          "Introduced a new configuration option within Approval Roles to completely toggle on or off the Break Glass emergency approval bypass. When disabled, users are strictly required to go through the standard request and approval workflow for checkout, ensuring tighter operational controls for highly sensitive accounts.",
+      },
+      {
+        title: "Empty Folder Visibility Pruned",
+        description:
+          "Refined the Dashboard navigation tree to dynamically prune empty folders. Folders containing no assigned connections or active subfolders are now automatically hidden from the sidebar, completely removing empty noise and decluttering the operator viewport.",
+      },
+      {
+        title: "Repository Clean Up and Formatting",
+        description:
+          "Removed all residual version reference strings from package manifests and unified Rust and frontend style formatting. Cleaned up CI formatting violations to ensure pristine build stability.",
+      },
+    ],
+  },
+  {
     version: "1.9.2",
     subtitle:
       "Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast",

@@ -121,6 +121,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date | Description |
 | :--- | :--- | :--- |
+| 1.9.3 | 2026-05-20 | **Option to disable Break Glass, dynamic empty connection folders pruning & package cleanup** — introduces togglable Break Glass emergency bypass in Approval Roles; dynamic dashboard folder filtering to prune empty directories; unifies style formatting and prunes manifest strings. ([details](CHANGELOG.md#193--2026-05-20)) |
 | 1.9.2 | 2026-05-20 | **Premium RDP Interaction & Dragging Performance** — resolves active RDP click deadzone issues on top-left of the viewport; optimizes sidebar toggle CSS transitions to target only color and background properties, completely eliminating cursor gesture dragging lag; consolidated `.session-bar-toggle` rules under dark theme to guarantee high chevron contrast. ([details](CHANGELOG.md#192--2026-05-20)) |
 | 1.9.1 | 2026-05-19 | **Patch Release — SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup** — fixes a deserialization bug that prevented the saving of edited SSO configurations when the client secret field was omitted to signify "no change." Resolves multiple technical debt items flagged by CodeQL related to unused variables across the backend codebase. ([details](CHANGELOG.md#191--2026-05-19)) |
 | 1.9.0 | 2026-05-19 | **Multiple SSO / OIDC Connections & Dynamic Login Branding** — administrative settings tab supporting CRUD and live connection tests for multiple concurrent identity providers (Entra ID, Okta, Keycloak); dynamic branded buttons on the login screen; multi-tenant state resolution via thread-safe `SSO_STATE_STORE` mapping; individually Vault-sealed client secrets; `BASE_URL` override for proxy port integrity. ([details](CHANGELOG.md#190--2026-05-19)) |
@@ -232,7 +233,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.9.2                                  # or "latest"
+export STRATA_VERSION=1.9.3                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -248,7 +249,7 @@ Images:
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.9.2 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.9.3 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -256,7 +257,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.9.2 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.9.2 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.9.3 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

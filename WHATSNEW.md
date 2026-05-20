@@ -1,3 +1,38 @@
+# What's New in v1.9.3
+
+> **Patch release: Option to disable Break Glass emergency bypass, dynamic empty connection folders pruning, and package cleanup.** v1.9.3 adds an administrative option to completely disable the Break Glass emergency bypass for specific Approval Roles, dynamically filters and prunes empty folders on the Dashboard sidebar navigation tree to streamline workspace presentation, aligns formatting constraints across the rust/frontend codebases, and ensures build artifact reference consistency.
+
+## Break Glass Emergency Bypass Toggle on Approval Roles
+
+Administrators can now enforce strict dual-operator authorization workflows by selectively disabling the "Break Glass" emergency bypass on individual Approval Roles. In previous iterations, operators with roles flagged for approval checkouts could trigger an emergency self-approval when immediate access was required.
+
+With this release, a new `break_glass_bypass` toggle is introduced under the Approval Role editor in **Admin Settings > Access**. When disabled, self-approvals and bypass paths are fully blocked. Operators are strictly required to obtain approval from a second authorized operator to checkout credentials, closing a potential compliance loophole in high-security environments.
+
+## Dynamic Empty Folders Pruning in Dashboard tree
+
+As organizations grow, the connection folder hierarchy can become cluttered with empty parent nodes or legacy directories that contain no active connection items. 
+
+v1.9.3 introduces dynamic pruning to the Dashboard sidebar tree traversal. The folder tree now automatically detects and recursively hides folder nodes that contain neither direct connections nor any active subfolders containing connections. The sidebar is now perfectly clean and clutter-free, displaying only folders that lead to selectable connection entries.
+
+## CI Formatting and Lint Alignment
+
+To maintain a pristine code quality standard and eliminate automated build pipeline interruptions, we have resolved style and formatting differences across both the Rust backend and React frontend. This includes applying uniform styling constraints to test suites, settings interfaces, and database schemas.
+
+## Upgrade
+
+Drop-in upgrade from v1.9.2. Roll the backend and frontend containers together to apply the new database migration:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build
+```
+
+The database migration `063_role_break_glass_bypass.sql` runs automatically at backend startup to create the `break_glass_bypass` column (defaulting to `true` to ensure zero disruption to pre-existing roles).
+
+---
+
 # What's New in v1.9.2
 
 > **Patch release: Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast.** v1.9.2 addresses several layout and user experience issues in active RDP/VNC sessions, including a top-left click deadzone, dragging lag on the collapsible sidebar toggle, and visibility contrast of the right-hand chevron button in dark theme.

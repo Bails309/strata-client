@@ -115,6 +115,8 @@ export default function NvrPlayer() {
       displayEl.style.background = "#000";
       container.appendChild(displayEl);
 
+      client.connect(tunnelQuery);
+
       // Intercept custom NVR instructions from the backend before they reach
       // the Guacamole Client (which would ignore them).
       const clientHandler = tunnel.oninstruction;
@@ -200,8 +202,6 @@ export default function NvrPlayer() {
         elapsedRef.current += 1;
         setElapsed(elapsedRef.current);
       }, 1000);
-
-      client.connect(tunnelQuery);
 
       return () => {
         resizeObserver.disconnect();

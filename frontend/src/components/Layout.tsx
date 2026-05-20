@@ -270,6 +270,7 @@ export default function Layout({
           className="fixed top-0 left-0 bottom-0 z-50 flex flex-col justify-between overflow-hidden transition-[width] duration-200 ease-out"
           style={{
             width: sidebarWidth,
+            pointerEvents: hidden ? "none" : "auto",
             padding: hidden ? 0 : collapsed ? "1.25rem 0.5rem" : "1.25rem 0.75rem",
             // While inside a session the sidebar floats over the remote
             // canvas — use the same translucent + blurred surface that

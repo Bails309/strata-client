@@ -84,6 +84,16 @@ test.describe('Security headers', () => {
     expect(response?.headers()['x-content-type-options']).toBe('nosniff');
   });
 
+  test('Strict-Transport-Security is present', async ({ page }) => {
+    const response = await page.goto('/login');
+    expect(response?.headers()['strict-transport-security']).toContain('max-age=');
+  });
+
+  test('X-Frame-Options is DENY', async ({ page }) => {
+    const response = await page.goto('/login');
+    expect(response?.headers()['x-frame-options']).toBe('DENY');
+  });
+
   test('no Server header exposed', async ({ page }) => {
     const response = await page.goto('/login');
     const server = response?.headers()['server'];

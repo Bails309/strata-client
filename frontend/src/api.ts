@@ -651,6 +651,7 @@ export interface ApprovalRole {
   id: string;
   name: string;
   description: string;
+  allow_emergency_bypass: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -695,12 +696,12 @@ export interface DiscoveredAccount {
 
 // Admin: Approval Roles
 export const getApprovalRoles = () => request<ApprovalRole[]>("/admin/approval-roles");
-export const createApprovalRole = (data: { name: string; description?: string }) =>
+export const createApprovalRole = (data: { name: string; description?: string; allow_emergency_bypass?: boolean }) =>
   request<{ id: string; status: string }>("/admin/approval-roles", {
     method: "POST",
     body: JSON.stringify(data),
   });
-export const updateApprovalRole = (id: string, data: { name?: string; description?: string }) =>
+export const updateApprovalRole = (id: string, data: { name?: string; description?: string; allow_emergency_bypass?: boolean }) =>
   request<{ status: string }>(`/admin/approval-roles/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),

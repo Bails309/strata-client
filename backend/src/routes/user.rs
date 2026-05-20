@@ -1369,6 +1369,7 @@ pub async fn request_checkout(
             let allow_bypass = crate::services::checkouts::emergency_bypass_allowed(
                 &db.pool,
                 mapping.ad_sync_config_id,
+                &mapping.managed_ad_dn,
             )
             .await?;
 

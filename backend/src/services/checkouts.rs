@@ -66,6 +66,7 @@ pub struct ApprovalRole {
     pub description: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub allow_emergency_bypass: bool,
 }
 
 // ── User account mapping row ───────────────────────────────────────────
@@ -1295,7 +1296,13 @@ pub async fn list_managed_accounts_for_user(
 ) -> Result<Vec<ManagedAccountRow>, crate::error::AppError> {
     let rows = sqlx::query_as(
         "SELECT m.id, m.user_id, m.managed_ad_dn, m.can_self_approve, m.ad_sync_config_id,
-                m.created_at, m.friendly_name, c.pm_allow_emergency_bypass
+                m.created_at, m.friendly_name,
+                (c.pm_allow_emergency_bypass AND NOT EXISTS (
+                    SELECT 1 FROM approval_role_accounts ara
+                    JOIN approval_roles ar ON ar.id = ara.role_id
+                    WHERE ara.managed_ad_dn = m.managed_ad_dn
+                    AND ar.allow_emergency_bypass = false
+                )) AS pm_allow_emergency_bypass
          FROM user_account_mappings m
          LEFT JOIN ad_sync_configs c ON c.id = m.ad_sync_config_id
          WHERE m.user_id = $1
@@ -1340,20 +1347,30 @@ pub async fn has_open_checkout(
     Ok(existing.is_some())
 }
 
-/// Returns whether emergency bypass is allowed for the given AD-sync config.
-/// Returns `false` if the config is missing or the flag is unset.
+/// Returns whether emergency bypass is allowed for the given AD-sync config and account DN.
+/// Returns `false` if the config is missing or the flag is unset or any covering approval role has bypass disabled.
 pub async fn emergency_bypass_allowed(
     pool: &PgPool,
     ad_sync_config_id: Option<Uuid>,
+    managed_ad_dn: &str,
 ) -> Result<bool, crate::error::AppError> {
     let Some(cfg_id) = ad_sync_config_id else {
         return Ok(false);
     };
-    let allow: Option<bool> =
-        sqlx::query_scalar("SELECT pm_allow_emergency_bypass FROM ad_sync_configs WHERE id = $1")
-            .bind(cfg_id)
-            .fetch_optional(pool)
-            .await?;
+    let allow: Option<bool> = sqlx::query_scalar(
+        "SELECT (c.pm_allow_emergency_bypass AND NOT EXISTS (
+            SELECT 1 FROM approval_role_accounts ara
+            JOIN approval_roles ar ON ar.id = ara.role_id
+            WHERE ara.managed_ad_dn = $2
+            AND ar.allow_emergency_bypass = false
+         ))
+         FROM ad_sync_configs c
+         WHERE c.id = $1"
+    )
+    .bind(cfg_id)
+    .bind(managed_ad_dn)
+    .fetch_optional(pool)
+    .await?;
     Ok(allow.unwrap_or(false))
 }
 
@@ -1662,15 +1679,30 @@ pub async fn create_approval_role(
     pool: &PgPool,
     name: &str,
     description: &str,
+    allow_emergency_bypass: bool,
 ) -> Result<Uuid, crate::error::AppError> {
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO approval_roles (name, description) VALUES ($1, $2) RETURNING id",
+        "INSERT INTO approval_roles (name, description, allow_emergency_bypass) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(name)
     .bind(description)
+    .bind(allow_emergency_bypass)
     .fetch_one(pool)
     .await?;
     Ok(id)
+}
+
+pub async fn update_approval_role_bypass(
+    pool: &PgPool,
+    role_id: Uuid,
+    allow_emergency_bypass: bool,
+) -> Result<(), crate::error::AppError> {
+    sqlx::query("UPDATE approval_roles SET allow_emergency_bypass = $1, updated_at = now() WHERE id = $2")
+        .bind(allow_emergency_bypass)
+        .bind(role_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn update_approval_role_name(

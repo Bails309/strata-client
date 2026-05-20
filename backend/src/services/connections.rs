@@ -218,6 +218,50 @@ pub async fn list_folders(pool: &Pool<Postgres>) -> Result<Vec<ConnectionFolderR
     Ok(rows)
 }
 
+pub async fn list_folders_for_user(
+    pool: &Pool<Postgres>,
+    user_id: Uuid,
+    see_all: bool,
+) -> Result<Vec<ConnectionFolderRow>, AppError> {
+    if see_all {
+        return list_folders(pool).await;
+    }
+
+    let rows: Vec<ConnectionFolderRow> = sqlx::query_as(
+        "WITH RECURSIVE active_folders AS (
+            SELECT cf.id, cf.name, cf.parent_id
+            FROM connection_folders cf
+            WHERE cf.id IN (
+                SELECT DISTINCT c.folder_id 
+                FROM connections c
+                JOIN users u ON u.id = $1
+                WHERE c.soft_deleted_at IS NULL
+                AND c.folder_id IS NOT NULL
+                AND (
+                    EXISTS (SELECT 1 FROM role_connections rc WHERE rc.role_id = u.role_id AND rc.connection_id = c.id)
+                    OR
+                    EXISTS (SELECT 1 FROM role_folders rf WHERE rf.role_id = u.role_id AND rf.folder_id = c.folder_id)
+                )
+            )
+            
+            UNION
+            
+            SELECT parent.id, parent.name, parent.parent_id
+            FROM connection_folders parent
+            JOIN active_folders child ON child.parent_id = parent.id
+        )
+        SELECT DISTINCT id, name, parent_id 
+        FROM active_folders
+        ORDER BY name"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+
 pub async fn create_folder(
     pool: &Pool<Postgres>,
     body: &FolderRequest,

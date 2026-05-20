@@ -35,6 +35,9 @@ bash ./scripts/dmz/gen-production-certs.sh
 ### Option A: Standalone Private CA (Recommended for Simplicity)
 This mode automatically generates a secure, standalone Private CA key and certificate, then immediately generates and signs both the DMZ server and backend client mTLS certificates.
 
+> [!NOTE]
+> If existing certificates are detected, the script will show an overwrite warning first. The DNS/SAN target prompt will appear immediately after you confirm by typing `y`.
+
 1. Select **Option 1** when prompted by the script.
 2. Enter the DNS name or IP the internal host will dial to reach the DMZ (e.g., `strata-edge.example.com`).
    > [!TIP]

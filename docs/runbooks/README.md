@@ -54,3 +54,5 @@ The runbooks listed below cover §26/§28 of the Coding Standards.
 | certificate-rotation.md | ACME + internal CA rotation | Active |
 | vault-operations.md | Vault unseal, rekey, rotate keys | Active |
 | database-operations.md | Postgres failover, migration rollback | Active |
+| dmz-incident.md | DMZ split-topology incident response | Active |
+| dmz-production-certs.md | Production DMZ mTLS cert generation & setup | Active |

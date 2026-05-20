@@ -211,16 +211,14 @@ impl SessionBuffer {
         // Opcodes that carry no persistent visual state.  Salvaging these
         // would either bloat the log (sync, nop) or replay stale input
         // (key, mouse) when a new observer joins.
-        const EPHEMERAL_OPCODES: &[&str] = &[
-            "4.sync", "3.nop", "3.key", "5.mouse",
-        ];
+        const EPHEMERAL_OPCODES: &[&str] = &["4.sync", "3.nop", "3.key", "5.mouse"];
 
         for inst in data.split_inclusive(';') {
             let trimmed = inst.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            let opcode_end = trimmed.find(',').unwrap_or(trimmed.len());
+            let opcode_end = trimmed.find([',', ';']).unwrap_or(trimmed.len());
             let opcode = &trimmed[..opcode_end];
             if EPHEMERAL_OPCODES.contains(&opcode) {
                 continue;
@@ -861,6 +859,7 @@ mod tests {
         // without waiting for MAX_BUFFER_DURATION.
         let mut buf = SessionBuffer::new();
         let large_chunk = "x".repeat(10 * 1024 * 1024); // 10 MB filler
+
         // Push a drawing instruction first — this should end up in
         // persistent_state once it is evicted by the filler pushes.
         buf.push("4.size,1.0,4.1920,4.1080;3.img,1.0,2.12,1.0,1.0,3.100,3.100;".into());
@@ -870,8 +869,14 @@ mod tests {
         // The first frame must have been evicted; its non-ephemeral
         // instructions should now live in persistent_state.
         let persistent = buf.persistent_state();
-        assert!(persistent.contains(".size,"), "size instruction must be salvaged: {persistent}");
-        assert!(persistent.contains(".img,"), "img instruction must be salvaged");
+        assert!(
+            persistent.contains(".size,"),
+            "size instruction must be salvaged: {persistent}"
+        );
+        assert!(
+            persistent.contains(".img,"),
+            "img instruction must be salvaged"
+        );
     }
 
     #[test]
@@ -891,7 +896,10 @@ mod tests {
         assert!(!persistent.contains(".sync,"), "sync must not be salvaged");
         assert!(!persistent.contains(".nop"), "nop must not be salvaged");
         assert!(!persistent.contains(".key,"), "key must not be salvaged");
-        assert!(!persistent.contains(".mouse,"), "mouse must not be salvaged");
+        assert!(
+            !persistent.contains(".mouse,"),
+            "mouse must not be salvaged"
+        );
     }
 
     #[test]

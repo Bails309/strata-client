@@ -263,6 +263,11 @@ html.light .session-bar-toggle {
   border-color: rgba(0, 0, 0, 0.08);
 }
 
+html.light .session-bar-toggle:hover {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
 /* ── Light Theme: Recent Card Overrides ── */
 html.light .recent-card {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(244, 244, 245, 0.9) 100%);
@@ -1054,6 +1059,16 @@ html.light .recent-card-btn:hover {
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-right: none;
+    color: var(--color-txt-secondary);
+    cursor: pointer;
+    transition: all 0.2s var(--ease-out);
+  }
+
+  .session-bar-toggle:hover {
+    color: var(--color-txt-primary);
+    background: rgba(30, 30, 40, 0.85);
+    border-color: rgba(255, 255, 255, 0.18);
+    border-right: none;
   }
 
   .session-thumbs-container {
@@ -1081,11 +1096,6 @@ html.light .recent-card-btn:hover {
 
   .session-thumb-error {
     border-color: var(--color-danger);
-  }
-
-  .session-bar-toggle {
-    @apply w-full flex flex-col items-center justify-center p-3 border-0 bg-transparent text-txt-secondary hover:text-txt-primary cursor-pointer transition-colors duration-150;
-    border-bottom: 1px solid var(--color-border);
   }
 
   .session-count-badge {

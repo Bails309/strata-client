@@ -22,8 +22,14 @@ Because this is a private tunnel:
 To simplify production certificate creation, a robust generator script is available at `scripts/dmz/gen-production-certs.sh`. This script supports two operation modes:
 
 ```bash
-# Run the script from the root of the repository
+# Make the script executable first:
+chmod +x ./scripts/dmz/gen-production-certs.sh
+
+# Run the script from the root of the repository:
 ./scripts/dmz/gen-production-certs.sh
+
+# Alternatively, invoke it directly via bash:
+bash ./scripts/dmz/gen-production-certs.sh
 ```
 
 ### Option A: Standalone Private CA (Recommended for Simplicity)

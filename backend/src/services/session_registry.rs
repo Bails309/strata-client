@@ -218,7 +218,7 @@ impl SessionBuffer {
             if trimmed.is_empty() {
                 continue;
             }
-            let opcode_end = trimmed.find(',').unwrap_or(trimmed.len());
+            let opcode_end = trimmed.find([',', ';']).unwrap_or(trimmed.len());
             let opcode = &trimmed[..opcode_end];
             if EPHEMERAL_OPCODES.contains(&opcode) {
                 continue;

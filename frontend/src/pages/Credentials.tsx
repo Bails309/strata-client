@@ -545,8 +545,8 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
             <p className="text-txt-secondary">No checkout requests yet.</p>
           ) : (
             <div className="space-y-3">
-              {allCheckouts
-                .filter((c) => {
+              {(() => {
+                const baseFiltered = allCheckouts.filter((c) => {
                   // Hide old Expired/stale checkouts if a newer Active one exists for the same account
                   if (c.status === "Expired" || isCheckoutStale(c) || isCheckoutExpired(c)) {
                     const hasNewer = allCheckouts.some(
@@ -563,107 +563,117 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                     return !hasNewer;
                   }
                   return true;
-                })
-                .map((c) => (
-                  <div key={c.id} className="card p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-sm font-medium">
-                        {c.friendly_name || c.managed_ad_dn}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {c.emergency_bypass && (
-                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-warning/20 text-warning border border-warning/40">
-                            ⚡ Emergency
-                          </span>
-                        )}
-                        <span
-                          className={`text-xs font-medium px-2 py-0.5 rounded ${
-                            c.status === "CheckedIn"
-                              ? "bg-accent/20 text-accent"
-                              : isCheckoutExpired(c)
-                                ? "bg-danger/20 text-danger"
-                                : isCheckoutLive(c)
-                                  ? "bg-success/20 text-success"
-                                  : c.status === "Scheduled"
-                                    ? "bg-accent/20 text-accent"
-                                    : c.status === "Pending"
-                                      ? "bg-warning/20 text-warning"
-                                      : c.status === "Denied"
-                                        ? "bg-danger/20 text-danger"
-                                        : "bg-border/20 text-txt-secondary"
-                          }`}
-                        >
-                          {getEffectiveStatus(c)}
+                });
+
+                // Limit expired/inactive checkouts to the 5 most recent
+                const live = baseFiltered.filter((c) => !isCheckoutExpired(c));
+                const expired = baseFiltered.filter((c) => isCheckoutExpired(c));
+                const sortedExpired = [...expired].sort(
+                  (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+                );
+                const limitedExpired = sortedExpired.slice(0, 5);
+
+                return [...live, ...limitedExpired].sort(
+                  (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+                );
+              })().map((c) => (
+                <div key={c.id} className="card p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-medium">{c.friendly_name || c.managed_ad_dn}</div>
+                    <div className="flex items-center gap-2">
+                      {c.emergency_bypass && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-warning/20 text-warning border border-warning/40">
+                          ⚡ Emergency
                         </span>
-                      </div>
-                    </div>
-                    <div className="text-xs text-txt-secondary mb-2">
-                      Duration: {c.requested_duration_mins}m
-                      {c.justification_comment && ` · ${c.justification_comment}`}
-                    </div>
-                    {c.status === "Scheduled" && c.scheduled_start_at && (
-                      <div className="text-xs text-accent mb-2">
-                        🕒 Release scheduled for {formatDateTime(c.scheduled_start_at)}
-                      </div>
-                    )}
-                    {isCheckoutLive(c) && (
-                      <div
-                        className={`text-sm font-mono font-semibold mb-2 tabular-nums ${
-                          new Date(c.expires_at!).getTime() - Date.now() < 300000
-                            ? "text-danger"
-                            : new Date(c.expires_at!).getTime() - Date.now() < 900000
-                              ? "text-warning"
-                              : "text-success"
+                      )}
+                      <span
+                        className={`text-xs font-medium px-2 py-0.5 rounded ${
+                          c.status === "CheckedIn"
+                            ? "bg-accent/20 text-accent"
+                            : isCheckoutExpired(c)
+                              ? "bg-danger/20 text-danger"
+                              : isCheckoutLive(c)
+                                ? "bg-success/20 text-success"
+                                : c.status === "Scheduled"
+                                  ? "bg-accent/20 text-accent"
+                                  : c.status === "Pending"
+                                    ? "bg-warning/20 text-warning"
+                                    : c.status === "Denied"
+                                      ? "bg-danger/20 text-danger"
+                                      : "bg-border/20 text-txt-secondary"
                         }`}
                       >
-                        ⏱ {getTimeRemaining(c.expires_at)}
-                      </div>
-                    )}
-                    {isCheckoutLive(c) && (
-                      <div>
-                        {revealedPw[c.id] ? (
-                          <div className="bg-bg-secondary p-3 rounded font-mono text-sm break-all">
-                            {revealedPw[c.id]}
-                          </div>
-                        ) : (
-                          <button
-                            className="btn btn-sm btn-primary"
-                            onClick={() => handleRevealCheckout(c.id)}
-                          >
-                            Reveal Password
-                          </button>
-                        )}
-                        <button
-                          className="btn btn-sm btn-outline ml-2 mt-2"
-                          onClick={() => setCheckinId(c.id)}
-                        >
-                          Check In
-                        </button>
-                      </div>
-                    )}
-                    {c.status === "Approved" && !isCheckoutLive(c) && (
-                      <div className="mt-2">
-                        <div className="text-xs text-warning mb-2">
-                          Activation failed — the password was not set in AD. You can retry.
+                        {getEffectiveStatus(c)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-txt-secondary mb-2">
+                    Duration: {c.requested_duration_mins}m
+                    {c.justification_comment && ` · ${c.justification_comment}`}
+                  </div>
+                  {c.status === "Scheduled" && c.scheduled_start_at && (
+                    <div className="text-xs text-accent mb-2">
+                      🕒 Release scheduled for {formatDateTime(c.scheduled_start_at)}
+                    </div>
+                  )}
+                  {isCheckoutLive(c) && (
+                    <div
+                      className={`text-sm font-mono font-semibold mb-2 tabular-nums ${
+                        new Date(c.expires_at!).getTime() - Date.now() < 300000
+                          ? "text-danger"
+                          : new Date(c.expires_at!).getTime() - Date.now() < 900000
+                            ? "text-warning"
+                            : "text-success"
+                      }`}
+                    >
+                      ⏱ {getTimeRemaining(c.expires_at)}
+                    </div>
+                  )}
+                  {isCheckoutLive(c) && (
+                    <div>
+                      {revealedPw[c.id] ? (
+                        <div className="bg-bg-secondary p-3 rounded font-mono text-sm break-all">
+                          {revealedPw[c.id]}
                         </div>
+                      ) : (
                         <button
                           className="btn btn-sm btn-primary"
-                          onClick={async () => {
-                            try {
-                              setError("");
-                              await retryCheckoutActivation(c.id);
-                              await load();
-                            } catch (e) {
-                              setError(e instanceof Error ? e.message : "Retry failed");
-                            }
-                          }}
+                          onClick={() => handleRevealCheckout(c.id)}
                         >
-                          Retry Activation
+                          Reveal Password
                         </button>
+                      )}
+                      <button
+                        className="btn btn-sm btn-outline ml-2 mt-2"
+                        onClick={() => setCheckinId(c.id)}
+                      >
+                        Check In
+                      </button>
+                    </div>
+                  )}
+                  {c.status === "Approved" && !isCheckoutLive(c) && (
+                    <div className="mt-2">
+                      <div className="text-xs text-warning mb-2">
+                        Activation failed — the password was not set in AD. You can retry.
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <button
+                        className="btn btn-sm btn-primary"
+                        onClick={async () => {
+                          try {
+                            setError("");
+                            await retryCheckoutActivation(c.id);
+                            await load();
+                          } catch (e) {
+                            setError(e instanceof Error ? e.message : "Retry failed");
+                          }
+                        }}
+                      >
+                        Retry Activation
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -942,6 +942,90 @@ describe("Credentials", () => {
     });
   });
 
+  it("limits expired checkouts to the 5 most recent on rotation", async () => {
+    setupDefaults();
+    vi.mocked(getMyCheckouts).mockResolvedValue([
+      {
+        id: "co1",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-1,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 1000).toISOString(),
+        updated_at: new Date(Date.now() - 1000).toISOString(),
+      },
+      {
+        id: "co2",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-2,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 2000).toISOString(),
+        updated_at: new Date(Date.now() - 2000).toISOString(),
+      },
+      {
+        id: "co3",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-3,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 3000).toISOString(),
+        updated_at: new Date(Date.now() - 3000).toISOString(),
+      },
+      {
+        id: "co4",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-4,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 4000).toISOString(),
+        updated_at: new Date(Date.now() - 4000).toISOString(),
+      },
+      {
+        id: "co5",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-5,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 5000).toISOString(),
+        updated_at: new Date(Date.now() - 5000).toISOString(),
+      },
+      {
+        id: "co6",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-6,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 6000).toISOString(),
+        updated_at: new Date(Date.now() - 6000).toISOString(),
+      },
+      {
+        id: "co7",
+        requester_user_id: "u1",
+        managed_ad_dn: "CN=account-7,DC=corp",
+        status: "Expired",
+        requested_duration_mins: 60,
+        created_at: new Date(Date.now() - 7000).toISOString(),
+        updated_at: new Date(Date.now() - 7000).toISOString(),
+      },
+    ]);
+    const user = userEvent.setup();
+    renderCredentials();
+    await screen.findByText("Work Profile");
+    await user.click(screen.getByText(/My Checkouts/));
+
+    await waitFor(() => {
+      expect(screen.getByText("CN=account-1,DC=corp")).toBeInTheDocument();
+    });
+    expect(screen.getByText("CN=account-2,DC=corp")).toBeInTheDocument();
+    expect(screen.getByText("CN=account-3,DC=corp")).toBeInTheDocument();
+    expect(screen.getByText("CN=account-4,DC=corp")).toBeInTheDocument();
+    expect(screen.getByText("CN=account-5,DC=corp")).toBeInTheDocument();
+
+    expect(screen.queryByText("CN=account-6,DC=corp")).not.toBeInTheDocument();
+    expect(screen.queryByText("CN=account-7,DC=corp")).not.toBeInTheDocument();
+  });
+
   it("shows time remaining for active checkout", async () => {
     setupDefaults();
     const futureExpiry = new Date(Date.now() + 5400000).toISOString(); // 1.5 hours

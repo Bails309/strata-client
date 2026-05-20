@@ -1390,13 +1390,40 @@ pub async fn insert_request(
     Ok(id)
 }
 
-/// List the requesting user's recent checkouts (most recent first, capped at 100).
+/// List the requesting user's recent checkouts (most recent first, returning active ones and capped at last 5 expired checkouts).
 pub async fn list_for_user(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Vec<CheckoutRequest>, crate::error::AppError> {
     let rows = sqlx::query_as(
-        "SELECT * FROM password_checkout_requests WHERE requester_user_id = $1 ORDER BY created_at DESC LIMIT 100",
+        r#"
+        WITH user_requests AS (
+            SELECT * FROM password_checkout_requests
+            WHERE requester_user_id = $1
+        ),
+        active_requests AS (
+            SELECT * FROM user_requests
+            WHERE NOT (
+                status IN ('Expired', 'Denied', 'CheckedIn')
+                OR (status IN ('Approved', 'Pending') AND created_at + (requested_duration_mins || ' minutes')::INTERVAL < now())
+                OR (status = 'Active' AND expires_at IS NOT NULL AND expires_at < now())
+            )
+        ),
+        expired_requests AS (
+            SELECT * FROM user_requests
+            WHERE (
+                status IN ('Expired', 'Denied', 'CheckedIn')
+                OR (status IN ('Approved', 'Pending') AND created_at + (requested_duration_mins || ' minutes')::INTERVAL < now())
+                OR (status = 'Active' AND expires_at IS NOT NULL AND expires_at < now())
+            )
+            ORDER BY created_at DESC
+            LIMIT 5
+        )
+        SELECT * FROM active_requests
+        UNION ALL
+        SELECT * FROM expired_requests
+        ORDER BY created_at DESC
+        "#,
     )
     .bind(user_id)
     .fetch_all(pool)

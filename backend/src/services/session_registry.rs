@@ -20,6 +20,16 @@ const MAX_BUFFER_DURATION: Duration = Duration::from_secs(300);
 /// Maximum total byte size of buffered frames per session (50 MB).
 const MAX_BUFFER_BYTES: usize = 50 * 1024 * 1024;
 
+/// Maximum total byte size of the persistent-state log per session (20 MB).
+///
+/// The persistent-state log accumulates non-ephemeral drawing instructions
+/// (image tiles, fills, copies, layer setup, etc.) salvaged from frames as
+/// they are evicted from the time-windowed ring buffer.  Observers who
+/// join a session that has been running longer than `MAX_BUFFER_DURATION`
+/// use it to reconstruct the canonical screen state instead of seeing a
+/// black canvas.
+const MAX_PERSISTENT_STATE_BYTES: usize = 20 * 1024 * 1024;
+
 /// Broadcast channel capacity — must be large enough to avoid lagging at
 /// typical frame rates (~30–60 fps × multi-instruction batches).
 const BROADCAST_CAPACITY: usize = 8192;
@@ -68,6 +78,12 @@ pub struct SessionBuffer {
     /// the observer's Guacamole client creates the display at the correct
     /// dimensions even when the original instruction has been evicted).
     last_size_instruction: Option<String>,
+    /// Drawing instructions salvaged from frames as they are evicted from
+    /// the time-windowed ring buffer.  Replayed (in order) to observers
+    /// joining sessions older than `MAX_BUFFER_DURATION` so that static
+    /// screen content drawn early in the session is not lost.
+    persistent_state: VecDeque<String>,
+    persistent_state_bytes: usize,
 }
 
 impl SessionBuffer {
@@ -76,6 +92,8 @@ impl SessionBuffer {
             frames: VecDeque::new(),
             total_bytes: 0,
             last_size_instruction: None,
+            persistent_state: VecDeque::new(),
+            persistent_state_bytes: 0,
         }
     }
 
@@ -115,8 +133,9 @@ impl SessionBuffer {
         let cutoff = Instant::now() - MAX_BUFFER_DURATION;
         while let Some(front) = self.frames.front() {
             if front.timestamp < cutoff {
-                self.total_bytes -= front.byte_size;
-                self.frames.pop_front();
+                let evicted = self.frames.pop_front().expect("front existed");
+                self.total_bytes -= evicted.byte_size;
+                self.salvage_persistent_state(&evicted.data);
             } else {
                 break;
             }
@@ -126,6 +145,7 @@ impl SessionBuffer {
         while self.total_bytes > MAX_BUFFER_BYTES {
             if let Some(front) = self.frames.pop_front() {
                 self.total_bytes -= front.byte_size;
+                self.salvage_persistent_state(&front.data);
             } else {
                 break;
             }
@@ -165,6 +185,63 @@ impl SessionBuffer {
     /// Cached last `size` instruction, if any.
     pub fn last_size(&self) -> Option<&str> {
         self.last_size_instruction.as_deref()
+    }
+
+    /// Drawing instructions salvaged from frames that have been evicted
+    /// from the time-windowed ring buffer.  These are replayed (in order,
+    /// before the current buffer dump) to observers joining a session
+    /// that has been running longer than `MAX_BUFFER_DURATION`, so that
+    /// static screen content drawn at session start is reconstructed and
+    /// the canvas does not appear black.
+    ///
+    /// Sync, nop, key and mouse instructions are not salvaged — they are
+    /// either ephemeral (input, cursor position) or flush markers and
+    /// do not affect persistent screen state.
+    pub fn persistent_state(&self) -> String {
+        let mut out = String::with_capacity(self.persistent_state_bytes);
+        for inst in &self.persistent_state {
+            out.push_str(inst);
+        }
+        out
+    }
+
+    /// Append all non-ephemeral instructions from `data` to the persistent
+    /// state log, evicting the oldest entries if the cap is exceeded.
+    fn salvage_persistent_state(&mut self, data: &str) {
+        // Opcodes that carry no persistent visual state.  Salvaging these
+        // would either bloat the log (sync, nop) or replay stale input
+        // (key, mouse) when a new observer joins.
+        const EPHEMERAL_OPCODES: &[&str] = &[
+            "4.sync", "3.nop", "3.key", "5.mouse",
+        ];
+
+        for inst in data.split_inclusive(';') {
+            let trimmed = inst.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let opcode_end = trimmed.find(',').unwrap_or(trimmed.len());
+            let opcode = &trimmed[..opcode_end];
+            if EPHEMERAL_OPCODES.contains(&opcode) {
+                continue;
+            }
+            let len = inst.len();
+            self.persistent_state.push_back(inst.to_string());
+            self.persistent_state_bytes += len;
+        }
+
+        // Best-effort cap — drop oldest instructions to stay under the
+        // byte budget.  Dropping the very oldest may break dependencies
+        // (e.g. a draw to a layer whose creation was evicted), but the
+        // remaining instructions still produce a far better approximation
+        // of the current screen than a black canvas.
+        while self.persistent_state_bytes > MAX_PERSISTENT_STATE_BYTES {
+            if let Some(old) = self.persistent_state.pop_front() {
+                self.persistent_state_bytes -= old.len();
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -768,6 +845,68 @@ mod tests {
         // Non-size push doesn't change it
         buf.push("3.img,1.0;".into());
         assert_eq!(buf.last_size(), Some("4.size,1.0,4.1024,3.768;"));
+    }
+
+    // ── Persistent-state salvage ───────────────────────────────────
+
+    #[test]
+    fn persistent_state_empty_by_default() {
+        let buf = SessionBuffer::new();
+        assert!(buf.persistent_state().is_empty());
+    }
+
+    #[test]
+    fn persistent_state_salvages_drawing_ops_on_size_eviction() {
+        // Force size-based eviction so the test runs deterministically
+        // without waiting for MAX_BUFFER_DURATION.
+        let mut buf = SessionBuffer::new();
+        let large_chunk = "x".repeat(10 * 1024 * 1024); // 10 MB filler
+        // Push a drawing instruction first — this should end up in
+        // persistent_state once it is evicted by the filler pushes.
+        buf.push("4.size,1.0,4.1920,4.1080;3.img,1.0,2.12,1.0,1.0,3.100,3.100;".into());
+        for _ in 0..6 {
+            buf.push(large_chunk.clone());
+        }
+        // The first frame must have been evicted; its non-ephemeral
+        // instructions should now live in persistent_state.
+        let persistent = buf.persistent_state();
+        assert!(persistent.contains(".size,"), "size instruction must be salvaged: {persistent}");
+        assert!(persistent.contains(".img,"), "img instruction must be salvaged");
+    }
+
+    #[test]
+    fn persistent_state_skips_ephemeral_opcodes() {
+        let mut buf = SessionBuffer::new();
+        buf.push(
+            "4.size,1.0,4.1920,4.1080;4.sync,1.0;3.nop;3.key,1.0,2.65,1.1;5.mouse,3.100,3.100,1.0;3.img,1.0,2.12;"
+                .into(),
+        );
+        let large_chunk = "x".repeat(10 * 1024 * 1024);
+        for _ in 0..6 {
+            buf.push(large_chunk.clone());
+        }
+        let persistent = buf.persistent_state();
+        assert!(persistent.contains(".size,"));
+        assert!(persistent.contains(".img,"));
+        assert!(!persistent.contains(".sync,"), "sync must not be salvaged");
+        assert!(!persistent.contains(".nop"), "nop must not be salvaged");
+        assert!(!persistent.contains(".key,"), "key must not be salvaged");
+        assert!(!persistent.contains(".mouse,"), "mouse must not be salvaged");
+    }
+
+    #[test]
+    fn persistent_state_respects_cap() {
+        let mut buf = SessionBuffer::new();
+        let drawing = "3.img,1.0,2.12,1.0,1.0,3.100,3.100;".repeat(100_000); // ~3 MB
+        for _ in 0..20 {
+            buf.push(drawing.clone());
+        }
+        assert!(
+            buf.persistent_state_bytes <= MAX_PERSISTENT_STATE_BYTES,
+            "persistent state ({}) exceeded cap ({})",
+            buf.persistent_state_bytes,
+            MAX_PERSISTENT_STATE_BYTES
+        );
     }
 
     #[tokio::test]

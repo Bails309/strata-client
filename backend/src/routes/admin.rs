@@ -2016,12 +2016,20 @@ pub async fn observe_session_ws(
     // receive the base-state drawing instructions (initial PNG tiles,
     // terminal background, etc.) that were sent earlier.  The replay is
     // then split into a fast base-state dump + a paced replay window.
+    //
+    // The persistent-state log captures drawing ops that have already
+    // aged out of the ring buffer — without it, observers joining a
+    // session more than `MAX_BUFFER_DURATION` after it started would
+    // see a black canvas because all of the initial wallpaper / layer
+    // setup draws were evicted.
     let size_inst;
+    let persistent_state;
     let all_frames;
     let mut rx;
     {
         let buffer = session.buffer.read().await;
         size_inst = buffer.last_size().map(|s| s.to_string());
+        persistent_state = buffer.persistent_state();
         all_frames = buffer.frames_with_timing(300); // full buffer
         rx = session.broadcast_tx.subscribe();
     }
@@ -2076,6 +2084,21 @@ pub async fn observe_session_ws(
                 if socket.send(Message::Text(size_inst.into())).await.is_err() {
                     return;
                 }
+            }
+
+            // Replay the persistent-state log (drawing instructions
+            // salvaged from frames already evicted from the ring buffer)
+            // before the buffer dump.  This restores screen content
+            // drawn earlier than the buffer window — without it, a
+            // session running longer than `MAX_BUFFER_DURATION` would
+            // present a black canvas to a newly-joining observer.
+            if !persistent_state.is_empty()
+                && socket
+                    .send(Message::Text(persistent_state.into()))
+                    .await
+                    .is_err()
+            {
+                return;
             }
 
             // ── Phase 1a: Base-state fast dump ──────────────────────
@@ -2207,10 +2230,24 @@ pub async fn observe_session_ws(
                                 // Dump the full buffer with sync-stripping so the
                                 // display rebuilds atomically in one shot.
                                 let buf = buffer_for_recovery.read().await;
+                                let rebuild_persistent = buf.persistent_state();
                                 let rebuild = buf.frames_with_timing(300);
                                 drop(buf);
 
                                 let mut send_ok = true;
+
+                                // Re-send persistent state first so any
+                                // long-evicted layer / image setup is
+                                // present before the recent frame dump.
+                                if !rebuild_persistent.is_empty()
+                                    && socket
+                                        .send(Message::Text(rebuild_persistent.into()))
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+
                                 for (_, chunk) in &rebuild {
                                     let mut stripped = String::with_capacity(chunk.len());
                                     for inst in chunk.split_inclusive(';') {

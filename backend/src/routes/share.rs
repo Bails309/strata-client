@@ -299,13 +299,14 @@ pub async fn ws_shared_tunnel(
     .await?;
 
     // Subscribe to the owner's session broadcast and get buffered frames
-    let (size_inst, all_frames, mut rx, input_tx) = {
+    let (size_inst, persistent_state, all_frames, mut rx, input_tx) = {
         let buffer = session.buffer.read().await;
         let size = buffer.last_size().map(|s| s.to_string());
+        let persistent = buffer.persistent_state();
         let timed = buffer.frames_with_timing(300); // full 5-minute buffer
         let rx = session.broadcast_tx.subscribe();
         let input_tx = session.input_tx.clone();
-        (size, timed, rx, input_tx)
+        (size, persistent, timed, rx, input_tx)
     };
 
     let buffer_for_recovery = session.buffer.clone();
@@ -328,6 +329,20 @@ pub async fn ws_shared_tunnel(
                 if socket.send(Message::Text(size_inst.into())).await.is_err() {
                     return;
                 }
+            }
+
+            // Replay the persistent-state log (drawing instructions
+            // salvaged from frames already evicted from the ring buffer)
+            // so observers joining a session that has been running
+            // longer than the buffer window see reconstructed screen
+            // content rather than a black canvas.
+            if !persistent_state.is_empty()
+                && socket
+                    .send(Message::Text(persistent_state.into()))
+                    .await
+                    .is_err()
+            {
+                return;
             }
 
             // Dump entire buffer instantly (sync-stripped) to rebuild display
@@ -387,10 +402,24 @@ pub async fn ws_shared_tunnel(
                                 tracing::warn!("Shared viewer lagged {n} frames — rebuilding display");
 
                                 let buf = buffer_for_recovery.read().await;
+                                let rebuild_persistent = buf.persistent_state();
                                 let rebuild = buf.frames_with_timing(300);
                                 drop(buf);
 
                                 let mut send_ok = true;
+
+                                // Re-send persistent state first so any
+                                // long-evicted layer / image setup is
+                                // present before the recent frame dump.
+                                if !rebuild_persistent.is_empty()
+                                    && socket
+                                        .send(Message::Text(rebuild_persistent.into()))
+                                        .await
+                                        .is_err()
+                                {
+                                    break;
+                                }
+
                                 for (_, chunk) in &rebuild {
                                     let mut stripped = String::with_capacity(chunk.len());
                                     for inst in chunk.split_inclusive(';') {

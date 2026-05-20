@@ -1061,7 +1061,10 @@ html.light .recent-card-btn:hover {
     border-right: none;
     color: var(--color-txt-secondary);
     cursor: pointer;
-    transition: all 0.2s var(--ease-out);
+    transition:
+      color 0.15s var(--ease-out),
+      background 0.15s var(--ease-out),
+      border-color 0.15s var(--ease-out);
   }
 
   .session-bar-toggle:hover {

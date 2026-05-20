@@ -29,6 +29,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.2",
+    subtitle:
+      "Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast",
+    sections: [
+      {
+        title: "Active Session Dragging Lag Fixed",
+        description:
+          "Redesigned the interactive collapsible session panel's vertical dragging toggle handle to be buttery smooth and instantaneous. By isolating specific CSS transitions to color, background, and border-color, we eliminated a layout interpolation delay during drag gestures.",
+      },
+      {
+        title: "Session Control Visibility & Dark Mode Contrast",
+        description:
+          "Restored high-contrast premium glassmorphic borders and translucent backdrop-blur panels for the session toggle controls under Dark Theme. Added sleek interactive hover states for both light and dark systems to ensure chevrons are fully visible on dark session backgrounds.",
+      },
+      {
+        title: "RDP Click Deadzone Resolved",
+        description:
+          "Solved a subtle layout bug where RDP/VNC sessions had an unresponsive top-left click region when the connection sidebar was collapsed. Dynamically toggling container pointer events ensures active sessions are 100% interactive across the entire screen real estate.",
+      },
+    ],
+  },
+  {
     version: "1.9.1",
     subtitle: "SSO Connection Editor fixes, Cache-Busting, and CodeQL variable cleanup",
     sections: [

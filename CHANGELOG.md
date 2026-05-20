@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] — 2026-05-20
+
+### Patch Release — Premium RDP interaction improvements, seamless collapsible sidebar dragging, and theme visual contrast
+
+This patch release addresses critical layout and usability defects within active connection session environments. It resolves an RDP top-left click interception deadzone, refines CSS transition rules on the collapsible session bar toggle to eliminate mouse gesture dragging lag, and restores high-contrast glassmorphic styling and visual cues for the right-hand chevron toggle under Dark Theme.
+
+#### Fixed
+- **Active RDP Session Top-Left Click Interception**
+  ([`frontend/src/components/SessionManager.tsx`](frontend/src/components/SessionManager.tsx)).
+  Applied dynamic pointer event properties (`pointer-events: none` when collapsed, `pointer-events: auto` when expanded) to the sliding sidebar panel container. This resolves a layout bug where the hidden sidebar continued to intercept mouse and pointer events on the top-left area of the remote screen.
+- **Collapsible Sidebar Toggle Dragging Gesture Lag**
+  ([`frontend/src/index.css`](frontend/src/index.css)).
+  Isolated specific CSS transition rules (`transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease`) instead of targeting `transition: all`. This prevents layout engine coordinate re-calculation delays and delivers instantaneous, buttery-smooth dragging responsiveness.
+- **Dark Theme Session Sidebar Chevron Visibility**
+  ([`frontend/src/index.css`](frontend/src/index.css)).
+  Consolidated CSS selector definitions for `.session-bar-toggle` under dark theme and restored the translucent backdrop-blur backdrop filter, high-contrast borders (`rgba(255, 255, 255, 0.15)`), and curated hover highlights. The right-hand chevron toggle is now perfectly legible across all themes.
+
+#### Migration notes
+- **Frontend rebuild only.** No database migration, no environment-variable changes.
+
 ## [1.9.1] — 2026-05-19
 
 ### Patch Release — SSO Edit Form Update Deserialization & Test Connection ID lookup, plus CodeQL cleanup

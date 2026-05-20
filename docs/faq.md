@@ -45,7 +45,7 @@ The previous Java/Tomcat + AngularJS stack is a maintenance burden and the SPA h
 git clone https://github.com/Bails309/strata-client.git
 cd strata-client
 cp .env.example .env
-export STRATA_VERSION=1.9.0
+export STRATA_VERSION=1.9.2
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```

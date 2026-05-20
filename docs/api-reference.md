@@ -864,10 +864,13 @@ Upgrades to a WebSocket connection that replays buffered Guacamole instructions 
 
 **Flow**:
 
-1. Backend injects the last known `size` instruction so the observer's display initialises at the correct dimensions
-2. Replays buffered frames from the requested offset at maximum speed
-3. Switches to real-time broadcast of live frames from the tunnel
-4. Returns `404` if the session ID is invalid or the session has ended
+1. Backend sends the custom `nvrheader` metadata instruction (`[paced_duration_ms, speed, buffer_depth_ms, offset_secs]`) so the frontend can render its timeline
+2. Backend injects the last known `size` instruction so the observer's display initialises at the correct dimensions
+3. Backend replays the per-session **persistent-state log** (v1.9.4) — non-ephemeral drawing instructions salvaged from frames that have aged out of the 5-minute ring buffer — so the canvas is reconstructed even for sessions older than the buffer window (otherwise the observer would see a black frame for long-running, mostly-idle sessions)
+4. Backend dumps the current ring buffer with sync-stripping (intermediate `4.sync` instructions are removed and a single flushing `sync` is emitted afterwards) so the coalesced drawing ops render as one atomic frame at the rewind point
+5. If `offset > 0`, backend paces the frames inside the rewind window at the requested `speed` multiplier and emits periodic `nvrprogress` markers; on completion it emits `nvrreplaydone`
+6. Backend switches to real-time forwarding of live frames from the per-session broadcast channel, with periodic `nop` + `sync` keep-alives during idle periods and an automatic buffer-rebuild (persistent log + ring buffer + flushing sync) if the broadcast subscriber falls behind
+7. Returns `404` if the session ID is invalid or the session has ended
 
 ### Metrics
 
@@ -1677,7 +1680,7 @@ The backend looks up the share token, finds the owner's **active session** in th
 - **View mode** — the shared viewer receives the owner's live display frames (read-only). Mouse and keyboard input from the viewer is discarded.
 - **Control mode** — the shared viewer receives live display frames and can send keyboard and mouse input, which is injected into the owner's guacd TCP stream via an mpsc channel.
 
-The shared viewer first receives a replay of the session's 5-minute ring buffer (with sync-stripping for atomic display rebuild), then transitions to live frame streaming.
+The shared viewer first receives the cached `size` instruction so the display initialises at the correct dimensions, then the persistent-state log (v1.9.4 — non-ephemeral drawing instructions salvaged from frames that have aged out of the 5-minute ring buffer), then a sync-stripped dump of the current ring buffer with a single flushing `sync` afterwards. After that initial reconstruction it transitions to live frame streaming from the owner's NVR broadcast channel. The lag-recovery rebuild inside the live-forwarding loop also re-sends the persistent log and re-dumps the ring buffer, so a viewer that falls behind the broadcast channel still recovers to a complete canvas.
 
 Returns `404` if the token is invalid, expired, revoked, or if the owner is not currently connected.
 

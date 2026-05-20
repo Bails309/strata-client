@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.4] — 2026-05-20
+
+### Patch Release — Live session observer reconstructs canvas state beyond the 5-minute NVR ring buffer
+
+This patch release fixes a long-standing visual defect in the admin and shared-viewer live-session observer that caused the canvas to render as a black frame whenever an observer joined a tunnel session more than five minutes after it had started. The fix introduces a per-session **persistent-state log** alongside the existing time-windowed ring buffer. Drawing instructions that age out of the five-minute ring buffer are now salvaged into the log so that newly-joining observers receive a fully reconstructed display rather than an empty canvas, while preserving the existing credential-filtering invariants.
+
+#### Fixed
+- **LIVE button / share viewer black canvas after 5 minutes of session uptime**
+  ([`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs), [`backend/src/routes/admin.rs`](backend/src/routes/admin.rs), [`backend/src/routes/share.rs`](backend/src/routes/share.rs)).
+  Admin observers (`GET /api/admin/sessions/:id/observe`), self-service observers (`GET /api/user/sessions/:id/observe`) and share-link viewers (`GET /api/shared/tunnel/:token`) previously saw a fully black canvas when joining a tunnel session whose original wallpaper / layer-setup drawing instructions had already been evicted from the five-minute ring buffer. The buffer evicted frames purely by age, so on mostly-idle desktops the instant-dump that primes a new observer's display contained only recent incremental updates — never the initial PNG tiles, layer creates, or large image streams that established the visible screen state. The frontend `NvrPlayer.tsx` correctly drove an `offset=0` (live-edge) connect, but with no drawing ops to replay the display stayed black until activity happened to repaint every pixel.
+
+#### Added
+- **Persistent-state log on `SessionBuffer`**
+  ([`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs)).
+  Introduced a per-session `persistent_state: VecDeque<String>` field alongside the existing time-windowed `frames: VecDeque<BufferedFrame>`. On every eviction from the ring buffer (whether triggered by the `MAX_BUFFER_DURATION = 300s` age cap or the `MAX_BUFFER_BYTES = 50 MB` size cap), non-ephemeral Guacamole instructions are appended in order to the persistent log via the new private `salvage_persistent_state(&mut self, data: &str)` helper. The log is capped at `MAX_PERSISTENT_STATE_BYTES = 20 MB`; once full, the **oldest** instructions are dropped first so that recent visual state is always retained. A new `pub fn persistent_state(&self) -> String` accessor returns the concatenated log on demand.
+- **Ephemeral-opcode filter shared with the persistent log**
+  ([`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs)).
+  `salvage_persistent_state` honours a const `EPHEMERAL_OPCODES = ["4.sync", "3.nop", "3.key", "5.mouse"]` allowlist of opcodes that carry no canonical screen state (frame flush markers, transport pings, keyboard input, and live cursor position). Everything else — `img`, `png`, `jpeg`, `copy`, `rect`, `cfill`, `lfill`, `cstroke`, `lstroke`, `transfer`, `blob`, `end`, `size`, `dispose`, `cursor`, layer/buffer setup — is preserved verbatim so that re-replay correctly reconstructs the canvas. The existing `filter_sensitive_instructions` credential-redaction pass still runs before any push, so the persistent log cannot accidentally capture `connect` or `args` opcodes.
+- **Observer handlers replay the persistent log before the buffer dump**
+  ([`backend/src/routes/admin.rs`](backend/src/routes/admin.rs), [`backend/src/routes/share.rs`](backend/src/routes/share.rs)).
+  Both `observe_session_ws` and the shared-tunnel WebSocket upgrade now read the persistent state under the same `buffer.read().await` lock that captures the buffered frames, then send (in order): `nvrheader` metadata → cached `size` instruction → persistent-state log → sync-stripped frame dump → final flushing `sync` → live broadcast frames. The lag-recovery rebuild path inside the live-forwarding loop also re-sends the persistent log before re-dumping the buffer so that observers who fall behind the broadcast channel still receive a complete canvas reconstruction.
+- **Unit tests for the persistent-state log**
+  ([`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs)).
+  Added four new `#[test]` cases — `persistent_state_empty_by_default`, `persistent_state_salvages_drawing_ops_on_size_eviction`, `persistent_state_skips_ephemeral_opcodes`, and `persistent_state_respects_cap` — covering the empty-default state, salvage-on-eviction behaviour, ephemeral-opcode filtering, and the 20 MB cap respectively.
+
+#### Migration notes
+- **Backend rebuild only.** No database migration, no schema change, no environment-variable change. The persistent-state log is a runtime-only in-memory structure scoped to the `ActiveSession` lifetime; restarts start each session's log empty (as before).
+- **Memory footprint.** Worst-case extra heap per active session is `MAX_PERSISTENT_STATE_BYTES = 20 MB` on top of the existing `MAX_BUFFER_BYTES = 50 MB` ring buffer, giving a per-session ceiling of ~70 MB of NVR state. The dynamic capacity recommendation in `GET /api/admin/metrics` (which uses `RAM_PER_SESSION_MB = 150` as a weighted-average estimate including the kernel-side tunnel and codec buffers) already comfortably covers this; no recommendation change is required.
+- **Credential redaction is preserved.** The persistent log inherits its data from `SessionBuffer::push`, which runs `filter_sensitive_instructions` before storing anything. The `7.connect` and `4.args` opcodes (which can carry credentials) continue to be stripped at ingestion and can never reach the persistent log.
+
 ## [1.9.3] — 2026-05-20
 
 ### Patch Release — Option to disable Break Glass emergency bypass, dynamic empty connection folders pruning, and package cleanup

@@ -1,3 +1,47 @@
+# What's New in v1.9.4
+
+> **Patch release: live session observer reconstructs canvas state beyond the 5-minute NVR ring buffer.** v1.9.4 fixes a visual defect where pressing **LIVE** on the Sessions page (or joining via a share link) showed a fully black canvas whenever the target session had been running for more than five minutes. Drawing instructions that aged out of the ring buffer are now salvaged into a per-session persistent-state log and replayed to newly-joining observers, so the canvas is always reconstructed from canonical screen state — while preserving the existing credential-redaction guarantees.
+
+## Live observer no longer shows a black screen on long-running sessions
+
+Strata's NVR (Network Video Recorder) admin and share-link observers replay a Guacamole instruction stream to reconstruct what the operator currently sees on their target host. To bound memory, each active session keeps a **rolling 5-minute ring buffer** of those instructions (`MAX_BUFFER_DURATION = 300s` / `MAX_BUFFER_BYTES = 50 MB`).
+
+That bound created a subtle visual regression on long-running sessions: the wallpaper, layer creates, large image streams, and other large drawing operations that established the visible canvas usually happen in the first few seconds of a session. Once the session crossed the 5-minute mark those instructions were evicted from the buffer, and a freshly-joining observer's instant-dump only contained the recent (mostly idle) incremental updates — which was not enough information to repaint the desktop. The frontend was already correctly asking for `offset=0` (live edge) on the **LIVE** button; the buffer just had no canonical state to replay.
+
+v1.9.4 introduces a **persistent-state log** that sits alongside the time-windowed ring buffer in `SessionBuffer`. Every time a frame is evicted (by age or by size), the backend salvages all of that frame's non-ephemeral drawing instructions and appends them, in order, to the persistent log. Ephemeral opcodes (`4.sync`, `3.nop`, `3.key`, `5.mouse`) are filtered out because they carry no canonical screen state — they are frame flushes, transport keep-alives, keyboard input, and the transient mouse cursor position respectively. Everything else (`img`, `png`, `jpeg`, `copy`, `rect`, `cfill`, `lfill`, `cstroke`, `lstroke`, `transfer`, `blob`, `end`, `size`, `dispose`, `cursor`, layer / buffer creates and so on) is preserved verbatim, so replaying the log re-establishes the canvas exactly as the operator drew it.
+
+The log has its own dedicated cap (`MAX_PERSISTENT_STATE_BYTES = 20 MB`) and uses oldest-first eviction once full, so that the most recent visual state is always retained even on very long sessions with heavy churn. The existing credential-redaction pass (`filter_sensitive_instructions`) runs **before** anything reaches the log, so `7.connect` and `4.args` opcodes remain stripped at ingestion and can never end up in the persistent state.
+
+## Observer flow updated end-to-end
+
+The observe WebSocket handshake now sends, in order, on every connect:
+
+1. `nvrheader` metadata (paced replay duration, speed, buffer depth, offset)
+2. The cached `size` instruction (so the observer's canvas initialises at the right dimensions)
+3. **The persistent-state log** (new — reconstructs canonical drawing state)
+4. The current ring-buffer dump (sync-stripped to coalesce drawing ops into one atomic frame)
+5. A single flushing `sync`
+6. Live broadcast frames
+
+The same sequence is applied in the **lag-recovery rebuild** inside the live-forwarding loop, so an observer who falls behind the per-session broadcast channel (`BROADCAST_CAPACITY = 8192` Guacamole frame batches) recovers to a complete canvas rather than a partial one. The behaviour is identical for the admin endpoint (`GET /api/admin/sessions/:id/observe`), the self-service endpoint (`GET /api/user/sessions/:id/observe`), and the share-link tunnel (`GET /api/shared/tunnel/:token`).
+
+The in-player rewind controls on `NvrPlayer.tsx` (30 s / 1 m / 3 m / 5 m and **Jump to Live**) continue to work as before — clicking **LIVE** lands you exactly at the live edge with a fully reconstructed canvas, and you can then rewind back through up to five minutes of paced replay before catching up to live again.
+
+## Upgrade
+
+Drop-in upgrade from v1.9.3 — backend rebuild only, no database migration, no schema or configuration change.
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend
+```
+
+Worst-case additional memory per active session is `MAX_PERSISTENT_STATE_BYTES = 20 MB` on top of the existing `MAX_BUFFER_BYTES = 50 MB` ring buffer (per-session ceiling ~70 MB of NVR state). The dynamic capacity recommendation in `GET /api/admin/metrics` (weighted-average `RAM_PER_SESSION_MB = 150` already accounts for kernel-side tunnel and codec buffers) covers this comfortably; no operator-facing recommendation has changed.
+
+---
+
 # What's New in v1.9.3
 
 > **Patch release: Option to disable Break Glass emergency bypass, dynamic empty connection folders pruning, and package cleanup.** v1.9.3 adds an administrative option to completely disable the Break Glass emergency bypass for specific Approval Roles, dynamically filters and prunes empty folders on the Dashboard sidebar navigation tree to streamline workspace presentation, aligns formatting constraints across the rust/frontend codebases, and ensures build artifact reference consistency.

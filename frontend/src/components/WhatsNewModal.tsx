@@ -29,6 +29,27 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.4",
+    subtitle: "NVR live observer fix — drawing state now persists beyond the 5-minute ring buffer",
+    sections: [
+      {
+        title: "Live observer no longer goes black after 5 minutes",
+        description:
+          "When admins clicked LIVE on a session that had been idle for more than five minutes, the viewer rendered a black canvas because the original wallpaper and layer-setup drawing instructions had aged out of the per-session ring buffer. Each session now keeps a separate persistent-state log of non-ephemeral drawing instructions which is replayed before live frames whenever a new observer attaches, so LIVE and share-link viewers see the correct desktop state for sessions of any age.",
+      },
+      {
+        title: "Strict role-gating of Emergency Approval Bypass",
+        description:
+          "The Break-Glass option on the credential checkout form is now shown only when an Approval Role explicitly covers the managed account AND every covering role has emergency bypass enabled. Turning off bypass on an Approval Role — or leaving the role's account scope empty — now reliably hides the option for affected accounts.",
+      },
+      {
+        title: "Credential redaction preserved across the new log",
+        description:
+          "The persistent-state log inherits its data from the same ingestion path as the ring buffer, so `7.connect` and `4.args` opcodes (which can carry credentials) are stripped before they can ever be salvaged. Ephemeral opcodes (`4.sync`, `3.nop`, `3.key`, `5.mouse`) are also excluded to avoid replaying stale input or bloating the log.",
+      },
+    ],
+  },
+  {
     version: "1.9.3",
     subtitle:
       "Option to disable Break Glass emergency bypass, dynamic empty connection folders pruning, and package cleanup",

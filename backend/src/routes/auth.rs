@@ -372,6 +372,11 @@ pub async fn login(
     )
     .await;
 
+    // Stamp `users.last_login_at` so the admin Users blade and the stale-
+    // account cleanup sweep both see this authentication. Best-effort: a
+    // failure here must never block the user from receiving their token.
+    let _ = crate::services::users::update_last_login(&db.pool, user.id).await;
+
     audit::log(
         &db.pool,
         Some(user.id),
@@ -1332,6 +1337,10 @@ pub async fn sso_callback(
         &json!({ "username": row.username, "sub": claims.sub }),
     )
     .await?;
+
+    // Stamp `users.last_login_at` so the admin Users blade and the stale-
+    // account cleanup sweep both see this authentication. Best-effort.
+    let _ = crate::services::users::update_last_login(&db.pool, row.id).await;
 
     // Redirect back to frontend root. The access_token + csrf_token cookies
     // bootstrap the SPA session; the refresh_token cookie is HttpOnly so the

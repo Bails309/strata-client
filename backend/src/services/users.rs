@@ -12,7 +12,7 @@ use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
 const SELECT_COLUMNS: &str =
-    "u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at";
+    "u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at, u.last_login_at";
 
 #[derive(Serialize, FromRow, Debug, Clone)]
 pub struct UserRow {
@@ -24,6 +24,7 @@ pub struct UserRow {
     pub sub: Option<String>,
     pub role_name: String,
     pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -96,6 +97,20 @@ pub async fn role_exists(pool: &Pool<Postgres>, role_id: Uuid) -> Result<bool, A
         .fetch_optional(pool)
         .await?;
     Ok(found.is_some())
+}
+
+/// Stamp `users.last_login_at` with the current timestamp.
+///
+/// Called from the local and SSO login handlers on every successful
+/// authentication.  Errors are non-fatal at the call site — a failure to
+/// record the login should never block the user from receiving their
+/// token — so callers typically `let _ = update_last_login(...).await;`.
+pub async fn update_last_login(pool: &Pool<Postgres>, id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE users SET last_login_at = now() WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Update the role assignment for a live user. Returns `true` if updated.
@@ -448,6 +463,7 @@ mod tests {
             sub: None,
             role_name: "admin".to_string(),
             deleted_at: None,
+            last_login_at: None,
         };
         let v = serde_json::to_value(&row).unwrap();
         assert!(v.get("password_hash").is_none(), "leaked password_hash");
@@ -467,6 +483,7 @@ mod tests {
             "u.sub",
             "r.name as role_name",
             "u.deleted_at",
+            "u.last_login_at",
         ] {
             assert!(
                 SELECT_COLUMNS.contains(col),

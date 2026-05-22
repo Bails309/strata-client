@@ -1030,6 +1030,7 @@ export interface User {
   sub?: string;
   role_name: string;
   deleted_at?: string;
+  last_login_at?: string;
 }
 
 export interface CreateUserRequest {

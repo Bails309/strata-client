@@ -2350,6 +2350,7 @@ describe("SecurityTab", () => {
       expect(updateSettings).toHaveBeenCalledWith([
         { key: "watermark_enabled", value: "true" },
         { key: "user_hard_delete_days", value: "90" },
+        { key: "user_stale_days", value: "0" },
       ]);
       expect(updateAuthMethods).toHaveBeenCalledWith({
         sso_enabled: false,

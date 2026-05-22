@@ -366,15 +366,18 @@ fn sanitise_display_name(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(MAX_DISPLAY_NAME_LEN));
     let mut prev_was_ws = false;
     for c in raw.chars() {
-        if c.is_control() {
-            continue;
-        }
+        // Whitespace (including \n, \t, \r — which also count as
+        // control chars) is collapsed to a single ASCII space; other
+        // control chars are dropped outright. Order matters: checking
+        // is_control first would swallow \n with no replacement.
         if c.is_whitespace() {
             if prev_was_ws || out.is_empty() {
                 continue;
             }
             prev_was_ws = true;
             out.push(' ');
+        } else if c.is_control() {
+            continue;
         } else {
             prev_was_ws = false;
             out.push(c);

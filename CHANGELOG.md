@@ -5,25 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- **Client IP visibility on the Sessions admin blade**
-  ([`backend/migrations/065_recording_client_ip.sql`](backend/migrations/065_recording_client_ip.sql), [`backend/src/db/mod.rs`](backend/src/db/mod.rs), [`backend/src/services/recordings.rs`](backend/src/services/recordings.rs), [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs), [`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/Sessions.tsx`](frontend/src/pages/Sessions.tsx), [`docs/api-reference.md`](docs/api-reference.md)).
-  The admin **Live** and **Recordings** tabs now render a **Client IP** column showing the operator's public source address as resolved at handshake from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback — the same helper that drives audit-log attribution). The live side reuses the in-memory `session_registry::ActiveSession.client_ip` field that was already populated end-to-end but never surfaced in the UI. The recordings side is backed by a new nullable `recordings.client_ip TEXT` column (migration 065) populated by `recordings::insert_start(...)` at the same call site that captures `nvr_session_id` and `started_at`, so the value is persisted at the moment the recording begins rather than reconstructed after the fact. Rows that pre-date migration 065 (or where the IP could not be resolved at handshake) render an italic **Unknown** placeholder. The column is gated on `isAdmin`, so non-admin views of `/user/sessions` and `/user/recordings` are unchanged.
-
-### Database
-
-- **Migration `065_recording_client_ip.sql`** — `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS client_ip TEXT;`. Nullable for backwards compatibility; no back-fill is performed.
-
 ## [1.9.5] — 2026-05-22
 
-### Minor Release — Server-side recordings search, per-user last-login tracking, and configurable stale-account auto-cleanup
+### Minor Release — Server-side recordings search, per-user last-login tracking, configurable stale-account auto-cleanup, and Client IP visibility on the Sessions blade
 
-This release tightens two operator-facing workflows on the admin blade. The **Recordings** tab on the Sessions page now performs its search and pagination on the server, lifting the previous hard cap of 200 client-side rows and giving administrators a true index over the historical recording set rather than a fixed-window slice of it. The **Users** tab now exposes a per-user **Last Login** column populated on every successful local or SSO authentication, and a new **Stale account auto-deletion** retention setting lets administrators automate the soft-delete of any account that has been provisioned and signed in at least once but has since gone idle past a configurable threshold. The new sweep deliberately ignores accounts that have never logged in so freshly-provisioned AD-sync imports are not aged out solely by creation time. Soft-deleted users continue to flow through the existing `user_hard_delete_days` retention window and remain restorable from the **Show Deleted Users** filter.
+This release tightens two operator-facing workflows on the admin blade. The **Recordings** tab on the Sessions page now performs its search and pagination on the server, lifting the previous hard cap of 200 client-side rows and giving administrators a true index over the historical recording set rather than a fixed-window slice of it. The **Users** tab now exposes a per-user **Last Login** column populated on every successful local or SSO authentication, and a new **Stale account auto-deletion** retention setting lets administrators automate the soft-delete of any account that has been provisioned and signed in at least once but has since gone idle past a configurable threshold. The new sweep deliberately ignores accounts that have never logged in so freshly-provisioned AD-sync imports are not aged out solely by creation time. Soft-deleted users continue to flow through the existing `user_hard_delete_days` retention window and remain restorable from the **Show Deleted Users** filter. The Sessions blade also gains a new **Client IP** column on both the Live and Recordings tabs, surfacing the operator's public source address for both in-flight and historical sessions for forensic and audit attribution.
 
 #### Added
+
 - **Server-side search and pagination for the Recordings table**
   ([`backend/src/routes/admin/recordings.rs`](backend/src/routes/admin/recordings.rs), [`backend/src/routes/user.rs`](backend/src/routes/user.rs), [`backend/src/services/recordings.rs`](backend/src/services/recordings.rs), [`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/Sessions.tsx`](frontend/src/pages/Sessions.tsx)).
   `GET /api/admin/recordings` and `GET /api/user/recordings` now accept an optional `search` query parameter. When supplied, the SQL `WHERE` clause adds `AND ($3::text IS NULL OR connection_name ILIKE $3 OR username ILIKE $3)` with the parameter bound as `format!("%{}%", search)` and the existing `LIMIT`/`OFFSET` indices shifted to `$4`/`$5`. The Sessions page replaces the previous 200-row client-side filter with a paginated fetch (`PAGE_SIZE = 50`) that issues `limit + 1` rows to derive `hasMore` for the Next/Previous footer, debounces the search input by 300 ms before each refetch, resets to page 1 on every new query, and ships a dedicated empty state that distinguishes "no recordings yet" from "no results matching `<query>`" with a single-click **Clear search filter** action.
@@ -33,17 +22,24 @@ This release tightens two operator-facing workflows on the admin blade. The **Re
 - **Configurable `user_stale_days` stale-account auto-soft-delete sweep**
   ([`backend/migrations/064_user_last_login.sql`](backend/migrations/064_user_last_login.sql), [`backend/src/services/user_cleanup.rs`](backend/src/services/user_cleanup.rs), [`frontend/src/pages/admin/SecurityTab.tsx`](frontend/src/pages/admin/SecurityTab.tsx)).
   The existing daily `user_cleanup` worker (`backend/src/services/user_cleanup.rs`) now runs a stale-account sweep before the existing hard-delete pass. It reads `user_stale_days` from `system_settings` (seeded to `'0'` by migration 064; **0 disables**) and, when the value is a positive integer, soft-deletes any live user whose `last_login_at` is older than the threshold via `UPDATE users SET deleted_at = now() WHERE deleted_at IS NULL AND last_login_at IS NOT NULL AND last_login_at < now() - make_interval(days => $1)`. Users with `last_login_at IS NULL` (never signed in) are explicitly excluded so freshly-provisioned AD-sync imports are not aged out solely on creation time — the clock only starts after a user's first successful authentication. Each affected row is audited as `user.stale_auto_deleted` with `{ user_id, username, stale_days }`, and the soft-deleted record continues to flow through the existing `user_hard_delete_days` retention window (so it remains recoverable from the **Show Deleted Users** filter for the configured grace period). The Security tab adds a **Stale account auto-deletion (days)** input alongside the hard-delete window, validated `0..=3650`, persisted via the existing `updateSettings` endpoint as the `user_stale_days` key.
+- **Client IP visibility on the Sessions admin blade**
+  ([`backend/migrations/065_recording_client_ip.sql`](backend/migrations/065_recording_client_ip.sql), [`backend/src/db/mod.rs`](backend/src/db/mod.rs), [`backend/src/services/recordings.rs`](backend/src/services/recordings.rs), [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs), [`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/Sessions.tsx`](frontend/src/pages/Sessions.tsx), [`docs/api-reference.md`](docs/api-reference.md)).
+  The admin **Live** and **Recordings** tabs now render a **Client IP** column showing the operator's public source address as resolved at handshake from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback — the same helper that drives audit-log attribution). The live side reuses the in-memory `session_registry::ActiveSession.client_ip` field that was already populated end-to-end but never surfaced in the UI. The recordings side is backed by a new nullable `recordings.client_ip TEXT` column (migration 065) populated by `recordings::insert_start(...)` at the same call site that captures `nvr_session_id` and `started_at`, so the value is persisted at the moment the recording begins rather than reconstructed after the fact. Rows that pre-date migration 065 (or where the IP could not be resolved at handshake) render an italic **Unknown** placeholder. The column is gated on `isAdmin`, so non-admin views of `/user/sessions` and `/user/recordings` are unchanged.
 
 #### Database
+
 - **Migration `064_user_last_login.sql`** — `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;` and `INSERT INTO system_settings (key, value) VALUES ('user_stale_days', '0') ON CONFLICT (key) DO NOTHING;`. The column is nullable so existing rows do not need a back-fill; any existing user is treated as **never logged in** until their next authentication.
+- **Migration `065_recording_client_ip.sql`** — `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS client_ip TEXT;`. Nullable for backwards compatibility; recordings created before this migration render as **Unknown** in the new Client IP column. No back-fill is performed.
 
 #### Tests
+
 - **`frontend/src/__tests__/Sessions.test.tsx`** — the `filters recordings by search` test was rewritten to mirror the new server-side semantics: `vi.mocked(getRecordings)` is now a filtering `mockImplementation` keyed off `params.search`, the test advances Vitest fake timers past the 300 ms debounce via `vi.advanceTimersByTime(350)` inside `act()`, asserts `getRecordings` was called with `{ search: "Alpha" }`, and `waitFor`s the Beta row out of the DOM after the refetch resolves.
-- **`frontend/src/__tests__/SecurityTab.test.tsx`** and **`frontend/src/__tests__/AdminSettings.test.tsx`** — the *persists watermark + retention + auth methods on save* and *sends watermark and auth settings on save* assertions were extended with the third settings tuple `{ key: "user_stale_days", value: "0" }`.
+- **`frontend/src/__tests__/SecurityTab.test.tsx`** and **`frontend/src/__tests__/AdminSettings.test.tsx`** — the _persists watermark + retention + auth methods on save_ and _sends watermark and auth settings on save_ assertions were extended with the third settings tuple `{ key: "user_stale_days", value: "0" }`.
 - **`backend/src/routes/admin.rs`** — three test-only `UserRow { ... }` literals (`user_row_serializes`, `user_row_serializes_with_deleted_at`, `user_row_serializes_with_sub`) now initialise the new `last_login_at: None` field so `cargo clippy -p strata-backend --all-targets -- -D warnings` builds cleanly.
 
 #### Migration notes
-- **Backend + frontend rebuild** required. `docker compose up -d --build backend frontend` is sufficient; migration 064 is applied automatically at backend startup by the existing `sqlx::migrate!` invocation.
+
+- **Backend + frontend rebuild** required. `docker compose up -d --build backend frontend` is sufficient; migrations 064 and 065 are applied automatically at backend startup by the existing `sqlx::migrate!` invocation.
 - **No back-fill of `last_login_at`.** Existing rows keep `NULL` until the user's next successful login. This is intentional — the stale-account sweep explicitly ignores `NULL` rows, so accounts that existed before the upgrade are never auto-deleted purely on the basis of when they were created. Operators who want to seed historical data can compute it from the existing `audit_logs` table (events `auth.local_login` and `auth.sso_login`) and `UPDATE` the column manually before enabling `user_stale_days`.
 - **Default `user_stale_days = 0` means the sweep is disabled out of the box.** Set a positive integer (1–3650) in **Admin Settings → Security → Stale account auto-deletion** to enable. The sweep runs daily as part of the existing `user_cleanup` worker, on the same cadence as the hard-delete pass.
 - **Recordings search is forwards-compatible.** Clients that omit the `search` query parameter continue to receive the previous behaviour (`AND ($3::text IS NULL OR ...)` short-circuits when the bound is `NULL`).
@@ -55,11 +51,13 @@ This release tightens two operator-facing workflows on the admin blade. The **Re
 This patch release fixes a long-standing visual defect in the admin and shared-viewer live-session observer that caused the canvas to render as a black frame whenever an observer joined a tunnel session more than five minutes after it had started. The fix introduces a per-session **persistent-state log** alongside the existing time-windowed ring buffer. Drawing instructions that age out of the five-minute ring buffer are now salvaged into the log so that newly-joining observers receive a fully reconstructed display rather than an empty canvas, while preserving the existing credential-filtering invariants.
 
 #### Fixed
+
 - **LIVE button / share viewer black canvas after 5 minutes of session uptime**
   ([`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs), [`backend/src/routes/admin.rs`](backend/src/routes/admin.rs), [`backend/src/routes/share.rs`](backend/src/routes/share.rs)).
   Admin observers (`GET /api/admin/sessions/:id/observe`), self-service observers (`GET /api/user/sessions/:id/observe`) and share-link viewers (`GET /api/shared/tunnel/:token`) previously saw a fully black canvas when joining a tunnel session whose original wallpaper / layer-setup drawing instructions had already been evicted from the five-minute ring buffer. The buffer evicted frames purely by age, so on mostly-idle desktops the instant-dump that primes a new observer's display contained only recent incremental updates — never the initial PNG tiles, layer creates, or large image streams that established the visible screen state. The frontend `NvrPlayer.tsx` correctly drove an `offset=0` (live-edge) connect, but with no drawing ops to replay the display stayed black until activity happened to repaint every pixel.
 
 #### Added
+
 - **Persistent-state log on `SessionBuffer`**
   ([`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs)).
   Introduced a per-session `persistent_state: VecDeque<String>` field alongside the existing time-windowed `frames: VecDeque<BufferedFrame>`. On every eviction from the ring buffer (whether triggered by the `MAX_BUFFER_DURATION = 300s` age cap or the `MAX_BUFFER_BYTES = 50 MB` size cap), non-ephemeral Guacamole instructions are appended in order to the persistent log via the new private `salvage_persistent_state(&mut self, data: &str)` helper. The log is capped at `MAX_PERSISTENT_STATE_BYTES = 20 MB`; once full, the **oldest** instructions are dropped first so that recent visual state is always retained. A new `pub fn persistent_state(&self) -> String` accessor returns the concatenated log on demand.
@@ -74,6 +72,7 @@ This patch release fixes a long-standing visual defect in the admin and shared-v
   Added four new `#[test]` cases — `persistent_state_empty_by_default`, `persistent_state_salvages_drawing_ops_on_size_eviction`, `persistent_state_skips_ephemeral_opcodes`, and `persistent_state_respects_cap` — covering the empty-default state, salvage-on-eviction behaviour, ephemeral-opcode filtering, and the 20 MB cap respectively.
 
 #### Migration notes
+
 - **Backend rebuild only.** No database migration, no schema change, no environment-variable change. The persistent-state log is a runtime-only in-memory structure scoped to the `ActiveSession` lifetime; restarts start each session's log empty (as before).
 - **Memory footprint.** Worst-case extra heap per active session is `MAX_PERSISTENT_STATE_BYTES = 20 MB` on top of the existing `MAX_BUFFER_BYTES = 50 MB` ring buffer, giving a per-session ceiling of ~70 MB of NVR state. The dynamic capacity recommendation in `GET /api/admin/metrics` (which uses `RAM_PER_SESSION_MB = 150` as a weighted-average estimate including the kernel-side tunnel and codec buffers) already comfortably covers this; no recommendation change is required.
 - **Credential redaction is preserved.** The persistent log inherits its data from `SessionBuffer::push`, which runs `filter_sensitive_instructions` before storing anything. The `7.connect` and `4.args` opcodes (which can carry credentials) continue to be stripped at ingestion and can never reach the persistent log.
@@ -85,21 +84,25 @@ This patch release fixes a long-standing visual defect in the admin and shared-v
 This patch release introduces critical operational controls and navigation refinements across the application. It adds a security-hardening option to disable the Break Glass emergency approval bypass within Approval Roles, dynamically hides empty folders on the Dashboard navigation tree to remove clutter, unifies style formatting guidelines across Rust and frontend codebases, and prunes residual version references to guarantee build stability.
 
 #### Added
+
 - **Break Glass Emergency Bypass Toggle on Approval Roles**
   ([`backend/migrations/063_role_break_glass_bypass.sql`](backend/migrations/063_role_break_glass_bypass.sql), [`backend/src/routes/admin.rs`](backend/src/routes/admin.rs), [`frontend/src/pages/admin/AccessTab.tsx`](frontend/src/pages/admin/AccessTab.tsx)).
   Added an administrative toggle to completely disable the Break Glass emergency bypass for specific Approval Roles. When disabled, operators are strictly prevented from self-approving or bypassing credentials checkout, guaranteeing forced dual-operator checkouts.
 
 #### Changed
+
 - **Dynamic Empty Folders Pruning in Dashboard tree**
   ([`frontend/src/utils/folderTree.ts`](frontend/src/utils/folderTree.ts), [`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx)).
   Updated the preorder traversal folder hierarchy model to recursively prune folders that contain neither active connections nor subfolders with connections. Hides noise and guarantees that folders visible on the Dashboard side menu actually lead to connection items.
 
 #### Fixed
+
 - **CI Formatting and Code Style Alignments**
   ([`backend/src/services/connections.rs`](backend/src/services/connections.rs), [`frontend/src/__tests__/AdminSettings.test.tsx`](frontend/src/__tests__/AdminSettings.test.tsx), [`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/admin/PasswordsTab.tsx`](frontend/src/pages/admin/PasswordsTab.tsx)).
   Resolved codebase formatting inconsistencies flagged during automated pipeline checkups. Unified cargo fmt parameters and ran Prettier to format source and test suites.
 
 #### Migration notes
+
 - **Automatic Database Migration.** On container startup, migration `063_role_break_glass_bypass.sql` runs unattended to add the `break_glass_bypass` toggle column (defaulting to true to preserve existing roles' behavior) and updates constraints safely.
 - **Frontend rebuild only** required for visual layout updates.
 
@@ -110,6 +113,7 @@ This patch release introduces critical operational controls and navigation refin
 This patch release addresses critical layout and usability defects within active connection session environments. It resolves an RDP top-left click interception deadzone, refines CSS transition rules on the collapsible session bar toggle to eliminate mouse gesture dragging lag, and restores high-contrast glassmorphic styling and visual cues for the right-hand chevron toggle under Dark Theme.
 
 #### Fixed
+
 - **Active RDP Session Top-Left Click Interception**
   ([`frontend/src/components/SessionManager.tsx`](frontend/src/components/SessionManager.tsx)).
   Applied dynamic pointer event properties (`pointer-events: none` when collapsed, `pointer-events: auto` when expanded) to the sliding sidebar panel container. This resolves a layout bug where the hidden sidebar continued to intercept mouse and pointer events on the top-left area of the remote screen.
@@ -121,6 +125,7 @@ This patch release addresses critical layout and usability defects within active
   Consolidated CSS selector definitions for `.session-bar-toggle` under dark theme and restored the translucent backdrop-blur backdrop filter, high-contrast borders (`rgba(255, 255, 255, 0.15)`), and curated hover highlights. The right-hand chevron toggle is now perfectly legible across all themes.
 
 #### Migration notes
+
 - **Frontend rebuild only.** No database migration, no environment-variable changes.
 
 ## [1.9.1] — 2026-05-19
@@ -130,6 +135,7 @@ This patch release addresses critical layout and usability defects within active
 This patch release addresses a critical deserialization error that occurred when saving an edited Single Sign-On (SSO) configuration, which caused the "Save Changes" button to become inoperable. It also resolves multiple technical debt items flagged by CodeQL related to unused variables across the backend codebase.
 
 #### Fixed
+
 - **SSO Provider Edit Form Deserialization Bug**
   ([`frontend/src/pages/admin/SsoTab.tsx`](frontend/src/pages/admin/SsoTab.tsx)).
   Modified the form submission logic to explicitly include the `client_secret` key in the JSON payload, even when empty. This satisfies the Axum backend's strict `SsoProviderUpdateRequest` schema requirements and prevents a 400 Bad Request error upon saving.
@@ -144,6 +150,7 @@ This patch release addresses a critical deserialization error that occurred when
   Cleaned up multiple unused variable warnings across the backend to improve code maintainability and execution flow.
 
 #### Migration notes
+
 - **Frontend rebuild only.** No database migration, no environment-variable changes.
 
 ## [1.9.0] — 2026-05-19
@@ -153,6 +160,7 @@ This patch release addresses a critical deserialization error that occurred when
 This minor release introduces the highly anticipated support for configuring and using multiple OpenID Connect (OIDC) / Single Sign-On (SSO) providers concurrently. Users are greeted with separate branded login buttons matching each active configuration. Client secrets are individually sealed in HashiCorp Vault transit keys, and the new `BASE_URL` override ensures seamless integration through downstream proxies or SSL terminators.
 
 #### Added
+
 - **Multi-tenant OIDC administrative CRUD API**
   ([`backend/src/routes/admin.rs`](backend/src/routes/admin.rs)).
   Created new admin-only routes to list (`GET /api/admin/settings/sso-providers`), create (`POST /api/admin/settings/sso-providers`), update (`PUT /api/admin/settings/sso-providers/:id`), and delete (`DELETE /api/admin/settings/sso-providers/:id`) multiple SSO providers.
@@ -170,6 +178,7 @@ This minor release introduces the highly anticipated support for configuring and
   Defined `BASE_URL` in environment files to supply the absolute origin (including ports like `:8443`) for OIDC callbacks, neutralizing downstream proxy port-stripping issues.
 
 #### Changed
+
 - **OIDC Database schema migration to sso_providers table**
   ([`backend/migrations/062_sso_providers.sql`](backend/migrations/062_sso_providers.sql)).
   Created database schema migration `062_sso_providers.sql` which drops the old single-SSO settings column definitions and transitions configurations into a dedicated relational table `sso_providers` with backwards-compatible automated backfills.
@@ -184,11 +193,13 @@ This minor release introduces the highly anticipated support for configuring and
   Modified admin validation paths to return a clear HTTP 400 Bad Request message when saving providers if HashiCorp Vault remains unconfigured, instead of surfacing a generic HTTP 500 error.
 
 #### Fixed
+
 - **Synchronized Vitest mocks for OIDC CRUD**
   ([`frontend/src/__tests__/AdminSettings.test.tsx`](frontend/src/__tests__/AdminSettings.test.tsx), [`frontend/src/__tests__/api.test.ts`](frontend/src/__tests__/api.test.ts)).
   Aligned mock definitions and mock network configurations inside the test suite to target the new multiple-provider model, maintaining continuous test greenness across Vitest runs.
 
 #### Migration notes
+
 - **Automatic Database Migration.** On container startup, migration `062_sso_providers.sql` will run unattended, creating the `sso_providers` table and backfilling any pre-existing single-SSO configuration.
 - **Verify `BASE_URL` in `.env`.** Ensure your `.env` contains a correct, absolute `BASE_URL` if you are accessing Strata Client through a reverse proxy (e.g. Caddy) or a non-standard HTTPS port.
 
@@ -223,7 +234,6 @@ during test component initialization.
   being wrapped in `act(...)` and ensures better test suite compliance.
 
 ## [1.8.3] — 2026-05-13
-
 
 ### Patch release — NJS-based security hardening, CSP frame-ancestors, and auth stabilization
 
@@ -280,7 +290,6 @@ variable for persistent sessions.**
 - **No database migration.** Roll both containers together:
   `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build`
 - **Full test suite 1401 / 1401 passing** on the released revision.
-
 
 ## [1.8.2] — 2026-05-13
 
@@ -349,8 +358,8 @@ backend and frontend containers together.
 #### Migration notes
 
 - **No database migration.** Roll both containers together to pick up
-   the backend header changes and the frontend session-reliability
-   fixes.
+  the backend header changes and the frontend session-reliability
+  fixes.
   `docker compose --env-file .env -f docker-compose.yml -f docker-compose.internal.yml up -d --build`
 - **Full test suite 1401 / 1401 passing** on the released revision.
 

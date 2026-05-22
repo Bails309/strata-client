@@ -31,7 +31,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.9.5",
     subtitle:
-      "Server-side recordings search & pagination, per-user last-login tracking, and configurable stale-account auto-cleanup",
+      "Server-side recordings search & pagination, per-user last-login tracking, configurable stale-account auto-cleanup, and Client IP visibility on the Sessions blade",
     sections: [
       {
         title: "Server-side recordings search and pagination",
@@ -47,6 +47,11 @@ export const RELEASE_CARDS: ReleaseCard[] = [
         title: "Configurable stale-account auto-deletion",
         description:
           "A new Stale account auto-deletion (days) setting in Admin Settings → Security → Data Retention drives the existing daily user_cleanup worker. When the value is a positive integer (1–3650), users whose `last_login_at` is older than the threshold are soft-deleted and audited as `user.stale_auto_deleted`. Users with `last_login_at IS NULL` (never signed in) are deliberately excluded so freshly-provisioned AD-sync imports are not aged out solely on creation time, and a value of 0 (the upgrade default) disables the sweep entirely. Soft-deleted accounts continue to flow through the existing user_hard_delete_days retention window and remain restorable from Show Deleted Users.",
+      },
+      {
+        title: "Client IP visibility on the Sessions blade",
+        description:
+          "The admin Live and Recordings tabs now render a new Client IP column showing the operator's public source address — resolved at handshake from the rightmost non-empty X-Forwarded-For entry, with a ConnectInfo peer-IP fallback. Live sessions reuse the existing in-memory session_registry value; recordings are backed by a new nullable `recordings.client_ip` column (migration 065) populated at the same call site that captures session_id and started_at. Recordings created before the migration render as an italic Unknown.",
       },
     ],
   },

@@ -584,69 +584,6 @@ const ROADMAP: RoadmapTheme[] = [
       },
     ],
   },
-  {
-    id: "notifications",
-    title: "Notifications & Email",
-    subtitle: "Keep humans in the loop with clear, consistent comms.",
-    accent: "#f472b6",
-    items: [
-      {
-        id: "notifications-managed-account-emails",
-        title: "Modern Managed-Account Notification Emails",
-        status: "Proposed",
-        areas: ["Notifications", "Email", "Managed Accounts"],
-        description:
-          "Redesigned transactional emails for the full managed-account checkout lifecycle — approval, rejection, and self-approval — sent automatically with a consistent modern template that renders cleanly in Outlook (dark-mode safe) and mobile clients.",
-        bullets: [
-          "Event triggers: approval granted, request rejected, self-approval exercised",
-          "Body always includes: requesting user, target AD account, justification, expiry time, and approver identity",
-          "One-click links back to the approvals page and the audit log entry",
-          "Tenant-brandable header + footer with neutral fallback styling",
-        ],
-      },
-    ],
-  },
-  {
-    id: "protocols",
-    title: "Protocols & Session Types",
-    subtitle: "Expand what a Strata connection can be.",
-    accent: "#22d3ee",
-    items: [
-      {
-        id: "protocols-web-sessions",
-        title: "Web Browser Sessions",
-        status: "Shipped",
-        areas: ["Protocols", "Sessions", "guacd"],
-        description:
-          "New `web` connection type that launches an ephemeral Chromium kiosk inside an Xvnc display and tunnels it through guacd as a standard VNC session. Brings parity with rustguac's web-session feature: per-session display allocation, optional credential autofill via Chromium's encrypted Login Data store, allow-listed domains, scripted login automation, and CIDR-bounded egress.",
-        bullets: [
-          "Backend service `web_session.rs` with display allocator (:100–:199) and ephemeral profile dir under /tmp",
-          "Optional autofill: PBKDF2(peanuts/saltysalt) → AES-128-CBC writes into Chromium Login Data SQLite",
-          "Allowed-domain enforcement via `--host-rules`, egress restricted by `web_allowed_networks` CIDR list",
-          "Login automation via Chrome DevTools Protocol on per-session ports 9200–9299",
-          "Admin form: new `WebSections.tsx` with URL, allowed domains, autofill builder, login script picker",
-          "AdSyncTab guarded to `rdp|ssh|vnc` only — web type is interactive-create only",
-        ],
-      },
-      {
-        id: "protocols-vdi-containers",
-        title: "VDI Desktop Containers",
-        status: "Shipped",
-        areas: ["Protocols", "Sessions", "Infrastructure"],
-        description:
-          "New `vdi` connection type that provisions a Docker container running xrdp on demand and tunnels it through guacd as a standard RDP session. Brings parity with rustguac's VDI feature: image whitelist, per-user persistent home, CPU/memory limits, idle reaper, and logout-vs-tab-close differentiation.",
-        bullets: [
-          "Backend `VdiDriver` trait with `DockerVdiDriver` (bollard) v1; future drivers: Nomad, Proxmox",
-          "Container reuse-by-name pattern; persistent home via bind mount under configurable `home_base`",
-          "Idle reaper extension to `session_cleanup.rs`; logout detection via xrdp disconnect reason",
-          "Image whitelist surfaced via `GET /api/admin/vdi/images`; sample image at `contrib/vdi-sample/`",
-          "Admin form: new `VdiSections.tsx` with image picker, CPU/memory/idle limits, env-var editor, persistent-home toggle",
-          "Security: docker.sock = host root — opt-in via docker-compose; recommend privileged sidecar with narrow gRPC API for production",
-          "Out of scope v1: shared driver across multi-replica backends",
-        ],
-      },
-    ],
-  },
 ];
 
 function statusColors(status: RoadmapStatus): { bg: string; fg: string } {

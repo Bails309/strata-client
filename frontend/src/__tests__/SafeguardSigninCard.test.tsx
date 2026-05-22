@@ -203,7 +203,7 @@ describe("SafeguardSigninCard", () => {
   });
 
   it("sets up a polling interval on mount", async () => {
-    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
     render(<SafeguardSigninCard />);
     await flush();

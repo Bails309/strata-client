@@ -43,12 +43,12 @@ For environments without an OIDC provider, Strata Client supports built-in usern
 
 Authentication uses a **dual-token architecture** aligned with OWASP session timeout recommendations:
 
-| Token         | TTL        | Storage                                        | Purpose                     |
-| ------------- | ---------- | ---------------------------------------------- | --------------------------- |
-| Access token  | 20 minutes | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | API authentication          |
-| Refresh token | 8 hours    | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | Silent access token renewal |
-| `csrf_token`  | Access + 60s| `Secure`, `SameSite=Strict` cookie             | CSRF for refresh & logout   |
-| `session_exp` | Access + 60s| `Secure`, `SameSite=Strict` cookie             | Expiry display for SPA      |
+| Token         | TTL          | Storage                                        | Purpose                     |
+| ------------- | ------------ | ---------------------------------------------- | --------------------------- |
+| Access token  | 20 minutes   | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | API authentication          |
+| Refresh token | 8 hours      | `HttpOnly`, `Secure`, `SameSite=Strict` cookie | Silent access token renewal |
+| `csrf_token`  | Access + 60s | `Secure`, `SameSite=Strict` cookie             | CSRF for refresh & logout   |
+| `session_exp` | Access + 60s | `Secure`, `SameSite=Strict` cookie             | Expiry display for SPA      |
 
 **Persistent JWT Signing (v1.8.3)**: Both the access and refresh tokens are signed using a persistent `JWT_SECRET` configured in the `.env` file. This ensures that user sessions remain valid across backend container restarts, providing a seamless experience during maintenance windows. If `JWT_SECRET` is not provided, the backend generates a random one on every startup, which invalidates all existing sessions (legacy behavior).
 
@@ -104,6 +104,7 @@ Since v1.8.2, a global middleware policy in `backend/src/routes/mod.rs` applies 
 #### Nginx NJS Header Masking (v1.8.3)
 
 To prevent technology fingerprinting, the Nginx gateway is configured with **Nginx JavaScript (njs)** to intercept and modify response headers globally:
+
 - **`Server`** header is masked to "Strata".
 - **`X-Powered-By`** header is removed entirely.
 - **`Content-Security-Policy: frame-ancestors 'none'`** is enforced globally to prevent clickjacking.
@@ -404,7 +405,7 @@ The `pm_allow_emergency_bypass` toggle on each AD sync config allows administrat
 2. The `justification_comment` must be at least 10 characters. Shorter justifications return `400 Validation`.
 3. `emergency_bypass` cannot be combined with `scheduled_start_at` — break-glass is inherently an "immediate" action and the two are treated as mutually exclusive.
 4. **`requested_duration_mins` is hard-clamped to a maximum of 30 minutes** when emergency bypass is effective. Any larger value submitted by the client is silently reduced to 30 before the row is written. This bounds the exposure window for a credential released without approver review. The UI also caps the duration input to 30 when the emergency checkbox is ticked, but the server-side clamp is authoritative.
-5. **Approval Role Override (v1.9.3+)**: Even if the AD sync config permits bypass, a role-level **Break Glass Bypass** toggle (`allow_emergency_bypass` in the database, defaulting to `true` to ensure zero disruption to pre-existing roles) allows administrators to strictly restrict this behavior. If *any* approval role covering the target managed account DN (via `approval_role_accounts`) has this bypass flag set to `false`, the emergency bypass path is fully blocked for that account, strictly requiring approval from a second authorized operator to checkout credentials.
+5. **Approval Role Override (v1.9.3+)**: Even if the AD sync config permits bypass, a role-level **Break Glass Bypass** toggle (`allow_emergency_bypass` in the database, defaulting to `true` to ensure zero disruption to pre-existing roles) allows administrators to strictly restrict this behavior. If _any_ approval role covering the target managed account DN (via `approval_role_accounts`) has this bypass flag set to `false`, the emergency bypass path is fully blocked for that account, strictly requiring approval from a second authorized operator to checkout credentials.
 
 Every emergency checkout writes a dedicated `checkout.emergency_bypass` audit entry capturing the requester, managed account DN, justification, and requested duration. The `emergency_bypass` flag is persisted on the checkout row for the entire lifecycle and surfaced as an **⚡ Emergency** badge across the Credentials and Approvals views, so both operators reviewing live activity and auditors reviewing history can identify break-glass use.
 
@@ -1008,6 +1009,25 @@ The NVR feature maintains an in-memory ring buffer of Guacamole protocol frames 
 - **No persistence** — both the ring buffer and the persistent-state log are held in process memory only. They are discarded when the session ends or the backend restarts. Sensitive content (e.g., screen images of a user's session) is never written to disk by the NVR feature.
 - **Admin-only** — the observe endpoint (`/api/admin/sessions/:id/observe`) is protected by `require_auth` + `require_admin` middleware. Non-admin users cannot list or observe sessions. A separate user-scoped observe endpoint (`/api/user/sessions/:id/observe`) is restricted to the authenticated user's own sessions.
 - **Read-only** — admin observers receive display output only. Keyboard and mouse input from the observer is not forwarded to the target session.
+
+---
+
+## Multiplayer Share (Co-Pilot) Security (v1.9.6+)
+
+Multiplayer shares extend the existing 1:1 connection-share model to a co-pilot room of up to 6 participants. The threat model assumes any participant can be hostile and that the share token alone is the only credential a participant presents.
+
+- **Opt-in per share, never default.** A share becomes multiplayer only when `multiplayer = true` is explicitly set in the create-share request body **and** `mode = "control"` **and** the operator has not flipped the global `multiplayer_share_enabled` kill switch to `"false"`. Any of those three gates failing silently downgrades the request to a standard single-viewer control share.
+- **Token unforgeability.** Multiplayer reuses the existing share-token format (cryptographically random, scoped to a single owner session, expires with the share). There is no separate "multiplayer token" — possession of the share URL is what grants the right to attempt to join.
+- **Capacity clamping.** `max_participants` is clamped to `1..=6` at the API boundary (`MAX_PARTICIPANTS = 6` in both Rust and TypeScript). A 7th joiner receives `join_error: "room_full"` and the socket is closed before any roster or screen frame is sent.
+- **Per-participant ID (pid) re-stamping.** Every participant is issued a server-side `pid` (UUIDv4) on join and **all** identity-bearing envelope fields (`cursor.pid`, `chat.pid`, `audio_offer.from`, etc.) are overwritten by the server before fanout. A hostile peer cannot impersonate another peer's pid in transit.
+- **Display-name hygiene.** Names are whitespace-collapsed, length-clamped to `MAX_DISPLAY_NAME_LEN = 40`, and an empty result yields `join_error: "empty_name"`. Collisions are disambiguated server-side with a `" (n)"` suffix; the client never has to disambiguate.
+- **Input arbitration is server-authoritative.** Tunnel-WS frames from a participant are forwarded to the owner only when `room.note_input_activity(pid)` returns true — i.e., the participant currently holds the input token. A peer cannot send keystrokes simply because it has the tunnel WS open; revoking the token instantly stops the input plane without disconnecting the screen plane. The owner can force-grant or revoke at any time with no idle delay.
+- **Per-envelope validation.** Every inbound envelope passes `CoPilotMsg::validate()` before fanout: chat ≤ 500 bytes, SDP ≤ 8192 bytes, ICE candidate ≤ 1024 bytes, revoke reason ≤ 120 bytes. Oversize messages close the WS with code 1009.
+- **Chat / audio capability gates.** `allow_chat = false` causes the server to silently drop inbound `chat` envelopes and never broadcast them. `allow_audio = false` does the same for `audio_offer` / `audio_answer` / `ice`. Capability is owner-decided at share-creation time and re-confirmed in the `welcome` envelope.
+- **Append-only audit.** Every multiplayer connection writes a `share_participant_audit` row on join (with `client_ip`, `user_agent`, `is_owner`, `joined_at`) and updates `left_at` on disconnect. The same events are duplicated into the global `audit_log` stream as `share.multiplayer.joined` / `share.multiplayer.left` so that multiplayer activity is searchable alongside every other security event in the system. Audit writes are not bypassable from the client — they happen inside `routes::share::ws_copilot_room` regardless of how the WS terminates.
+- **Operator kill switch.** Setting `multiplayer_share_enabled = "false"` in `system_settings` immediately stops any new multiplayer share from being created; in-flight rooms are unaffected (they finish when the owner ends the share). The setting is consulted on every create call — no backend restart required.
+- **WebRTC audio scope.** The 1.9.6 server validates and re-stamps SDP/ICE envelopes but ships **no** client-side WebRTC peer. Until the audio mesh frontend lands, `allow_audio = true` is effectively a no-op for end users; the wire shape is locked in to avoid a future breaking change. When the audio mesh ships, peers will negotiate directly browser-to-browser; the backend never sees audio media, only SDP offers/answers and ICE candidates (which are length-bounded above).
+- **No persistent multiplayer state.** Cursors, chat, and the input token live in process memory on the owner's `ActiveSession`. They are discarded when the share ends, the owner disconnects, or the backend restarts. Chat is **not** archived to the database; the audit table records who joined when, not what they said.
 
 ---
 

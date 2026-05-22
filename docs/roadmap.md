@@ -9,7 +9,7 @@ Status legend:
 - **Proposed** — accepted into the roadmap but not yet scheduled
 - **Researching** — under active design / spike
 - **In progress** — on a development branch
-- **Shipped** — released (see *What's New*)
+- **Shipped** — released (see _What's New_)
 
 ## Lifecycle of shipped items
 
@@ -33,6 +33,7 @@ release that delivered them, then are removed. In practice:
 ## Protocols & Session Types
 
 ### Kubernetes Pod Console
+
 **Status:** Proposed
 **Area:** Protocols · guacd
 
@@ -45,6 +46,7 @@ to the guacd WebSocket stream.
 ## Recording Enhancements
 
 ### Historic Recording Screenshots
+
 **Status:** Proposed  
 **Area:** Recordings · Client
 
@@ -59,6 +61,7 @@ Users can preview the buffer, reorder, and download individual screenshots
 the buffer.
 
 ### Automatic PII Redaction in Recordings
+
 **Status:** Researching  
 **Area:** Recordings · Privacy · Compliance
 
@@ -76,6 +79,7 @@ an audit trail of every rule change.
 ## Security & Zero Trust Access
 
 ### Color-Coded Security Tiers ("Red" Servers)
+
 **Status:** Proposed  
 **Area:** Access Control · Auth
 
@@ -90,6 +94,7 @@ Lower tiers (Green / Amber) retain the current auth flow. UI clearly badges
 tier throughout the dashboard, session bar, and admin views.
 
 ### Immutable Security Flags
+
 **Status:** Proposed  
 **Area:** Access Control · Governance
 
@@ -102,6 +107,7 @@ a compromised admin account cannot quietly weaken a high-tier host. Options:
   IaC change can revert it
 
 ### Context-Aware Access (Device Posture)
+
 **Status:** Proposed  
 **Area:** Access Control · Client
 
@@ -122,15 +128,17 @@ attested to the backend.
 ## Auditing, Analytics & Compliance
 
 ### OCR Over Recorded Sessions
+
 **Status:** Proposed  
 **Area:** Auditing · Search
 
 Background OCR job transcribes rendered text from recordings into a searchable
-index. Auditors can then query the entire archive (e.g. *find every session
-where a window titled "Payroll" was opened* or *every time `sudo rm -rf`
-appeared on screen*) and jump directly to the timestamp.
+index. Auditors can then query the entire archive (e.g. _find every session
+where a window titled "Payroll" was opened_ or _every time `sudo rm -rf`
+appeared on screen_) and jump directly to the timestamp.
 
 ### Anomaly Detection
+
 **Status:** Researching  
 **Area:** Auditing · Risk
 
@@ -145,11 +153,12 @@ Model is per-user; alerts are written to the audit log and surfaced on the
 admin dashboard.
 
 ### Personal Metrics & Usage Reports
+
 **Status:** Proposed  
 **Area:** Analytics
 
-Dashboards for users (*my sessions this month, time spent per host*) and
-admins (*top users by access volume, idle servers, peak concurrency*).
+Dashboards for users (_my sessions this month, time spent per host_) and
+admins (_top users by access volume, idle servers, peak concurrency_).
 Exportable CSV / PDF for management reporting.
 
 ---
@@ -157,19 +166,30 @@ Exportable CSV / PDF for management reporting.
 ## Workflows & Collaboration
 
 ### Multiplayer / Co-Pilot Mode
-**Status:** Proposed  
+
+**Status:** Shipped (v1.9.6)  
 **Area:** Sessions · Collaboration
 
-Extend the current share-link feature into real-time collaboration:
+Shipped in v1.9.6 as an opt-in extension to the existing share-link
+feature. A share with `multiplayer: true` and `mode: "control"` opens a
+co-pilot room of up to six participants:
 
-- **Named, distinct cursors** per participant (colour + label)
-- **Text chat** overlay anchored to the session
-- **WebRTC audio** channel (optional, browser-native) for voice assist
-- Turn-based keyboard handoff to prevent input collisions
+- **Named, distinct cursors** per participant (8-colour deterministic palette + display-name label, server-side disambiguated).
+- **Text chat** overlay anchored to the session (≤ 500 bytes per message, owner-gated via `allow_chat`).
+- **Input-token FSM** with owner force-grant, idle-grant after 2 s, voluntary release, and instant owner revoke.
+- **Two-WebSocket architecture**: `/api/shared/tunnel/{token}?pid=<uuid>` for Guacamole frames + `/api/shared/copilot/{token}?name=...` for JSON envelopes — see [ADR-0014](adr/ADR-0014-co-pilot-two-websocket-split.md).
+- **Append-only audit** via the new `share_participant_audit` table plus `share.multiplayer.joined` / `share.multiplayer.left` events in the global audit log.
+- **Operator kill switch** via the `multiplayer_share_enabled` system setting (default enabled; set to `"false"` to globally downgrade all new multiplayer share requests to single-viewer).
+
+**Deferred to a follow-up release:**
+
+- **WebRTC audio channel** for voice assist. `allow_audio`, the `audio_offer` / `audio_answer` / `ice` envelopes, and server-side validation are all wired through, but the 1.9.6 frontend ships no WebRTC peer mesh.
+- **Owner-side participant view** so the owner sees peer cursors and chat from inside their own `SessionManager`. The 1.9.6 owner only sees the revoke control on the share dialog.
 
 Primary use cases: pair programming, IT remote support, and on-boarding.
 
 ### Quick-Share Outbound (Approval-Gated)
+
 **Status:** Proposed  
 **Area:** File Transfer · DLP
 
@@ -189,5 +209,5 @@ rejected files are purged. Every request + decision is logged.
 
 ---
 
-*Have a feature suggestion? Raise an issue in the project tracker and tag it
-`roadmap`.*
+_Have a feature suggestion? Raise an issue in the project tracker and tag it
+`roadmap`._

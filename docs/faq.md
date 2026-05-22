@@ -45,7 +45,7 @@ The previous Java/Tomcat + AngularJS stack is a maintenance burden and the SPA h
 git clone https://github.com/Bails309/strata-client.git
 cd strata-client
 cp .env.example .env
-export STRATA_VERSION=1.9.2
+export STRATA_VERSION=1.9.6
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -67,6 +67,7 @@ The bundled Vault is auto-initialised, auto-unsealed, and runs the Transit engin
 ### Can I run Strata behind an existing reverse proxy?
 
 Yes. Strata's own `frontend` container is just nginx; if you already have one, you can either:
+
 - Remove the `frontend` service and proxy `/api/*` and `/*` directly at the backend + a static asset server, or
 - Keep the `frontend` container and proxy your edge to it on port 80/443.
 
@@ -110,7 +111,7 @@ RDP, VNC, SSH, Telnet, Kubernetes pod console, Web (kiosk Chromium-in-Xvnc), VDI
 
 ### What's the difference between a Web Session and a VDI Session?
 
-- **Web** spawns a single-tab Chromium kiosk inside `Xvnc` *inside the backend container* and tunnels it as VNC. It's a constrained browser pointed at one URL with optional Playwright/Puppeteer login automation, suitable for SaaS apps that don't have native SSO or need IP-pinning. Works out of the box with `docker compose up -d`.
+- **Web** spawns a single-tab Chromium kiosk inside `Xvnc` _inside the backend container_ and tunnels it as VNC. It's a constrained browser pointed at one URL with optional Playwright/Puppeteer login automation, suitable for SaaS apps that don't have native SSO or need IP-pinning. Works out of the box with `docker compose up -d`.
 - **VDI** spawns a Strata-managed Docker container running `xrdp` and tunnels it as RDP — a real Linux desktop in a sandbox. **Disabled by default** because it requires mounting `/var/run/docker.sock` (= host root); opt in via the `docker-compose.vdi.yml` overlay. Read the warning at the top of that file.
 
 See [docs/web-sessions.md](web-sessions.md) and [docs/vdi.md](vdi.md).
@@ -147,6 +148,10 @@ Every row in the `audit_logs` table includes a `hash` column. Each row's hash is
 
 Only with the `can_view_sessions` permission. The Live Session NVR shows admin-side observers a 5-minute rewind buffer plus the live broadcast channel; share links (24-hour expiry, instant revoke, view or control mode) let session owners hand limited access to specific external collaborators. Both paths are audit-logged.
 
+### Can multiple people drive the same share at once? (v1.9.6+)
+
+Yes — that's the new **co-pilot mode**. When the owner creates a control share with **Multiplayer** enabled (1.9.6+, max 6 participants), every joiner gets a coloured cursor, an optional chat panel, and shares one input token. Only the participant holding the token can type or click; the owner can force-grant or revoke at any time, and the token auto-transfers after two seconds of input idle. Join / leave events are written to the `share_participant_audit` table and the global audit log. The whole feature can be disabled cluster-wide by flipping the `multiplayer_share_enabled` system setting to `"false"`. See [`docs/architecture.md`](architecture.md#multiplayer--co-pilot-mode-v196) for the design.
+
 ---
 
 ## Security
@@ -177,7 +182,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md). Backend needs Rust 1.95; frontend nee
 
 ### Do you accept feature PRs from outside contributors?
 
-Yes — please open an issue or a Discussion *first* for anything non-trivial so we can shape the design before code is written. The PR template ([.github/PULL_REQUEST_TEMPLATE.md](../.github/PULL_REQUEST_TEMPLATE.md)) lists exactly what we'll check at review.
+Yes — please open an issue or a Discussion _first_ for anything non-trivial so we can shape the design before code is written. The PR template ([.github/PULL_REQUEST_TEMPLATE.md](../.github/PULL_REQUEST_TEMPLATE.md)) lists exactly what we'll check at review.
 
 ### Why are some upstream guacd patches still applied if you pin to a release commit?
 

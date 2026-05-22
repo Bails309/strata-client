@@ -728,7 +728,8 @@ role_connections ──── many-to-many role ↔ connection
 user_credentials ──── encrypted password + DEK + nonce per user/connection
 credential_profiles ─ saved credential profiles with optional TTL expiry, optional per-profile extended_expiry flag (raises the cap from 12 h to 2160 h / 90 d, enforced by the `chk_ttl_hours` two-arm CHECK constraint), and optional checkout_id link to password management
 user_favorites ────── user ↔ connection favorites (composite PK)
-connection_shares ── temporary share links with mode (view/control); viewers observe via NVR broadcast
+connection_shares ── temporary share links with mode (view/control); viewers observe via NVR broadcast. v1.9.6+ adds `multiplayer BOOLEAN`, `max_participants SMALLINT CHECK (1..6)`, `allow_chat BOOLEAN`, `allow_audio BOOLEAN` for the co-pilot extension
+share_participant_audit ─ v1.9.6+ per-participant join/leave audit rows for multiplayer shares: share_id FK, pid (server-issued UUID), display_name, is_owner, joined_at, left_at, client_ip, user_agent
 kerberos_realms ──── multi-realm Kerberos config (realm, KDCs, admin server, lifetimes)
 ad_sync_configs ──── AD LDAP source configs (URL, auth, search bases, PM search bases, filter, schedule, CA cert, connection_defaults)
 ad_sync_runs ─────── per-config sync run history with stats
@@ -745,6 +746,79 @@ user_preferences ──── per-user UI preferences blob (JSONB, schema owned 
 ```
 
 See `backend/migrations/001_initial_schema.sql` through `062_sso_providers.sql` for the full DDL.
+
+## Multiplayer / Co-Pilot Mode (v1.9.6+)
+
+Strata's share links graduate from a strict 1:1 (owner ↔ single viewer) model to a multi-participant **co-pilot** room when the share is flagged `multiplayer = true`. The feature is opt-in per share, gated on `mode = "control"`, clamped to `1..=6` participants, and globally killable via the `multiplayer_share_enabled` system setting.
+
+### Two-WebSocket architecture
+
+A multiplayer share is served by **two** sibling WebSockets on the existing public surface:
+
+| Path                                            | Wire                | Purpose                                                                                                                                                                         |
+| ----------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/shared/tunnel/{share_token}?pid=<uuid>`   | Guacamole protocol  | Screen frames out, optional input back. Input is forwarded to the owner only when `room.note_input_activity(pid)` confirms the participant currently holds the **input token**. |
+| `/api/shared/copilot/{share_token}?name=<name>` | JSON envelopes only | Bidirectional control plane: roster, cursors, chat, input arbitration, audio (reserved). Frame demux by leading byte: `{` → envelope, otherwise rejected.                       |
+
+The split exists because `Guacamole.WebSocketTunnel` on the client cannot parse JSON frames interleaved with Guacamole instructions. Single-viewer shares are unaffected — they ignore the copilot endpoint entirely and the tunnel endpoint accepts an absent `pid` query parameter without any gating.
+
+### Envelope protocol
+
+Envelopes are tagged unions with `#[serde(tag = "type", rename_all = "snake_case")]`. The authoritative definition lives in `backend/src/services/co_pilot.rs`; a hand-mirrored TypeScript copy lives in `frontend/src/co-pilot/protocol.ts`. The variants:
+
+| Variant                                | Direction       | Notes                                                                                                                      |
+| -------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `hello`                                | client → server | Optional opening envelope. Carries `display_name` and `want_audio`. The server also accepts the equivalent `?name=` query. |
+| `welcome`                              | server → client | First server reply on a successful join. Carries `pid`, `allow_chat`, `allow_audio`, `max_participants`.                   |
+| `roster`                               | server → all    | Snapshot of the room (pid, display_name, color, has_input, is_owner). Re-broadcast on every membership / token change.     |
+| `cursor`                               | client ↔ server | Display-space pointer coordinates. Pid is re-stamped server-side; throttled to ~30 Hz on the client.                       |
+| `chat`                                 | client ↔ server | Plain-text message ≤ 500 bytes; dropped when `allow_chat = false`. Pid is re-stamped server-side.                          |
+| `input_claim`                          | client → server | Request the input token. Runs `try_claim_input` FSM: owner force-grant; otherwise grant if idle ≥ 2 s; otherwise denied.   |
+| `input_release`                        | client → server | Voluntary release. Token transfers to the owner if currently held by a peer, else cleared.                                 |
+| `input_grant`                          | server → all    | Token-holder change broadcast. Companion to the new `roster`.                                                              |
+| `input_revoke`                         | server → all    | Owner-initiated revoke with a short reason string.                                                                         |
+| `audio_offer` / `audio_answer` / `ice` | client ↔ server | WebRTC SDP/ICE relay for the future audio mesh. Pid is re-stamped server-side; dropped when `allow_audio = false`.         |
+| `leave`                                | server → all    | Participant cleanly disconnected.                                                                                          |
+| `join_error`                           | server → client | Sent immediately before close on a failed join. `reason ∈ {"room_full", "empty_name"}`.                                    |
+
+Bound-checks (`MAX_DISPLAY_NAME_LEN = 40`, `MAX_CHAT_LEN = 500`, `MAX_SDP_LEN = 8192`, `MAX_ICE_CANDIDATE_LEN = 1024`, `MAX_REVOKE_REASON_LEN = 120`) run in `CoPilotMsg::validate()` and are enforced before any fanout.
+
+### `CoPilotRoom` — per-session arbitration
+
+One `Arc<CoPilotRoom>` lives on every `ActiveSession` (always instantiated, zero-cost when no multiplayer share is open). Internally it holds a `std::sync::RwLock<RoomState>` (no `.await` is ever held across the lock) plus a `tokio::sync::broadcast::Sender<Arc<String>>` fanout channel sized for 1024 envelopes. The state machine guarantees:
+
+- **Single-holder input token.** Exactly zero or one participant holds the token at any time; the owner implicitly starts holding it on first peer join.
+- **Owner force-grant.** Any `input_claim` from the owner is granted unconditionally and transfers the token from whichever peer held it.
+- **Idle-grant.** A peer claim is granted automatically when the current holder has been input-idle for ≥ 2 seconds (`INPUT_IDLE_GRANT_AFTER`). This is what `note_input_activity()` on the tunnel WS feeds.
+- **Voluntary release.** `input_release` transfers the token to the owner if the owner is in the room, else clears it.
+- **Revoke.** The owner can revoke at any time; a `revoke` envelope is broadcast with a reason string.
+- **Colour allocation.** An 8-entry deterministic palette (blue, emerald, amber, red, violet, pink, teal, orange) is allocated round-robin in `join_order`.
+- **Name disambiguation.** Whitespace-collapsed; empty rejected with `join_error: "empty_name"`; collisions get a `" (n)"` suffix up to 99.
+
+The full table of variants, their validation arms, and the 17-test FSM coverage lives in `backend/src/services/co_pilot/room.rs`.
+
+### Audit and forensics
+
+Every join, leave, and token transition is captured in two places:
+
+1. **`share_participant_audit`** rows — one row per participant per session, with `joined_at` stamped on join and `left_at` filled in on disconnect. Includes `client_ip` and `user_agent` for attribution.
+2. **`audit_log`** events — `share.multiplayer.joined` and `share.multiplayer.left` events flow into the same forensic stream as every other security-relevant event.
+
+The dedicated table exists so multiplayer queries don't have to scan the full audit log; the audit-log events exist so the multiplayer activity shows up in the same view as logins, role changes, and password checkouts.
+
+### Operator kill switch
+
+The system setting `multiplayer_share_enabled` (default `"true"` — never seeded, absence means enabled) is consulted by `routes::share::create_share` on every multiplayer-share creation. When the value is exactly `"false"` the route silently downgrades the request to a standard single-viewer control share. Toggle off without redeploying:
+
+```sql
+INSERT INTO system_settings (key, value) VALUES ('multiplayer_share_enabled', 'false')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+```
+
+### Deferred for a follow-up release
+
+- **Audio mesh client.** `allow_audio`, the envelope variants (`audio_offer` / `audio_answer` / `ice`), and the server-side validation are all wired through, but the 1.9.6 frontend does not implement a WebRTC peer mesh.
+- **Owner-side participant view.** The 1.9.6 owner sees the screen and can revoke; they don't see peer cursors or the chat panel in their own session view. A future commit will add a `/api/user/sessions/:id/co-pilot` endpoint and reuse `CoPilotOverlay` from the owner's `SessionManager`.
 
 ## Directory Structure
 

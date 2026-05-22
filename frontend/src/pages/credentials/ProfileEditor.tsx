@@ -165,9 +165,7 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                 <input
                   id="prof-sg-account"
                   value={editing.safeguard_account_id ?? ""}
-                  onChange={(e) =>
-                    setEditing({ ...editing, safeguard_account_id: e.target.value })
-                  }
+                  onChange={(e) => setEditing({ ...editing, safeguard_account_id: e.target.value })}
                   placeholder="e.g. 42"
                   autoComplete="off"
                 />
@@ -191,31 +189,31 @@ export default function ProfileEditor(props: ProfileEditorProps) {
             </div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div className="form-group">
-              <label htmlFor="prof-username">Username</label>
-              <input
-                id="prof-username"
-                value={editing.username}
-                onChange={(e) => setEditing({ ...editing, username: e.target.value })}
-                placeholder={editing.id ? "(unchanged)" : "sAMAccountName (e.g. jsmith)"}
-                autoComplete="off"
-              />
-              <p className="text-txt-tertiary text-[0.6875rem] mt-1">
-                Note: Use sAMAccountName format (e.g. jsmith), not UPN or full email address.
-              </p>
+              <div className="form-group">
+                <label htmlFor="prof-username">Username</label>
+                <input
+                  id="prof-username"
+                  value={editing.username}
+                  onChange={(e) => setEditing({ ...editing, username: e.target.value })}
+                  placeholder={editing.id ? "(unchanged)" : "sAMAccountName (e.g. jsmith)"}
+                  autoComplete="off"
+                />
+                <p className="text-txt-tertiary text-[0.6875rem] mt-1">
+                  Note: Use sAMAccountName format (e.g. jsmith), not UPN or full email address.
+                </p>
+              </div>
+              <div className="form-group">
+                <label htmlFor="prof-password">Password</label>
+                <input
+                  id="prof-password"
+                  type="password"
+                  value={editing.password}
+                  onChange={(e) => setEditing({ ...editing, password: e.target.value })}
+                  placeholder={editing.id ? "(unchanged)" : "Enter password"}
+                  autoComplete="new-password"
+                />
+              </div>
             </div>
-            <div className="form-group">
-              <label htmlFor="prof-password">Password</label>
-              <input
-                id="prof-password"
-                type="password"
-                value={editing.password}
-                onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-                placeholder={editing.id ? "(unchanged)" : "Enter password"}
-                autoComplete="new-password"
-              />
-            </div>
-          </div>
           )}
           <div className="form-group">
             <label htmlFor="prof-ttl">Password Expiry</label>
@@ -281,7 +279,8 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                     });
                   }}
                 />
-                Allow extended expiry (up to 90 days) — use only for service or break-glass accounts.
+                Allow extended expiry (up to 90 days) — use only for service or break-glass
+                accounts.
               </label>
             )}
             <p className="text-txt-tertiary text-xs mt-1">

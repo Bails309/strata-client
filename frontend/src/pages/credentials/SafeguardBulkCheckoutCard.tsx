@@ -40,10 +40,7 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
   const { profiles, safeguardEnabled, signinNonce } = props;
   const { formatDateTime } = useSettings();
 
-  const sgProfiles = useMemo(
-    () => profiles.filter((p) => p.kind === "safeguard"),
-    [profiles]
-  );
+  const sgProfiles = useMemo(() => profiles.filter((p) => p.kind === "safeguard"), [profiles]);
 
   const [cached, setCached] = useState<SafeguardCachedStatus[]>([]);
   const [status, setStatus] = useState<SafeguardSigninStatus | null>(null);
@@ -80,8 +77,7 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
   // Sign-in gating: per_user_browser / hybrid modes need a live token
   // before we let the user select rows or submit. A2A mode has its
   // own appliance-trusted credentials, so we don't block it.
-  const signinRequired =
-    !!status && !status.signed_in && status.auth_mode !== "a2a";
+  const signinRequired = !!status && !status.signed_in && status.auth_mode !== "a2a";
   const selectionDisabled = !passwordCacheEnabled || signinRequired;
 
   const cacheByProfile = new Map(cached.map((c) => [c.profile_id, c]));
@@ -107,9 +103,7 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
     if (selected.size === 0) return;
     const trimmed = comment.trim();
     if (!trimmed) {
-      setError(
-        "Safeguard requires a justification comment for password checkouts.",
-      );
+      setError("Safeguard requires a justification comment for password checkouts.");
       return;
     }
     setBusy(true);
@@ -117,7 +111,8 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
     setResults([]);
     try {
       const ids = Array.from(selected);
-      const res = await bulkSafeguardCheckout(ids, trimmed);      setResults(res);
+      const res = await bulkSafeguardCheckout(ids, trimmed);
+      setResults(res);
       // Clear selection for rows that succeeded so a retry only sends
       // the failed ones.
       const ok = new Set(res.filter((r) => r.ok).map((r) => r.profile_id));
@@ -156,11 +151,7 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       const res = await safeguardCheckin(ids);
       const failed = res.filter((r) => !r.ok);
       if (failed.length > 0) {
-        setError(
-          failed
-            .map((r) => r.error ?? `profile ${r.profile_id} failed`)
-            .join("; "),
-        );
+        setError(failed.map((r) => r.error ?? `profile ${r.profile_id} failed`).join("; "));
       }
       await refresh();
     } catch (e: unknown) {
@@ -176,26 +167,25 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
         <div>
           <h3 className="!mb-1">Safeguard bulk checkout</h3>
           <p className="text-xs text-txt-secondary !mb-0">
-            Pre-fetch passwords for your Safeguard profiles in one go. Each
-            password is sealed in Strata&apos;s vault for the duration set on
-            that profile (the &quot;Password Expiry&quot; slider in the
-            profile editor) so you only need to sign in to Safeguard once for
-            the day.
+            Pre-fetch passwords for your Safeguard profiles in one go. Each password is sealed in
+            Strata&apos;s vault for the duration set on that profile (the &quot;Password
+            Expiry&quot; slider in the profile editor) so you only need to sign in to Safeguard once
+            for the day.
           </p>
         </div>
       </div>
 
       {!passwordCacheEnabled && (
         <div className="rounded-sm mb-3 px-4 py-2 text-[0.8125rem] bg-warning-dim text-warning">
-          Bulk checkout requires the administrator to enable Safeguard password
-          caching (Admin → Safeguard → &quot;Cache checked-out passwords&quot;).
+          Bulk checkout requires the administrator to enable Safeguard password caching (Admin →
+          Safeguard → &quot;Cache checked-out passwords&quot;).
         </div>
       )}
 
       {status && !status.signed_in && status.auth_mode !== "a2a" && (
         <div className="rounded-sm mb-3 px-4 py-2 text-[0.8125rem] bg-warning-dim text-warning">
-          You&apos;re currently signed out of Safeguard. Sign in above before
-          attempting a bulk checkout.
+          You&apos;re currently signed out of Safeguard. Sign in above before attempting a bulk
+          checkout.
         </div>
       )}
 
@@ -235,18 +225,14 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
               className="checkbox"
               checked={selected.size === sgProfiles.length && sgProfiles.length > 0}
               ref={(el) => {
-                if (el)
-                  el.indeterminate =
-                    selected.size > 0 && selected.size < sgProfiles.length;
+                if (el) el.indeterminate = selected.size > 0 && selected.size < sgProfiles.length;
               }}
               onChange={selectAll}
               aria-label="Select all Safeguard profiles"
               disabled={busy || selectionDisabled || sgProfiles.length === 0}
             />
             <span className="font-medium">
-              {selected.size === 0
-                ? "Select all"
-                : `${selected.size} selected`}
+              {selected.size === 0 ? "Select all" : `${selected.size} selected`}
             </span>
           </label>
           <div className="flex items-center gap-2">
@@ -267,10 +253,7 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
               type="button"
               className="btn btn-primary btn-sm"
               disabled={
-                busy ||
-                selected.size === 0 ||
-                selectionDisabled ||
-                comment.trim().length === 0
+                busy || selected.size === 0 || selectionDisabled || comment.trim().length === 0
               }
               onClick={handleCheckout}
             >
@@ -301,8 +284,8 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{p.label}</div>
                       <div className="text-xs text-txt-tertiary truncate">
-                        Account {p.safeguard_account_id ?? "?"} ·{" "}
-                        {p.safeguard_asset ?? "?"} · request {p.ttl_hours}h
+                        Account {p.safeguard_account_id ?? "?"} · {p.safeguard_asset ?? "?"} ·
+                        request {p.ttl_hours}h
                       </div>
                     </div>
                   </label>

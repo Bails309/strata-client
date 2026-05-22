@@ -112,12 +112,7 @@ export default function SafeguardSigninCard({
   if (status.auth_mode === "a2a") return null;
 
   const minutesLeft = status.expires_at
-    ? Math.max(
-        0,
-        Math.round(
-          (new Date(status.expires_at).getTime() - Date.now()) / 60_000,
-        ),
-      )
+    ? Math.max(0, Math.round((new Date(status.expires_at).getTime() - Date.now()) / 60_000))
     : 0;
 
   return (
@@ -136,15 +131,13 @@ export default function SafeguardSigninCard({
           </h3>
           <p className="text-xs text-txt-secondary !mb-0">
             Safeguard JIT credentials check out as <strong>you</strong> against{" "}
-            <code className="text-[11px]">{status.appliance_fqdn}</code>. Sign in
-            with the PowerShell helper to mint a 15-minute API token; Strata
-            stores it Vault-sealed and uses it for every JIT checkout you trigger
-            during your session.
+            <code className="text-[11px]">{status.appliance_fqdn}</code>. Sign in with the
+            PowerShell helper to mint a 15-minute API token; Strata stores it Vault-sealed and uses
+            it for every JIT checkout you trigger during your session.
             {status.signed_in && status.expires_at && (
               <>
                 {" "}
-                Current token expires at{" "}
-                <strong>{formatDateTime(status.expires_at)}</strong>.
+                Current token expires at <strong>{formatDateTime(status.expires_at)}</strong>.
               </>
             )}
           </p>
@@ -190,16 +183,13 @@ export default function SafeguardSigninCard({
               Copy snippet
             </button>
             <div className="text-txt-secondary">
-              A browser window opens for federated sign-in. After it
-              completes, your Safeguard API token is copied to the
-              clipboard.
+              A browser window opens for federated sign-in. After it completes, your Safeguard API
+              token is copied to the clipboard.
             </div>
           </div>
 
           <div className="form-group !mb-0">
-            <label htmlFor="sg-token-paste">
-              2. Paste the token from PowerShell ($SGToken)
-            </label>
+            <label htmlFor="sg-token-paste">2. Paste the token from PowerShell ($SGToken)</label>
             <textarea
               id="sg-token-paste"
               rows={3}
@@ -213,9 +203,7 @@ export default function SafeguardSigninCard({
           </div>
 
           {error && (
-            <div className="rounded-md px-3 py-2 text-xs bg-danger/10 text-danger">
-              {error}
-            </div>
+            <div className="rounded-md px-3 py-2 text-xs bg-danger/10 text-danger">{error}</div>
           )}
 
           <div className="flex gap-2 justify-end">
@@ -227,11 +215,7 @@ export default function SafeguardSigninCard({
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={busy || !tokenInput.trim()}
-            >
+            <button type="submit" className="btn btn-primary" disabled={busy || !tokenInput.trim()}>
               {busy ? "Submitting…" : "Submit token"}
             </button>
           </div>

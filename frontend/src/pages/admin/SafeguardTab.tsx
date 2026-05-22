@@ -233,8 +233,8 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
             placeholder="extf161"
           />
           <div className="text-xs text-txt-secondary mt-1">
-            The federation provider alias as configured on the Safeguard side. Required for
-            per-user browser SSO / Hybrid modes; ignored in A2A-only mode.
+            The federation provider alias as configured on the Safeguard side. Required for per-user
+            browser SSO / Hybrid modes; ignored in A2A-only mode.
           </div>
         </div>
 

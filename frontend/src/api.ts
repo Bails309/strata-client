@@ -1797,8 +1797,7 @@ export const testSafeguardConnection = (cfg: SafeguardConfig) =>
 
 /** Non-admin capability probe — returns `{enabled}` so the credential
  * editor can decide whether to show the Safeguard JIT option. */
-export const getSafeguardEnabled = () =>
-  request<{ enabled: boolean }>("/user/safeguard/enabled");
+export const getSafeguardEnabled = () => request<{ enabled: boolean }>("/user/safeguard/enabled");
 
 // -- Per-user Safeguard sign-in (browser/RSTS mode) ------------------
 
@@ -1824,10 +1823,7 @@ export interface SafeguardSigninStatus {
 export const getSafeguardSigninStatus = () =>
   request<SafeguardSigninStatus>("/user/safeguard/status");
 
-export const submitSafeguardToken = (
-  api_token: string,
-  expires_in_seconds?: number,
-) =>
+export const submitSafeguardToken = (api_token: string, expires_in_seconds?: number) =>
   request<{ signed_in: true; expires_at: string }>("/user/safeguard/token", {
     method: "POST",
     body: JSON.stringify({ api_token, expires_in_seconds }),
@@ -1855,13 +1851,9 @@ export interface BulkSafeguardCheckoutResult {
   replaced_existing?: boolean;
 }
 
-export const listSafeguardCached = () =>
-  request<SafeguardCachedStatus[]>("/user/safeguard/cached");
+export const listSafeguardCached = () => request<SafeguardCachedStatus[]>("/user/safeguard/cached");
 
-export const bulkSafeguardCheckout = (
-  profile_ids: string[],
-  comment: string,
-) =>
+export const bulkSafeguardCheckout = (profile_ids: string[], comment: string) =>
   request<BulkSafeguardCheckoutResult[]>("/user/safeguard/bulk-checkout", {
     method: "POST",
     body: JSON.stringify({ profile_ids, comment }),
@@ -1883,7 +1875,6 @@ export const safeguardCheckin = (profile_ids: string[]) =>
     method: "POST",
     body: JSON.stringify({ profile_ids }),
   });
-
 
 // -- Trusted CA bundles ----------------------------------------------
 export interface TrustedCaSummary {

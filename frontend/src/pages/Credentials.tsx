@@ -553,9 +553,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               tab so all password-request actions live together).
               Self-hides when JIT is off or admin chose A2A-only mode. */}
           {safeguardEnabled && (
-            <SafeguardSigninCard
-              onStatusChange={() => setSigninNonce((n) => n + 1)}
-            />
+            <SafeguardSigninCard onStatusChange={() => setSigninNonce((n) => n + 1)} />
           )}
           {/* Bulk pre-checkout for Safeguard JIT profiles. Self-hides
               when the user has no safeguard-kind profiles. */}

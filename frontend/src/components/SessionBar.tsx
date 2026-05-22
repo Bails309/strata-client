@@ -76,6 +76,11 @@ export default function SessionBar() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Multiplayer share options (v1.9.6+) — only honoured for control-mode shares.
+  const [mpEnabled, setMpEnabled] = useState(false);
+  const [mpMax, setMpMax] = useState(2);
+  const [mpChat, setMpChat] = useState(true);
+  const [mpAudio, setMpAudio] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   // Draggable toggle-tab state (vertical offset from center, in px)
   const [tabOffsetY, setTabOffsetY] = useState(0);
@@ -208,8 +213,24 @@ export default function SessionBar() {
       setShareUrl(null);
       setCopied(false);
       try {
-        const result = await createShareLink(activeSession.connectionId, mode);
-        const fullUrl = `${window.location.origin}${result.share_url}`;
+        // Multiplayer is only meaningful for control-mode shares; the
+        // server enforces this too, but we surface the intent in the URL
+        // so the viewer page knows to open the co-pilot WS.
+        const useMp = mode === "control" && mpEnabled;
+        const result = await createShareLink(
+          activeSession.connectionId,
+          useMp
+            ? {
+                mode,
+                multiplayer: true,
+                max_participants: mpMax,
+                allow_chat: mpChat,
+                allow_audio: mpAudio,
+              }
+            : mode
+        );
+        const mpQs = useMp ? "?mp=1" : "";
+        const fullUrl = `${window.location.origin}${result.share_url}${mpQs}`;
         setShareUrl(fullUrl);
         setShareOpen(true);
       } catch {
@@ -218,7 +239,7 @@ export default function SessionBar() {
         setShareLoading(false);
       }
     },
-    [activeSession]
+    [activeSession, mpEnabled, mpMax, mpChat, mpAudio]
   );
 
   const handleCopy = useCallback(() => {
@@ -676,49 +697,102 @@ export default function SessionBar() {
                       </button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        className="flex flex-col items-center gap-1.5 p-2 rounded border border-white/5 bg-white/5 hover:bg-white/10 transition-colors"
-                        onClick={() => handleShare("view")}
-                        disabled={shareLoading}
-                      >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="#60a5fa"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                    <>
+                      <div className="mb-2 p-2 rounded border border-white/5 bg-white/5">
+                        <label className="flex items-center gap-2 text-[0.7rem] cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={mpEnabled}
+                            onChange={(e) => setMpEnabled(e.target.checked)}
+                            className="accent-accent-light"
+                          />
+                          <span className="font-medium">Multiplayer (co-pilot)</span>
+                          <span className="text-txt-secondary text-[0.6rem]">
+                            Control mode only
+                          </span>
+                        </label>
+                        {mpEnabled && (
+                          <div className="mt-2 flex flex-col gap-1.5 text-[0.65rem] text-txt-secondary">
+                            <label className="flex items-center justify-between gap-2">
+                              <span>Max participants</span>
+                              <input
+                                type="number"
+                                min={2}
+                                max={6}
+                                value={mpMax}
+                                onChange={(e) =>
+                                  setMpMax(Math.max(2, Math.min(6, Number(e.target.value) || 2)))
+                                }
+                                className="w-12 px-1 py-0.5 rounded bg-white/5 border border-white/10 text-right"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer">
+                              <span>Allow chat</span>
+                              <input
+                                type="checkbox"
+                                checked={mpChat}
+                                onChange={(e) => setMpChat(e.target.checked)}
+                                className="accent-accent-light"
+                              />
+                            </label>
+                            <label className="flex items-center justify-between gap-2 cursor-pointer">
+                              <span>Allow audio</span>
+                              <input
+                                type="checkbox"
+                                checked={mpAudio}
+                                onChange={(e) => setMpAudio(e.target.checked)}
+                                className="accent-accent-light"
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          className="flex flex-col items-center gap-1.5 p-2 rounded border border-white/5 bg-white/5 hover:bg-white/10 transition-colors"
+                          onClick={() => handleShare("view")}
+                          disabled={shareLoading}
                         >
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                          <circle cx="12" cy="12" r="3" />
-                        </svg>
-                        <span className="text-[0.6rem] font-medium tracking-tight">View Only</span>
-                      </button>
-                      <button
-                        className="flex flex-col items-center gap-1.5 p-2 rounded border border-white/5 bg-white/5 hover:bg-white/10 transition-colors"
-                        onClick={() => handleShare("control")}
-                        disabled={shareLoading}
-                      >
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="#fb923c"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="#60a5fa"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                          <span className="text-[0.6rem] font-medium tracking-tight">
+                            View Only
+                          </span>
+                        </button>
+                        <button
+                          className="flex flex-col items-center gap-1.5 p-2 rounded border border-white/5 bg-white/5 hover:bg-white/10 transition-colors"
+                          onClick={() => handleShare("control")}
+                          disabled={shareLoading}
                         >
-                          <rect x="2" y="3" width="20" height="14" rx="2" />
-                          <line x1="8" y1="21" x2="16" y2="21" />
-                          <line x1="12" y1="17" x2="12" y2="21" />
-                        </svg>
-                        <span className="text-[0.6rem] font-medium tracking-tight">Control</span>
-                      </button>
-                    </div>
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="#fb923c"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <rect x="2" y="3" width="20" height="14" rx="2" />
+                            <line x1="8" y1="21" x2="16" y2="21" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
+                          </svg>
+                          <span className="text-[0.6rem] font-medium tracking-tight">Control</span>
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
               )}

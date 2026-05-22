@@ -1,6 +1,6 @@
 # What's New in v1.9.5
 
-> **Minor release: server-side recordings search and pagination, per-user last-login tracking, and configurable stale-account auto-cleanup.** v1.9.5 makes two operator workflows on the admin blade meaningfully faster and more compliant — the Recordings table now performs its search and pagination on the server (no more silent 200-row cap on the client), and the Users table surfaces a per-user **Last Login** column plus a new retention setting that auto-soft-deletes accounts that have been provisioned and signed in at least once but have since gone idle past a configurable threshold.
+> **Minor release: server-side recordings search and pagination, per-user last-login tracking, configurable stale-account auto-cleanup, and Client IP visibility on the Sessions blade.** v1.9.5 makes two operator workflows on the admin blade meaningfully faster and more compliant — the Recordings table now performs its search and pagination on the server (no more silent 200-row cap on the client), and the Users table surfaces a per-user **Last Login** column plus a new retention setting that auto-soft-deletes accounts that have been provisioned and signed in at least once but have since gone idle past a configurable threshold. The Sessions blade also gains a new **Client IP** column on both the Live and Recordings tabs so administrators can see the operator's public source address for both in-flight and historical sessions.
 
 ## Server-side recordings search and pagination
 
@@ -35,9 +35,15 @@ Two safety guarantees are explicit in the implementation and documented in the U
 
 Every affected row is written to the audit log as `user.stale_auto_deleted` with `{ user_id, username, stale_days }`, with `actor_id = None` to reflect that the worker (not a human operator) performed the action. Soft-deleted accounts continue to flow through the existing `user_hard_delete_days` retention window and remain restorable from the **Show Deleted Users** filter for the configured grace period.
 
+## Client IP visibility on the Sessions blade
+
+The admin **Sessions** page now renders a new **Client IP** column on both the Live and Recordings tabs, showing the operator's public source address — the same value used for audit-log attribution — for every in-flight and historical session. The IP is resolved at handshake from the rightmost non-empty `X-Forwarded-For` entry, with a `ConnectInfo` peer-IP fallback for direct (non-proxied) connections.
+
+The **Live** tab reuses the in-memory `session_registry::ActiveSession.client_ip` field that was already populated end-to-end but never surfaced in the UI — no schema change was needed for in-flight sessions. The **Recordings** tab is backed by a new nullable `recordings.client_ip TEXT` column (migration 065) populated by `recordings::insert_start(...)` at the same call site that captures `nvr_session_id` and `started_at`, so the value is persisted at the moment the recording begins rather than reconstructed after the fact. Recordings created before migration 065 (or where the IP could not be resolved at handshake) render as an italic **Unknown** placeholder. The column is gated on `isAdmin`, so non-admin views of `/user/sessions` and `/user/recordings` are unchanged.
+
 ## Upgrade
 
-Drop-in upgrade from v1.9.4 — backend + frontend rebuild, migration 064 applies automatically on first start. No configuration changes required to keep the old behaviour (the new sweep ships disabled by default).
+Drop-in upgrade from v1.9.4 — backend + frontend rebuild, migrations 064 and 065 apply automatically on first start. No configuration changes required to keep the old behaviour (the new sweep ships disabled by default, and the new Client IP column is populated automatically going forward).
 
 ```sh
 docker compose --env-file .env \
@@ -106,7 +112,7 @@ With this release, a new `break_glass_bypass` toggle is introduced under the App
 
 ## Dynamic Empty Folders Pruning in Dashboard tree
 
-As organizations grow, the connection folder hierarchy can become cluttered with empty parent nodes or legacy directories that contain no active connection items. 
+As organizations grow, the connection folder hierarchy can become cluttered with empty parent nodes or legacy directories that contain no active connection items.
 
 v1.9.3 introduces dynamic pruning to the Dashboard sidebar tree traversal. The folder tree now automatically detects and recursively hides folder nodes that contain neither direct connections nor any active subfolders containing connections. The sidebar is now perfectly clean and clutter-free, displaying only folders that lead to selectable connection entries.
 
@@ -192,7 +198,6 @@ Configured Nginx's SPA routing to serve the main `index.html` file with strict c
 > simultaneously, complete with dynamic login branding, robust thread-safe
 > state routing, and individual Vault transit unsealing.
 
-
 ## Multiple SSO & OpenID Connect Connections
 
 v1.9.0 adds full multi-tenant OIDC architecture to Strata Client. Administrators can now configure, manage, and audit multiple Single Sign-On (SSO) connections simultaneously (e.g. Entra ID, Okta, and Keycloak side-by-side) using the newly expanded admin settings panel.
@@ -205,7 +210,6 @@ Key improvements include:
 - **Individual Vault-Sealed Client Secrets**: Stored client secrets are encrypted at rest using separate HashiCorp Vault transit keys dynamically per database row, preventing credential leakage in database dumps.
 - **Port Integrity via `BASE_URL`**: Introduced a new `BASE_URL` configuration override in `.env` and `.env.example`. This prevents downstream proxies or SSL terminators from stripping non-standard ports (e.g., `:8443`) from redirect URIs, resolving callback mismatches during OIDC authorization code exchanges.
 - **Robust Database Migration and UX**: Database migration `062_sso_providers.sql` seamlessly migrates old single-SSO environments to the new multi-provider schema at startup. Furthermore, saving an OIDC provider while Vault is unconfigured now returns a helpful HTTP 400 Bad Request instruction rather than an unhelpful HTTP 500 error, guiding the operator to initialize Vault first.
-
 
 ## Upgrade
 
@@ -228,7 +232,6 @@ docker compose --env-file .env \
 > hardening.** v1.8.4 resolves critical test suite regressions by
 > implementing a robust global fetch polyfill and synchronizing
 > authentication mocks across the entire frontend codebase.
-
 
 ## Robust and Stable Testing Environment
 
@@ -265,7 +268,6 @@ v1.8.4 is focused on development environment reliability and testing stability. 
 > is now a mandatory environment variable for persistent sessions.**
 
 ## Modern Anti-Clickjacking Protection
-
 
 Recent security hardening completes our transition to modern security headers by replacing the legacy `X-Frame-Options` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive across all responses.
 
@@ -307,7 +309,6 @@ docker compose --env-file .env \
 
 # What's New in v1.8.2
 
-
 > **Patch release: global security headers, session-timeout reliability,
 > and CI hardening.** v1.8.2 hardens the application's security posture
 > by enforcing non-cacheable API responses globally and tightening the
@@ -336,8 +337,8 @@ once a user signs out or closes their session, no sensitive data remains
 reachable in the browser's local cache.
 
 ## Modern framing protection
-  
-v1.8.2 replaces the legacy `X-Frame-Options: DENY` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive. 
+
+v1.8.2 replaces the legacy `X-Frame-Options: DENY` header with the modern `Content-Security-Policy: frame-ancestors 'none'` directive.
 
 While `X-Frame-Options` served us well, modern browsers now prioritize the CSP `frame-ancestors` directive. By moving to the CSP standard, we ensure that anti-framing protection is handled more predictably across modern user agents while remaining explicitly secure against clickjacking attacks.
 

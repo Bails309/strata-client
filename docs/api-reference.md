@@ -847,10 +847,14 @@ List all currently active tunnel sessions. Each entry includes the session's rin
     "started_at": "2026-04-06T10:30:00Z",
     "buffer_depth_secs": 287,
     "bytes_from_guacd": 52428800,
-    "bytes_to_guacd": 1048576
+    "bytes_to_guacd": 1048576,
+    "remote_host": "10.0.42.7",
+    "client_ip": "203.0.113.42"
   }
 ]
 ```
+
+`client_ip` is the operator's public source address as resolved from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback). The literal string `"unknown"` is returned when no IP could be derived (e.g. direct loopback during dev).
 
 #### `GET /api/admin/sessions/:session_id/observe`
 
@@ -1295,10 +1299,13 @@ List the calling user's own historical recordings. Supports optional filtering, 
     "started_at": "2026-04-15T10:00:00Z",
     "duration_secs": 3600,
     "storage_path": "08c6776c-7fc1-4869-864e-c1a823864ad4-1776293653790.guac",
-    "storage_type": "local"
+    "storage_type": "local",
+    "client_ip": "203.0.113.42"
   }
 ]
 ```
+
+`client_ip` is captured at handshake from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback). It is `null` for recordings created before migration 065.
 
 ### `GET /api/user/recordings/:id/stream`
 

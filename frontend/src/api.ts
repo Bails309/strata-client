@@ -1351,6 +1351,9 @@ export interface HistoricalRecording {
   duration_secs: number | null;
   storage_path: string;
   storage_type: "local" | "azure";
+  /** Operator's public source IP at the time the recording started.
+   *  `null` for recordings created before migration 065. */
+  client_ip?: string | null;
 }
 
 export const getRecordings = (

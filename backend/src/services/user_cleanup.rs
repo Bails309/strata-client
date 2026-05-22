@@ -55,6 +55,71 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
 
     tracing::info!("Running user cleanup (hard-deleting users soft-deleted for >{days} days) ...");
 
+    // ── Stale-account soft-delete sweep ──
+    //
+    // Operators can configure `user_stale_days` to auto-soft-delete any
+    // live user whose `last_login_at` is older than the threshold. The
+    // sweep deliberately skips users with NULL `last_login_at` so that
+    // freshly-provisioned accounts (e.g. AD-sync imports that have never
+    // signed in) are not aged out solely on the basis of their creation
+    // time — the clock only starts ticking once the user has logged in
+    // at least once. A value of 0 (the default) disables the sweep.
+    let stale_days = crate::services::settings::get(&db.pool, "user_stale_days")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<i32>().ok())
+        .filter(|d| *d > 0);
+
+    if let Some(stale_days) = stale_days {
+        // Collect candidates first so we can emit one audit-log entry per
+        // user (the worker has no acting-user id, so audit::log is called
+        // with `actor_id = None`).
+        let stale: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, username
+             FROM users
+             WHERE deleted_at IS NULL
+               AND last_login_at IS NOT NULL
+               AND last_login_at < now() - make_interval(days => $1)",
+        )
+        .bind(stale_days)
+        .fetch_all(&db.pool)
+        .await?;
+
+        if !stale.is_empty() {
+            let result = sqlx::query(
+                "UPDATE users
+                 SET deleted_at = now()
+                 WHERE deleted_at IS NULL
+                   AND last_login_at IS NOT NULL
+                   AND last_login_at < now() - make_interval(days => $1)",
+            )
+            .bind(stale_days)
+            .execute(&db.pool)
+            .await?;
+
+            tracing::info!(
+                "Soft-deleted {} stale user(s) (no login in >{} days)",
+                result.rows_affected(),
+                stale_days
+            );
+
+            for (uid, uname) in &stale {
+                let _ = crate::services::audit::log(
+                    &db.pool,
+                    None,
+                    "user.stale_auto_deleted",
+                    &serde_json::json!({
+                        "user_id": uid.to_string(),
+                        "username": uname,
+                        "stale_days": stale_days,
+                    }),
+                )
+                .await;
+            }
+        }
+    }
+
     // ── Purge recording files for users about to be hard-deleted ──
     let doomed_recordings: Vec<(String, String)> = sqlx::query_as(
         "SELECT r.storage_path, r.storage_type

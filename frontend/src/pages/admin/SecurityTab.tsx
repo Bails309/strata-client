@@ -28,6 +28,7 @@ export default function SecurityTab({
   const [userHardDeleteDays, setUserHardDeleteDays] = useState(
     settings.user_hard_delete_days || "90"
   );
+  const [userStaleDays, setUserStaleDays] = useState(settings.user_stale_days || "0");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export default function SecurityTab({
       settings.local_auth_enabled === undefined ? true : settings.local_auth_enabled === "true"
     );
     setUserHardDeleteDays(settings.user_hard_delete_days || "90");
+    setUserStaleDays(settings.user_stale_days || "0");
   }, [settings]);
 
   async function handleSave() {
@@ -48,10 +50,17 @@ export default function SecurityTab({
         throw new Error("User hard-delete window must be between 1 and 3650 days.");
       }
 
+      // Validate stale-account window: 0 disables the sweep; otherwise 1..3650.
+      const parsedStale = parseInt(userStaleDays, 10);
+      if (!Number.isFinite(parsedStale) || parsedStale < 0 || parsedStale > 3650) {
+        throw new Error("Stale-account window must be between 0 and 3650 days (0 = disabled).");
+      }
+
       // Update general security settings
       await updateSettings([
         { key: "watermark_enabled", value: String(watermarkEnabled) },
         { key: "user_hard_delete_days", value: String(parsedDays) },
+        { key: "user_stale_days", value: String(parsedStale) },
       ]);
 
       // Update authentication methods (dedicated endpoint with validation)
@@ -189,6 +198,28 @@ export default function SecurityTab({
               Number of days a soft-deleted user remains recoverable before the background cleanup
               task permanently removes their record and any associated session recordings. Defaults
               to 90 days. Must be between 1 and 3650.
+            </p>
+          </div>
+
+          <div className="form-group mt-6">
+            <label htmlFor="user-stale-days" className="block font-medium mb-1">
+              Stale account auto-deletion (days)
+            </label>
+            <input
+              id="user-stale-days"
+              type="number"
+              min={0}
+              max={3650}
+              value={userStaleDays}
+              onChange={(e) => setUserStaleDays(e.target.value)}
+              className="w-32"
+            />
+            <p className="text-txt-secondary text-sm mt-1">
+              Automatically soft-delete any user who has not logged in for this many days. The
+              countdown only starts after a user&apos;s first successful login &mdash; accounts that
+              have never logged in (e.g. fresh AD-sync imports) are never touched by this sweep.
+              Soft-deleted users still go through the normal hard-delete window above and can be
+              restored from <em>Show Deleted Users</em>. Set to <strong>0</strong> to disable.
             </p>
           </div>
         </div>

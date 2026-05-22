@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ConfirmModal from "../../components/ConfirmModal";
 import Select from "../../components/Select";
 import { orderFoldersByHierarchy, indentedFolderLabel } from "../../utils/folderTree";
+import { useSettings } from "../../contexts/SettingsContext";
 import {
   Connection,
   ConnectionFolder,
@@ -62,6 +63,7 @@ export default function AccessTab({
   onFoldersChanged: (f: ConnectionFolder[]) => void;
   onUsersChanged: (u: User[]) => void;
 }) {
+  const { formatDateTime } = useSettings();
   const [newRole, setNewRole] = useState<{
     name: string;
     can_manage_system: boolean;
@@ -1238,6 +1240,7 @@ export default function AccessTab({
                   <th>Auth Type</th>
                   <th>Role</th>
                   <th>OIDC Sub</th>
+                  <th>Last Login</th>
                   <th className="w-[100px]">Actions</th>
                 </tr>
               </thead>
@@ -1279,6 +1282,13 @@ export default function AccessTab({
                     </td>
                     <td className="font-mono text-[0.7rem] text-txt-tertiary">
                       {u.sub || <span className="opacity-30">—</span>}
+                    </td>
+                    <td className="text-xs text-txt-secondary whitespace-nowrap">
+                      {u.last_login_at ? (
+                        formatDateTime(u.last_login_at)
+                      ) : (
+                        <span className="opacity-40 italic">Never</span>
+                      )}
                     </td>
                     <td>
                       <div className="flex gap-1">

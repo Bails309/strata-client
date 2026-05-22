@@ -34,6 +34,7 @@ import NotificationsTab from "./admin/NotificationsTab";
 import TrustedCAsTab from "./admin/TrustedCAsTab";
 import VdiTab from "./admin/VdiTab";
 import DmzLinksTab from "./admin/DmzLinksTab";
+import SafeguardTab from "./admin/SafeguardTab";
 
 type Tab =
   | "health"
@@ -52,6 +53,7 @@ type Tab =
   | "vdi"
   | "trusted-cas"
   | "dmz-links"
+  | "safeguard"
   | "security";
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
@@ -226,6 +228,9 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Trusted CAs ── */}
         {tab === "trusted-cas" && <TrustedCAsTab onSave={() => flash("Trusted CAs updated")} />}
 
+        {/* ── Safeguard JIT ── */}
+        {tab === "safeguard" && <SafeguardTab onSave={() => flash("Safeguard config updated")} />}
+
         {/* ── Security ── */}
         {tab === "security" && (
           <SecurityTab
@@ -268,6 +273,7 @@ const TAB_LABELS: Record<Tab, string> = {
   vdi: "VDI",
   "trusted-cas": "Trusted CAs",
   "dmz-links": "DMZ Links",
+  safeguard: "Safeguard JIT",
   security: "Security",
 };
 
@@ -279,7 +285,7 @@ const ADMIN_NAV_GROUPS: Array<{ title: string; items: Tab[] }> = [
   },
   { title: "Connectivity", items: ["network", "dmz-links", "trusted-cas", "vdi"] },
   { title: "Workspace", items: ["display", "tags", "notifications", "recordings"] },
-  { title: "Secrets & Security", items: ["vault", "security"] },
+  { title: "Secrets & Security", items: ["vault", "safeguard", "security"] },
 ];
 
 function tabVisible(t: Tab, user: MeResponse): boolean {

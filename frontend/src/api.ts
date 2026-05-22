@@ -1710,6 +1710,57 @@ export const listEmailDeliveries = (status?: string, limit = 50) => {
   return request<EmailDelivery[]>(`/admin/notifications/deliveries?${params.toString()}`);
 };
 
+// -- Safeguard JIT ---------------------------------------------------
+//
+// Configurable OneIdentity Safeguard integration. The admin tab POSTs
+// the same shape back; secret fields use the `********` mask sentinel
+// to mean "keep existing", empty string to mean "clear", any other
+// value replaces.
+export type SafeguardAuthMode = "per_user_oidc" | "a2a" | "hybrid";
+
+export interface SafeguardConfig {
+  enabled: boolean;
+  appliance_fqdn: string;
+  appliance_port: number;
+  verify_tls: boolean;
+  ca_cert_pem: string;
+  idp_alias: string;
+  auth_mode: SafeguardAuthMode;
+  default_checkout_hours: number;
+  request_reason_template: string;
+  auto_checkin_on_session_end: boolean;
+  // `********` = currently set (keep on save); `` = unset.
+  a2a_api_key: string;
+  a2a_client_cert_pem: string;
+  a2a_client_key_pem: string;
+}
+
+export interface SafeguardTestStep {
+  name: string;
+  ok: boolean;
+  detail: string | null;
+}
+
+export interface SafeguardTestOutcome {
+  ok: boolean;
+  message: string;
+  steps: SafeguardTestStep[];
+}
+
+export const getSafeguardConfig = () => request<SafeguardConfig>("/admin/safeguard/config");
+
+export const updateSafeguardConfig = (cfg: SafeguardConfig) =>
+  request<SafeguardConfig>("/admin/safeguard/config", {
+    method: "PUT",
+    body: JSON.stringify(cfg),
+  });
+
+export const testSafeguardConnection = (cfg: SafeguardConfig) =>
+  request<SafeguardTestOutcome>("/admin/safeguard/test", {
+    method: "POST",
+    body: JSON.stringify(cfg),
+  });
+
 // -- Trusted CA bundles ----------------------------------------------
 export interface TrustedCaSummary {
   id: string;

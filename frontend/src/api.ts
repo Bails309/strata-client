@@ -1475,6 +1475,11 @@ export interface DmzLinkRow {
   since_unix_secs: number;
   connects: number;
   failures: number;
+  /** Strata software version advertised by the DMZ peer in the most recent
+   *  successful handshake. `null` when no handshake has yet succeeded, or
+   *  when the DMZ is running a pre-1.9.6 build that does not echo its
+   *  version back over the link. */
+  remote_software_version: string | null;
 }
 
 export interface DmzLinksResponse {

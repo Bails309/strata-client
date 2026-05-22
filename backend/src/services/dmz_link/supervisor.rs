@@ -143,7 +143,15 @@ async fn run_endpoint(
                 continue;
             }
         };
-        tracing::info!(endpoint = %url, link_id = %accepted.link_id, "DMZ link authenticated");
+        // Capture the DMZ's advertised version (None on legacy peers)
+        // so the admin UI can flag DMZ ↔ backend version skew.
+        registry.set_remote_version(&url, accepted.remote_software_version.clone());
+        tracing::info!(
+            endpoint = %url,
+            link_id = %accepted.link_id,
+            remote_software_version = ?accepted.remote_software_version,
+            "DMZ link authenticated"
+        );
 
         // ── h2 serve loop ───────────────────────────────────────────
         // The link state stays `Authenticating` until the h2 handshake
@@ -293,6 +301,7 @@ mod tests {
                     psk_id: "current".into(),
                     psks,
                     link_id,
+                    software_version: "test-dmz".into(),
                 };
                 if server_handshake(&mut server, &sc).await.is_ok() {
                     after_auth(server);

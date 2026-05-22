@@ -30,6 +30,7 @@ vi.mock("../api", () => ({
   getServiceHealth: vi.fn(),
   getMetrics: vi.fn(),
   getCertificates: vi.fn(() => Promise.resolve({ certificates: [], errors: [] })),
+  getDmzLinks: vi.fn().mockResolvedValue({ configured: false, links: [] }),
   getRoles: vi.fn(),
   createRole: vi.fn(),
   getRoleMappings: vi.fn().mockResolvedValue({ connection_ids: [], folder_ids: [] }),

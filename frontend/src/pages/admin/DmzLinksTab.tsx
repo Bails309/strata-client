@@ -125,6 +125,7 @@ export default function DmzLinksTab() {
               <tr className="text-left text-txt-tertiary border-b border-glass-border">
                 <th className="py-2 pr-4">Endpoint</th>
                 <th className="py-2 pr-4">State</th>
+                <th className="py-2 pr-4">DMZ version</th>
                 <th className="py-2 pr-4">Connects</th>
                 <th className="py-2 pr-4">Failures</th>
                 <th className="py-2 pr-4">Since</th>
@@ -155,6 +156,9 @@ function DmzLinkTableRow({ row }: { row: DmzLinkRow }) {
         >
           {row.state}
         </span>
+      </td>
+      <td className="py-2 pr-4 font-mono text-xs">
+        {row.remote_software_version ? `v${row.remote_software_version}` : "—"}
       </td>
       <td className="py-2 pr-4">{row.connects}</td>
       <td className="py-2 pr-4">{row.failures}</td>

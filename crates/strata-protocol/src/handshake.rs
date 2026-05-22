@@ -95,6 +95,12 @@ pub enum AuthOutcome {
     Accept {
         /// Stable id assigned by the DMZ to this link instance.
         link_id: String,
+        /// Strata software version advertised by the DMZ peer. Optional
+        /// with a serde default so older DMZ binaries that don't emit
+        /// this field still interop — they'll deserialise as `None` and
+        /// the internal node simply reports "unknown" in the admin UI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        software_version: Option<String>,
     },
     /// Link rejected.
     Reject {

@@ -48,6 +48,11 @@ pub struct LinkServerConfig {
     /// kicks in on attack-like traffic.
     pub accept_rate_rps: u32,
     pub accept_rate_burst: u32,
+    /// Strata software version of this DMZ binary (e.g.
+    /// `env!("CARGO_PKG_VERSION")`). Echoed back to each internal
+    /// node in `AuthOutcome::Accept` so the admin UI can flag DMZ ↔
+    /// backend version skew.
+    pub software_version: String,
 }
 
 /// Bind, accept, and drive link connections until `shutdown` cancels.
@@ -143,6 +148,7 @@ async fn handle_connection(
         psk_id: cfg.active_psk_id.clone(),
         psks,
         link_id: link_id.clone(),
+        software_version: cfg.software_version.clone(),
     };
 
     let peer_info: LinkPeer = server_handshake(&mut tls, &sh_cfg)

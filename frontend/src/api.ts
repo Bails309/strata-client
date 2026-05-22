@@ -1207,11 +1207,29 @@ export interface ShareLinkResponse {
   mode: "view" | "control";
 }
 
-export const createShareLink = (connectionId: string, mode: "view" | "control" = "view") =>
-  request<ShareLinkResponse>(`/user/connections/${connectionId}/share`, {
+/**
+ * v1.9.6+ — optional multiplayer / co-pilot fields. Only honoured when
+ * `mode === "control"`. The server clamps `max_participants` to 1..=6
+ * and silently forces `multiplayer = false` for view-mode shares.
+ */
+export interface ShareLinkOptions {
+  mode?: "view" | "control";
+  multiplayer?: boolean;
+  max_participants?: number;
+  allow_chat?: boolean;
+  allow_audio?: boolean;
+}
+
+export const createShareLink = (
+  connectionId: string,
+  modeOrOpts: "view" | "control" | ShareLinkOptions = "view"
+) => {
+  const body: ShareLinkOptions = typeof modeOrOpts === "string" ? { mode: modeOrOpts } : modeOrOpts;
+  return request<ShareLinkResponse>(`/user/connections/${connectionId}/share`, {
     method: "POST",
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify(body),
   });
+};
 
 export const revokeShareLink = (shareId: string) =>
   request<{ status: string }>(`/user/shares/${shareId}`, { method: "DELETE" });

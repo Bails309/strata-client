@@ -58,6 +58,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/shared/tunnel/{share_token}",
             get(share::ws_shared_tunnel),
         )
+        .route(
+            "/api/shared/copilot/{share_token}",
+            get(share::ws_copilot_room),
+        )
         .route("/api/files/{token}", get(files::download));
 
     // ── Admin routes (auth + admin role) ─────────────────────────────

@@ -39,6 +39,7 @@ pub async fn connection_visible_to_user(
 }
 
 /// Insert a new share row with a mandatory expiry.
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_share(
     pool: &Pool<Postgres>,
     connection_id: Uuid,
@@ -47,10 +48,14 @@ pub async fn insert_share(
     read_only: bool,
     mode: &str,
     expiry_hours: i32,
+    multiplayer: bool,
+    max_participants: i16,
+    allow_chat: bool,
+    allow_audio: bool,
 ) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO connection_shares (connection_id, owner_user_id, share_token, read_only, mode, expires_at)
-         VALUES ($1, $2, $3, $4, $5, now() + make_interval(hours => $6))",
+        "INSERT INTO connection_shares (connection_id, owner_user_id, share_token, read_only, mode, expires_at, multiplayer, max_participants, allow_chat, allow_audio)
+         VALUES ($1, $2, $3, $4, $5, now() + make_interval(hours => $6), $7, $8, $9, $10)",
     )
     .bind(connection_id)
     .bind(owner_user_id)
@@ -58,6 +63,10 @@ pub async fn insert_share(
     .bind(read_only)
     .bind(mode)
     .bind(expiry_hours)
+    .bind(multiplayer)
+    .bind(max_participants)
+    .bind(allow_chat)
+    .bind(allow_audio)
     .execute(pool)
     .await?;
     Ok(())
@@ -80,7 +89,30 @@ pub async fn revoke_owned(
     Ok(result.rows_affected() > 0)
 }
 
-/// Active share lookup row: (share_id, connection_id, owner_user_id, mode).
+/// Active share lookup row carrying the v1.9.6 multiplayer fields.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ActiveShare {
+    /// Share row id.
+    pub share_id: Uuid,
+    /// Underlying connection id.
+    pub connection_id: Uuid,
+    /// User id of the share's owner.
+    pub owner_user_id: Uuid,
+    /// Share mode: `view` or `control`.
+    pub mode: String,
+    /// Multiplayer / co-pilot toggle.
+    pub multiplayer: bool,
+    /// DB-clamped participant cap (1..=6).
+    pub max_participants: i16,
+    /// Whether the room exposes a chat channel.
+    pub allow_chat: bool,
+    /// Whether the room signals an optional WebRTC audio mesh.
+    pub allow_audio: bool,
+}
+
+/// Legacy tuple alias kept for downstream call-sites that haven't
+/// migrated to [`ActiveShare`] yet. Will be removed in v1.10.
+#[allow(dead_code)]
 pub type ActiveShareRow = (Uuid, Uuid, Uuid, String);
 
 /// Look up an active (non-revoked, non-expired) share by token. The share is
@@ -92,9 +124,16 @@ pub type ActiveShareRow = (Uuid, Uuid, Uuid, String);
 pub async fn find_active_by_token(
     pool: &Pool<Postgres>,
     token: &str,
-) -> Result<Option<ActiveShareRow>, AppError> {
-    let row = sqlx::query_as(
-        "SELECT cs.id, cs.connection_id, cs.owner_user_id, cs.mode
+) -> Result<Option<ActiveShare>, AppError> {
+    let row = sqlx::query_as::<_, ActiveShare>(
+        "SELECT cs.id              AS share_id,
+                cs.connection_id,
+                cs.owner_user_id,
+                cs.mode,
+                cs.multiplayer,
+                cs.max_participants,
+                cs.allow_chat,
+                cs.allow_audio
          FROM connection_shares cs
          JOIN connections c ON c.id = cs.connection_id
          WHERE cs.share_token = $1

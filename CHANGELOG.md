@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.6] — Unreleased
+
+### Minor Release — Multiplayer / Co-Pilot Mode for shared sessions
+
+Strata's share links graduate from a strict 1:1 (owner ↔ single viewer) model
+to a true **multiplayer / co-pilot** experience. Owners can now invite up to
+six participants into a single control-mode share, each with their own
+display name, deterministically-assigned cursor colour, and live presence on
+the screen. A server-arbitrated single-holder input token governs which
+participant currently drives the keyboard and mouse — the owner can
+force-grant control at any time, peers can request control voluntarily, and
+an idle-grant rule automatically transfers the token after two seconds of
+inactivity so no participant can monopolise the session indefinitely. An
+optional in-room text chat panel (default on) lets the cohort coordinate
+without leaving the session, and a per-room audio-mesh flag is wired
+end-to-end so a future release can light up voice without a schema change.
+
+#### Added
+
+- **Multiplayer / Co-Pilot Mode for control-mode shares**
+  ([`backend/src/services/co_pilot.rs`](backend/src/services/co_pilot.rs), [`backend/src/services/co_pilot/room.rs`](backend/src/services/co_pilot/room.rs), [`backend/src/routes/share.rs`](backend/src/routes/share.rs), [`backend/src/routes/mod.rs`](backend/src/routes/mod.rs), [`backend/src/services/session_registry.rs`](backend/src/services/session_registry.rs), [`backend/src/services/shares.rs`](backend/src/services/shares.rs), [`backend/migrations/066_multiplayer_share.sql`](backend/migrations/066_multiplayer_share.sql), [`frontend/src/co-pilot/`](frontend/src/co-pilot/), [`frontend/src/pages/SharedViewer.tsx`](frontend/src/pages/SharedViewer.tsx), [`frontend/src/components/SessionBar.tsx`](frontend/src/components/SessionBar.tsx), [`frontend/src/api.ts`](frontend/src/api.ts)).
+  When an owner creates a control-mode share, the new **Multiplayer (co-pilot)** toggle in the Share popover unlocks three sub-controls — **Max participants** (clamped 2..=6), **Allow chat** (default on), and **Allow audio** (default off, reserved for a follow-up release). The generated share URL carries an `mp=1` flag so the viewer knows to open the new sibling WebSocket. The server routes the JSON envelope protocol through a dedicated `/api/shared/copilot/{share_token}?name=Foo` endpoint, separate from the existing Guacamole tunnel WebSocket at `/api/shared/tunnel/{share_token}`. Splitting envelopes onto their own connection avoids interleaving JSON frames with the Guacamole protocol that `Guacamole.WebSocketTunnel` cannot parse. The server's first response is a `Welcome { pid, allow_chat, allow_audio, max_participants }` envelope; the client then opens the tunnel WS with `?pid=<uuid>` so the server can gate input forwarding on the in-memory input-token holder. Per-room state lives in `CoPilotRoom` (one per `ActiveSession`, always-instantiated and zero-cost when no multiplayer share exists): roster, deterministic colour palette (8-entry round-robin), join-order, and the single-holder input token with the FSM described above (owner force-grant, peer claim, 2-second idle-grant, voluntary release, owner revoke). Display names are sanitised, length-bounded to 40 characters, and disambiguated with a `" (n)"` suffix when collisions occur. Every join and leave is audited via a dedicated `share_participant_audit` table plus matching `audit_log` events (`share.multiplayer.joined`, `share.multiplayer.left`), so post-incident forensics can reconstruct who was in the room at any time.
+- **`multiplayer_share_enabled` system setting kill-switch**
+  ([`backend/src/routes/share.rs`](backend/src/routes/share.rs)). `POST /api/user/connections/{id}/share` checks the `multiplayer_share_enabled` system setting (default `"true"`, never seeded — absence means enabled) on every multiplayer share creation. When the value is exactly `"false"` the route silently downgrades the request to a standard single-viewer control share, leaving the existing share workflow untouched but giving administrators a single-toggle escape hatch if they need to disable the feature in a hurry without re-deploying.
+
+#### Database
+
+- **Migration `066_multiplayer_share.sql`** — `ALTER TABLE connection_shares ADD COLUMN multiplayer BOOLEAN NOT NULL DEFAULT FALSE`, `max_participants SMALLINT NOT NULL DEFAULT 1 CHECK (max_participants BETWEEN 1 AND 6)`, `allow_chat BOOLEAN NOT NULL DEFAULT FALSE`, `allow_audio BOOLEAN NOT NULL DEFAULT FALSE`; new `share_participant_audit (id BIGSERIAL PRIMARY KEY, share_id UUID REFERENCES connection_shares(id) ON DELETE CASCADE, pid UUID NOT NULL, display_name TEXT NOT NULL, is_owner BOOLEAN NOT NULL DEFAULT FALSE, joined_at TIMESTAMPTZ NOT NULL DEFAULT now(), left_at TIMESTAMPTZ, client_ip TEXT, user_agent TEXT)` with indices on `share_id` and `joined_at`. All existing shares retain the legacy single-viewer behaviour without modification.
+
+#### Tests
+
+- **Backend** — 17 unit tests in `services::co_pilot::room` cover the join/leave/sanitise/disambiguate/colour-allocation/input-claim-FSM paths; additional route-level tests in `routes::share` exercise the multiplayer-defaults-off case, full multiplayer payload round-tripping, and the lock-step `max_participants` clamp shared by the DB CHECK, the route, and the in-memory room cap.
+- **Frontend** — full vitest suite (1407 cases across 67 files) continues to pass with no regressions.
+
+#### Upgrade Notes
+
+- Apply migration 066 before rolling the binary. The schema additions are all backwards-compatible (`DEFAULT FALSE` / `DEFAULT 1`) so existing single-viewer shares continue to function without modification while the new column data lights up.
+- The first release ships **without** the audio-mesh client and **without** an owner-side participant view; `allow_audio` is wired through the schema and protocol so a future release can light it up without a migration. Operators wishing to disable the entire feature until they have evaluated it can `INSERT INTO system_settings (key, value) VALUES ('multiplayer_share_enabled', 'false') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;`.
+
 ## [1.9.5] — 2026-05-22
 
 ### Minor Release — Server-side recordings search, per-user last-login tracking, configurable stale-account auto-cleanup, Client IP visibility on the Sessions blade, and DMZ peer version visibility on the Health blade

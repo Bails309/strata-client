@@ -1,4 +1,4 @@
-use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -50,11 +50,39 @@ pub struct CreateShareRequest {
     /// "view" (default, read-only) or "control" (full input forwarding).
     #[serde(default = "default_share_mode")]
     pub mode: String,
+    /// Multiplayer / co-pilot toggle (v1.9.6+). When `true`, the share
+    /// link admits up to [`MAX_MULTIPLAYER_PARTICIPANTS`] simultaneous
+    /// participants who can each be granted the input token in turn.
+    #[serde(default)]
+    pub multiplayer: bool,
+    /// Server-clamped to `1..=` [`MAX_MULTIPLAYER_PARTICIPANTS`]. Only
+    /// honoured when `multiplayer = true`.
+    #[serde(default = "default_max_participants")]
+    pub max_participants: i16,
+    /// Whether the co-pilot room exposes a chat channel.
+    #[serde(default = "default_true")]
+    pub allow_chat: bool,
+    /// Whether the co-pilot room signals an optional WebRTC audio mesh.
+    /// No server-side TURN is provisioned; opt-in mesh only.
+    #[serde(default)]
+    pub allow_audio: bool,
 }
 
 fn default_share_mode() -> String {
     "view".into()
 }
+
+fn default_max_participants() -> i16 {
+    2
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Hard server-side cap on participants per multiplayer room. Matches
+/// `co_pilot::MAX_PARTICIPANTS` and the DB-level CHECK in migration 066.
+pub const MAX_MULTIPLAYER_PARTICIPANTS: i16 = 6;
 
 #[derive(Serialize)]
 pub struct ShareLinkResponse {
@@ -97,6 +125,27 @@ pub async fn create_share(
     // Validate mode
     let mode = crate::routes::admin::validate_share_mode(&body.mode)?;
 
+    // Multiplayer is only meaningful with `control` mode — there's no
+    // point in a multi-cursor read-only viewer. Reject the combination
+    // up-front so the wire contract stays simple.
+    // Operators can also gate the entire feature off via the system
+    // setting `multiplayer_share_enabled` (default "true"); when off,
+    // any incoming multiplayer flag is silently downgraded to a
+    // standard single-viewer control share.
+    let multiplayer_enabled = crate::services::settings::get(&db.pool, "multiplayer_share_enabled")
+        .await
+        .unwrap_or(None)
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    let multiplayer = body.multiplayer && mode == "control" && multiplayer_enabled;
+    let max_participants = if multiplayer {
+        body.max_participants.clamp(1, MAX_MULTIPLAYER_PARTICIPANTS)
+    } else {
+        1
+    };
+    let allow_chat = body.allow_chat && multiplayer;
+    let allow_audio = body.allow_audio && multiplayer;
+
     // Generate a unique share token
     let share_token = format!("{}", Uuid::new_v4());
 
@@ -111,6 +160,10 @@ pub async fn create_share(
         read_only,
         &mode,
         DEFAULT_SHARE_EXPIRY_HOURS,
+        multiplayer,
+        max_participants,
+        allow_chat,
+        allow_audio,
     )
     .await?;
 
@@ -121,7 +174,11 @@ pub async fn create_share(
         &serde_json::json!({
             "connection_id": connection_id.to_string(),
             "share_token": &share_token,
-            "mode": &mode
+            "mode": &mode,
+            "multiplayer": multiplayer,
+            "max_participants": max_participants,
+            "allow_chat": allow_chat,
+            "allow_audio": allow_audio,
         }),
     )
     .await?;
@@ -172,6 +229,7 @@ pub async fn ws_shared_tunnel(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
     Path(share_token): Path<String>,
+    Query(qs): Query<HashMap<String, String>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
@@ -251,7 +309,7 @@ pub async fn ws_shared_tunnel(
     // Look up the share and verify it's valid
     let share = crate::services::shares::find_active_by_token(&db.pool, &share_token).await?;
 
-    let (_share_id, connection_id, owner_user_id, mode) = match share {
+    let share = match share {
         Some(s) => s,
         None => {
             let _ = crate::services::audit::log(
@@ -267,6 +325,9 @@ pub async fn ws_shared_tunnel(
             return Err(AppError::NotFound("Invalid or expired share link".into()));
         }
     };
+    let connection_id = share.connection_id;
+    let owner_user_id = share.owner_user_id;
+    let mode = share.mode.clone();
 
     let is_control = mode == "control";
 
@@ -317,6 +378,19 @@ pub async fn ws_shared_tunnel(
     // mid-session.
     let revoke_pool = db.pool.clone();
     let revoke_token = share_token.clone();
+
+    // ── Multiplayer input gating (v1.9.6+) ────────────────────────
+    // When the share is `multiplayer = true`, control-mode input is
+    // ALSO gated on the in-memory co-pilot room: only the participant
+    // currently holding the input token has their Guacamole frames
+    // forwarded to the owner's guacd. The `pid` arrives as a query
+    // param after the client completes its co-pilot handshake on the
+    // sibling `/api/shared/copilot/:token` WebSocket. Single-viewer
+    // shares ignore the room entirely (pid_opt remains `None`) — the
+    // existing behaviour is preserved byte-for-byte.
+    let multiplayer = share.multiplayer;
+    let pid_opt: Option<Uuid> = qs.get("pid").and_then(|v| Uuid::parse_str(v).ok());
+    let room_for_input = session.co_pilot_room.clone();
 
     Ok(ws
         .protocols(["guacamole"])
@@ -457,12 +531,25 @@ pub async fn ws_shared_tunnel(
                     msg = socket.recv() => {
                         match msg {
                             None => break, // client disconnected
-                            Some(Ok(Message::Text(text)))
-                                if is_control
-                                // Forward input from control viewer to owner's guacd
-                                    && input_tx.send(text.to_string()).await.is_err() =>
-                            {
-                                break; // owner's session ended
+                            Some(Ok(Message::Text(text))) if is_control => {
+                                // Multiplayer shares gate every input frame
+                                // on whether this WebSocket's participant is
+                                // the room's current input-token holder.
+                                // Single-viewer control mode bypasses the
+                                // gate (pid_opt is None / multiplayer is
+                                // false) and forwards unconditionally.
+                                let should_forward = if multiplayer {
+                                    pid_opt
+                                        .map(|pid| room_for_input.note_input_activity(pid))
+                                        .unwrap_or(false)
+                                } else {
+                                    true
+                                };
+                                if should_forward
+                                    && input_tx.send(text.to_string()).await.is_err()
+                                {
+                                    break; // owner's session ended
+                                }
                             }
                             _ => {} // discard in view mode or for non-text messages
                         }
@@ -523,6 +610,331 @@ pub async fn ws_shared_tunnel(
                 }
             }
         }))
+}
+
+// ── Co-pilot room WebSocket (v1.9.6+) ────────────────────────────────
+//
+// `GET /api/shared/copilot/:share_token?name=Foo`
+//
+// Sibling WebSocket to `/api/shared/tunnel/:share_token` carrying ONLY
+// the JSON envelope protocol (cursor / chat / input-token arbitration
+// / optional WebRTC signalling). The screen replay + Guacamole input
+// forwarding live exclusively on the tunnel WS.
+//
+// Handshake:
+//   1. Client opens this WS with `?name=<display>`.
+//   2. Server validates the share is `multiplayer = true`, calls
+//      `room.join()`, and replies with a `Welcome { pid, ... }` frame.
+//   3. Server broadcasts the new `Roster` to everyone.
+//   4. Client then opens the tunnel WS with `?pid=<pid>` for screen +
+//      gated input.
+pub async fn ws_copilot_room(
+    ws: WebSocketUpgrade,
+    State(state): State<SharedState>,
+    Path(share_token): Path<String>,
+    Query(qs): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let db = {
+        let s = state.read().await;
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        s.db.clone().ok_or(AppError::SetupRequired)?
+    };
+
+    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
+        .unwrap_or_else(|| addr.ip().to_string());
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let share = crate::services::shares::find_active_by_token(&db.pool, &share_token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+
+    if !share.multiplayer {
+        return Err(AppError::NotFound(
+            "This share is not a multiplayer share".into(),
+        ));
+    }
+
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+    let session = registry
+        .find_by_connection_and_user(share.connection_id, share.owner_user_id)
+        .await
+        .ok_or_else(|| {
+            AppError::NotFound(
+                "The owner's session is not currently active. They must be connected for you to join.".into(),
+            )
+        })?;
+
+    let display_name = qs
+        .get("name")
+        .cloned()
+        .unwrap_or_else(|| "Guest".to_string());
+    let pool = db.pool.clone();
+
+    Ok(ws.on_upgrade(move |socket| async move {
+        copilot_room_loop(
+            socket,
+            session,
+            share,
+            display_name,
+            share_token,
+            pool,
+            client_ip,
+            user_agent,
+        )
+        .await;
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn copilot_room_loop(
+    mut socket: axum::extract::ws::WebSocket,
+    session: std::sync::Arc<crate::services::session_registry::ActiveSession>,
+    share: crate::services::shares::ActiveShare,
+    display_name: String,
+    share_token: String,
+    pool: sqlx::PgPool,
+    client_ip: String,
+    user_agent: String,
+) {
+    use crate::services::co_pilot::CoPilotMsg;
+    use axum::extract::ws::Message;
+
+    let room = session.co_pilot_room.clone();
+
+    // Phase 1: join the room.
+    let participant = match room.join(&display_name, false) {
+        Ok(p) => p,
+        Err(e) => {
+            let reason = match e {
+                crate::services::co_pilot::JoinError::RoomFull => "room_full",
+                crate::services::co_pilot::JoinError::EmptyDisplayName => "empty_name",
+            };
+            let _ = socket
+                .send(Message::Text(
+                    format!("{{\"type\":\"join_error\",\"reason\":\"{reason}\"}}").into(),
+                ))
+                .await;
+            return;
+        }
+    };
+    let pid = participant.pid;
+
+    // Phase 2: send Welcome to this socket only so the client learns
+    // its server-assigned pid before opening the sibling tunnel WS.
+    let welcome = CoPilotMsg::Welcome {
+        pid,
+        allow_chat: share.allow_chat,
+        allow_audio: share.allow_audio,
+        max_participants: share.max_participants.clamp(1, i16::from(u8::MAX)) as u8,
+    };
+    if let Ok(json) = serde_json::to_string(&welcome) {
+        if socket.send(Message::Text(json.into())).await.is_err() {
+            // Client gave up before we could welcome them — undo join.
+            let _ = room.leave(pid);
+            return;
+        }
+    }
+
+    // Phase 3: subscribe to fanout + broadcast new Roster to everyone.
+    let mut fanout_rx = room.subscribe();
+    let _ = room.broadcast(&CoPilotMsg::Roster {
+        participants: room.roster(),
+    });
+
+    // Audit join (best-effort).
+    let _ = sqlx::query(
+        "INSERT INTO share_participant_audit \
+         (share_id, pid, display_name, is_owner, client_ip, user_agent) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(share.share_id)
+    .bind(pid)
+    .bind(&participant.display_name)
+    .bind(false)
+    .bind(&client_ip)
+    .bind(&user_agent)
+    .execute(&pool)
+    .await;
+    let _ = crate::services::audit::log(
+        &pool,
+        None,
+        "share.multiplayer.joined",
+        &serde_json::json!({
+            "share_token_prefix": hash_token_prefix(&share_token),
+            "pid": pid.to_string(),
+            "display_name": &participant.display_name,
+            "client_ip": &client_ip,
+        }),
+    )
+    .await;
+
+    // Phase 4: main loop. Envelope-only — no screen, no Guacamole input.
+    let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let revoke_check_every: u32 = 2; // 30s @ 15s tick
+    let mut ticks_since_check: u32 = 0;
+    let revoke_pool = pool.clone();
+    let revoke_token = share_token.clone();
+
+    loop {
+        tokio::select! {
+            env = fanout_rx.recv() => {
+                match env {
+                    Ok(text) => {
+                        if socket.send(Message::Text((*text).clone().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        let roster = CoPilotMsg::Roster { participants: room.roster() };
+                        if let Ok(json) = serde_json::to_string(&roster) {
+                            if socket.send(Message::Text(json.into())).await.is_err() { break; }
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    None => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if !CoPilotMsg::looks_like_envelope(&text) { continue; }
+                        let env = match serde_json::from_str::<CoPilotMsg>(&text) {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+                        if env.validate().is_err() { continue; }
+                        handle_client_envelope(env, pid, &share, &room).await;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+            _ = keepalive.tick() => {
+                // Application-level ping. Axum handles ws-level pings
+                // transparently, but a no-op cursor keepalive lets us
+                // notice a half-open NAT translation.
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+                ticks_since_check += 1;
+                if ticks_since_check >= revoke_check_every {
+                    ticks_since_check = 0;
+                    match crate::services::shares::find_active_by_token(
+                        &revoke_pool, &revoke_token,
+                    ).await {
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            tracing::info!(
+                                token_prefix = %hash_token_prefix(&revoke_token),
+                                "co-pilot participant kicked: share no longer active"
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "co-pilot revocation re-check failed; keeping participant"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 5: leave + final Roster + audit.
+    if room.leave(pid) {
+        let _ = room.broadcast(&CoPilotMsg::Leave { pid });
+        let _ = room.broadcast(&CoPilotMsg::Roster {
+            participants: room.roster(),
+        });
+    }
+    let _ = sqlx::query(
+        "UPDATE share_participant_audit \
+         SET left_at = now() \
+         WHERE share_id = $1 AND pid = $2 AND left_at IS NULL",
+    )
+    .bind(share.share_id)
+    .bind(pid)
+    .execute(&pool)
+    .await;
+    let _ = crate::services::audit::log(
+        &pool,
+        None,
+        "share.multiplayer.left",
+        &serde_json::json!({
+            "share_token_prefix": hash_token_prefix(&share_token),
+            "pid": pid.to_string(),
+        }),
+    )
+    .await;
+}
+
+/// Dispatch a client-originated, already-validated envelope. The
+/// server-side `pid` is **always** re-stamped before fan-out so a
+/// malicious client cannot forge events from another participant.
+async fn handle_client_envelope(
+    mut env: crate::services::co_pilot::CoPilotMsg,
+    pid: uuid::Uuid,
+    share: &crate::services::shares::ActiveShare,
+    room: &crate::services::co_pilot::CoPilotRoom,
+) {
+    use crate::services::co_pilot::{CoPilotMsg, InputClaimResult};
+
+    match &mut env {
+        CoPilotMsg::Cursor { pid: p, .. } => {
+            *p = pid;
+        }
+        CoPilotMsg::Chat { pid: p, .. } => {
+            if !share.allow_chat {
+                return;
+            }
+            *p = pid;
+        }
+        CoPilotMsg::InputClaim { pid: p } => {
+            *p = pid;
+            if let InputClaimResult::Granted { .. } = room.try_claim_input(pid) {
+                let _ = room.broadcast(&CoPilotMsg::InputGrant { pid, by: pid });
+                let _ = room.broadcast(&CoPilotMsg::Roster {
+                    participants: room.roster(),
+                });
+            }
+            return;
+        }
+        CoPilotMsg::InputRelease { pid: p } => {
+            *p = pid;
+            if room.release_input(pid) {
+                let _ = room.broadcast(&CoPilotMsg::Roster {
+                    participants: room.roster(),
+                });
+            }
+            return;
+        }
+        CoPilotMsg::AudioOffer { pid: p, .. }
+        | CoPilotMsg::AudioAnswer { pid: p, .. }
+        | CoPilotMsg::Ice { pid: p, .. } => {
+            if !share.allow_audio {
+                return;
+            }
+            *p = pid;
+        }
+        // Server-only envelopes (Hello/Roster/InputGrant/InputRevoke/Leave):
+        // a client sending these is either confused or hostile — drop.
+        _ => return,
+    }
+    let _ = room.broadcast(&env);
 }
 
 #[cfg(test)]
@@ -594,6 +1006,39 @@ mod tests {
     fn create_share_request_arbitrary_string() {
         let r: CreateShareRequest = serde_json::from_str(r#"{"mode":"other"}"#).unwrap();
         assert_eq!(r.mode, "other");
+    }
+
+    // ── Multiplayer extension defaults (v1.9.6+) ──────────────────
+
+    #[test]
+    fn create_share_request_multiplayer_defaults_off() {
+        let r: CreateShareRequest = serde_json::from_str("{}").unwrap();
+        assert!(!r.multiplayer);
+        assert_eq!(r.max_participants, default_max_participants());
+        assert!(r.allow_chat);
+        assert!(!r.allow_audio);
+    }
+
+    #[test]
+    fn create_share_request_multiplayer_payload() {
+        let r: CreateShareRequest = serde_json::from_str(
+            r#"{"mode":"control","multiplayer":true,"max_participants":4,"allow_chat":true,"allow_audio":true}"#,
+        )
+        .unwrap();
+        assert!(r.multiplayer);
+        assert_eq!(r.max_participants, 4);
+        assert!(r.allow_chat);
+        assert!(r.allow_audio);
+    }
+
+    #[test]
+    fn max_multiplayer_participants_matches_protocol_constant() {
+        // Wire-level cap must match `co_pilot::MAX_PARTICIPANTS` so the
+        // DB-clamp, route-clamp, and in-memory room cap stay in lock-step.
+        assert_eq!(
+            MAX_MULTIPLAYER_PARTICIPANTS as u8,
+            crate::services::co_pilot::MAX_PARTICIPANTS
+        );
     }
 
     // ── Share link URL construction ────────────────────────────────

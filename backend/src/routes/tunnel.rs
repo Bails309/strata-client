@@ -906,6 +906,7 @@ pub async fn ws_tunnel(
             user.username.clone(),
             rn.clone(),
             started_at,
+            Some(client_ip.clone()),
         )
         .await
         {

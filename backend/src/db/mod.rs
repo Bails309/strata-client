@@ -186,6 +186,10 @@ pub struct Recording {
     pub storage_path: String,
     pub storage_type: String, // 'local' or 'azure'
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Operator's public source IP at the time the recording started, as
+    /// resolved from `X-Forwarded-For` with a `ConnectInfo` peer-IP fallback.
+    /// `None` for recordings created before migration 065.
+    pub client_ip: Option<String>,
 }
 
 #[cfg(test)]
@@ -268,6 +272,7 @@ mod tests {
             storage_path: "/recordings/sess-001.guac".into(),
             storage_type: "local".into(),
             created_at: chrono::Utc::now(),
+            client_ip: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["session_id"], "sess-001");
@@ -291,6 +296,7 @@ mod tests {
             storage_path: "/recordings/sess-002.guac".into(),
             storage_type: "azure".into(),
             created_at: chrono::Utc::now(),
+            client_ip: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert!(v["duration_secs"].is_null());

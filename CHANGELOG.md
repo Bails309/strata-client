@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Client IP visibility on the Sessions admin blade**
+  ([`backend/migrations/065_recording_client_ip.sql`](backend/migrations/065_recording_client_ip.sql), [`backend/src/db/mod.rs`](backend/src/db/mod.rs), [`backend/src/services/recordings.rs`](backend/src/services/recordings.rs), [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs), [`frontend/src/api.ts`](frontend/src/api.ts), [`frontend/src/pages/Sessions.tsx`](frontend/src/pages/Sessions.tsx), [`docs/api-reference.md`](docs/api-reference.md)).
+  The admin **Live** and **Recordings** tabs now render a **Client IP** column showing the operator's public source address as resolved at handshake from the rightmost non-empty `X-Forwarded-For` entry (with a `ConnectInfo` peer-IP fallback — the same helper that drives audit-log attribution). The live side reuses the in-memory `session_registry::ActiveSession.client_ip` field that was already populated end-to-end but never surfaced in the UI. The recordings side is backed by a new nullable `recordings.client_ip TEXT` column (migration 065) populated by `recordings::insert_start(...)` at the same call site that captures `nvr_session_id` and `started_at`, so the value is persisted at the moment the recording begins rather than reconstructed after the fact. Rows that pre-date migration 065 (or where the IP could not be resolved at handshake) render an italic **Unknown** placeholder. The column is gated on `isAdmin`, so non-admin views of `/user/sessions` and `/user/recordings` are unchanged.
+
+### Database
+
+- **Migration `065_recording_client_ip.sql`** — `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS client_ip TEXT;`. Nullable for backwards compatibility; no back-fill is performed.
+
 ## [1.9.5] — 2026-05-22
 
 ### Minor Release — Server-side recordings search, per-user last-login tracking, and configurable stale-account auto-cleanup

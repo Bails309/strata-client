@@ -629,10 +629,11 @@ pub async fn insert_start(
     username: String,
     storage_path: String,
     started_at: chrono::DateTime<chrono::Utc>,
+    client_ip: Option<String>,
 ) -> Result<(), crate::error::AppError> {
     sqlx::query(
-        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7)",
+        "INSERT INTO recordings (session_id, connection_id, connection_name, user_id, username, storage_path, storage_type, started_at, client_ip)
+         VALUES ($1, $2, $3, $4, $5, $6, 'local', $7, $8)",
     )
     .bind(session_id)
     .bind(connection_id)
@@ -641,6 +642,7 @@ pub async fn insert_start(
     .bind(username)
     .bind(storage_path)
     .bind(started_at)
+    .bind(client_ip)
     .execute(pool)
     .await?;
     Ok(())

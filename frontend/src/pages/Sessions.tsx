@@ -252,6 +252,11 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                   <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
                     Remote Host
                   </th>
+                  {isAdmin && (
+                    <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
+                      Client IP
+                    </th>
+                  )}
                   <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
                     Active Since
                   </th>
@@ -266,7 +271,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
               <tbody className="divide-y divide-border">
                 {sessions.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 8 : 6} className="p-12 text-center">
+                    <td colSpan={isAdmin ? 9 : 6} className="p-12 text-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="p-3 bg-nav-link-hover rounded-full">
                           <svg
@@ -328,6 +333,17 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                           {session.remote_host}
                         </span>
                       </td>
+                      {isAdmin && (
+                        <td className="p-4">
+                          {session.client_ip && session.client_ip !== "unknown" ? (
+                            <span className="text-sm font-mono text-txt-primary">
+                              {session.client_ip}
+                            </span>
+                          ) : (
+                            <span className="text-sm italic text-txt-tertiary">Unknown</span>
+                          )}
+                        </td>
+                      )}
                       <td className="p-4">
                         <div className="flex flex-col">
                           <span className="text-sm text-txt-primary">
@@ -540,6 +556,11 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                     </th>
                     {isAdmin && (
                       <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
+                        Client IP
+                      </th>
+                    )}
+                    {isAdmin && (
+                      <th className="p-4 text-left text-xs font-semibold uppercase tracking-wider text-txt-tertiary">
                         Storage
                       </th>
                     )}
@@ -573,6 +594,17 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                           {formatRecDuration(r.duration_secs)}
                         </span>
                       </td>
+                      {isAdmin && (
+                        <td className="p-4">
+                          {r.client_ip && r.client_ip !== "unknown" ? (
+                            <span className="text-sm font-mono text-txt-primary">
+                              {r.client_ip}
+                            </span>
+                          ) : (
+                            <span className="text-sm italic text-txt-tertiary">Unknown</span>
+                          )}
+                        </td>
+                      )}
                       {isAdmin && (
                         <td className="p-4">
                           <span

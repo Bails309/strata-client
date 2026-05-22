@@ -31,7 +31,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.9.5",
     subtitle:
-      "Server-side recordings search & pagination, per-user last-login tracking, configurable stale-account auto-cleanup, and Client IP visibility on the Sessions blade",
+      "Server-side recordings search & pagination, per-user last-login tracking, configurable stale-account auto-cleanup, Client IP visibility on the Sessions blade, and DMZ peer version visibility on the Health blade",
     sections: [
       {
         title: "Server-side recordings search and pagination",
@@ -52,6 +52,11 @@ export const RELEASE_CARDS: ReleaseCard[] = [
         title: "Client IP visibility on the Sessions blade",
         description:
           "The admin Live and Recordings tabs now render a new Client IP column showing the operator's public source address — resolved at handshake from the rightmost non-empty X-Forwarded-For entry, with a ConnectInfo peer-IP fallback. Live sessions reuse the existing in-memory session_registry value; recordings are backed by a new nullable `recordings.client_ip` column (migration 065) populated at the same call site that captures session_id and started_at. Recordings created before the migration render as an italic Unknown.",
+      },
+      {
+        title: "DMZ peer version visibility on the Health blade",
+        description:
+          "In DMZ deployments, the Health tab now renders a new DMZ Version tile alongside the existing Strata Version tile, capturing the `strata-dmz` binary version over the existing mTLS link. The strata-link/1.0 handshake is extended so the DMZ echoes its own software_version back to the internal node in AuthOutcome::Accept; the new field is Option<String> with serde(default), so pre-1.9.5 DMZ binaries that don't emit it deserialise to None and the UI renders an explicit Unknown rather than refusing to handshake. Multi-DMZ deployments running heterogenous builds show a Mixed indicator with the full list of distinct versions; single-version deployments add a yellow Skew vs frontend warning when the DMZ version differs from __APP_VERSION__. The DMZ Links tab also gains a per-endpoint DMZ version column. No new ports — the whole exchange stays inside the existing mTLS + PSK link.",
       },
     ],
   },

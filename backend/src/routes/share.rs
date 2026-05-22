@@ -707,7 +707,7 @@ async fn copilot_room_loop(
     client_ip: String,
     user_agent: String,
 ) {
-    use crate::services::co_pilot::{looks_like_envelope, CoPilotMsg};
+    use crate::services::co_pilot::CoPilotMsg;
     use axum::extract::ws::Message;
 
     let room = session.co_pilot_room.clone();
@@ -809,7 +809,7 @@ async fn copilot_room_loop(
                 match msg {
                     None => break,
                     Some(Ok(Message::Text(text))) => {
-                        if !looks_like_envelope(&text) { continue; }
+                        if !CoPilotMsg::looks_like_envelope(&text) { continue; }
                         let env = match serde_json::from_str::<CoPilotMsg>(&text) {
                             Ok(e) => e,
                             Err(_) => continue,

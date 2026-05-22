@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 pub mod room;
 
-pub use room::{CoPilotRoom, InputClaimResult, JoinError, Participant};
+pub use room::{CoPilotRoom, InputClaimResult, JoinError};
 
 /// Maximum length of a participant-supplied display name, in bytes.
 pub const MAX_DISPLAY_NAME_LEN: usize = 40;

@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — Unreleased
+
+### Minor Release — OneIdentity Safeguard JIT credential checkout (preview)
+
+A first slice of the OneIdentity Safeguard integration ships as a
+**UI-configurable preview**: every appliance setting (FQDN, port, TLS
+verification, pinned CA, IdP alias, auth mode, default duration, reason
+template, auto-checkin behaviour, A2A client cert / key / API key) lives
+behind the new **Admin → Secrets & Security → Safeguard JIT** tab. The
+feature is gated behind a master `enabled` switch — defaults are
+`enabled = false` so existing deployments are unaffected until an
+operator turns it on. A2A authentication mode is functional in this
+release; per-user OIDC is scaffolded but deferred to a follow-up so we
+can ship the configurator and connectivity probe first.
+
+#### Added
+
+- **Safeguard JIT admin configuration** ([`backend/migrations/067_safeguard.sql`](backend/migrations/067_safeguard.sql), [`backend/src/services/safeguard/`](backend/src/services/safeguard/), [`backend/src/routes/admin/safeguard.rs`](backend/src/routes/admin/safeguard.rs), [`frontend/src/pages/admin/SafeguardTab.tsx`](frontend/src/pages/admin/SafeguardTab.tsx)).
+  Singleton `safeguard_config` row stores every appliance tunable; A2A
+  secrets are sealed with the same Vault transit-key envelope the SMTP
+  password / AD bind password already use, so plaintext never reaches
+  the DB. `credential_profiles` gains a `kind` discriminator (`local` /
+  `safeguard`) and a `(safeguard_account_id, safeguard_asset)` tuple so
+  a future commit on this branch can resolve JIT passwords at
+  tunnel-open time. Admin REST surface: `GET / PUT
+  /api/admin/safeguard/config` with keep-on-mask semantics for sealed
+  fields and `POST /api/admin/safeguard/test` for live reachability +
+  A2A handshake probing.
+- **Master kill-switch** matching the v1.9.6 multiplayer-share pattern
+  ([`backend/src/services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs)). When `enabled = false` the
+  credential-profile kind selector hides the Safeguard option across
+  the UI and existing safeguard-backed profiles fall through to the
+  existing "expired managed credential" rejection so no in-flight
+  session is forced to recover from a half-disabled state.
+- **Append-only Safeguard checkout audit table** ([`backend/migrations/067_safeguard.sql`](backend/migrations/067_safeguard.sql))
+  with `pending → success/failed → checked_in/expired` outcome
+  transitions, mirroring the `share_participant_audit` shape so the
+  same forensic tooling can be reused.
+
 ## [1.9.6] — Unreleased
 
 ### Minor Release — Multiplayer / Co-Pilot Mode for shared sessions

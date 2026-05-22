@@ -121,6 +121,7 @@ For the full per-version history of how these capabilities were built and the bu
 
 | Version | Date | Description |
 | :--- | :--- | :--- |
+| 1.9.5 | 2026-05-22 | **Server-side recordings search & pagination, per-user last-login tracking, and configurable stale-account auto-cleanup** — `GET /api/admin/recordings` and `GET /api/user/recordings` now accept an optional `search` query parameter and the Sessions page paginates server-side (`PAGE_SIZE = 50`, 300 ms debounce, `limit + 1` `hasMore` probe), lifting the prior 200-row client-side cap; migration 064 adds `users.last_login_at` populated by both local-login and SSO-callback paths and surfaced as a **Last Login** column on the admin Users blade; new `user_stale_days` retention setting drives the existing `user_cleanup` worker to soft-delete users idle past the threshold, with `NULL last_login_at` rows explicitly excluded and `0` disabling the sweep — audited as `user.stale_auto_deleted`. ([details](CHANGELOG.md#195--2026-05-22)) |
 | 1.9.4 | 2026-05-20 | **NVR observer reconstructs canvas state beyond the 5-minute ring buffer** — adds a per-session persistent-state log alongside `SessionBuffer` so drawing instructions salvaged from frames that age out of the time-windowed buffer are still replayed to newly-joining LIVE / share-link observers; eliminates the long-standing "black canvas after 5 minutes" defect on long-running, mostly-idle sessions. Credential redaction (`7.connect` / `4.args` stripping) is preserved across the new log. ([details](CHANGELOG.md#194--2026-05-20)) |
 | 1.9.3 | 2026-05-20 | **Option to disable Break Glass, dynamic empty connection folders pruning & package cleanup** — introduces togglable Break Glass emergency bypass in Approval Roles; dynamic dashboard folder filtering to prune empty directories; unifies style formatting and prunes manifest strings. ([details](CHANGELOG.md#193--2026-05-20)) |
 | 1.9.2 | 2026-05-20 | **Premium RDP Interaction & Dragging Performance** — resolves active RDP click deadzone issues on top-left of the viewport; optimizes sidebar toggle CSS transitions to target only color and background properties, completely eliminating cursor gesture dragging lag; consolidated `.session-bar-toggle` rules under dark theme to guarantee high chevron contrast. ([details](CHANGELOG.md#192--2026-05-20)) |
@@ -234,7 +235,7 @@ You have two options. **Pre-built images is the faster path** (~30 s on a cold h
 Every tagged release publishes Cosign-signed, SLSA Level-3-provenance, CycloneDX-SBOM-attached container images to GitHub Container Registry. The `docker-compose.ghcr.yml` overlay points the stack at them:
 
 ```bash
-export STRATA_VERSION=1.9.4                                  # or "latest"
+export STRATA_VERSION=1.9.5                                  # or "latest"
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
@@ -250,7 +251,7 @@ Images:
 Verify image signatures + provenance with [Cosign](https://docs.sigstore.dev/cosign/installation/) before deploying to production:
 
 ```bash
-cosign verify ghcr.io/bails309/strata-client/backend:1.9.4 \
+cosign verify ghcr.io/bails309/strata-client/backend:1.9.5 \
   --certificate-identity-regexp '^https://github.com/Bails309/strata-client/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -258,7 +259,7 @@ cosign verify ghcr.io/bails309/strata-client/backend:1.9.4 \
 The published SBOM is also attached as an in-toto attestation:
 
 ```bash
-cosign download attestation ghcr.io/bails309/strata-client/backend:1.9.4 \
+cosign download attestation ghcr.io/bails309/strata-client/backend:1.9.5 \
   --predicate-type https://cyclonedx.org/bom
 ```
 

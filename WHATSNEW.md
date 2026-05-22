@@ -1,3 +1,55 @@
+# What's New in v1.9.5
+
+> **Minor release: server-side recordings search and pagination, per-user last-login tracking, and configurable stale-account auto-cleanup.** v1.9.5 makes two operator workflows on the admin blade meaningfully faster and more compliant — the Recordings table now performs its search and pagination on the server (no more silent 200-row cap on the client), and the Users table surfaces a per-user **Last Login** column plus a new retention setting that auto-soft-deletes accounts that have been provisioned and signed in at least once but have since gone idle past a configurable threshold.
+
+## Server-side recordings search and pagination
+
+The **Recordings** tab on the Sessions page previously fetched the most recent 200 recordings from the API and ran the search filter in the browser — anything beyond that window was invisible, even to a focussed search. v1.9.5 moves both the search and the pagination to the backend.
+
+`GET /api/admin/recordings` and `GET /api/user/recordings` now accept an optional `search` query parameter. When present, the SQL `WHERE` clause adds `AND ($3::text IS NULL OR connection_name ILIKE $3 OR username ILIKE $3)` with the parameter bound as `%search%`, so a single query matches either the connection name or the operator name without any client-side post-filtering.
+
+In the UI, the Sessions page now ships with a `PAGE_SIZE = 50` paginator and a 300 ms debounced search input. Each fetch asks for `limit + 1` rows so the page can derive a reliable `hasMore` flag, the Next / Previous footer is keyboard-accessible, and the search box resets the page to 1 on every new query. The empty state has been split into two — _"Session recordings will appear here once completed."_ when the list is genuinely empty, and _"No results matching `<query>`"_ with a single-click **Clear search filter** button when the active search has no matches. The same plumbing is used by the user-scoped Recordings view, so non-admin users get the same fast scrolling and search across their own historical recordings.
+
+## Per-user Last Login timestamp
+
+Every successful local or SSO authentication now updates a new `users.last_login_at` column (migration 064). The hook fires from both `POST /api/auth/login` and `GET /api/auth/sso/callback`, immediately before audit logging, and is invoked best-effort (`let _ = update_last_login(...)`) so a transient DB hiccup never blocks the user from receiving their access / refresh tokens.
+
+The admin **Users** table now renders a new **Last Login** column right next to the existing role and status fields. Timestamps are formatted via the same `useSettings().formatDateTime` helper that powers the rest of the admin UI, so they honour the configured `display_timezone`, `display_date_format`, and `display_time_format`. Accounts that have not yet authenticated render as an italic **Never** placeholder — visually distinct from _"logged in just now"_ — which makes it straightforward to spot AD-sync imports that were provisioned but have never actually been used.
+
+## Configurable stale-account auto-cleanup
+
+A new **Stale account auto-deletion (days)** setting in **Admin Settings → Security → Data Retention** wires the new `last_login_at` field into the existing daily `user_cleanup` worker. Before the existing hard-delete pass runs, the worker now reads `user_stale_days` from `system_settings` and — when the value is a positive integer (1–3650) — issues:
+
+```sql
+UPDATE users
+SET deleted_at = now()
+WHERE deleted_at IS NULL
+  AND last_login_at IS NOT NULL
+  AND last_login_at < now() - make_interval(days => $1)
+```
+
+Two safety guarantees are explicit in the implementation and documented in the UI:
+
+1. **NULL `last_login_at` is never aged out.** Users who have been provisioned (e.g. by AD sync) but have never signed in are explicitly excluded — the clock only starts after a user's first successful authentication, so a freshly-imported batch of accounts is never auto-deleted on the basis of when they were _created_.
+2. **Setting `user_stale_days = 0` disables the sweep entirely.** This is the default after upgrade. The feature is opt-in; nothing happens until an administrator sets a positive threshold.
+
+Every affected row is written to the audit log as `user.stale_auto_deleted` with `{ user_id, username, stale_days }`, with `actor_id = None` to reflect that the worker (not a human operator) performed the action. Soft-deleted accounts continue to flow through the existing `user_hard_delete_days` retention window and remain restorable from the **Show Deleted Users** filter for the configured grace period.
+
+## Upgrade
+
+Drop-in upgrade from v1.9.4 — backend + frontend rebuild, migration 064 applies automatically on first start. No configuration changes required to keep the old behaviour (the new sweep ships disabled by default).
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend frontend
+```
+
+To enable the stale-account sweep after upgrade, set **Admin Settings → Security → Data Retention → Stale account auto-deletion (days)** to a positive integer and click **Save**. The next daily `user_cleanup` worker pass will pick up the new value.
+
+---
+
 # What's New in v1.9.4
 
 > **Patch release: live session observer reconstructs canvas state beyond the 5-minute NVR ring buffer.** v1.9.4 fixes a visual defect where pressing **LIVE** on the Sessions page (or joining via a share link) showed a fully black canvas whenever the target session had been running for more than five minutes. Drawing instructions that aged out of the ring buffer are now salvaged into a per-session persistent-state log and replayed to newly-joining observers, so the canvas is always reconstructed from canonical screen state — while preserving the existing credential-redaction guarantees.

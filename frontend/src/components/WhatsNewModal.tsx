@@ -29,6 +29,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.5",
+    subtitle:
+      "Server-side recordings search & pagination, per-user last-login tracking, and configurable stale-account auto-cleanup",
+    sections: [
+      {
+        title: "Server-side recordings search and pagination",
+        description:
+          "The Recordings tab on the Sessions page no longer caps at the most recent 200 rows. `GET /api/admin/recordings` and `GET /api/user/recordings` now accept an optional `search` query parameter (matched server-side against `connection_name` and `username` via `ILIKE`), and the page itself paginates with `PAGE_SIZE = 50`, a 300 ms debounced search input, and a Next / Previous footer driven by a `limit + 1` `hasMore` probe. A dedicated empty state distinguishes 'no recordings yet' from 'no results matching <query>' with a one-click Clear search filter button.",
+      },
+      {
+        title: "Per-user Last Login on the Users blade",
+        description:
+          "Every successful local or SSO authentication now stamps `users.last_login_at` (migration 064) immediately before audit logging — best-effort, so a DB hiccup never blocks token issuance. The admin Users table renders a new Last Login column formatted via the operator's configured timezone / date / time format, with an italic Never placeholder for accounts that have not yet authenticated.",
+      },
+      {
+        title: "Configurable stale-account auto-deletion",
+        description:
+          "A new Stale account auto-deletion (days) setting in Admin Settings → Security → Data Retention drives the existing daily user_cleanup worker. When the value is a positive integer (1–3650), users whose `last_login_at` is older than the threshold are soft-deleted and audited as `user.stale_auto_deleted`. Users with `last_login_at IS NULL` (never signed in) are deliberately excluded so freshly-provisioned AD-sync imports are not aged out solely on creation time, and a value of 0 (the upgrade default) disables the sweep entirely. Soft-deleted accounts continue to flow through the existing user_hard_delete_days retention window and remain restorable from Show Deleted Users.",
+      },
+    ],
+  },
+  {
     version: "1.9.4",
     subtitle: "NVR live observer fix — drawing state now persists beyond the 5-minute ring buffer",
     sections: [

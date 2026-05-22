@@ -775,10 +775,13 @@ List all users.
     "id": "uuid",
     "username": "jdoe",
     "sub": "keycloak-subject-id",
-    "role_name": "admin"
+    "role_name": "admin",
+    "last_login_at": "2026-05-21T14:03:11Z"
   }
 ]
 ```
+
+The `last_login_at` field (added in v1.9.5, migration 064) is the most recent successful local-login or SSO-callback timestamp. It is `null` for users who have been provisioned (e.g. via AD sync) but have never authenticated; the stale-account auto-cleanup sweep (`user_stale_days`, see [security.md](./security.md#user-lifecycle-retention)) explicitly excludes `null` rows so freshly-provisioned accounts are never aged out solely on creation time.
 
 #### `POST /api/admin/users/:id/reset-password`
 
@@ -1266,15 +1269,17 @@ List the calling user's own active tunnel sessions. Returns only sessions where 
 
 ### `GET /api/user/recordings`
 
-List the calling user's own historical recordings. Supports optional filtering and pagination.
+List the calling user's own historical recordings. Supports optional filtering, search, and pagination. The admin equivalent — `GET /api/admin/recordings` — accepts the same query parameters but is not scoped to the caller's `user_id` and additionally accepts a `user_id` filter.
 
 **Query Parameters**:
 
-| Parameter       | Type    | Default | Description          |
-| --------------- | ------- | ------- | -------------------- |
-| `connection_id` | uuid    | —       | Filter by connection |
-| `limit`         | integer | 50      | Maximum results      |
-| `offset`        | integer | 0       | Pagination offset    |
+| Parameter       | Type    | Default | Description                                                                                                                              |
+| --------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `connection_id` | uuid    | —       | Filter by connection                                                                                                                     |
+| `user_id`       | uuid    | —       | Admin-only filter (`GET /api/admin/recordings`); ignored on the user-scoped endpoint                                                     |
+| `search`        | string  | —       | Case-insensitive substring match against `connection_name` **or** `username` (server-side, bound as `ILIKE '%<search>%'`). Added v1.9.5. |
+| `limit`         | integer | 50      | Maximum results                                                                                                                          |
+| `offset`        | integer | 0       | Pagination offset                                                                                                                        |
 
 **Response** `200 OK`
 
@@ -2180,6 +2185,7 @@ required, but the response intentionally omits the PEM bytes.
 | `trusted_ca.created`              | Admin uploaded a new Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                             |
 | `trusted_ca.updated`              | Admin edited a Trusted CA bundle. `details`: `{ id, name, fingerprint }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                                   |
 | `trusted_ca.deleted`              | Admin deleted a Trusted CA bundle. `details`: `{ id, name }`. Added in v1.2.0                                                                                                                                                                                                                                                                                                                                               |
+| `user.stale_auto_deleted`         | Stale-account cleanup worker soft-deleted a user whose `last_login_at` was older than the configured `user_stale_days` threshold. `details`: `{ user_id, username, stale_days }`. `actor_id` is `NULL` (worker, not a human). Added in v1.9.5                                                                                                                                                                               |
 
 ---
 

@@ -309,6 +309,14 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/dmz-links/reconnect",
             post(admin::dmz::reconnect_links),
         )
+        .route(
+            "/api/admin/safeguard/config",
+            get(admin::safeguard::get_config).put(admin::safeguard::put_config),
+        )
+        .route(
+            "/api/admin/safeguard/test",
+            post(admin::safeguard::test_connection),
+        )
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         // CSRF runs first on the request path (outermost layer). It inspects

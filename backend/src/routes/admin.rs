@@ -19,6 +19,7 @@ use crate::services::{audit, kerberos, settings};
 
 pub mod dmz;
 pub mod recordings;
+pub mod safeguard;
 
 // ── Rate limiter: admin password reset (W3-7) ──────────────────────────
 

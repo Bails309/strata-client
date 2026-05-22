@@ -596,7 +596,7 @@ function DmzVersionTile({
     );
   }
   const single = versions.length === 1 ? versions[0] : null;
-  const mismatch = single != null && single !== __APP_VERSION__;
+  const mismatch = single !== null && single !== __APP_VERSION__;
   return (
     <div
       className="rounded-xl px-4 py-3 flex items-center gap-3"
@@ -626,7 +626,7 @@ function DmzVersionTile({
         <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
           DMZ Version
         </p>
-        {single != null ? (
+        {single !== null ? (
           <>
             <p className="text-sm font-bold text-txt-primary">v{single}</p>
             {mismatch && (

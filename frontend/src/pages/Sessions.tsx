@@ -503,7 +503,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
               <p>No recordings found</p>
               {debouncedSearch ? (
                 <>
-                  <p className="text-xs mt-1">No results matching "{debouncedSearch}"</p>
+                  <p className="text-xs mt-1">No results matching &quot;{debouncedSearch}&quot;</p>
                   <button
                     className="btn-sm mt-4 inline-flex items-center gap-1.5"
                     onClick={() => {

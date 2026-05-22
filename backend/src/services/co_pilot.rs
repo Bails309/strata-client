@@ -47,6 +47,7 @@ pub const MAX_PARTICIPANTS: u8 = 6;
 
 /// Errors returned by [`CoPilotMsg::validate`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // every variant describes a `field` validation failure; the prefix is intentional.
 pub enum CoPilotError {
     /// A bounded string field exceeded its limit.
     #[error("field `{field}` exceeds maximum length ({max} bytes)")]

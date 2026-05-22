@@ -42,7 +42,7 @@ const COLOR_PALETTE: &[&str] = &[
 ];
 
 /// One live participant in a co-pilot room.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Participant {
     /// Server-assigned, per-WS, ephemeral id.
     pub pid: Uuid,
@@ -54,6 +54,7 @@ pub struct Participant {
     /// `true` iff this participant is the session's owner.
     pub is_owner: bool,
     /// Wall-clock join time.
+    #[allow(dead_code)] // surfaced by the deferred owner participant-view endpoint.
     pub joined_at: Instant,
 }
 
@@ -243,6 +244,7 @@ impl CoPilotRoom {
     }
 
     /// Participant count.
+    #[allow(dead_code)] // exposed for the deferred owner participant-view endpoint.
     pub fn participant_count(&self) -> usize {
         self.state
             .read()
@@ -294,6 +296,7 @@ impl CoPilotRoom {
 
     /// Owner force-revoke. Returns the previous holder, if any.
     /// The caller is responsible for validating that `by` is the owner.
+    #[allow(dead_code)] // exposed for the deferred owner force-revoke endpoint.
     pub fn revoke_input(&self) -> Option<Uuid> {
         let mut state = self.state.write().expect("co-pilot room lock poisoned");
         let prev = state.input_holder.take();
@@ -303,6 +306,7 @@ impl CoPilotRoom {
 
     /// Owner force-grant to a specific participant. Returns the
     /// previous holder, if any, on success. Caller validates `by`.
+    #[allow(dead_code)] // exposed for the deferred owner force-grant endpoint.
     pub fn force_grant(&self, to: Uuid) -> Result<Option<Uuid>, JoinError> {
         let mut state = self.state.write().expect("co-pilot room lock poisoned");
         if !state.participants.contains_key(&to) {

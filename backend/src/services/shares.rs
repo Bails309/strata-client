@@ -112,6 +112,7 @@ pub struct ActiveShare {
 
 /// Legacy tuple alias kept for downstream call-sites that haven't
 /// migrated to [`ActiveShare`] yet. Will be removed in v1.10.
+#[allow(dead_code)]
 pub type ActiveShareRow = (Uuid, Uuid, Uuid, String);
 
 /// Look up an active (non-revoked, non-expired) share by token. The share is

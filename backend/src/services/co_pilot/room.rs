@@ -352,6 +352,31 @@ impl CoPilotRoom {
             false
         }
     }
+
+    /// Subscribe to the room's envelope fan-out. Every participant's
+    /// WebSocket loop holds one receiver; outbound envelopes are
+    /// JSON-serialised once at the call site and shared via `Arc`.
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<String>> {
+        self.fanout_tx.subscribe()
+    }
+
+    /// Serialise `msg` once and fan it out to all participants. Returns
+    /// the number of currently-subscribed receivers, or `0` if either
+    /// serialisation failed or there are no listeners. We intentionally
+    /// swallow serialisation errors here because the envelope was just
+    /// constructed in-process from typed data — a failure would indicate
+    /// a coding bug rather than a runtime condition worth propagating
+    /// through the WebSocket loop.
+    pub fn broadcast(&self, msg: &super::CoPilotMsg) -> usize {
+        let json = match serde_json::to_string(msg) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "co-pilot envelope serialise failed");
+                return 0;
+            }
+        };
+        self.fanout_tx.send(Arc::new(json)).unwrap_or(0)
+    }
 }
 
 /// Strip control characters, collapse whitespace, and truncate to

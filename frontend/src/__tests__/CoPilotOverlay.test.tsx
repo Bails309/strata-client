@@ -125,7 +125,7 @@ describe("CoPilotOverlay", () => {
   it("renders a remote cursor scaled by displayScale", () => {
     const { container } = render(<CoPilotOverlay {...baseProps({ displayScale: 2 })} />);
     const cursorWrap = container.querySelector(
-      "div[style*=\"left: 200\"], div[style*='left: 200px']",
+      "div[style*=\"left: 200\"], div[style*='left: 200px']"
     );
     expect(cursorWrap).not.toBeNull();
   });

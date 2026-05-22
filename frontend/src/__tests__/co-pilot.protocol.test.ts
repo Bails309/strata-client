@@ -30,7 +30,7 @@ describe("co-pilot/protocol", () => {
     it("returns true for any frame starting with '{'", () => {
       expect(looksLikeEnvelope('{"type":"cursor"}')).toBe(true);
       expect(looksLikeEnvelope("{")).toBe(true);
-      expect(looksLikeEnvelope("{ \"x\": 1 }")).toBe(true);
+      expect(looksLikeEnvelope('{ "x": 1 }')).toBe(true);
     });
 
     it("returns false for Guacamole frames and other non-JSON inputs", () => {

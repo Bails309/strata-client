@@ -39,6 +39,7 @@ pub const MAX_REVOKE_REASON_LEN: usize = 120;
 
 /// Current co-pilot protocol version. Bumped on any breaking wire
 /// change so the client can refuse to handshake.
+#[allow(dead_code)] // referenced by the deferred client-side handshake check.
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// Hard server-side cap on participants per co-pilot room — matches

@@ -88,6 +88,7 @@ pub enum JoinError {
 pub struct CoPilotRoom {
     /// Owning session id (matches `ActiveSession.session_id`). Kept for
     /// log correlation only — never mutated.
+    #[allow(dead_code)] // surfaced through tracing spans on future audit work.
     pub session_id: String,
     state: RwLock<RoomState>,
     /// Server → all participants fan-out for JSON envelope strings.
@@ -216,6 +217,7 @@ impl CoPilotRoom {
     }
 
     /// Current input-token holder, if any.
+    #[allow(dead_code)] // exposed for the deferred owner participant-view endpoint.
     pub fn current_holder(&self) -> Option<Uuid> {
         self.state
             .read()
@@ -224,6 +226,7 @@ impl CoPilotRoom {
     }
 
     /// Returns `true` iff `pid` is in the room.
+    #[allow(dead_code)] // exposed for the deferred owner participant-view endpoint.
     pub fn contains(&self, pid: Uuid) -> bool {
         self.state
             .read()
@@ -233,6 +236,7 @@ impl CoPilotRoom {
     }
 
     /// Returns `true` iff `pid` is the room's owner.
+    #[allow(dead_code)] // exposed for the deferred owner participant-view endpoint.
     pub fn is_owner(&self, pid: Uuid) -> bool {
         self.state
             .read()

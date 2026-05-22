@@ -26,6 +26,16 @@ vi.mock("../api", () => ({
   linkCheckoutToProfile: vi.fn(),
   checkinCheckout: vi.fn(),
   retryCheckoutActivation: vi.fn(),
+  getSafeguardEnabled: vi.fn().mockResolvedValue({ enabled: false }),
+  getSafeguardSigninStatus: vi.fn().mockResolvedValue({
+    signed_in: false,
+    appliance_fqdn: "",
+    idp_alias: "",
+    auth_mode: "a2a",
+    enabled: false,
+  }),
+  submitSafeguardToken: vi.fn(),
+  clearSafeguardToken: vi.fn(),
 }));
 
 vi.mock("../contexts/SettingsContext", () => ({

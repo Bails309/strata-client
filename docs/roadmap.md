@@ -165,29 +165,6 @@ Exportable CSV / PDF for management reporting.
 
 ## Workflows & Collaboration
 
-### Multiplayer / Co-Pilot Mode
-
-**Status:** Shipped (v1.9.6)  
-**Area:** Sessions · Collaboration
-
-Shipped in v1.9.6 as an opt-in extension to the existing share-link
-feature. A share with `multiplayer: true` and `mode: "control"` opens a
-co-pilot room of up to six participants:
-
-- **Named, distinct cursors** per participant (8-colour deterministic palette + display-name label, server-side disambiguated).
-- **Text chat** overlay anchored to the session (≤ 500 bytes per message, owner-gated via `allow_chat`).
-- **Input-token FSM** with owner force-grant, idle-grant after 2 s, voluntary release, and instant owner revoke.
-- **Two-WebSocket architecture**: `/api/shared/tunnel/{token}?pid=<uuid>` for Guacamole frames + `/api/shared/copilot/{token}?name=...` for JSON envelopes — see [ADR-0014](adr/ADR-0014-co-pilot-two-websocket-split.md).
-- **Append-only audit** via the new `share_participant_audit` table plus `share.multiplayer.joined` / `share.multiplayer.left` events in the global audit log.
-- **Operator kill switch** via the `multiplayer_share_enabled` system setting (default enabled; set to `"false"` to globally downgrade all new multiplayer share requests to single-viewer).
-
-**Deferred to a follow-up release:**
-
-- **WebRTC audio channel** for voice assist. `allow_audio`, the `audio_offer` / `audio_answer` / `ice` envelopes, and server-side validation are all wired through, but the 1.9.6 frontend ships no WebRTC peer mesh.
-- **Owner-side participant view** so the owner sees peer cursors and chat from inside their own `SessionManager`. The 1.9.6 owner only sees the revoke control on the share dialog.
-
-Primary use cases: pair programming, IT remote support, and on-boarding.
-
 ### Quick-Share Outbound (Approval-Gated)
 
 **Status:** Proposed  

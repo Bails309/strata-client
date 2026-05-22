@@ -281,11 +281,11 @@ const ADMIN_NAV_GROUPS: Array<{ title: string; items: Tab[] }> = [
   { title: "Overview", items: ["health", "sessions"] },
   {
     title: "Identity & Access",
-    items: ["access", "ad-sync", "sso", "kerberos", "passwords"],
+    items: ["access", "ad-sync", "sso", "kerberos", "passwords", "safeguard"],
   },
   { title: "Connectivity", items: ["network", "dmz-links", "trusted-cas", "vdi"] },
   { title: "Workspace", items: ["display", "tags", "notifications", "recordings"] },
-  { title: "Secrets & Security", items: ["vault", "safeguard", "security"] },
+  { title: "Secrets & Security", items: ["vault", "security"] },
 ];
 
 function tabVisible(t: Tab, user: MeResponse): boolean {

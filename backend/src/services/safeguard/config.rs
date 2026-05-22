@@ -29,7 +29,12 @@ pub const SECRET_MASK: &str = "********";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMode {
-    PerUserOidc,
+    /// Per-user browser SSO via Safeguard's RSTS federation flow.
+    /// Each user runs the helper (PowerShell `Connect-Safeguard -Browser
+    /// -IdentityProvider <alias>`) once per token lifetime and posts the
+    /// resulting API token to Strata, where it is Vault-sealed and used
+    /// for that user's JIT checkouts.
+    PerUserBrowser,
     A2a,
     Hybrid,
 }
@@ -37,7 +42,7 @@ pub enum AuthMode {
 impl AuthMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            AuthMode::PerUserOidc => "per_user_oidc",
+            AuthMode::PerUserBrowser => "per_user_browser",
             AuthMode::A2a => "a2a",
             AuthMode::Hybrid => "hybrid",
         }
@@ -45,7 +50,10 @@ impl AuthMode {
 
     pub fn parse(s: &str) -> Result<Self, AppError> {
         match s {
-            "per_user_oidc" => Ok(AuthMode::PerUserOidc),
+            "per_user_browser" => Ok(AuthMode::PerUserBrowser),
+            // Accept the legacy spelling for one release so any
+            // unmigrated row or in-flight admin request doesn't 400.
+            "per_user_oidc" => Ok(AuthMode::PerUserBrowser),
             "a2a" => Ok(AuthMode::A2a),
             "hybrid" => Ok(AuthMode::Hybrid),
             other => Err(AppError::Validation(format!(
@@ -72,6 +80,14 @@ pub struct SafeguardConfig {
     pub default_checkout_hours: i32,
     pub request_reason_template: String,
     pub auto_checkin_on_session_end: bool,
+    /// When `true`, a successful JIT checkout's password is sealed and
+    /// cached for `default_checkout_hours`, so subsequent tunnel opens
+    /// for the same profile reuse the cached row without requiring a
+    /// fresh per-user Safeguard sign-in. Auto-checkin is suppressed
+    /// while caching is active — the credential remains live on the
+    /// appliance until Safeguard's own rotation policy expires it.
+    #[serde(default)]
+    pub password_cache_enabled: bool,
     /// On read: `"********"` if set, `""` if unset. On write: same
     /// convention — `"********"` means "leave existing alone".
     #[serde(default)]
@@ -91,10 +107,11 @@ impl Default for SafeguardConfig {
             verify_tls: true,
             ca_cert_pem: String::new(),
             idp_alias: String::new(),
-            auth_mode: AuthMode::PerUserOidc,
+            auth_mode: AuthMode::PerUserBrowser,
             default_checkout_hours: 12,
             request_reason_template: "Strata session {session_id} for {user}".to_string(),
             auto_checkin_on_session_end: true,
+            password_cache_enabled: false,
             a2a_api_key: String::new(),
             a2a_client_cert_pem: String::new(),
             a2a_client_key_pem: String::new(),
@@ -116,6 +133,7 @@ struct ConfigRow {
     default_checkout_hours: i32,
     request_reason_template: String,
     auto_checkin_on_session_end: bool,
+    password_cache_enabled: bool,
     a2a_api_key_sealed: Option<String>,
     a2a_client_cert_pem_sealed: Option<String>,
     a2a_client_key_pem_sealed: Option<String>,
@@ -127,7 +145,7 @@ pub async fn load(pool: &PgPool) -> Result<SafeguardConfig, AppError> {
     let row: ConfigRow = sqlx::query_as(
         "SELECT enabled, appliance_fqdn, appliance_port, verify_tls, ca_cert_pem,
                 idp_alias, auth_mode, default_checkout_hours, request_reason_template,
-                auto_checkin_on_session_end,
+                auto_checkin_on_session_end, password_cache_enabled,
                 a2a_api_key_sealed, a2a_client_cert_pem_sealed, a2a_client_key_pem_sealed
            FROM safeguard_config WHERE id = 1",
     )
@@ -145,6 +163,7 @@ pub async fn load(pool: &PgPool) -> Result<SafeguardConfig, AppError> {
         default_checkout_hours: row.default_checkout_hours,
         request_reason_template: row.request_reason_template,
         auto_checkin_on_session_end: row.auto_checkin_on_session_end,
+        password_cache_enabled: row.password_cache_enabled,
         a2a_api_key: mask_if_set(row.a2a_api_key_sealed.as_deref()),
         a2a_client_cert_pem: mask_if_set(row.a2a_client_cert_pem_sealed.as_deref()),
         a2a_client_key_pem: mask_if_set(row.a2a_client_key_pem_sealed.as_deref()),
@@ -227,11 +246,12 @@ pub async fn save(
             default_checkout_hours      = $8,
             request_reason_template     = $9,
             auto_checkin_on_session_end = $10,
-            a2a_api_key_sealed          = $11,
-            a2a_client_cert_pem_sealed  = $12,
-            a2a_client_key_pem_sealed   = $13,
+            password_cache_enabled      = $11,
+            a2a_api_key_sealed          = $12,
+            a2a_client_cert_pem_sealed  = $13,
+            a2a_client_key_pem_sealed   = $14,
             updated_at                  = now(),
-            updated_by                  = $14
+            updated_by                  = $15
           WHERE id = 1",
     )
     .bind(new_cfg.enabled)
@@ -244,6 +264,7 @@ pub async fn save(
     .bind(new_cfg.default_checkout_hours)
     .bind(&new_cfg.request_reason_template)
     .bind(new_cfg.auto_checkin_on_session_end)
+    .bind(new_cfg.password_cache_enabled)
     .bind(api_key)
     .bind(client_cert)
     .bind(client_key)
@@ -302,18 +323,11 @@ fn validate(cfg: &SafeguardConfig) -> Result<(), AppError> {
         ));
     }
     if cfg.enabled
-        && matches!(cfg.auth_mode, AuthMode::PerUserOidc | AuthMode::Hybrid)
+        && matches!(cfg.auth_mode, AuthMode::PerUserBrowser | AuthMode::Hybrid)
         && cfg.idp_alias.trim().is_empty()
     {
         return Err(AppError::Validation(
-            "idp_alias is required for per_user_oidc / hybrid auth modes".into(),
-        ));
-    }
-    // Per-user OIDC isn't implemented yet — refuse to enable it as the
-    // *exclusive* mode so admins don't lock themselves out of JIT.
-    if cfg.enabled && cfg.auth_mode == AuthMode::PerUserOidc {
-        return Err(AppError::Validation(
-            "per_user_oidc mode is not yet implemented; choose a2a or hybrid".into(),
+            "idp_alias is required for per_user_browser / hybrid auth modes".into(),
         ));
     }
     Ok(())
@@ -325,7 +339,7 @@ mod tests {
 
     #[test]
     fn auth_mode_roundtrip() {
-        for m in [AuthMode::PerUserOidc, AuthMode::A2a, AuthMode::Hybrid] {
+        for m in [AuthMode::PerUserBrowser, AuthMode::A2a, AuthMode::Hybrid] {
             assert_eq!(AuthMode::parse(m.as_str()).unwrap(), m);
         }
         assert!(AuthMode::parse("nonsense").is_err());
@@ -352,12 +366,12 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_per_user_oidc_when_enabled() {
+    fn validate_requires_idp_alias_for_per_user_browser() {
         let c = SafeguardConfig {
             enabled: true,
-            auth_mode: AuthMode::PerUserOidc,
+            auth_mode: AuthMode::PerUserBrowser,
             appliance_fqdn: "sg.example.com".into(),
-            idp_alias: "extf161".into(),
+            idp_alias: String::new(),
             ..Default::default()
         };
         assert!(validate(&c).is_err());

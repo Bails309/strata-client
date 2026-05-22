@@ -1084,6 +1084,12 @@ export interface CredentialProfile {
   /** When true, the profile may set ttl_hours up to 2160 (90 days). */
   extended_expiry: boolean;
   checkout_id?: string;
+  /** "local" (username+password sealed in vault) or "safeguard" (JIT checkout). */
+  kind?: "local" | "safeguard";
+  /** Numeric Safeguard AccountId — present when kind === "safeguard". */
+  safeguard_account_id?: string;
+  /** Asset label or numeric AssetId — present when kind === "safeguard". */
+  safeguard_asset?: string;
 }
 
 export interface CredentialMapping {
@@ -1095,17 +1101,37 @@ export interface CredentialMapping {
 export const getCredentialProfiles = () =>
   request<CredentialProfile[]>("/user/credential-profiles");
 
+export interface CreateCredentialProfileBody {
+  label: string;
+  /** Required when kind === "local". */
+  username?: string;
+  /** Required when kind === "local". */
+  password?: string;
+  ttl_hours?: number;
+  extended_expiry?: boolean;
+  /** Defaults to "local" on the backend. */
+  kind?: "local" | "safeguard";
+  safeguard_account_id?: string;
+  safeguard_asset?: string;
+}
+
 export const createCredentialProfile = (
-  label: string,
-  username: string,
-  password: string,
+  body: CreateCredentialProfileBody | string,
+  username?: string,
+  password?: string,
   ttl_hours?: number,
   extended_expiry?: boolean
-) =>
-  request<{ id: string; status: string }>("/user/credential-profiles", {
+) => {
+  // Back-compat: existing callers pass positional (label, username, password, ttl, extended).
+  const payload: CreateCredentialProfileBody =
+    typeof body === "string"
+      ? { label: body, username, password, ttl_hours, extended_expiry }
+      : body;
+  return request<{ id: string; status: string; kind?: string }>("/user/credential-profiles", {
     method: "POST",
-    body: JSON.stringify({ label, username, password, ttl_hours, extended_expiry }),
+    body: JSON.stringify(payload),
   });
+};
 
 export const updateCredentialProfile = (
   profileId: string,
@@ -1115,6 +1141,8 @@ export const updateCredentialProfile = (
     password?: string;
     ttl_hours?: number;
     extended_expiry?: boolean;
+    safeguard_account_id?: string;
+    safeguard_asset?: string;
   }
 ) =>
   request<{ status: string }>(`/user/credential-profiles/${profileId}`, {
@@ -1716,7 +1744,7 @@ export const listEmailDeliveries = (status?: string, limit = 50) => {
 // the same shape back; secret fields use the `********` mask sentinel
 // to mean "keep existing", empty string to mean "clear", any other
 // value replaces.
-export type SafeguardAuthMode = "per_user_oidc" | "a2a" | "hybrid";
+export type SafeguardAuthMode = "per_user_browser" | "a2a" | "hybrid";
 
 export interface SafeguardConfig {
   enabled: boolean;
@@ -1729,6 +1757,12 @@ export interface SafeguardConfig {
   default_checkout_hours: number;
   request_reason_template: string;
   auto_checkin_on_session_end: boolean;
+  /** When true, JIT-checked-out passwords are vault-cached for
+   * `default_checkout_hours` and reused across sessions, and
+   * auto-checkin is suppressed so the appliance keeps the request
+   * open for follow-up tunnels. Trades stricter audit granularity
+   * for users not having to re-submit a 15-min RSTS token. */
+  password_cache_enabled: boolean;
   // `********` = currently set (keep on save); `` = unset.
   a2a_api_key: string;
   a2a_client_cert_pem: string;
@@ -1760,6 +1794,96 @@ export const testSafeguardConnection = (cfg: SafeguardConfig) =>
     method: "POST",
     body: JSON.stringify(cfg),
   });
+
+/** Non-admin capability probe — returns `{enabled}` so the credential
+ * editor can decide whether to show the Safeguard JIT option. */
+export const getSafeguardEnabled = () =>
+  request<{ enabled: boolean }>("/user/safeguard/enabled");
+
+// -- Per-user Safeguard sign-in (browser/RSTS mode) ------------------
+
+/** Shape returned by `GET /api/user/safeguard/status`. */
+export interface SafeguardSigninStatus {
+  /** True when a non-expired token is on file for the current user. */
+  signed_in: boolean;
+  /** ISO-8601; only present when `signed_in = true`. */
+  expires_at?: string;
+  /** Appliance hint so the UI can render the helper snippet without
+   * a separate admin-config fetch. */
+  appliance_fqdn: string;
+  idp_alias: string;
+  auth_mode: SafeguardAuthMode;
+  /** Mirrors the JIT kill switch — when false, the UI hides the
+   * sign-in card entirely. */
+  enabled: boolean;
+  /** Mirrors admin "Cache checked-out passwords". The bulk-checkout
+   * card uses this to decide whether to enable the action. */
+  password_cache_enabled?: boolean;
+}
+
+export const getSafeguardSigninStatus = () =>
+  request<SafeguardSigninStatus>("/user/safeguard/status");
+
+export const submitSafeguardToken = (
+  api_token: string,
+  expires_in_seconds?: number,
+) =>
+  request<{ signed_in: true; expires_at: string }>("/user/safeguard/token", {
+    method: "POST",
+    body: JSON.stringify({ api_token, expires_in_seconds }),
+  });
+
+export const clearSafeguardToken = () =>
+  request<{ signed_in: false }>("/user/safeguard/token", { method: "DELETE" });
+
+// -- Safeguard bulk pre-checkout -------------------------------------
+export interface SafeguardCachedStatus {
+  profile_id: string;
+  username: string | null;
+  request_id: string | null;
+  /** RFC3339. */
+  expires_at: string;
+}
+
+export interface BulkSafeguardCheckoutResult {
+  profile_id: string;
+  label: string;
+  ok: boolean;
+  error?: string;
+  expires_at?: string;
+  username?: string;
+  replaced_existing?: boolean;
+}
+
+export const listSafeguardCached = () =>
+  request<SafeguardCachedStatus[]>("/user/safeguard/cached");
+
+export const bulkSafeguardCheckout = (
+  profile_ids: string[],
+  comment: string,
+) =>
+  request<BulkSafeguardCheckoutResult[]>("/user/safeguard/bulk-checkout", {
+    method: "POST",
+    body: JSON.stringify({ profile_ids, comment }),
+  });
+
+export interface BulkSafeguardCheckinResult {
+  profile_id: string;
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Release one or more cached Safeguard passwords. Pass an empty
+ * `profile_ids` array to release everything currently cached for
+ * the calling user.
+ */
+export const safeguardCheckin = (profile_ids: string[]) =>
+  request<BulkSafeguardCheckinResult[]>("/user/safeguard/checkin", {
+    method: "POST",
+    body: JSON.stringify({ profile_ids }),
+  });
+
 
 // -- Trusted CA bundles ----------------------------------------------
 export interface TrustedCaSummary {

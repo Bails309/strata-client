@@ -29,6 +29,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.0",
+    subtitle:
+      "OneIdentity Safeguard JIT credential checkout — fetch privileged-account passwords from Safeguard at tunnel-open time with bulk checkout, per-user browser sign-in, A2A, optional Vault-sealed caching, and full hardening against every 8.x REST quirk",
+    sections: [
+      {
+        title: "Just-in-time credential checkout against Safeguard",
+        description:
+          "A new safeguard credential-profile kind resolves its password from OneIdentity Safeguard for Privileged Passwords at the moment the tunnel is opened, instead of carrying a locally-stored password. Each tunnel runs a four-step REST dance against the appliance — preflight any stale request this user holds for the same target, post a fresh access request stamped with the user's justification and the profile's TTL, retrieve the released password via CheckoutPassword, and hand it to the existing Guacamole connection path. The username is built from AccountName + AccountDomainName so RDP receives the correct logon name rather than the numeric account id.",
+      },
+      {
+        title: "Bulk Checkout and one-click check-in",
+        description:
+          "The Credentials page gains a Request Checkout tab pairing a Safeguard sign-in card with a Bulk Checkout card. Users supply a single mandatory Justification (sent verbatim as Safeguard's ReasonComment for every selected profile), pick any subset of their Safeguard-backed profiles via per-row checkboxes plus a master Select all toggle, and click Checkout selected to pre-fetch every password in one signed-in burst. Failures are inlined into the failing row with the full Safeguard error body, and a matching Check in all (N) button releases every cached credential back to the appliance in one POST.",
+      },
+      {
+        title: "Per-user browser sign-in and A2A",
+        description:
+          "Per-user-browser auth has each user run Connect-Safeguard -Browser -IdentityProvider <alias> from the Safeguard PowerShell module and paste the resulting API token into the new sign-in card — every subsequent checkout is then attributed to the user's own identity in the Safeguard audit log. A2A authenticates Strata as a single application identity via client certificate + key + API key, ideal for shared-automation accounts where individual attribution isn't required. The default hybrid mode prefers the per-user token when available and falls back to A2A when it isn't.",
+      },
+      {
+        title: "Optional Vault-sealed password cache",
+        description:
+          "When an administrator enables Cache released passwords, every successful JIT checkout is sealed via the same Vault envelope encryption Strata already uses for SMTP / AD bind / local-credential passwords and stored per (user_id, profile_id) for the lifetime configured by each profile's TTL slider. Subsequent tunnel opens for the same profile reuse the cached row without making any Safeguard API call — so a long-running shift no longer means a 15-minute sign-in carousel for the operator. Caching is opt-in and disabled by default.",
+      },
+      {
+        title: "Hardened against every Safeguard 8.x REST quirk we found",
+        description:
+          "The integration absorbs Safeguard 8.2.x behaviours that aren't obvious from the documentation: Me/ActionableRequests returns rows under singular bucket keys (Requester/Approver/Reviewer/Admin) instead of pre-8.x plural keys, Cancel/CheckIn reject Content-Length: 0 and bare {} and need the JSON-encoded string body \"strata preflight\", and the Code 90010 'pending password reset' rotation race that fires immediately after a Cancel is now absorbed by a backoff loop on CheckoutPassword that retries the marker for up to ten seconds before surfacing any other error.",
+      },
+    ],
+  },
+  {
     version: "1.9.6",
     subtitle:
       "Multiplayer / Co-Pilot Mode for shared sessions — up to six participants with arbitrated input control, live cursors, and in-room chat",

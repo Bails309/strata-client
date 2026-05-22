@@ -8,6 +8,8 @@ import { createPortal } from "react-dom";
 import Select from "../components/Select";
 import RequestCheckoutForm from "./credentials/RequestCheckoutForm";
 import ProfileEditor, { type EditingProfile } from "./credentials/ProfileEditor";
+import SafeguardSigninCard from "./credentials/SafeguardSigninCard";
+import SafeguardBulkCheckoutCard from "./credentials/SafeguardBulkCheckoutCard";
 import {
   getCredentialProfiles,
   createCredentialProfile,
@@ -29,6 +31,7 @@ import {
   Connection,
   CheckoutRequest,
   UserAccountMapping,
+  getSafeguardEnabled,
 } from "../api";
 
 export default function Credentials({ vaultConfigured }: { vaultConfigured: boolean }) {
@@ -42,6 +45,10 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   const [editing, setEditing] = useState<EditingProfile | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Bumped on every successful Safeguard sign-in/out so the bulk
+  // checkout card refreshes its sign-in gating immediately rather than
+  // waiting for its 60s poll tick.
+  const [signinNonce, setSigninNonce] = useState(0);
   const [mappingProfileId, setMappingProfileId] = useState<string | null>(null);
   const [mappingConnectionIds, setMappingConnectionIds] = useState<string[]>([]);
   const [mappingSearch, setMappingSearch] = useState("");
@@ -94,6 +101,16 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
 
   // Checkout-to-profile linking
   const [linkingProfileId, setLinkingProfileId] = useState<string | null>(null);
+
+  // Is the Safeguard JIT appliance configured & enabled? Drives whether the
+  // credential editor offers the "safeguard" kind. We probe a non-admin endpoint
+  // so non-admin users still see the option when their operator has enabled it.
+  const [safeguardEnabled, setSafeguardEnabled] = useState(false);
+  useEffect(() => {
+    getSafeguardEnabled()
+      .then((r) => setSafeguardEnabled(r.enabled))
+      .catch(() => setSafeguardEnabled(false));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -151,6 +168,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
     setSaving(true);
     setError("");
     try {
+      const isSafeguard = editing.kind === "safeguard";
       if (editing.id) {
         await updateCredentialProfile(editing.id, {
           label: editing.label,
@@ -158,6 +176,22 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
           password: editing.password || undefined,
           ttl_hours: editing.ttl_hours,
           extended_expiry: editing.extended_expiry,
+          safeguard_account_id: editing.safeguard_account_id,
+          safeguard_asset: editing.safeguard_asset,
+        });
+      } else if (isSafeguard) {
+        if (!editing.label || !editing.safeguard_account_id || !editing.safeguard_asset) {
+          setError("Label, AccountId, and Asset are required for a Safeguard profile");
+          setSaving(false);
+          return;
+        }
+        await createCredentialProfile({
+          label: editing.label,
+          ttl_hours: editing.ttl_hours,
+          extended_expiry: editing.extended_expiry,
+          kind: "safeguard",
+          safeguard_account_id: editing.safeguard_account_id,
+          safeguard_asset: editing.safeguard_asset,
         });
       } else {
         if (!editing.label || !editing.username || !editing.password) {
@@ -514,25 +548,42 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
 
       {/* ── Request Checkout ── */}
       {tab === "request" && (
-        <RequestCheckoutForm
-          managedAccounts={managedAccounts}
-          allCheckouts={allCheckouts}
-          selectedDn={selectedDn}
-          setSelectedDn={setSelectedDn}
-          duration={duration}
-          setDuration={setDuration}
-          justification={justification}
-          setJustification={setJustification}
-          emergencyBypass={emergencyBypass}
-          setEmergencyBypass={setEmergencyBypass}
-          scheduleEnabled={scheduleEnabled}
-          setScheduleEnabled={setScheduleEnabled}
-          scheduledStart={scheduledStart}
-          setScheduledStart={setScheduledStart}
-          submitting={submitting}
-          isCheckoutExpired={isCheckoutExpired}
-          onRequest={handleRequestCheckout}
-        />
+        <>
+          {/* Per-user Safeguard sign-in card (moved here from Profiles
+              tab so all password-request actions live together).
+              Self-hides when JIT is off or admin chose A2A-only mode. */}
+          {safeguardEnabled && (
+            <SafeguardSigninCard
+              onStatusChange={() => setSigninNonce((n) => n + 1)}
+            />
+          )}
+          {/* Bulk pre-checkout for Safeguard JIT profiles. Self-hides
+              when the user has no safeguard-kind profiles. */}
+          <SafeguardBulkCheckoutCard
+            profiles={profiles}
+            safeguardEnabled={safeguardEnabled}
+            signinNonce={signinNonce}
+          />
+          <RequestCheckoutForm
+            managedAccounts={managedAccounts}
+            allCheckouts={allCheckouts}
+            selectedDn={selectedDn}
+            setSelectedDn={setSelectedDn}
+            duration={duration}
+            setDuration={setDuration}
+            justification={justification}
+            setJustification={setJustification}
+            emergencyBypass={emergencyBypass}
+            setEmergencyBypass={setEmergencyBypass}
+            scheduleEnabled={scheduleEnabled}
+            setScheduleEnabled={setScheduleEnabled}
+            scheduledStart={scheduledStart}
+            setScheduledStart={setScheduledStart}
+            submitting={submitting}
+            isCheckoutExpired={isCheckoutExpired}
+            onRequest={handleRequestCheckout}
+          />
+        </>
       )}
 
       {/* ── My Checkouts ── */}
@@ -697,6 +748,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
               isCheckoutExpired={isCheckoutExpired}
               getTimeRemaining={getTimeRemaining}
               formatDateTime={formatDateTime}
+              safeguardEnabled={safeguardEnabled}
             />
           )}
 
@@ -910,6 +962,9 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 password: "",
                                 ttl_hours: profile.ttl_hours,
                                 extended_expiry: profile.extended_expiry,
+                                kind: profile.kind ?? "local",
+                                safeguard_account_id: profile.safeguard_account_id,
+                                safeguard_asset: profile.safeguard_asset,
                               });
                             }}
                           >

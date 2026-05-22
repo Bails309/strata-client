@@ -1606,6 +1606,241 @@ The filename is sanitized to prevent path traversal. Returns `application/octet-
 
 ---
 
+## Safeguard JIT Endpoints (v1.10.0+)
+
+OneIdentity Safeguard for Privileged Passwords integration. Both
+the admin configuration surface and the per-user
+sign-in / bulk-checkout / check-in surface live here.
+
+### Admin — Configuration
+
+#### `GET /api/admin/safeguard/config`
+
+Read the singleton `safeguard_config` row. Sealed fields
+(`a2a_api_key`, `a2a_client_cert_pem`, `a2a_client_key_pem`) are
+rendered as the eight-character literal `"********"` and never as
+the plaintext. Requires `can_manage_system`.
+
+**Response** `200 OK`
+
+```json
+{
+  "enabled": false,
+  "appliance_fqdn": "spp.example.com",
+  "appliance_port": 443,
+  "verify_tls": true,
+  "ca_cert_pem": null,
+  "idp_alias": "extf161",
+  "auth_mode": "hybrid",
+  "default_checkout_hours": 4,
+  "request_reason_template": "Strata JIT: {{user}} → {{asset}}",
+  "auto_checkin_on_session_end": true,
+  "password_cache_enabled": false,
+  "a2a_api_key": "********",
+  "a2a_client_cert_pem": "********",
+  "a2a_client_key_pem": "********"
+}
+```
+
+#### `PUT /api/admin/safeguard/config`
+
+Update the configuration. Sealed fields may be sent as `"********"`
+to preserve the existing sealed value (so an admin can edit
+unrelated fields without re-typing the A2A material), or replaced
+with new plaintext that the backend then seals before persisting.
+
+`auth_mode` accepts `"per_user_browser"`, `"a2a"`, or `"hybrid"`.
+The legacy spelling `"per_user_oidc"` is still accepted for one
+release as a deserializer alias. Requires `can_manage_system` and a
+matching `X-CSRF-Token` header.
+
+**Response** `200 OK` with the freshly-loaded config (sealed columns
+masked, same shape as `GET`).
+
+#### `POST /api/admin/safeguard/test`
+
+Live connectivity probe against the in-memory form values (not the
+persisted row). Runs TCP → TLS → `GET /service/core/v4/Me` in
+sequence and reports the first failure point. Requires
+`can_manage_system`.
+
+**Body** — full `SafeguardConfig` shape, same as PUT.
+
+**Response** `200 OK`
+
+```json
+{
+  "tcp": "ok",
+  "tls": "ok",
+  "me": "ok",
+  "me_identity": "alice@corp.local",
+  "duration_ms": 643
+}
+```
+
+On failure, the offending step contains the error string and the
+later steps are `"skipped"`. Returns `400 Bad Request` if the
+config body itself is malformed.
+
+### User — Sign-in and bulk checkout
+
+#### `GET /api/user/safeguard/enabled`
+
+Boolean kill-switch state for the SPA. Gates rendering of the
+Safeguard tab on the Credentials page so a fully-disabled
+deployment never even loads the bulk-checkout components.
+
+**Response** `200 OK`
+
+```json
+{ "enabled": true }
+```
+
+#### `GET /api/user/safeguard/status`
+
+Per-user sign-in status. Used to render the **Signed in — N min
+left** badge on the sign-in card.
+
+**Response** `200 OK`
+
+```json
+{
+  "signed_in": true,
+  "expires_at": "2026-05-22T17:34:12Z"
+}
+```
+
+When no token is present, `signed_in` is `false` and `expires_at`
+is `null`.
+
+#### `POST /api/user/safeguard/token`
+
+Submit a Safeguard API token freshly minted from
+`Connect-Safeguard -Browser -IdentityProvider <alias>` or a token
+copied from the appliance. The token is sealed with Vault and
+stored in `safeguard_user_tokens` keyed on the calling user's
+`user_id`.
+
+**Body**
+
+```json
+{ "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiI..." }
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "signed_in": true,
+  "expires_at": "2026-05-22T17:34:12Z"
+}
+```
+
+#### `DELETE /api/user/safeguard/token`
+
+Eagerly purge the calling user's stored token (sign-out). Returns
+`204 No Content`. The user's existing cached passwords (if any)
+are **not** evicted by this call — they remain valid until their
+own `expires_at`.
+
+#### `POST /api/user/safeguard/bulk-checkout`
+
+Run JIT checkout for the supplied profile ids serially.
+
+**Body**
+
+```json
+{
+  "profile_ids": ["c1b3e4f0-…", "9b0a-…"],
+  "reason_comment": "Quarterly patch window — change CHG12345"
+}
+```
+
+`reason_comment` is required and non-empty (sent verbatim as
+Safeguard's `ReasonComment`). `profile_ids` must be a non-empty
+array of profile UUIDs owned by the caller. The backend iterates
+one row at a time (so Safeguard never sees an overlapping request
+for the same `(user, account)` pair) and returns per-row results
+even when some succeed and some fail.
+
+**Response** `200 OK`
+
+```json
+{
+  "results": [
+    {
+      "profile_id": "c1b3e4f0-…",
+      "status": "success",
+      "expires_at": "2026-05-22T21:00:00Z"
+    },
+    {
+      "profile_id": "9b0a-…",
+      "status": "failed",
+      "error": "Code 90114: Cannot CheckIn this request in its current state"
+    }
+  ]
+}
+```
+
+When `password_cache_enabled = true`, a successful row also writes
+the sealed plaintext into `safeguard_cached_passwords` and bumps
+the matching `credential_profiles.expires_at` forward.
+
+#### `GET /api/user/safeguard/cached`
+
+Non-decrypting status of the calling user's live cache rows.
+Powers the bulk-checkout card's per-row **Active until …** /
+**Check in** badges.
+
+**Response** `200 OK`
+
+```json
+{
+  "rows": [
+    {
+      "profile_id": "c1b3e4f0-…",
+      "expires_at": "2026-05-22T21:00:00Z"
+    }
+  ]
+}
+```
+
+#### `POST /api/user/safeguard/checkin`
+
+Release one or many cached profiles back to Safeguard. An empty
+`profile_ids` array means "every profile I currently hold".
+
+**Body**
+
+```json
+{ "profile_ids": ["c1b3e4f0-…"] }
+```
+
+or
+
+```json
+{ "profile_ids": [] }
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "results": [
+    {
+      "profile_id": "c1b3e4f0-…",
+      "status": "checked_in"
+    }
+  ]
+}
+```
+
+Each successful row evicts the cache entry and slams the matching
+`credential_profiles.expires_at` to `now()` so the Profiles list
+immediately renders the credential as expired.
+
+---
+
 ## WebSocket Tunnel
 
 ### `GET /api/tunnel/:connection_id`

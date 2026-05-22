@@ -344,6 +344,30 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::list_credential_profiles),
         )
         .route(
+            "/api/user/safeguard/enabled",
+            get(user::safeguard_enabled),
+        )
+        .route(
+            "/api/user/safeguard/status",
+            get(user::safeguard_token_status),
+        )
+        .route(
+            "/api/user/safeguard/token",
+            post(user::submit_safeguard_token).delete(user::clear_safeguard_token),
+        )
+        .route(
+            "/api/user/safeguard/bulk-checkout",
+            post(user::bulk_safeguard_checkout),
+        )
+        .route(
+            "/api/user/safeguard/cached",
+            get(user::list_safeguard_cached),
+        )
+        .route(
+            "/api/user/safeguard/checkin",
+            post(user::bulk_safeguard_checkin),
+        )
+        .route(
             "/api/user/credential-profiles",
             post(user::create_credential_profile),
         )

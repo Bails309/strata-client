@@ -23,6 +23,20 @@ pub struct CredentialProfileRow {
     pub ttl_hours: i32,
     pub extended_expiry: bool,
     pub checkout_id: Option<Uuid>,
+    /// 'local' (envelope-encrypted username+password) or 'safeguard'
+    /// (JIT checkout from OneIdentity Safeguard at tunnel-open time).
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    /// Safeguard AccountId for `kind='safeguard'` profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safeguard_account_id: Option<String>,
+    /// Safeguard AssetId / asset name for `kind='safeguard'` profiles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safeguard_asset: Option<String>,
+}
+
+fn default_kind() -> String {
+    "local".to_string()
 }
 
 /// Maximum TTL (in hours) when a profile opts in to extended expiry.
@@ -74,13 +88,131 @@ pub async fn list_for_user(
 ) -> Result<Vec<CredentialProfileRow>, AppError> {
     let rows = sqlx::query_as(
         "SELECT id, label, created_at, updated_at, expires_at,
-                (expires_at < now()) AS expired, ttl_hours, extended_expiry, checkout_id
+                (expires_at < now()) AS expired, ttl_hours, extended_expiry, checkout_id,
+                kind, safeguard_account_id, safeguard_asset
          FROM credential_profiles WHERE user_id = $1 ORDER BY label",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Lightweight (kind, account_id, asset) lookup. Used by tunnel JIT to
+/// decide whether a connection's mapped profile is a Safeguard
+/// reference before touching the encrypted-payload path. Returns None
+/// when there is no profile mapped for `(connection_id, user_id)`.
+pub async fn safeguard_target_for_connection(
+    pool: &PgPool,
+    connection_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<(Uuid, String, String, i32)>, AppError> {
+    let row: Option<(Uuid, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours
+           FROM credential_mappings cm
+           JOIN credential_profiles cp ON cp.id = cm.credential_id
+          WHERE cm.connection_id = $1 AND cp.user_id = $2
+            AND cp.kind = 'safeguard'
+            AND cp.expires_at > now()",
+    )
+    .bind(connection_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id, acc, asset, ttl)| {
+        (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)
+    }))
+}
+
+/// Variant for the one-off ticket path: look up safeguard target by
+/// profile_id rather than connection_id.
+pub async fn safeguard_target_for_profile(
+    pool: &PgPool,
+    profile_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<(String, String)>, AppError> {
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT cp.safeguard_account_id, cp.safeguard_asset
+           FROM credential_profiles cp
+          WHERE cp.id = $1 AND cp.user_id = $2 AND cp.kind = 'safeguard'
+            AND cp.expires_at > now()",
+    )
+    .bind(profile_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(acc, asset)| (acc.unwrap_or_default(), asset.unwrap_or_default())))
+}
+
+/// Insert a `kind='safeguard'` profile. No envelope payload is
+/// stored — the password is fetched JIT at tunnel open.
+pub async fn insert_safeguard(
+    pool: &PgPool,
+    user_id: Uuid,
+    label: &str,
+    account_id: &str,
+    asset: &str,
+    ttl_hours: i32,
+    extended_expiry: bool,
+) -> Result<Uuid, AppError> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO credential_profiles
+           (user_id, label, encrypted_username, encrypted_password, encrypted_dek, nonce,
+            ttl_hours, extended_expiry, expires_at,
+            kind, safeguard_account_id, safeguard_asset)
+         VALUES ($1, $2, $3, $3, $3, $3, $4, $5,
+                 now() + make_interval(hours => $4),
+                 'safeguard', $6, $7)
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(label)
+    .bind(&[] as &[u8])
+    .bind(ttl_hours)
+    .bind(extended_expiry)
+    .bind(account_id)
+    .bind(asset)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Update the Safeguard target on an existing safeguard-kind profile.
+/// No-op when the profile is `kind='local'`.
+pub async fn update_safeguard_target(
+    pool: &PgPool,
+    profile_id: Uuid,
+    account_id: Option<&str>,
+    asset: Option<&str>,
+) -> Result<(), AppError> {
+    if account_id.is_none() && asset.is_none() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE credential_profiles SET
+            safeguard_account_id = COALESCE($2, safeguard_account_id),
+            safeguard_asset      = COALESCE($3, safeguard_asset),
+            updated_at           = now()
+          WHERE id = $1 AND kind = 'safeguard'",
+    )
+    .bind(profile_id)
+    .bind(account_id)
+    .bind(asset)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Read the `kind` column for a profile (cheap; used by tunnel.rs to
+/// branch JIT vs. local without re-selecting the whole row).
+pub async fn get_kind(pool: &PgPool, profile_id: Uuid) -> Result<Option<String>, AppError> {
+    let k: Option<String> = sqlx::query_scalar(
+        "SELECT kind FROM credential_profiles WHERE id = $1",
+    )
+    .bind(profile_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(k)
 }
 
 pub async fn user_owns(pool: &PgPool, profile_id: Uuid, user_id: Uuid) -> Result<bool, AppError> {
@@ -245,6 +377,28 @@ pub async fn clear_checkout_link(pool: &PgPool, profile_id: Uuid) -> Result<(), 
         "UPDATE credential_profiles SET checkout_id = NULL, updated_at = now() WHERE id = $1",
     )
     .bind(profile_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Force the profile's `expires_at` to a specific timestamp without
+/// touching the sealed payload, label, or TTL. Used by the Safeguard
+/// bulk-checkin path to mark profiles as expired the moment their
+/// cached password is released — a checked-in credential is, from the
+/// user's point of view, no different from an expired one (the
+/// appliance has rotated the password and a fresh checkout is
+/// required before it can be used again).
+pub async fn set_expires_at(
+    pool: &PgPool,
+    profile_id: Uuid,
+    expires_at: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE credential_profiles SET expires_at = $2, updated_at = now() WHERE id = $1",
+    )
+    .bind(profile_id)
+    .bind(expires_at)
     .execute(pool)
     .await?;
     Ok(())

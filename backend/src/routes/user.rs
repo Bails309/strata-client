@@ -583,11 +583,22 @@ pub use crate::services::credential_profiles::{CredentialProfileRow, MappingRow}
 #[derive(Deserialize)]
 pub struct CreateCredentialProfileRequest {
     pub label: String,
-    pub username: String,
-    pub password: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
     pub ttl_hours: Option<i32>,
     #[serde(default)]
     pub extended_expiry: Option<bool>,
+    /// 'local' (default) or 'safeguard'. When `safeguard`, the
+    /// `username`/`password` fields are ignored and
+    /// `safeguard_account_id` + `safeguard_asset` are required.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub safeguard_account_id: Option<String>,
+    #[serde(default)]
+    pub safeguard_asset: Option<String>,
 }
 
 pub async fn list_credential_profiles(
@@ -599,12 +610,622 @@ pub async fn list_credential_profiles(
     Ok(Json(rows))
 }
 
+/// `GET /api/user/safeguard/enabled` — minimal capability probe so the
+/// credential editor can show or hide the Safeguard JIT option without
+/// granting non-admin users read access to the full appliance config.
+pub async fn safeguard_enabled(
+    State(state): State<SharedState>,
+    Extension(_user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let enabled = crate::services::safeguard::kill_switch_enabled(&db.pool).await;
+    Ok(Json(serde_json::json!({ "enabled": enabled })))
+}
+
+/// `GET /api/user/safeguard/status` — does the current user have a
+/// live Safeguard API token on file? Used by the credential editor to
+/// show a "Sign in to Safeguard" prompt when needed.
+pub async fn safeguard_token_status(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let status =
+        crate::services::safeguard::user_token::status(&db.pool, user.id).await?;
+    // Also report the appliance hint (FQDN + idp_alias) so the
+    // frontend can render the correct PowerShell helper snippet
+    // without an extra round-trip.
+    let cfg = crate::services::safeguard::config::load(&db.pool).await?;
+    Ok(Json(serde_json::json!({
+        "signed_in": status.signed_in,
+        "expires_at": status.expires_at,
+        "appliance_fqdn": cfg.appliance_fqdn,
+        "idp_alias": cfg.idp_alias,
+        "auth_mode": cfg.auth_mode.as_str(),
+        "enabled": cfg.enabled,
+        "password_cache_enabled": cfg.password_cache_enabled,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct SubmitSafeguardTokenBody {
+    /// The Safeguard API access token from `Connect-Safeguard`'s
+    /// `$SGToken` (already RSTS-exchanged by the PS module — usable
+    /// as a bearer against /service/core).
+    pub api_token: String,
+    /// Optional override of the token's lifetime in seconds. Safeguard
+    /// tokens are 15-minute lived by default; we cap at 24h so a
+    /// fat-fingered value can't pin a stale token forever.
+    #[serde(default)]
+    pub expires_in_seconds: Option<i64>,
+}
+
+/// `POST /api/user/safeguard/token` — accept the API token a user
+/// obtained from `Connect-Safeguard -Browser` and Vault-seal it for
+/// future JIT checkouts.
+pub async fn submit_safeguard_token(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<SubmitSafeguardTokenBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+    };
+
+    let token = body.api_token.trim().to_string();
+    if token.is_empty() {
+        return Err(AppError::Validation(
+            "api_token is required".into(),
+        ));
+    }
+    // 15 min default matches the appliance; 24h cap is a sanity guard.
+    let ttl_secs = body
+        .expires_in_seconds
+        .unwrap_or(15 * 60)
+        .clamp(60, 24 * 60 * 60);
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
+
+    crate::services::safeguard::user_token::store(
+        &db.pool,
+        &vault_cfg,
+        user.id,
+        &token,
+        expires_at,
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "signed_in": true,
+        "expires_at": expires_at,
+    })))
+}
+
+/// `DELETE /api/user/safeguard/token` — sign the user out of
+/// Safeguard. Idempotent.
+pub async fn clear_safeguard_token(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    crate::services::safeguard::user_token::clear(&db.pool, user.id).await?;
+    Ok(Json(serde_json::json!({ "signed_in": false })))
+}
+
+#[derive(Deserialize)]
+pub struct BulkSafeguardCheckoutBody {
+    pub profile_ids: Vec<Uuid>,
+    /// User-supplied justification. Safeguard policy normally
+    /// requires a non-empty `ReasonComment`; when omitted Safeguard
+    /// silently denies the request. We treat it as required here
+    /// and fall back to a generated marker only if the caller sent
+    /// nothing (keeps backwards compatibility with old clients).
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BulkSafeguardCheckoutResult {
+    pub profile_id: Uuid,
+    pub label: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Cache expiry (only present on success).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Username Safeguard returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// `true` when the call replaced an existing live cache row by
+    /// checking the old request back in first.
+    #[serde(default)]
+    pub replaced_existing: bool,
+}
+
+/// `POST /api/user/safeguard/bulk-checkout` — pre-fetch passwords for
+/// the user's selected Safeguard profiles in one batch, cache each
+/// for the profile's own `ttl_hours`, and (when one is already
+/// cached) check the old appliance request in first so the new
+/// checkout cleanly replaces it.
+///
+/// Requires admin `password_cache_enabled = true` — without caching
+/// the result would be discarded the moment the user disconnects.
+pub async fn bulk_safeguard_checkout(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<BulkSafeguardCheckoutBody>,
+) -> Result<Json<Vec<BulkSafeguardCheckoutResult>>, AppError> {
+    let db = require_running(&state).await?;
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+    };
+
+    let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
+    if !sg_cfg.enabled {
+        return Err(AppError::Validation(
+            "Safeguard JIT is not enabled".into(),
+        ));
+    }
+    if !sg_cfg.password_cache_enabled {
+        return Err(AppError::Validation(
+            "Bulk checkout requires the admin to enable Safeguard password caching".into(),
+        ));
+    }
+    if body.profile_ids.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Safeguard policy commonly requires a non-empty ReasonComment;
+    // refuse upfront rather than silently substituting a marker the
+    // reviewer can't action on.
+    let trimmed_comment = body
+        .comment
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if trimmed_comment.is_none() {
+        return Err(AppError::Validation(
+            "A justification comment is required for Safeguard checkouts".into(),
+        ));
+    }
+
+    // Resolve profiles the user actually owns. Anything not owned, not
+    // kind='safeguard', or expired is silently dropped — the response
+    // will be missing those ids and the UI can highlight them.
+    let rows = cp_svc::list_for_user(&db.pool, user.id).await?;
+    let mut out = Vec::with_capacity(body.profile_ids.len());
+
+    for pid in body.profile_ids.iter().copied() {
+        let Some(profile) = rows.iter().find(|r| r.id == pid) else {
+            out.push(BulkSafeguardCheckoutResult {
+                profile_id: pid,
+                label: String::new(),
+                ok: false,
+                error: Some("profile not found".into()),
+                expires_at: None,
+                username: None,
+                replaced_existing: false,
+            });
+            continue;
+        };
+        if profile.kind != "safeguard" {
+            out.push(BulkSafeguardCheckoutResult {
+                profile_id: pid,
+                label: profile.label.clone(),
+                ok: false,
+                error: Some("not a Safeguard profile".into()),
+                expires_at: None,
+                username: None,
+                replaced_existing: false,
+            });
+            continue;
+        }
+        let account_id = profile.safeguard_account_id.clone().unwrap_or_default();
+        let asset = profile.safeguard_asset.clone().unwrap_or_default();
+        if account_id.trim().is_empty() || asset.trim().is_empty() {
+            out.push(BulkSafeguardCheckoutResult {
+                profile_id: pid,
+                label: profile.label.clone(),
+                ok: false,
+                error: Some("profile is missing account_id or asset".into()),
+                expires_at: None,
+                username: None,
+                replaced_existing: false,
+            });
+            continue;
+        }
+
+        // If there's already a cached row for this profile, release
+        // the existing Safeguard request before opening a new one so
+        // the appliance audit shows a clean transition and the user
+        // doesn't end up with two open requests for the same account.
+        let mut replaced_existing = false;
+        if let Ok(Some(cached)) = crate::services::safeguard::password_cache::load(
+            &db.pool, &vault_cfg, user.id, pid,
+        )
+        .await
+        {
+            replaced_existing = true;
+            if let Some(rid) = cached.request_id.as_deref() {
+                if let Err(e) = crate::services::safeguard::jit_checkin(
+                    &db.pool,
+                    &vault_cfg,
+                    rid,
+                    &account_id,
+                    &asset,
+                    Some(user.id),
+                    None,
+                )
+                .await
+                {
+                    // Best-effort: a stale checkin (already checked in
+                    // via portal) shouldn't block the new checkout.
+                    tracing::warn!(
+                        "bulk-checkout: existing request {} checkin failed for profile {}: {e}",
+                        rid,
+                        pid
+                    );
+                }
+            }
+            let _ = crate::services::safeguard::password_cache::clear(
+                &db.pool, user.id, pid,
+            )
+            .await;
+        }
+
+        // New JIT checkout at the profile's own ttl_hours.
+        // Prefer the user-supplied comment verbatim — Safeguard
+        // policy commonly mandates a meaningful ReasonComment and
+        // the admin-template-rendered marker ("Strata bulk:<uuid>")
+        // is rarely what a reviewer wants to see in the audit log.
+        let user_comment = body
+            .comment
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let reason = match user_comment {
+            Some(c) => c.to_string(),
+            None => crate::services::safeguard::render_reason(
+                &sg_cfg.request_reason_template,
+                &format!("bulk:{pid}"),
+                &user.username,
+            ),
+        };
+        let outcome = match crate::services::safeguard::jit_checkout(
+            &db.pool,
+            &vault_cfg,
+            &account_id,
+            &asset,
+            &reason,
+            Some(user.id),
+            None,
+            Some(pid),
+            Some(profile.ttl_hours.max(1) as u32),
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(
+                    "bulk-checkout: jit_checkout failed for profile {pid} ({}): {e}",
+                    profile.label
+                );
+                out.push(BulkSafeguardCheckoutResult {
+                    profile_id: pid,
+                    label: profile.label.clone(),
+                    ok: false,
+                    error: Some(e.to_string()),
+                    expires_at: None,
+                    username: None,
+                    replaced_existing,
+                });
+                continue;
+            }
+        };
+
+        let expires_at =
+            chrono::Utc::now() + chrono::Duration::hours(profile.ttl_hours.max(1) as i64);
+        if let Err(e) = crate::services::safeguard::password_cache::store(
+            &db.pool,
+            &vault_cfg,
+            user.id,
+            pid,
+            outcome.username.as_deref(),
+            &outcome.password,
+            Some(&outcome.request_id),
+            expires_at,
+        )
+        .await
+        {
+            out.push(BulkSafeguardCheckoutResult {
+                profile_id: pid,
+                label: profile.label.clone(),
+                ok: false,
+                error: Some(format!("cache store failed: {e}")),
+                expires_at: None,
+                username: outcome.username.clone(),
+                replaced_existing,
+            });
+            continue;
+        }
+
+        // Keep the profile's own `expires_at` in lock-step with the
+        // cache row's TTL so the Profiles list reflects the freshly
+        // checked-out window (the column is otherwise frozen at the
+        // last profile edit). On checkin we slam it back to `now()`.
+        let _ = cp_svc::set_expires_at(&db.pool, pid, expires_at).await;
+
+        out.push(BulkSafeguardCheckoutResult {
+            profile_id: pid,
+            label: profile.label.clone(),
+            ok: true,
+            error: None,
+            expires_at: Some(expires_at),
+            username: outcome.username,
+            replaced_existing,
+        });
+    }
+
+    Ok(Json(out))
+}
+
+/// `GET /api/user/safeguard/cached` — lightweight (no-decrypt)
+/// snapshot of the user's live cache rows. Used by the bulk-checkout
+/// UI to render "Cached — Xh left" badges. Expired rows are
+/// automatically excluded.
+pub async fn list_safeguard_cached(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::services::safeguard::password_cache::CachedStatus>>, AppError> {
+    let db = require_running(&state).await?;
+    let rows = crate::services::safeguard::password_cache::status_for_user(
+        &db.pool, user.id,
+    )
+    .await?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+pub struct BulkSafeguardCheckinBody {
+    /// Profile IDs to release. An empty list means "all currently
+    /// cached", so the UI can offer a single "Check in all" button
+    /// without needing to enumerate every cached profile id.
+    #[serde(default)]
+    pub profile_ids: Vec<Uuid>,
+}
+
+#[derive(Serialize)]
+pub struct BulkSafeguardCheckinResult {
+    pub profile_id: Uuid,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// `POST /api/user/safeguard/checkin` — release one or more cached
+/// Safeguard passwords. For each profile we call
+/// `AccessRequests/{id}/CheckIn` on the appliance (best-effort: a
+/// 4xx from Safeguard for an already-closed request still results
+/// in the local cache row being cleared so the UI is consistent).
+///
+/// Available whenever the user has a valid bearer (per-user token
+/// or A2A fallback). The same `jit_checkin` path is reused so the
+/// audit row is identical to a tunnel-driven check-in.
+pub async fn bulk_safeguard_checkin(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<BulkSafeguardCheckinBody>,
+) -> Result<Json<Vec<BulkSafeguardCheckinResult>>, AppError> {
+    let db = require_running(&state).await?;
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+    };
+
+    // Resolve the full set of target profiles. An empty `profile_ids`
+    // means "everything currently cached for this user".
+    let cached = crate::services::safeguard::password_cache::status_for_user(
+        &db.pool, user.id,
+    )
+    .await?;
+    let target_ids: Vec<Uuid> = if body.profile_ids.is_empty() {
+        cached.iter().map(|c| c.profile_id).collect()
+    } else {
+        body.profile_ids.clone()
+    };
+
+    if target_ids.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    let profiles = cp_svc::list_for_user(&db.pool, user.id).await?;
+    let mut out = Vec::with_capacity(target_ids.len());
+
+    for pid in target_ids {
+        // Pull request_id + account/asset off the live cache row;
+        // without those the appliance call can't be made.
+        let entry = match crate::services::safeguard::password_cache::load(
+            &db.pool, &vault_cfg, user.id, pid,
+        )
+        .await
+        {
+            Ok(Some(e)) => e,
+            Ok(None) => {
+                out.push(BulkSafeguardCheckinResult {
+                    profile_id: pid,
+                    ok: true,
+                    error: None,
+                });
+                continue;
+            }
+            Err(e) => {
+                out.push(BulkSafeguardCheckinResult {
+                    profile_id: pid,
+                    ok: false,
+                    error: Some(e.to_string()),
+                });
+                continue;
+            }
+        };
+
+        // Account/asset for the audit row are taken from the user's
+        // own profile — the cache table doesn't carry them.
+        let (account_id, asset_id) = profiles
+            .iter()
+            .find(|p| p.id == pid)
+            .map(|p| {
+                (
+                    p.safeguard_account_id.clone().unwrap_or_default(),
+                    p.safeguard_asset.clone().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
+
+        let mut error: Option<String> = None;
+        if let Some(rid) = entry.request_id.as_deref() {
+            if let Err(e) = crate::services::safeguard::jit_checkin(
+                &db.pool,
+                &vault_cfg,
+                rid,
+                &account_id,
+                &asset_id,
+                Some(user.id),
+                None,
+            )
+            .await
+            {
+                // Don't abort: the appliance may have already auto-
+                // checked-in (TTL expired, admin revoked, portal
+                // check-in). We still want to drop the cache row so
+                // the UI doesn't keep showing a stale entry.
+                tracing::warn!(
+                    "bulk-checkin: appliance checkin failed for profile {pid}: {e}"
+                );
+                error = Some(e.to_string());
+            }
+        }
+
+        let _ = crate::services::safeguard::password_cache::clear(
+            &db.pool, user.id, pid,
+        )
+        .await;
+
+        // Mark the profile expired immediately so the Profiles list
+        // doesn't keep showing a "valid until ..." timestamp on a
+        // credential whose password has just been scrambled by the
+        // appliance — a user glancing at the row could otherwise
+        // think the cached password is still usable.
+        let _ = cp_svc::set_expires_at(&db.pool, pid, chrono::Utc::now()).await;
+
+        out.push(BulkSafeguardCheckinResult {
+            profile_id: pid,
+            ok: error.is_none(),
+            error,
+        });
+    }
+
+    Ok(Json(out))
+}
+
 pub async fn create_credential_profile(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
     Json(body): Json<CreateCredentialProfileRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+
+    let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
+    let extended_expiry = body.extended_expiry.unwrap_or(false);
+    let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
+
+    // ── Safeguard JIT branch ────────────────────────────────────────
+    // No envelope payload is stored — the password is checked out from
+    // the Safeguard appliance at tunnel-open time.
+    if body.kind.as_deref() == Some("safeguard") {
+        let account_id = body
+            .safeguard_account_id
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "safeguard_account_id is required for Safeguard profiles".into(),
+                )
+            })?;
+        let asset = body
+            .safeguard_asset
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("safeguard_asset is required for Safeguard profiles".into())
+            })?;
+
+        // Hard-fail when the Safeguard subsystem is disabled — the
+        // profile would be unusable. Better to refuse at create time
+        // than to surface a 503 at the first tunnel open.
+        if !crate::services::safeguard::kill_switch_enabled(&db.pool).await {
+            return Err(AppError::Validation(
+                "Safeguard JIT is disabled in admin settings".into(),
+            ));
+        }
+
+        let id = cp_svc::insert_safeguard(
+            &db.pool,
+            user.id,
+            &body.label,
+            account_id,
+            asset,
+            ttl_hours,
+            extended_expiry,
+        )
+        .await?;
+
+        crate::services::audit::log(
+            &db.pool,
+            Some(user.id),
+            "credential_profile.created",
+            &json!({
+                "profile_id": id.to_string(),
+                "label": body.label,
+                "kind": "safeguard",
+                "safeguard_account_id": account_id,
+                "safeguard_asset": asset,
+                "ttl_hours": ttl_hours,
+            }),
+        )
+        .await?;
+
+        return Ok(Json(
+            json!({ "id": id, "status": "created", "kind": "safeguard" }),
+        ));
+    }
+
+    // ── Local (envelope-encrypted) branch — original behaviour ────
+    let username = body
+        .username
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation("username is required for local credential profiles".into())
+        })?;
+    let password = body
+        .password
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation("password is required for local credential profiles".into())
+        })?;
 
     let vault_cfg = {
         let s = state.read().await;
@@ -616,8 +1237,8 @@ pub async fn create_credential_profile(
 
     // Envelope-encrypt both username and password with one DEK
     let combined = serde_json::json!({
-        "u": body.username,
-        "p": body.password,
+        "u": username,
+        "p": password,
     });
     let sealed_raw = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
     let sealed = cp_svc::SealedPayload {
@@ -625,10 +1246,6 @@ pub async fn create_credential_profile(
         encrypted_dek: sealed_raw.encrypted_dek,
         nonce: sealed_raw.nonce,
     };
-
-    let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
-    let extended_expiry = body.extended_expiry.unwrap_or(false);
-    let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
 
     let id = cp_svc::insert(
         &db.pool,
@@ -664,6 +1281,10 @@ pub struct UpdateCredentialProfileRequest {
     pub ttl_hours: Option<i32>,
     #[serde(default)]
     pub extended_expiry: Option<bool>,
+    #[serde(default)]
+    pub safeguard_account_id: Option<String>,
+    #[serde(default)]
+    pub safeguard_asset: Option<String>,
 }
 
 pub async fn update_credential_profile(
@@ -760,6 +1381,15 @@ pub async fn update_credential_profile(
         )
         .await?;
     }
+
+    // Safeguard targets (no-op when the profile is `kind='local'`).
+    cp_svc::update_safeguard_target(
+        &db.pool,
+        profile_id,
+        body.safeguard_account_id.as_deref(),
+        body.safeguard_asset.as_deref(),
+    )
+    .await?;
 
     crate::services::audit::log(
         &db.pool,
@@ -1949,8 +2579,8 @@ mod tests {
         });
         let req: CreateCredentialProfileRequest = serde_json::from_value(j).unwrap();
         assert_eq!(req.label, "Work");
-        assert_eq!(req.username, "admin");
-        assert_eq!(req.password, "hunter2");
+        assert_eq!(req.username.as_deref(), Some("admin"));
+        assert_eq!(req.password.as_deref(), Some("hunter2"));
         assert_eq!(req.ttl_hours, Some(8));
     }
 
@@ -2115,6 +2745,9 @@ mod tests {
             ttl_hours: 8,
             extended_expiry: false,
             checkout_id: None,
+            kind: "local".into(),
+            safeguard_account_id: None,
+            safeguard_asset: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Work");
@@ -2289,6 +2922,9 @@ mod tests {
             ttl_hours: 4,
             extended_expiry: false,
             checkout_id: None,
+            kind: "local".into(),
+            safeguard_account_id: None,
+            safeguard_asset: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Expired Profile");

@@ -26,9 +26,9 @@ import Select from "../../components/Select";
  */
 const AUTH_MODES: { value: SafeguardAuthMode; label: string; help: string }[] = [
   {
-    value: "per_user_oidc",
-    label: "Per-user OIDC (deferred)",
-    help: "Each user logs in to Safeguard as themselves via federated SSO. Not yet implemented — choose A2A or Hybrid for v1.10.",
+    value: "per_user_browser",
+    label: "Per-user browser SSO (RSTS)",
+    help: "Each user signs in to Safeguard via federation in their own browser using the Safeguard-PS helper (Connect-Safeguard -Browser -IdentityProvider <alias>), then submits the resulting API token to Strata. Strata stores it Vault-sealed and uses it for that user's JIT checkouts. Requires no Safeguard admin involvement.",
   },
   {
     value: "a2a",
@@ -38,7 +38,7 @@ const AUTH_MODES: { value: SafeguardAuthMode; label: string; help: string }[] = 
   {
     value: "hybrid",
     label: "Hybrid (per-user + A2A fallback)",
-    help: "Per-user OIDC when the user has linked their Safeguard account; A2A for shared-automation accounts. The per-user side is deferred — Hybrid currently behaves like A2A.",
+    help: "Per-user browser token when the user has signed in; A2A as a fallback for shared automation accounts or users who have not yet signed in.",
   },
 ];
 
@@ -122,9 +122,6 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
     );
   if (!cfg) return null;
 
-  const oidcChosen = cfg.auth_mode === "per_user_oidc";
-  const oidcOnlyAndEnabled = cfg.enabled && oidcChosen;
-
   return (
     <div className="card animate-fade-in space-y-6">
       <div>
@@ -135,22 +132,22 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
         </p>
       </div>
 
-      {/* ── Master toggle ── */}
-      <section className="border border-border/50 rounded-md p-4">
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfg.enabled}
-            onChange={(e) => update("enabled", e.target.checked)}
-          />
-          <span>
-            <div className="font-semibold">Enable Safeguard JIT</div>
-            <div className="text-xs text-txt-secondary mt-1">
-              When off, the "Safeguard JIT" credential kind is hidden across the UI and any existing
-              safeguard-backed profiles behave like an expired managed credential.
-            </div>
-          </span>
-        </label>
+      {/* ── Master toggle (justified row card) ── */}
+      <section className="border border-border/50 rounded-md px-4 py-3 flex items-center justify-between gap-4">
+        <div>
+          <div className="font-semibold text-sm">Enable Safeguard JIT</div>
+          <div className="text-xs text-txt-secondary mt-1">
+            When off, the &quot;Safeguard JIT&quot; credential kind is hidden across the UI and any
+            existing safeguard-backed profiles behave like an expired managed credential.
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          className="checkbox flex-none"
+          checked={cfg.enabled}
+          onChange={(e) => update("enabled", e.target.checked)}
+          aria-label="Enable Safeguard JIT"
+        />
       </section>
 
       {/* ── Appliance ── */}
@@ -158,41 +155,45 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
         <h3 className="text-sm font-semibold uppercase tracking-wider text-txt-tertiary mb-3">
           Appliance
         </h3>
-        <div className="form-group">
-          <label htmlFor="sg-fqdn">FQDN</label>
-          <input
-            id="sg-fqdn"
-            value={cfg.appliance_fqdn}
-            onChange={(e) => update("appliance_fqdn", e.target.value)}
-            placeholder="safeguard.corp.example.com"
-          />
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "1rem" }}>
+          <div className="form-group !mb-0">
+            <label htmlFor="sg-fqdn">FQDN</label>
+            <input
+              id="sg-fqdn"
+              value={cfg.appliance_fqdn}
+              onChange={(e) => update("appliance_fqdn", e.target.value)}
+              placeholder="safeguard.corp.example.com"
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label htmlFor="sg-port">Port</label>
+            <input
+              id="sg-port"
+              type="number"
+              min={1}
+              max={65535}
+              value={cfg.appliance_port}
+              onChange={(e) => update("appliance_port", Number(e.target.value) || 443)}
+            />
+          </div>
         </div>
-        <div className="form-group">
-          <label htmlFor="sg-port">Port</label>
-          <input
-            id="sg-port"
-            type="number"
-            min={1}
-            max={65535}
-            value={cfg.appliance_port}
-            onChange={(e) => update("appliance_port", Number(e.target.value) || 443)}
-          />
-        </div>
-        <label className="flex items-start gap-2 mt-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfg.verify_tls}
-            onChange={(e) => update("verify_tls", e.target.checked)}
-          />
-          <span>
-            <div className="text-sm">Verify TLS certificate</div>
-            <div className="text-xs text-txt-secondary">
+        <div className="border border-border/50 rounded-md px-4 py-3 flex items-center justify-between gap-4 mt-4">
+          <div>
+            <div className="text-sm font-medium">Verify TLS certificate</div>
+            <div className="text-xs text-txt-secondary mt-1">
               Disable only for lab appliances with self-signed certs; production deployments should
               pin a CA below.
             </div>
-          </span>
-        </label>
-        <div className="form-group mt-3">
+          </div>
+          <input
+            type="checkbox"
+            className="checkbox flex-none"
+            checked={cfg.verify_tls}
+            onChange={(e) => update("verify_tls", e.target.checked)}
+            aria-label="Verify TLS certificate"
+          />
+        </div>
+        <div className="form-group mt-4">
           <label htmlFor="sg-ca">Pinned CA bundle (PEM, optional)</label>
           <textarea
             id="sg-ca"
@@ -223,13 +224,6 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
           </div>
         </div>
 
-        {oidcOnlyAndEnabled && (
-          <div className="rounded-md px-3 py-2 mb-3 text-xs bg-warning/10 text-warning">
-            Per-user OIDC is not yet implemented. Save will be rejected until you choose A2A or
-            Hybrid.
-          </div>
-        )}
-
         <div className="form-group">
           <label htmlFor="sg-idp">Identity Provider alias</label>
           <input
@@ -239,14 +233,15 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
             placeholder="extf161"
           />
           <div className="text-xs text-txt-secondary mt-1">
-            The federation provider alias as configured on the Safeguard side. Required for per-user
-            OIDC / Hybrid modes; ignored in A2A-only mode.
+            The federation provider alias as configured on the Safeguard side. Required for
+            per-user browser SSO / Hybrid modes; ignored in A2A-only mode.
           </div>
         </div>
 
-        {/* A2A creds — shown for a2a / hybrid */}
-        {cfg.auth_mode !== "per_user_oidc" && (
-          <div className="rounded-md border border-border/50 p-3 space-y-3">
+        {/* A2A creds — shown for a2a / hybrid (skipped for per_user_browser, which uses
+            the user's own RSTS-issued bearer instead of an A2A client cert). */}
+        {cfg.auth_mode !== "per_user_browser" && (
+          <div className="rounded-md border border-border/50 p-4 space-y-4">
             <div className="text-xs text-txt-secondary">
               A2A credentials are encrypted with Vault before storage. Leave a field as{" "}
               <code className="text-[10px]">********</code> to keep its existing value; clear it to
@@ -291,48 +286,70 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
         <h3 className="text-sm font-semibold uppercase tracking-wider text-txt-tertiary mb-3">
           Defaults &amp; behaviour
         </h3>
-        <div className="form-group">
-          <label htmlFor="sg-hours">Default checkout duration (hours)</label>
-          <input
-            id="sg-hours"
-            type="number"
-            min={1}
-            max={12}
-            value={cfg.default_checkout_hours}
-            onChange={(e) =>
-              update(
-                "default_checkout_hours",
-                Math.max(1, Math.min(12, Number(e.target.value) || 1))
-              )
-            }
-          />
-        </div>
-        <div className="form-group">
-          <label htmlFor="sg-reason">Reason template</label>
-          <input
-            id="sg-reason"
-            value={cfg.request_reason_template}
-            onChange={(e) => update("request_reason_template", e.target.value)}
-          />
-          <div className="text-xs text-txt-secondary mt-1">
-            Tokens: <code>{"{session_id}"}</code>, <code>{"{user}"}</code>,{" "}
-            <code>{"{connection}"}</code>.
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "1rem" }}>
+          <div className="form-group !mb-0">
+            <label htmlFor="sg-hours">Default duration (hours)</label>
+            <input
+              id="sg-hours"
+              type="number"
+              min={1}
+              max={12}
+              value={cfg.default_checkout_hours}
+              onChange={(e) =>
+                update(
+                  "default_checkout_hours",
+                  Math.max(1, Math.min(12, Number(e.target.value) || 1))
+                )
+              }
+            />
+          </div>
+          <div className="form-group !mb-0">
+            <label htmlFor="sg-reason">Reason template</label>
+            <input
+              id="sg-reason"
+              value={cfg.request_reason_template}
+              onChange={(e) => update("request_reason_template", e.target.value)}
+            />
+            <div className="text-xs text-txt-secondary mt-1">
+              Tokens: <code>{"{session_id}"}</code>, <code>{"{user}"}</code>,{" "}
+              <code>{"{connection}"}</code>.
+            </div>
           </div>
         </div>
-        <label className="flex items-start gap-2 mt-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfg.auto_checkin_on_session_end}
-            onChange={(e) => update("auto_checkin_on_session_end", e.target.checked)}
-          />
-          <span>
-            <div className="text-sm">Auto check-in on session end</div>
-            <div className="text-xs text-txt-secondary">
-              When the tunnel closes, Strata calls Safeguard's Checkin endpoint so the upstream
+        <div className="border border-border/50 rounded-md px-4 py-3 flex items-center justify-between gap-4 mt-4">
+          <div>
+            <div className="text-sm font-medium">Auto check-in on session end</div>
+            <div className="text-xs text-txt-secondary mt-1">
+              When the tunnel closes, Strata calls Safeguard&apos;s Checkin endpoint so the upstream
               window matches actual usage.
             </div>
-          </span>
-        </label>
+          </div>
+          <input
+            type="checkbox"
+            className="checkbox flex-none"
+            checked={cfg.auto_checkin_on_session_end}
+            onChange={(e) => update("auto_checkin_on_session_end", e.target.checked)}
+            aria-label="Auto check-in on session end"
+          />
+        </div>
+        <div className="border border-border/50 rounded-md px-4 py-3 flex items-center justify-between gap-4 mt-4">
+          <div>
+            <div className="text-sm font-medium">Cache checked-out passwords</div>
+            <div className="text-xs text-txt-secondary mt-1">
+              Vault-seal the password for the duration above and reuse it for every tunnel until it
+              expires. Users won&apos;t need to re-submit a fresh 15-minute Safeguard token between
+              sessions. <strong>Auto check-in is suppressed</strong> while this is on, so the
+              appliance keeps the access request open until its own rotation policy fires.
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            className="checkbox flex-none"
+            checked={cfg.password_cache_enabled}
+            onChange={(e) => update("password_cache_enabled", e.target.checked)}
+            aria-label="Cache checked-out passwords"
+          />
+        </div>
       </section>
 
       {/* ── Test result ── */}

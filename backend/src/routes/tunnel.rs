@@ -280,11 +280,186 @@ pub async fn ws_tunnel(
     // Parse extra JSONB into a HashMap for guacd params
     let mut extra = crate::tunnel::json_to_string_map(&extra_json);
 
+    // ── Safeguard JIT branch ────────────────────────────────────────
+    // When the connection is mapped to a `kind='safeguard'` credential
+    // profile, perform a just-in-time password checkout from the
+    // OneIdentity Safeguard appliance and use the returned credential
+    // for this tunnel. The request_id is captured so we can checkin
+    // when the WebSocket closes (see the `on_upgrade` closure below)
+    // — UNLESS the admin has enabled `password_cache_enabled`, in
+    // which case the password is Vault-cached for its full lifetime
+    // and auto-checkin is suppressed so the appliance keeps the
+    // request open for follow-up sessions.
+    let mut safeguard_state: Option<(String, String, String)> = None; // (request_id, account_id, asset)
+    let mut safeguard_password: Option<String> = None;
+    let mut safeguard_username: Option<String> = None;
+    if let Some(vault_cfg) = &config.vault {
+        if let Some((profile_id, account_id, asset, profile_ttl_hours)) =
+            crate::services::credential_profiles::safeguard_target_for_connection(
+                &db.pool,
+                connection_id,
+                user.id,
+            )
+            .await?
+        {
+            let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
+
+            // 1. Try the cache first when admin-enabled. A live cache
+            //    row short-circuits the entire JIT flow (no Safeguard
+            //    API call) — that's the whole point of this mode. But
+            //    if the user (or an admin) already checked the
+            //    request back in via the Safeguard portal, the
+            //    cached password is dead — verify with the appliance
+            //    before reusing it. Validation failures fail closed:
+            //    evict the row and fall through to a fresh JIT
+            //    checkout so the user still gets a working tunnel.
+            let mut from_cache = false;
+            if sg_cfg.password_cache_enabled {
+                if let Some(cached) = crate::services::safeguard::password_cache::load(
+                    &db.pool,
+                    vault_cfg,
+                    user.id,
+                    profile_id,
+                )
+                .await?
+                {
+                    let validity = match cached.request_id.as_deref() {
+                        Some(rid) => match crate::services::safeguard::check_request_validity(
+                            &db.pool,
+                            vault_cfg,
+                            rid,
+                            Some(user.id),
+                        )
+                        .await
+                        {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Safeguard cache validation errored for profile {} (request {}): {e} — falling back to cached password",
+                                    profile_id,
+                                    rid
+                                );
+                                crate::services::safeguard::CacheValidity::Unknown
+                            }
+                        },
+                        // No request_id stored — can't validate, but
+                        // the row is otherwise fresh. Trust it.
+                        None => crate::services::safeguard::CacheValidity::Unknown,
+                    };
+                    let still_active = !matches!(
+                        validity,
+                        crate::services::safeguard::CacheValidity::Inactive
+                    );
+                    if still_active {
+                        tracing::info!(
+                            "Safeguard password cache hit for profile {} (validity={:?}): username={:?}, expires_at={}",
+                            profile_id,
+                            validity,
+                            cached.username,
+                            cached.expires_at
+                        );
+                        safeguard_username = cached.username;
+                        safeguard_password = Some(cached.password);
+                        from_cache = true;
+                    } else {
+                        tracing::info!(
+                            "Safeguard cached password for profile {} is no longer valid on the appliance (checked-in/expired) — refreshing",
+                            profile_id
+                        );
+                        if let Err(e) = crate::services::safeguard::password_cache::clear(
+                            &db.pool, user.id, profile_id,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "safeguard password_cache clear failed (profile={}): {e}",
+                                profile_id
+                            );
+                        }
+                    }
+                }
+            }
+
+            // 2. Cache miss (or caching disabled) → JIT checkout.
+            if !from_cache {
+                let reason = crate::services::safeguard::render_reason(
+                    &sg_cfg.request_reason_template,
+                    &connection_id.to_string(),
+                    &user.username,
+                );
+                let outcome = crate::services::safeguard::jit_checkout(
+                    &db.pool,
+                    vault_cfg,
+                    &account_id,
+                    &asset,
+                    &reason,
+                    Some(user.id),
+                    Some(connection_id),
+                    Some(profile_id),
+                    Some(profile_ttl_hours.max(1) as u32),
+                )
+                .await?;
+                tracing::info!(
+                    "Safeguard JIT checkout succeeded: request_id={}, account_id={}, username={:?}",
+                    outcome.request_id,
+                    account_id,
+                    outcome.username
+                );
+
+                if sg_cfg.password_cache_enabled {
+                    // Cache the freshly-issued password for the
+                    // profile's own lifetime (matches the Safeguard
+                    // RequestedDurationHours we just sent). Skip
+                    // auto-checkin so Safeguard keeps the request
+                    // live for the same window. Best-effort: cache
+                    // write failure must not break the user's
+                    // connection.
+                    let ttl_hours = profile_ttl_hours.max(1) as i64;
+                    let expires_at = chrono::Utc::now() + chrono::Duration::hours(ttl_hours);
+                    if let Err(e) = crate::services::safeguard::password_cache::store(
+                        &db.pool,
+                        vault_cfg,
+                        user.id,
+                        profile_id,
+                        outcome.username.as_deref(),
+                        &outcome.password,
+                        Some(&outcome.request_id),
+                        expires_at,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            "safeguard password_cache store failed (profile={}): {e}",
+                            profile_id
+                        );
+                    }
+                } else {
+                    // Classic JIT: remember the request so the close
+                    // handler can call /CheckIn.
+                    safeguard_state =
+                        Some((outcome.request_id, account_id.clone(), asset.clone()));
+                }
+
+                safeguard_username = outcome.username;
+                safeguard_password = Some(outcome.password);
+            }
+        }
+    }
+
     // Attempt to load and decrypt user credentials from credential profiles.
     // If the profile is linked to an active checkout, the managed credential's
     // username (sAMAccountName) and password fully replace the user's own profile
     // credentials — the user expects to connect AS the managed account.
-    let (vault_username, vault_password) = if let Some(vault_cfg) = &config.vault {
+    let (vault_username, vault_password) = if safeguard_password.is_some() {
+        // Safeguard JIT path: password from CheckoutPassword + username
+        // synthesised from the AccessRequest's AccountName/DomainName
+        // (e.g. `CAPITA\sa1`). Falling back to None means the protocol
+        // prompts in-band, which is what we did before — but for RDP
+        // that surfaces as "invalid credentials" the moment the target
+        // rejects the empty NLA username. Always prefer the resolved
+        // name when the appliance gave us one.
+        (safeguard_username.clone(), safeguard_password.clone())
+    } else if let Some(vault_cfg) = &config.vault {
         // Check if the profile is linked to an active checkout with a managed credential
         let managed_cred = crate::services::user_credentials::load_mapping_managed(
             &db.pool,
@@ -961,6 +1136,19 @@ pub async fn ws_tunnel(
         None
     };
     let web_user_id = user_id;
+    // Capture Safeguard checkout state for auto-checkin on disconnect.
+    // The vault config is needed at checkin time to unseal A2A secrets;
+    // we clone it into the closure to keep `state` ownership clean.
+    let safeguard_close = safeguard_state.clone();
+    let safeguard_vault_cfg = config.vault.clone();
+    let safeguard_auto_checkin = if safeguard_close.is_some() {
+        crate::services::safeguard::config::load(&db.pool)
+            .await
+            .map(|c| c.auto_checkin_on_session_end)
+            .unwrap_or(false)
+    } else {
+        false
+    };
     Ok(ws
         .protocols(["guacamole"])
         .max_message_size(1024 * 1024)
@@ -1039,6 +1227,40 @@ pub async fn ws_tunnel(
                     }),
                 )
                 .await;
+            }
+
+            // ── Safeguard JIT auto-checkin ─────────────────────────
+            // When the operator has enabled `auto_checkin_on_session_end`
+            // (default true) and this tunnel was opened with a JIT
+            // checkout, release the access request now. Failures are
+            // logged but never propagated — the browser side is already
+            // gone and there's nothing to surface them to. Safeguard's
+            // policy-driven max-lease window is the safety net if this
+            // call ever silently drops.
+            if let (Some((request_id, account_id, asset)), Some(vault_cfg)) =
+                (safeguard_close, safeguard_vault_cfg)
+            {
+                if safeguard_auto_checkin {
+                    if let Err(e) = crate::services::safeguard::jit_checkin(
+                        &audit_pool,
+                        &vault_cfg,
+                        &request_id,
+                        &account_id,
+                        &asset,
+                        Some(user_id),
+                        Some(connection_id),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            "Safeguard auto-checkin failed for request_id={request_id}: {e}"
+                        );
+                    } else {
+                        tracing::info!(
+                            "Safeguard auto-checkin succeeded for request_id={request_id}"
+                        );
+                    }
+                }
             }
         }))
 }

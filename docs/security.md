@@ -1031,6 +1031,108 @@ Multiplayer shares extend the existing 1:1 connection-share model to a co-pilot 
 
 ---
 
+## Safeguard JIT Credential Checkout Security (v1.10.0+)
+
+The OneIdentity Safeguard JIT integration retrieves privileged-account
+passwords from the appliance at tunnel-open time. Every artefact that
+crosses the integration boundary in either direction — A2A secrets,
+per-user RSTS bearer tokens, cached plaintext passwords — is treated
+as ciphertext at rest and validated at every trust boundary.
+
+- **Vault-sealed at rest, end-to-end.** A2A secrets
+  (`a2a_api_key`, `a2a_client_cert_pem`, `a2a_client_key_pem` in
+  `safeguard_config`), per-user RSTS bearer tokens
+  (`safeguard_user_tokens.ciphertext`), and cached plaintext
+  passwords (`safeguard_cached_passwords.ciphertext`) are sealed
+  using the same per-row envelope encryption — Vault Transit
+  generates a fresh DEK per row, the DEK encrypts the secret with
+  ChaCha20-Poly1305, and Vault's KEK encrypts the DEK. The DB never
+  sees plaintext; the backend memory holds plaintext for the
+  millisecond between Vault decrypt and the outbound
+  `reqwest::RequestBuilder::bearer_auth()` / guacd handshake.
+- **Mask-on-read for admin GET.** `GET /api/admin/safeguard/config`
+  renders every sealed column as the eight-character literal
+  `"********"`. The corresponding PUT accepts the same literal as a
+  sentinel for "keep existing", so an administrator can edit
+  unrelated fields without re-typing the A2A material — and a
+  hostile SPA process that scrapes the form never sees the real
+  values.
+- **Kill switch is fail-closed.** `safeguard_config.enabled = FALSE`
+  (the upgrade default) hides the **Kind** selector's Safeguard
+  option across the UI, prevents the Credentials page from
+  rendering the sign-in or bulk-checkout cards, and routes existing
+  safeguard-backed profiles through the same expired-managed-
+  credential rejection used elsewhere. The check happens on every
+  request at the route layer — there is no cached "enabled" flag
+  that could lag the toggle.
+- **Per-user token isolation.** `safeguard_user_tokens` is keyed on
+  `user_id` (PK) with a foreign key onto `users` and `ON DELETE
+  CASCADE`. The bearer used for a checkout is **only** loaded from
+  the row matching the authenticated principal's `user_id`; one
+  user's token can never be used for another user's checkout. A
+  user being deleted (soft or hard) atomically evicts their token.
+  The `expires_at` column is consulted on every read and rows past
+  TTL return `None` without being returned (and are eligible for
+  the next purge sweep).
+- **Cache TTL is per-profile, never per-server.** The cache row's
+  `expires_at` is set from `credential_profiles.ttl_hours` — there
+  is no global "cache for N hours" override. The
+  `password_cache::load(...)` accessor eagerly **DELETEs** any row
+  whose `expires_at` has passed before returning a hit, so a stale
+  entry can never silently succeed even if a background sweep is
+  paused or has not yet run.
+- **Audit attribution is to the human, always.**
+  `safeguard_checkout_audit` stamps the human `user_id` on every
+  row regardless of which Safeguard auth path was used (per-user
+  browser token, A2A, or hybrid). When A2A is in play the appliance
+  itself records "Strata" as the requester, but the human is
+  recoverable by joining `safeguard_checkout_audit.opened_at` and
+  `audit_log` against the calling user.
+- **State-machine bounded outcomes.** The `outcome` column is
+  constrained to the closed set `pending → success | failed →
+  checked_in | expired`. Every transition is written
+  append-only; rows are never updated to rewrite history. A
+  checkout that timed out without an explicit check-in is recorded
+  as `expired`, not silently overwritten as `checked_in`.
+- **Preflight prevents leaked passwords.** Safeguard returns the
+  **existing** request id and password on Code 90001 when a user
+  has an overlapping access request for the same account — and the
+  appliance simultaneously rotates the password every time a fresh
+  request is accepted, so reusing the returned material results in
+  a stale credential that fails RDP auth and locks the AD account
+  out. The preflight loop in
+  [`backend/src/services/safeguard/mod.rs`](../backend/src/services/safeguard/mod.rs)
+  releases stale `RequestAvailable` / `PasswordCheckedOut` requests
+  before posting a new one, eliminating the 90001 / rotation
+  combination and preventing the lockout class entirely.
+- **TLS is per-config, with optional pinning.** The `reqwest` HTTP
+  client used to talk to Safeguard is built per config load (not
+  per request) with: system trust store, an **additional**
+  per-config PEM CA chain layered on top via
+  `Certificate::from_pem`, the operator-controlled `verify_tls`
+  switch (default `true` — disabling it triggers a stern admin-tab
+  warning), and the optional A2A client identity when auth_mode
+  selects it. The CA layering means the operator can pin a private
+  PKI without disabling validation against the public roots used by
+  every other outbound TLS call the backend makes.
+- **Justification is mandatory and verbatim.** The bulk-checkout
+  card requires a non-empty justification before the **Checkout
+  selected** button activates, and the backend rejects an empty
+  `reason_comment` with `400 Bad Request`. The text is sent
+  verbatim as Safeguard's `ReasonComment` — Strata does **not**
+  templatize or rewrite the comment, so the appliance's reviewer
+  sees exactly what the operator typed.
+- **No retry on non-transient errors.** The Code 90010 retry loop
+  in `checkout_password_with_retry` matches **only** the
+  `"Code":90010` marker. Authentication failures, validation
+  errors, account-not-found, kill-switch state, and any other
+  Safeguard error are surfaced to the caller immediately and
+  recorded as `failed` in `safeguard_checkout_audit` — no silent
+  retries that could mask a permission revocation or a typo'd
+  account id.
+
+---
+
 ## Quick Share (Temporary File CDN)
 
 Quick Share provides session-scoped temporary file hosting so users can transfer files into a remote desktop via a download URL.

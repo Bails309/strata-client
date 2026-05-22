@@ -11,6 +11,9 @@ vi.mock("@docs/api-reference.md?raw", () => ({ default: "# API Reference\nAPI co
 vi.mock("@docs/dmz.md?raw", () => ({ default: "# DMZ Deployment\nDMZ content here" }));
 vi.mock("@docs/web-sessions.md?raw", () => ({ default: "# Web Sessions\nWeb content here" }));
 vi.mock("@docs/vdi.md?raw", () => ({ default: "# VDI\nVDI content here" }));
+vi.mock("@docs/safeguard-user-guide.md?raw", () => ({
+  default: "# Safeguard User Guide\nSafeguard user guide content here",
+}));
 
 // Mermaid pulls in a large ESM bundle and only runs when fenced ```mermaid
 // blocks are present in the rendered docs; stub it in the test environment.

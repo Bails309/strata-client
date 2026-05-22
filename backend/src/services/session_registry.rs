@@ -336,8 +336,7 @@ impl SessionRegistry {
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let buffer = Arc::new(RwLock::new(SessionBuffer::new()));
         let (input_tx, input_rx) = tokio::sync::mpsc::channel::<String>(256);
-        let co_pilot_room =
-            crate::services::co_pilot::CoPilotRoom::new(session_id.clone());
+        let co_pilot_room = crate::services::co_pilot::CoPilotRoom::new(session_id.clone());
 
         let session = Arc::new(ActiveSession {
             session_id: session_id.clone(),

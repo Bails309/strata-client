@@ -124,15 +124,8 @@ impl CoPilotRoom {
     /// colour, and (for non-owners) ensures the room has not exceeded
     /// [`MAX_PARTICIPANTS`]. The session owner is always admitted even
     /// when the room is "full" — they are the host.
-    pub fn join(
-        &self,
-        display_name: &str,
-        is_owner: bool,
-    ) -> Result<Participant, JoinError> {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+    pub fn join(&self, display_name: &str, is_owner: bool) -> Result<Participant, JoinError> {
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
 
         // Owner can always (re-)join even at cap — they're the host.
         if !is_owner && state.participants.len() >= MAX_PARTICIPANTS as usize {
@@ -185,10 +178,7 @@ impl CoPilotRoom {
     /// is cleared (or transferred to the owner if present).
     /// Returns `true` iff a participant was actually removed.
     pub fn leave(&self, pid: Uuid) -> bool {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
         let removed = state.participants.remove(&pid).is_some();
         if removed {
             state.join_order.retain(|p| *p != pid);
@@ -209,10 +199,7 @@ impl CoPilotRoom {
 
     /// Roster snapshot in stable join order.
     pub fn roster(&self) -> Vec<RosterEntry> {
-        let state = self
-            .state
-            .read()
-            .expect("co-pilot room lock poisoned");
+        let state = self.state.read().expect("co-pilot room lock poisoned");
         state
             .join_order
             .iter()
@@ -271,10 +258,7 @@ impl CoPilotRoom {
     /// - No-one currently holds the token; or
     /// - The current holder has been idle for [`INPUT_IDLE_GRANT_AFTER`].
     pub fn try_claim_input(&self, pid: Uuid) -> InputClaimResult {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
         let p = match state.participants.get(&pid) {
             Some(p) => p.clone(),
             None => return InputClaimResult::UnknownParticipant,
@@ -282,10 +266,11 @@ impl CoPilotRoom {
         match state.input_holder {
             Some(current) if current == pid => InputClaimResult::AlreadyHeld,
             Some(current)
-                if !p.is_owner
-                    && state.input_last_activity.elapsed() < INPUT_IDLE_GRANT_AFTER =>
+                if !p.is_owner && state.input_last_activity.elapsed() < INPUT_IDLE_GRANT_AFTER =>
             {
-                InputClaimResult::Denied { current_holder: current }
+                InputClaimResult::Denied {
+                    current_holder: current,
+                }
             }
             other => {
                 state.input_holder = Some(pid);
@@ -297,10 +282,7 @@ impl CoPilotRoom {
 
     /// Voluntary release. Returns `true` iff `pid` was the holder.
     pub fn release_input(&self, pid: Uuid) -> bool {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
         if state.input_holder == Some(pid) {
             state.input_holder = None;
             state.input_last_activity = Instant::now();
@@ -313,10 +295,7 @@ impl CoPilotRoom {
     /// Owner force-revoke. Returns the previous holder, if any.
     /// The caller is responsible for validating that `by` is the owner.
     pub fn revoke_input(&self) -> Option<Uuid> {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
         let prev = state.input_holder.take();
         state.input_last_activity = Instant::now();
         prev
@@ -325,10 +304,7 @@ impl CoPilotRoom {
     /// Owner force-grant to a specific participant. Returns the
     /// previous holder, if any, on success. Caller validates `by`.
     pub fn force_grant(&self, to: Uuid) -> Result<Option<Uuid>, JoinError> {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
         if !state.participants.contains_key(&to) {
             return Err(JoinError::EmptyDisplayName); // reuse: unknown target
         }
@@ -341,10 +317,7 @@ impl CoPilotRoom {
     /// token. Returns `true` iff `pid` is the active holder (and thus
     /// the caller should forward this input frame to the session).
     pub fn note_input_activity(&self, pid: Uuid) -> bool {
-        let mut state = self
-            .state
-            .write()
-            .expect("co-pilot room lock poisoned");
+        let mut state = self.state.write().expect("co-pilot room lock poisoned");
         if state.input_holder == Some(pid) {
             state.input_last_activity = Instant::now();
             true
@@ -529,7 +502,8 @@ mod tests {
         // Backdate the holder's last-activity past the idle threshold.
         {
             let mut state = room.state.write().unwrap();
-            state.input_last_activity = Instant::now() - (INPUT_IDLE_GRANT_AFTER + Duration::from_millis(50));
+            state.input_last_activity =
+                Instant::now() - (INPUT_IDLE_GRANT_AFTER + Duration::from_millis(50));
         }
         match room.try_claim_input(viewer.pid) {
             InputClaimResult::Granted { previous } => {
@@ -548,7 +522,8 @@ mod tests {
         // Viewer takes the token after idle period.
         {
             let mut state = room.state.write().unwrap();
-            state.input_last_activity = Instant::now() - (INPUT_IDLE_GRANT_AFTER + Duration::from_millis(50));
+            state.input_last_activity =
+                Instant::now() - (INPUT_IDLE_GRANT_AFTER + Duration::from_millis(50));
         }
         room.try_claim_input(viewer.pid);
         assert_eq!(room.current_holder(), Some(viewer.pid));
@@ -565,7 +540,10 @@ mod tests {
     fn already_held_is_idempotent() {
         let room = CoPilotRoom::new("s1".into());
         let owner = room.join("Host", true).unwrap();
-        assert_eq!(room.try_claim_input(owner.pid), InputClaimResult::AlreadyHeld);
+        assert_eq!(
+            room.try_claim_input(owner.pid),
+            InputClaimResult::AlreadyHeld
+        );
     }
 
     #[test]
@@ -642,7 +620,10 @@ mod tests {
         let b = room.join("B", false).unwrap();
         let c = room.join("C", false).unwrap();
         let roster = room.roster();
-        assert_eq!(roster.iter().map(|r| r.pid).collect::<Vec<_>>(), vec![a.pid, b.pid, c.pid]);
+        assert_eq!(
+            roster.iter().map(|r| r.pid).collect::<Vec<_>>(),
+            vec![a.pid, b.pid, c.pid]
+        );
         assert!(roster[0].is_owner);
         assert!(roster[0].has_input);
         assert!(!roster[1].has_input);

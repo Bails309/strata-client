@@ -564,14 +564,8 @@ mod tests {
                 },
                 "hello",
             ),
-            (
-                CoPilotMsg::InputClaim { pid: pid() },
-                "input_claim",
-            ),
-            (
-                CoPilotMsg::InputRelease { pid: pid() },
-                "input_release",
-            ),
+            (CoPilotMsg::InputClaim { pid: pid() }, "input_claim"),
+            (CoPilotMsg::InputRelease { pid: pid() }, "input_release"),
             (
                 CoPilotMsg::InputGrant {
                     pid: pid(),

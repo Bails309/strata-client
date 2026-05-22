@@ -343,10 +343,7 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/user/credential-profiles",
             get(user::list_credential_profiles),
         )
-        .route(
-            "/api/user/safeguard/enabled",
-            get(user::safeguard_enabled),
-        )
+        .route("/api/user/safeguard/enabled", get(user::safeguard_enabled))
         .route(
             "/api/user/safeguard/status",
             get(user::safeguard_token_status),

@@ -30,10 +30,7 @@ use sqlx::PgPool;
 /// row should fail closed.
 #[allow(dead_code)] // Wired into resolve_credentials in a follow-up commit.
 pub async fn kill_switch_enabled(pool: &PgPool) -> bool {
-    config::load(pool)
-        .await
-        .map(|c| c.enabled)
-        .unwrap_or(false)
+    config::load(pool).await.map(|c| c.enabled).unwrap_or(false)
 }
 
 /// Returned by the test-connection endpoint. Stable JSON shape; the
@@ -228,11 +225,7 @@ pub async fn jit_checkout(
                         .a2a_api_key
                         .as_deref()
                         .filter(|s| !s.trim().is_empty())
-                        .ok_or_else(|| {
-                            AppError::Validation(
-                                "safeguard.signin_required".into(),
-                            )
-                        })?;
+                        .ok_or_else(|| AppError::Validation("safeguard.signin_required".into()))?;
                     client::a2a_login(&http, &base, api_key).await?
                 }
             }
@@ -405,13 +398,11 @@ pub async fn jit_checkin(
     let bearer_result: Result<String> = match cfg.auth_mode {
         config::AuthMode::PerUserBrowser => {
             let uid = user_id.ok_or_else(|| {
-                AppError::Validation(
-                    "Safeguard per_user_browser checkin requires a user".into(),
-                )
+                AppError::Validation("Safeguard per_user_browser checkin requires a user".into())
             })?;
-            user_token::load(pool, vault, uid).await?.ok_or_else(|| {
-                AppError::Validation("safeguard.signin_required".into())
-            })
+            user_token::load(pool, vault, uid)
+                .await?
+                .ok_or_else(|| AppError::Validation("safeguard.signin_required".into()))
         }
         config::AuthMode::A2a => {
             let api_key = secrets
@@ -435,9 +426,7 @@ pub async fn jit_checkin(
                         .a2a_api_key
                         .as_deref()
                         .filter(|s| !s.trim().is_empty())
-                        .ok_or_else(|| {
-                            AppError::Validation("safeguard.signin_required".into())
-                        })?;
+                        .ok_or_else(|| AppError::Validation("safeguard.signin_required".into()))?;
                     client::a2a_login(&http, &base, api_key).await
                 }
             }

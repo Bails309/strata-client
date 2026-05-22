@@ -119,9 +119,8 @@ pub async fn safeguard_target_for_connection(
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, acc, asset, ttl)| {
-        (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)
-    }))
+    Ok(row
+        .map(|(id, acc, asset, ttl)| (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)))
 }
 
 /// Variant for the one-off ticket path: look up safeguard target by
@@ -206,12 +205,11 @@ pub async fn update_safeguard_target(
 /// Read the `kind` column for a profile (cheap; used by tunnel.rs to
 /// branch JIT vs. local without re-selecting the whole row).
 pub async fn get_kind(pool: &PgPool, profile_id: Uuid) -> Result<Option<String>, AppError> {
-    let k: Option<String> = sqlx::query_scalar(
-        "SELECT kind FROM credential_profiles WHERE id = $1",
-    )
-    .bind(profile_id)
-    .fetch_optional(pool)
-    .await?;
+    let k: Option<String> =
+        sqlx::query_scalar("SELECT kind FROM credential_profiles WHERE id = $1")
+            .bind(profile_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(k)
 }
 
@@ -394,13 +392,11 @@ pub async fn set_expires_at(
     profile_id: Uuid,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE credential_profiles SET expires_at = $2, updated_at = now() WHERE id = $1",
-    )
-    .bind(profile_id)
-    .bind(expires_at)
-    .execute(pool)
-    .await?;
+    sqlx::query("UPDATE credential_profiles SET expires_at = $2, updated_at = now() WHERE id = $1")
+        .bind(profile_id)
+        .bind(expires_at)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

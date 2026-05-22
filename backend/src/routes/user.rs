@@ -630,8 +630,7 @@ pub async fn safeguard_token_status(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let status =
-        crate::services::safeguard::user_token::status(&db.pool, user.id).await?;
+    let status = crate::services::safeguard::user_token::status(&db.pool, user.id).await?;
     // Also report the appliance hint (FQDN + idp_alias) so the
     // frontend can render the correct PowerShell helper snippet
     // without an extra round-trip.
@@ -679,9 +678,7 @@ pub async fn submit_safeguard_token(
 
     let token = body.api_token.trim().to_string();
     if token.is_empty() {
-        return Err(AppError::Validation(
-            "api_token is required".into(),
-        ));
+        return Err(AppError::Validation("api_token is required".into()));
     }
     // 15 min default matches the appliance; 24h cap is a sanity guard.
     let ttl_secs = body
@@ -691,11 +688,7 @@ pub async fn submit_safeguard_token(
     let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
 
     crate::services::safeguard::user_token::store(
-        &db.pool,
-        &vault_cfg,
-        user.id,
-        &token,
-        expires_at,
+        &db.pool, &vault_cfg, user.id, &token, expires_at,
     )
     .await?;
 
@@ -771,9 +764,7 @@ pub async fn bulk_safeguard_checkout(
 
     let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
     if !sg_cfg.enabled {
-        return Err(AppError::Validation(
-            "Safeguard JIT is not enabled".into(),
-        ));
+        return Err(AppError::Validation("Safeguard JIT is not enabled".into()));
     }
     if !sg_cfg.password_cache_enabled {
         return Err(AppError::Validation(
@@ -849,10 +840,9 @@ pub async fn bulk_safeguard_checkout(
         // the appliance audit shows a clean transition and the user
         // doesn't end up with two open requests for the same account.
         let mut replaced_existing = false;
-        if let Ok(Some(cached)) = crate::services::safeguard::password_cache::load(
-            &db.pool, &vault_cfg, user.id, pid,
-        )
-        .await
+        if let Ok(Some(cached)) =
+            crate::services::safeguard::password_cache::load(&db.pool, &vault_cfg, user.id, pid)
+                .await
         {
             replaced_existing = true;
             if let Some(rid) = cached.request_id.as_deref() {
@@ -876,10 +866,7 @@ pub async fn bulk_safeguard_checkout(
                     );
                 }
             }
-            let _ = crate::services::safeguard::password_cache::clear(
-                &db.pool, user.id, pid,
-            )
-            .await;
+            let _ = crate::services::safeguard::password_cache::clear(&db.pool, user.id, pid).await;
         }
 
         // New JIT checkout at the profile's own ttl_hours.
@@ -987,10 +974,8 @@ pub async fn list_safeguard_cached(
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<Vec<crate::services::safeguard::password_cache::CachedStatus>>, AppError> {
     let db = require_running(&state).await?;
-    let rows = crate::services::safeguard::password_cache::status_for_user(
-        &db.pool, user.id,
-    )
-    .await?;
+    let rows =
+        crate::services::safeguard::password_cache::status_for_user(&db.pool, user.id).await?;
     Ok(Json(rows))
 }
 
@@ -1036,10 +1021,8 @@ pub async fn bulk_safeguard_checkin(
 
     // Resolve the full set of target profiles. An empty `profile_ids`
     // means "everything currently cached for this user".
-    let cached = crate::services::safeguard::password_cache::status_for_user(
-        &db.pool, user.id,
-    )
-    .await?;
+    let cached =
+        crate::services::safeguard::password_cache::status_for_user(&db.pool, user.id).await?;
     let target_ids: Vec<Uuid> = if body.profile_ids.is_empty() {
         cached.iter().map(|c| c.profile_id).collect()
     } else {
@@ -1110,17 +1093,12 @@ pub async fn bulk_safeguard_checkin(
                 // checked-in (TTL expired, admin revoked, portal
                 // check-in). We still want to drop the cache row so
                 // the UI doesn't keep showing a stale entry.
-                tracing::warn!(
-                    "bulk-checkin: appliance checkin failed for profile {pid}: {e}"
-                );
+                tracing::warn!("bulk-checkin: appliance checkin failed for profile {pid}: {e}");
                 error = Some(e.to_string());
             }
         }
 
-        let _ = crate::services::safeguard::password_cache::clear(
-            &db.pool, user.id, pid,
-        )
-        .await;
+        let _ = crate::services::safeguard::password_cache::clear(&db.pool, user.id, pid).await;
 
         // Mark the profile expired immediately so the Profiles list
         // doesn't keep showing a "valid until ..." timestamp on a

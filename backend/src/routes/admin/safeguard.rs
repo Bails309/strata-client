@@ -95,9 +95,22 @@ pub async fn test_connection(
         None
     };
     let mut secrets = ResolvedSecrets {
-        a2a_api_key: resolve_secret(&draft.a2a_api_key, saved_secrets.as_ref().and_then(|s| s.a2a_api_key.clone())),
-        a2a_client_cert_pem: resolve_secret(&draft.a2a_client_cert_pem, saved_secrets.as_ref().and_then(|s| s.a2a_client_cert_pem.clone())),
-        a2a_client_key_pem: resolve_secret(&draft.a2a_client_key_pem, saved_secrets.as_ref().and_then(|s| s.a2a_client_key_pem.clone())),
+        a2a_api_key: resolve_secret(
+            &draft.a2a_api_key,
+            saved_secrets.as_ref().and_then(|s| s.a2a_api_key.clone()),
+        ),
+        a2a_client_cert_pem: resolve_secret(
+            &draft.a2a_client_cert_pem,
+            saved_secrets
+                .as_ref()
+                .and_then(|s| s.a2a_client_cert_pem.clone()),
+        ),
+        a2a_client_key_pem: resolve_secret(
+            &draft.a2a_client_key_pem,
+            saved_secrets
+                .as_ref()
+                .and_then(|s| s.a2a_client_key_pem.clone()),
+        ),
     };
     // Trim trailing whitespace defensively so pasted PEM blocks don't
     // confuse reqwest's identity parser.

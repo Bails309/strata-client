@@ -181,10 +181,7 @@ pub struct ResolvedSecrets {
 
 /// Decrypt the sealed secrets for use by the REST client. Each field
 /// is `None` when the corresponding column was NULL.
-pub async fn load_secrets(
-    pool: &PgPool,
-    vault: &VaultConfig,
-) -> Result<ResolvedSecrets, AppError> {
+pub async fn load_secrets(pool: &PgPool, vault: &VaultConfig) -> Result<ResolvedSecrets, AppError> {
     let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT a2a_api_key_sealed, a2a_client_cert_pem_sealed, a2a_client_key_pem_sealed
            FROM safeguard_config WHERE id = 1",
@@ -196,7 +193,9 @@ pub async fn load_secrets(
         match v {
             None => Ok::<_, AppError>(None),
             Some(s) if s.is_empty() => Ok(None),
-            Some(s) => crate::services::vault::unseal_setting(vault, &s).await.map(Some),
+            Some(s) => crate::services::vault::unseal_setting(vault, &s)
+                .await
+                .map(Some),
         }
     };
 
@@ -229,10 +228,8 @@ pub async fn save(
     .await?;
 
     let api_key = reseal_or_keep(vault, &new_cfg.a2a_api_key, existing.0).await?;
-    let client_cert =
-        reseal_or_keep(vault, &new_cfg.a2a_client_cert_pem, existing.1).await?;
-    let client_key =
-        reseal_or_keep(vault, &new_cfg.a2a_client_key_pem, existing.2).await?;
+    let client_cert = reseal_or_keep(vault, &new_cfg.a2a_client_cert_pem, existing.1).await?;
+    let client_key = reseal_or_keep(vault, &new_cfg.a2a_client_key_pem, existing.2).await?;
 
     sqlx::query(
         "UPDATE safeguard_config SET
@@ -298,9 +295,7 @@ async fn reseal_or_keep(
         return Ok(None);
     }
     let vault = vault.ok_or_else(|| {
-        AppError::Validation(
-            "Vault must be configured before storing Safeguard secrets".into(),
-        )
+        AppError::Validation("Vault must be configured before storing Safeguard secrets".into())
     })?;
     let sealed = crate::services::vault::seal_setting(vault, incoming).await?;
     Ok(Some(sealed))

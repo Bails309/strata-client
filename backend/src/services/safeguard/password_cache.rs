@@ -114,9 +114,8 @@ pub async fn load(
     }
 
     let plaintext = unseal(vault, &encrypted_dek, &ciphertext, &nonce).await?;
-    let password = String::from_utf8(plaintext).map_err(|_| {
-        AppError::Internal("cached Safeguard password is not valid UTF-8".into())
-    })?;
+    let password = String::from_utf8(plaintext)
+        .map_err(|_| AppError::Internal("cached Safeguard password is not valid UTF-8".into()))?;
 
     Ok(Some(CachedPassword {
         username,
@@ -127,13 +126,11 @@ pub async fn load(
 }
 
 pub async fn clear(pool: &PgPool, user_id: Uuid, profile_id: Uuid) -> Result<(), AppError> {
-    sqlx::query(
-        "DELETE FROM safeguard_cached_passwords WHERE user_id = $1 AND profile_id = $2",
-    )
-    .bind(user_id)
-    .bind(profile_id)
-    .execute(pool)
-    .await?;
+    sqlx::query("DELETE FROM safeguard_cached_passwords WHERE user_id = $1 AND profile_id = $2")
+        .bind(user_id)
+        .bind(profile_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -150,10 +147,7 @@ pub struct CachedStatus {
 /// Expired rows are filtered out (caller treats absence as "not
 /// cached"). No decryption occurs — this is safe to call on every
 /// poll.
-pub async fn status_for_user(
-    pool: &PgPool,
-    user_id: Uuid,
-) -> Result<Vec<CachedStatus>, AppError> {
+pub async fn status_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<CachedStatus>, AppError> {
     let rows: Vec<(Uuid, Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
         "SELECT profile_id, username, request_id, expires_at
            FROM safeguard_cached_passwords
@@ -165,11 +159,13 @@ pub async fn status_for_user(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(profile_id, username, request_id, expires_at)| CachedStatus {
-            profile_id,
-            username,
-            request_id,
-            expires_at,
-        })
+        .map(
+            |(profile_id, username, request_id, expires_at)| CachedStatus {
+                profile_id,
+                username,
+                request_id,
+                expires_at,
+            },
+        )
         .collect())
 }

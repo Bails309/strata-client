@@ -265,10 +265,7 @@ pub async fn create_access_request(
             body.insert("AccountId".into(), serde_json::json!(n));
         }
         Err(_) => {
-            body.insert(
-                "AccountName".into(),
-                serde_json::json!(params.account_id),
-            );
+            body.insert("AccountName".into(), serde_json::json!(params.account_id));
         }
     }
     match params.asset_id.trim().parse::<i64>() {
@@ -453,7 +450,9 @@ pub async fn list_my_active_requests_for(
         .map_err(|e| AppError::Internal(format!("safeguard list Me/Requests: {e}")))?;
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND {
-        tracing::info!("safeguard preflight: Me/Requests returned 404, falling back to Me/ActionableRequests");
+        tracing::info!(
+            "safeguard preflight: Me/Requests returned 404, falling back to Me/ActionableRequests"
+        );
         // Older appliance — try the actionable wrapper instead.
         let url2 = format!("{base}/service/core/v4/Me/ActionableRequests");
         let resp2 = client
@@ -461,7 +460,9 @@ pub async fn list_my_active_requests_for(
             .bearer_auth(bearer)
             .send()
             .await
-            .map_err(|e| AppError::Internal(format!("safeguard list Me/ActionableRequests: {e}")))?;
+            .map_err(|e| {
+                AppError::Internal(format!("safeguard list Me/ActionableRequests: {e}"))
+            })?;
         let status2 = resp2.status();
         if status2 == reqwest::StatusCode::NOT_FOUND {
             return Ok(Vec::new());

@@ -98,9 +98,8 @@ pub async fn load(
 
     let plaintext = unseal(vault, &encrypted_dek, &ciphertext, &nonce).await?;
 
-    let token = String::from_utf8(plaintext).map_err(|_| {
-        AppError::Internal("stored Safeguard token is not valid UTF-8".into())
-    })?;
+    let token = String::from_utf8(plaintext)
+        .map_err(|_| AppError::Internal("stored Safeguard token is not valid UTF-8".into()))?;
 
     Ok(Some(token))
 }
@@ -110,12 +109,11 @@ pub async fn load(
 /// `signed_in = false` for an expired row but does NOT delete it —
 /// `load` performs the cleanup so a /status poll stays idempotent.
 pub async fn status(pool: &PgPool, user_id: Uuid) -> Result<TokenStatus, AppError> {
-    let row: Option<(DateTime<Utc>,)> = sqlx::query_as(
-        "SELECT expires_at FROM safeguard_user_tokens WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(DateTime<Utc>,)> =
+        sqlx::query_as("SELECT expires_at FROM safeguard_user_tokens WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
 
     Ok(match row {
         Some((expires_at,)) if expires_at > Utc::now() => TokenStatus {

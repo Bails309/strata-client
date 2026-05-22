@@ -316,10 +316,7 @@ pub async fn ws_tunnel(
             let mut from_cache = false;
             if sg_cfg.password_cache_enabled {
                 if let Some(cached) = crate::services::safeguard::password_cache::load(
-                    &db.pool,
-                    vault_cfg,
-                    user.id,
-                    profile_id,
+                    &db.pool, vault_cfg, user.id, profile_id,
                 )
                 .await?
                 {
@@ -436,8 +433,7 @@ pub async fn ws_tunnel(
                 } else {
                     // Classic JIT: remember the request so the close
                     // handler can call /CheckIn.
-                    safeguard_state =
-                        Some((outcome.request_id, account_id.clone(), asset.clone()));
+                    safeguard_state = Some((outcome.request_id, account_id.clone(), asset.clone()));
                 }
 
                 safeguard_username = outcome.username;

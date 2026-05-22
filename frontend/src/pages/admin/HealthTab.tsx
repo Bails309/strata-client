@@ -6,9 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   CertificatesResponse,
   CertificateEntry,
+  DmzLinksResponse,
   MetricsSummary,
   ServiceHealth,
   getCertificates,
+  getDmzLinks,
   getMetrics,
   getServiceHealth,
 } from "../../api";
@@ -17,6 +19,7 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
   const [certs, setCerts] = useState<CertificatesResponse | null>(null);
+  const [dmz, setDmz] = useState<DmzLinksResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [countdown, setCountdown] = useState(60);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
@@ -27,11 +30,13 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
       getServiceHealth().catch(() => null),
       getMetrics().catch(() => null),
       getCertificates().catch(() => null),
+      getDmzLinks().catch(() => null),
     ])
-      .then(([h, m, c]) => {
+      .then(([h, m, c, d]) => {
         setHealth(h);
         setMetrics(m);
         setCerts(c);
+        setDmz(d);
         setLastChecked(new Date());
         setCountdown(60);
       })
@@ -480,6 +485,10 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
           </div>
         </div>
 
+        {dmz?.configured && dmz.links.length > 0 && (
+          <DmzVersionTile dmz={dmz} iconStyle={iconStyle} />
+        )}
+
         <div
           className="rounded-xl px-4 py-3 flex items-center gap-3"
           style={{
@@ -520,6 +529,119 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
           {lastChecked.toLocaleTimeString("en-GB")}
         </p>
       )}
+    </div>
+  );
+}
+
+// ── DMZ Version tile ──────────────────────────────────────────────────
+// Surfaces the DMZ peer's `strata-dmz` binary version, captured from the
+// `AuthOutcome::Accept` frame on the most recent successful mTLS link
+// handshake. Only rendered when DMZ mode is configured and at least one
+// link has completed a handshake with a version-bearing peer (i.e. the
+// DMZ is on >= 1.9.6). Multi-DMZ deployments may have heterogenous
+// versions; we collapse to a single tile when they agree and surface a
+// mismatch warning otherwise.
+function DmzVersionTile({
+  dmz,
+  iconStyle,
+}: {
+  dmz: DmzLinksResponse;
+  iconStyle: (color: string) => React.CSSProperties;
+}) {
+  // Distinct non-null versions reported across all links.
+  const versions = Array.from(
+    new Set(
+      dmz.links
+        .map((l) => l.remote_software_version)
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+    )
+  );
+  // No handshake has yet surfaced a version (legacy DMZ peers, or all
+  // links still in Backoff after a fresh restart). Render a tile that
+  // makes the unknown state explicit rather than silently hiding it.
+  if (versions.length === 0) {
+    return (
+      <div
+        className="rounded-xl px-4 py-3 flex items-center gap-3"
+        style={{
+          background: "var(--color-surface-secondary)",
+          border: "1px solid var(--color-glass-border)",
+        }}
+      >
+        <div style={iconStyle("#a855f7")}>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+            <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+            <line x1="6" x2="6.01" y1="6" y2="6" />
+            <line x1="6" x2="6.01" y1="18" y2="18" />
+          </svg>
+        </div>
+        <div>
+          <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+            DMZ Version
+          </p>
+          <p className="text-sm font-bold text-txt-tertiary">Unknown</p>
+          <p className="text-[0.6rem] text-txt-tertiary">No handshake yet, or legacy DMZ</p>
+        </div>
+      </div>
+    );
+  }
+  const single = versions.length === 1 ? versions[0] : null;
+  const mismatch = single !== null && single !== __APP_VERSION__;
+  return (
+    <div
+      className="rounded-xl px-4 py-3 flex items-center gap-3"
+      style={{
+        background: "var(--color-surface-secondary)",
+        border: "1px solid var(--color-glass-border)",
+      }}
+    >
+      <div style={iconStyle("#a855f7")}>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+          <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+          <line x1="6" x2="6.01" y1="6" y2="6" />
+          <line x1="6" x2="6.01" y1="18" y2="18" />
+        </svg>
+      </div>
+      <div>
+        <p className="text-[0.6rem] uppercase tracking-wider text-txt-tertiary font-semibold">
+          DMZ Version
+        </p>
+        {single !== null ? (
+          <>
+            <p className="text-sm font-bold text-txt-primary">v{single}</p>
+            {mismatch && (
+              <p className="text-[0.6rem] text-yellow-400">Skew vs frontend v{__APP_VERSION__}</p>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-sm font-bold text-yellow-400">Mixed</p>
+            <p className="text-[0.6rem] text-yellow-400">
+              {versions.map((v) => `v${v}`).join(", ")}
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 }

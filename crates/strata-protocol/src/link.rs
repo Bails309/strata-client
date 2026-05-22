@@ -53,6 +53,10 @@ pub struct ClientHandshakeConfig {
 pub struct LinkAccepted {
     /// Stable identifier the DMZ assigned to this link instance.
     pub link_id: String,
+    /// Strata software version advertised by the DMZ peer, if any.
+    /// `None` when the DMZ is running a pre-1.9.6 build that does
+    /// not yet include the field in its `AuthOutcome::Accept`.
+    pub remote_software_version: Option<String>,
 }
 
 /// Drive the internal node's side of the handshake to completion.
@@ -90,7 +94,13 @@ where
 
         let outcome: AuthOutcome = read_frame(stream).await?;
         match outcome {
-            AuthOutcome::Accept { link_id } => Ok(LinkAccepted { link_id }),
+            AuthOutcome::Accept {
+                link_id,
+                software_version,
+            } => Ok(LinkAccepted {
+                link_id,
+                remote_software_version: software_version,
+            }),
             AuthOutcome::Reject { reason } => Err(ProtocolError::AuthFailed(reason)),
         }
     };
@@ -113,6 +123,10 @@ pub struct ServerHandshakeConfig {
     pub psks: std::collections::HashMap<String, Vec<u8>>,
     /// Stable identifier this DMZ instance assigns to the link.
     pub link_id: String,
+    /// Strata software version of this DMZ binary. Echoed back to the
+    /// internal node in `AuthOutcome::Accept` so the admin UI can
+    /// surface DMZ ↔ backend version skew.
+    pub software_version: String,
 }
 
 /// Outcome of a successful server-side handshake.
@@ -165,6 +179,7 @@ where
                     stream,
                     &AuthOutcome::Accept {
                         link_id: cfg.link_id.clone(),
+                        software_version: Some(cfg.software_version.clone()),
                     },
                 )
                 .await?;
@@ -221,6 +236,7 @@ mod tests {
             psk_id: "current".into(),
             psks: psk_map("current", b"shared-link-psk"),
             link_id: "dmz-1#42".into(),
+            software_version: "9.9.9-dmz".into(),
         }
     }
 
@@ -237,8 +253,54 @@ mod tests {
         let cr = cr.unwrap().unwrap();
         let sr = sr.unwrap().unwrap();
         assert_eq!(cr.link_id, "dmz-1#42");
+        assert_eq!(cr.remote_software_version.as_deref(), Some("9.9.9-dmz"));
         assert_eq!(sr.cluster_id, "production");
         assert_eq!(sr.node_id, "internal-1");
+    }
+
+    #[tokio::test]
+    async fn handshake_accepts_legacy_dmz_without_version() {
+        // Simulate a pre-1.9.6 DMZ peer that emits an AuthOutcome::Accept
+        // with no software_version field. The client must still accept
+        // and report None for remote_software_version.
+        use crate::frame::{read_frame, write_frame};
+        use crate::handshake::{AuthChallenge, AuthHello, AuthResponse, fresh_nonce_b64};
+
+        let (mut a, mut b) = tokio::io::duplex(8192);
+        let cc = client_cfg();
+
+        let client = tokio::spawn(async move { client_handshake(&mut a, &cc).await });
+
+        let server = tokio::spawn(async move {
+            let _hello: AuthHello = read_frame(&mut b).await.unwrap();
+            let challenge = AuthChallenge {
+                server_nonce_b64: fresh_nonce_b64(),
+                psk_id: "current".into(),
+            };
+            write_frame(&mut b, &challenge).await.unwrap();
+            let _resp: AuthResponse = read_frame(&mut b).await.unwrap();
+            // Hand-roll a legacy Accept frame: tagged enum with no
+            // software_version field. serde(default) on the field
+            // makes this deserialise cleanly on the client.
+            #[derive(serde::Serialize)]
+            #[serde(tag = "outcome", rename_all = "snake_case")]
+            enum LegacyOutcome {
+                Accept { link_id: String },
+            }
+            write_frame(
+                &mut b,
+                &LegacyOutcome::Accept {
+                    link_id: "legacy#1".into(),
+                },
+            )
+            .await
+            .unwrap();
+        });
+
+        let (cr, _sr) = tokio::join!(client, server);
+        let cr = cr.unwrap().unwrap();
+        assert_eq!(cr.link_id, "legacy#1");
+        assert_eq!(cr.remote_software_version, None);
     }
 
     #[tokio::test]

@@ -104,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
         // TLS handshake flood from a single source.
         accept_rate_rps: 5,
         accept_rate_burst: 30,
+        software_version: env!("CARGO_PKG_VERSION").to_string(),
     };
     let registry_for_link = registry.clone();
     let shutdown_for_link = shutdown.clone();

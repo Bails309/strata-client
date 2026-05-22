@@ -62,6 +62,14 @@ pub struct LinkStatus {
     /// Reset to zero each time the link reaches `Up`, so the counter
     /// reflects only failures since the last successful connection.
     pub failures: u64,
+    /// Strata software version advertised by the DMZ peer in the most
+    /// recent successful handshake. `None` when we have not yet
+    /// completed a handshake against this endpoint, or when the DMZ
+    /// is running a pre-1.9.6 build that does not yet echo its
+    /// version back in `AuthOutcome::Accept`. Preserved across
+    /// `Backoff` cycles so the UI keeps the last-known value while
+    /// the link is reconnecting.
+    pub remote_software_version: Option<String>,
     /// Internal flag set by [`LinkRegistry::kick`] so the supervisor
     /// can distinguish an admin-requested reconnect from a real
     /// disconnect when the active stream is cancelled. Not exposed
@@ -125,6 +133,19 @@ impl LinkRegistry {
             s.state = LinkState::Backoff;
             s.since = SystemTime::now();
             s.last_error = Some(reason);
+        }
+    }
+
+    /// Record the DMZ peer's advertised software version captured
+    /// during the most recent successful handshake. Called by the
+    /// supervisor immediately after `client_handshake` returns.
+    /// `None` (legacy DMZ that did not echo the field) clears any
+    /// previously-known value so the UI doesn't show stale info
+    /// after a DMZ downgrade.
+    pub(crate) fn set_remote_version(&self, endpoint: &str, version: Option<String>) {
+        let mut g = self.inner.write().expect("LinkRegistry poisoned");
+        if let Some(s) = g.get_mut(endpoint) {
+            s.remote_software_version = version;
         }
     }
 
@@ -204,6 +225,7 @@ impl LinkRegistry {
                 since: SystemTime::now(),
                 connects: 0,
                 failures: 0,
+                remote_software_version: None,
                 kicked: false,
             });
         }

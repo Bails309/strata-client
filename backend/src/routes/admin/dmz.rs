@@ -45,6 +45,11 @@ pub struct DmzLinkRow {
     pub connects: u64,
     /// Total dial / handshake / runtime failures since process start.
     pub failures: u64,
+    /// Strata software version advertised by the DMZ peer in the most
+    /// recent successful handshake. `null` when no handshake has yet
+    /// succeeded, or when the DMZ is running a pre-1.9.6 build that
+    /// does not yet echo its version in `AuthOutcome::Accept`.
+    pub remote_software_version: Option<String>,
 }
 
 impl From<LinkStatus> for DmzLinkRow {
@@ -62,6 +67,7 @@ impl From<LinkStatus> for DmzLinkRow {
             since_unix_secs,
             connects: s.connects,
             failures: s.failures,
+            remote_software_version: s.remote_software_version,
         }
     }
 }
@@ -158,6 +164,7 @@ mod tests {
             since: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(42),
             connects: 3,
             failures: 1,
+            remote_software_version: Some("1.9.6-dmz".into()),
             kicked: false,
         }
     }
@@ -171,6 +178,7 @@ mod tests {
         assert_eq!(row.since_unix_secs, 42);
         assert_eq!(row.connects, 3);
         assert_eq!(row.failures, 1);
+        assert_eq!(row.remote_software_version.as_deref(), Some("1.9.6-dmz"));
     }
 
     #[test]

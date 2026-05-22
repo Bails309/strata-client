@@ -985,7 +985,8 @@ by the **Admin → DMZ Links** tab; auto-refreshed every 15 seconds.
       "connects": 4,
       "failures": 1,
       "since_unix_secs": 1714780000,
-      "last_error": null
+      "last_error": null,
+      "remote_software_version": "1.9.6"
     },
     {
       "endpoint": "dmz-b.example.com:9443",
@@ -993,21 +994,23 @@ by the **Admin → DMZ Links** tab; auto-refreshed every 15 seconds.
       "connects": 0,
       "failures": 7,
       "since_unix_secs": 1714779931,
-      "last_error": "tls: handshake failure: certificate verify failed"
+      "last_error": "tls: handshake failure: certificate verify failed",
+      "remote_software_version": null
     }
   ]
 }
 ```
 
-| Field                     | Type           | Description                                                                                                                  |
-| ------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `configured`              | bool           | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`. |
-| `links[].endpoint`        | string         | `host:port` for one DMZ peer.                                                                                                |
-| `links[].state`           | enum           | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`.                                           |
-| `links[].connects`        | int            | Successful link establishments since process start.                                                                          |
-| `links[].failures`        | int            | Failed handshake or TCP attempts since process start.                                                                        |
-| `links[].since_unix_secs` | int            | Wall-clock instant the link entered its current `state`.                                                                     |
-| `links[].last_error`      | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run.   |
+| Field                              | Type           | Description                                                                                                                                                                                                                                                                                          |
+| ---------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `configured`                       | bool           | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`.                                                                                                                                                                         |
+| `links[].endpoint`                 | string         | `host:port` for one DMZ peer.                                                                                                                                                                                                                                                                        |
+| `links[].state`                    | enum           | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`.                                                                                                                                                                                                                   |
+| `links[].connects`                 | int            | Successful link establishments since process start.                                                                                                                                                                                                                                                  |
+| `links[].failures`                 | int            | Failed handshake or TCP attempts since process start.                                                                                                                                                                                                                                                |
+| `links[].since_unix_secs`          | int            | Wall-clock instant the link entered its current `state`.                                                                                                                                                                                                                                             |
+| `links[].last_error`               | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run.                                                                                                                                                                           |
+| `links[].remote_software_version`  | string \| null | The `strata-dmz` binary version reported by the peer in its `AuthOutcome::Accept` frame on the most recent successful handshake. `null` until at least one handshake has completed, or when the DMZ is running a pre-1.9.6 build that does not yet echo its version over the link. Added in v1.9.6. |
 
 `curl` example:
 

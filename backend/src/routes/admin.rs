@@ -19,6 +19,7 @@ use crate::services::{audit, kerberos, settings};
 
 pub mod dmz;
 pub mod recordings;
+pub mod safeguard;
 
 // ── Rate limiter: admin password reset (W3-7) ──────────────────────────
 
@@ -5005,6 +5006,9 @@ mod tests {
             ttl_hours: 8,
             extended_expiry: false,
             checkout_id: None,
+            kind: "local".into(),
+            safeguard_account_id: None,
+            safeguard_asset: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["label"], "Work");

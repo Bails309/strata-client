@@ -309,6 +309,14 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/admin/dmz-links/reconnect",
             post(admin::dmz::reconnect_links),
         )
+        .route(
+            "/api/admin/safeguard/config",
+            get(admin::safeguard::get_config).put(admin::safeguard::put_config),
+        )
+        .route(
+            "/api/admin/safeguard/test",
+            post(admin::safeguard::test_connection),
+        )
         .layer(middleware::from_fn(require_admin))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         // CSRF runs first on the request path (outermost layer). It inspects
@@ -334,6 +342,27 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/credential-profiles",
             get(user::list_credential_profiles),
+        )
+        .route("/api/user/safeguard/enabled", get(user::safeguard_enabled))
+        .route(
+            "/api/user/safeguard/status",
+            get(user::safeguard_token_status),
+        )
+        .route(
+            "/api/user/safeguard/token",
+            post(user::submit_safeguard_token).delete(user::clear_safeguard_token),
+        )
+        .route(
+            "/api/user/safeguard/bulk-checkout",
+            post(user::bulk_safeguard_checkout),
+        )
+        .route(
+            "/api/user/safeguard/cached",
+            get(user::list_safeguard_cached),
+        )
+        .route(
+            "/api/user/safeguard/checkin",
+            post(user::bulk_safeguard_checkin),
         )
         .route(
             "/api/user/credential-profiles",

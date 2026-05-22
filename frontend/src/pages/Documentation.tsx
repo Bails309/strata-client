@@ -18,6 +18,7 @@ import apiReferenceMd from "@docs/api-reference.md?raw";
 import dmzMd from "@docs/dmz.md?raw";
 import webSessionsMd from "@docs/web-sessions.md?raw";
 import vdiMd from "@docs/vdi.md?raw";
+import safeguardUserGuideMd from "@docs/safeguard-user-guide.md?raw";
 
 /* ── Sidebar sections ──────────────────────────────────────────────── */
 
@@ -171,6 +172,27 @@ const SECTIONS: DocSection[] = [
       </svg>
     ),
     content: vdiMd,
+  },
+  {
+    id: "safeguard-user-guide",
+    label: "Safeguard JIT (User Guide)",
+    icon: (
+      <svg
+        width={ICON_SIZE}
+        height={ICON_SIZE}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="3" y="11" width="18" height="10" rx="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        <circle cx="12" cy="16" r="1.25" />
+      </svg>
+    ),
+    content: safeguardUserGuideMd,
   },
   {
     id: "roadmap",

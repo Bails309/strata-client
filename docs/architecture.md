@@ -820,6 +820,198 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 - **Audio mesh client.** `allow_audio`, the envelope variants (`audio_offer` / `audio_answer` / `ice`), and the server-side validation are all wired through, but the 1.9.6 frontend does not implement a WebRTC peer mesh.
 - **Owner-side participant view.** The 1.9.6 owner sees the screen and can revoke; they don't see peer cursors or the chat panel in their own session view. A future commit will add a `/api/user/sessions/:id/co-pilot` endpoint and reuse `CoPilotOverlay` from the owner's `SessionManager`.
 
+## Safeguard JIT credential checkout (v1.10.0+)
+
+v1.10.0 ships a first-class integration with **OneIdentity Safeguard for
+Privileged Passwords** that lets a credential profile carry a Safeguard
+`AccountID` + asset reference instead of a locally-stored password.
+Each tunnel resolves its credentials through a just-in-time (JIT) REST
+dance against the appliance at the moment of connection, with an
+optional Vault-sealed cache for the duration of a user's shift and a
+dedicated bulk-checkout UI for operators who need to pre-fetch every
+password for a planned change window.
+
+### Module layout
+
+```text
+backend/src/services/safeguard/
+├── mod.rs             # jit_checkout / jit_checkin orchestration,
+│                      # preflight, checkout_password_with_retry
+├── config.rs          # SafeguardConfig load / save / unseal (Vault)
+├── client.rs          # REST client: AccessRequests, CheckoutPassword,
+│                      # Me/ActionableRequests deserializer
+├── user_token.rs      # safeguard_user_tokens seal / store / read
+└── password_cache.rs  # safeguard_cached_passwords seal / store /
+                       # load (eager-purge on expiry)
+```
+
+| Layer                 | Responsibility                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.rs`           | Loads the singleton `safeguard_config` row, unseals A2A secrets via Vault, applies `"********"` mask semantics on PUT.                                        |
+| `user_token.rs`       | Per-user RSTS bearer storage in `safeguard_user_tokens`; Vault-sealed (ciphertext + per-row DEK + nonce). Expiry-aware accessor returns `None` after RSTS TTL. |
+| `client.rs`           | Bearer-aware `reqwest::Client` builder (system trust + optional CA + per-config TLS verify + optional A2A client identity), AccessRequests CRUD.              |
+| `password_cache.rs`   | Per-(user, profile) sealed plaintext cache with eager-purge on stale read.                                                                                    |
+| `mod.rs`              | Public surface: `jit_checkout(profile, user, ctx)`, `jit_checkin(profile, user, ctx)`, retry/preflight glue.                                                  |
+
+### Authentication modes
+
+`safeguard_config.auth_mode` selects between three modes:
+
+- **`per_user_browser`** — Each user runs `Connect-Safeguard -Browser
+  -IdentityProvider <alias>` from the Safeguard PowerShell module and
+  pastes the resulting bearer into Strata's sign-in card. The token
+  is sealed in `safeguard_user_tokens` and reused for every
+  subsequent checkout until its ~15 minute RSTS TTL expires. Every
+  checkout is attributed to the user's IdP identity in the Safeguard
+  audit log.
+- **`a2a`** — Strata authenticates to the appliance as a single
+  application identity using a Vault-sealed client certificate + key
+  + API key triple. Every checkout shows the "Strata" application
+  identity in the Safeguard audit log; Strata's own
+  `safeguard_checkout_audit` still attributes the row to the human
+  `user_id`.
+- **`hybrid`** (recommended default) — Prefers the per-user token
+  when present, falls back to A2A when it isn't. Users who haven't
+  signed in yet still get a working checkout against
+  shared-automation accounts.
+
+### Data flow — `jit_checkout`
+
+```mermaid
+sequenceDiagram
+    participant UI as Frontend
+    participant BE as backend (Axum)
+    participant SG as Safeguard appliance
+    participant Vault
+    participant DB as Postgres
+
+    UI->>BE: open tunnel for safeguard profile
+    BE->>DB: load safeguard_config + cache row
+    alt cache hit and not expired
+        DB-->>BE: sealed password
+        BE->>Vault: decrypt envelope
+        BE-->>UI: bind to guacd, no SG call
+    else cache miss or caching disabled
+        BE->>Vault: unseal A2A secrets / user token
+        BE->>SG: GET Me/ActionableRequests (preflight)
+        SG-->>BE: open requests for (user, account)
+        opt stale request present
+            BE->>SG: CheckIn or Cancel stale request
+        end
+        BE->>SG: POST AccessRequests (RequestedDurationHours)
+        SG-->>BE: { id, AccountName, AccountDomainName }
+        BE->>SG: POST {id}/CheckoutPassword
+        alt Code 90010
+            BE->>BE: backoff 0/0.5/1/2/3/4 s
+            BE->>SG: POST {id}/CheckoutPassword (retry)
+        end
+        SG-->>BE: plaintext password
+        opt password_cache_enabled
+            BE->>Vault: seal password
+            BE->>DB: insert safeguard_cached_passwords
+            BE->>DB: UPDATE credential_profiles.expires_at
+        end
+        BE->>DB: safeguard_checkout_audit (success)
+        BE-->>UI: bind to guacd
+    end
+```
+
+### Preflight & stale-request release
+
+Safeguard rejects a second simultaneous request for the same account
+by the same user with **Code 90001**, returning the existing request id
+and password — which then fails RDP auth because the appliance
+rotates the password every time it accepts a fresh request. The
+`list_my_active_requests_for(account_id, asset)` helper in
+[`backend/src/services/safeguard/client.rs`](../backend/src/services/safeguard/client.rs)
+enumerates the caller's open requests under both the Safeguard 8.x
+**singular** bucket keys (`Requester`, `Approver`, `Reviewer`, `Admin`)
+and the legacy **plural** keys (`PersonalRequests`,
+`RequestorRequests`, `ApproverRequests`, `ReviewerRequests`), with a
+final raw-`Vec<Row>` fallback for the wire shape some 7.x appliances
+emit.
+
+The release verb is dispatched based on the workflow state in each
+candidate row:
+
+| Reported state                            | Verb used    | Fallback on 90114 |
+| ----------------------------------------- | ------------ | ----------------- |
+| `RequestAvailable`, `PendingApproval`     | `Cancel`     | try `CheckIn`     |
+| `PasswordCheckedOut`, `RequestCheckedOut` | `CheckIn`    | try `Cancel`      |
+| Anything else / unknown                   | `Cancel` then `CheckIn` until one accepts |
+
+The request body is the JSON-encoded string literal `"strata
+preflight"` with `Content-Type: application/json` and a non-zero
+`Content-Length` — Safeguard rejects `Content-Length: 0` with `411`,
+rejects `{}` with `415`, and rejects a raw string with `70000`, all of
+which are now caught at the integration boundary rather than
+surfacing to the user.
+
+### Code 90010 retry on `CheckoutPassword`
+
+Cancelling a stale `RequestAvailable` triggers an immediate password
+rotation on the Safeguard side. The very next `CheckoutPassword`
+against the freshly-created replacement request returns **Code 90010**
+("You cannot access this account while another request is pending
+password reset") for a few seconds until the rotation finishes.
+`checkout_password_with_retry` in
+[`backend/src/services/safeguard/mod.rs`](../backend/src/services/safeguard/mod.rs)
+wraps the bare client call with an exponential-ish backoff loop
+(`[0, 500, 1000, 2000, 3000, 4000]` ms — ~10 s total worst case),
+retries **only** when the error body contains the `"Code":90010`
+marker, and surfaces any other error (auth, validation, not-found)
+immediately so a permanently-broken state never blocks behind
+transient retries.
+
+### Password cache lifecycle
+
+`safeguard_cached_passwords (user_id, profile_id)` is a composite-PK
+table written every time JIT checkout succeeds **and** the
+administrator has flipped `safeguard_config.password_cache_enabled =
+true`. The lifetime of each row is governed by the per-profile
+`ttl_hours` slider — not a global setting — so a user with a long
+shift can hold a credential for the duration their profile allows
+without re-triggering the 15-minute RSTS sign-in carousel.
+
+The `password_cache::load(...)` accessor performs an eager DELETE on
+any row whose `expires_at` has passed before returning a hit, so a
+stale entry can never silently succeed. Auto-checkin is suppressed
+while caching is active: the `AccessRequest` stays open on the
+Safeguard side until the user explicitly checks back in (or until
+Safeguard's own policy expires it), giving the cache an actual
+lifetime to honour.
+
+`credential_profiles.expires_at` is kept in lock-step with the cache
+row's TTL via the new `credential_profiles::set_expires_at` helper —
+slammed forward to the TTL on checkout, slammed back to `now()` on
+checkin — so the Profiles list never lies about whether a Safeguard
+credential is usable.
+
+### Append-only audit trail
+
+Every state transition is written to `safeguard_checkout_audit`:
+
+```text
+pending ──▶ success ──▶ checked_in
+   │            │
+   └─▶ failed   └─▶ expired
+```
+
+Columns: `id`, `user_id`, `profile_id`, `sg_account_id`, `sg_asset`,
+`sg_request_id`, `session_id`, `opened_at`, `closed_at`, `outcome`,
+`error_message`. The table shape mirrors `share_participant_audit` so
+existing forensic tooling can be reused without modification.
+
+### Kill switch
+
+`safeguard_config.enabled = FALSE` (the upgrade default) hides the
+**Kind** selector's Safeguard option across the UI, hides the
+Credentials page's sign-in and bulk-checkout cards, and routes
+existing safeguard-backed profiles through the same "expired managed
+credential" rejection used elsewhere — so a half-disabled state never
+forces a session to recover at an awkward moment. Flipping the
+switch back on lights the entire surface up in a single step.
+
 ## Directory Structure
 
 ```

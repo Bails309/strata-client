@@ -5,6 +5,284 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-05-22
+
+### Minor Release — OneIdentity Safeguard JIT credential checkout (full release)
+
+v1.10.0 ships the full OneIdentity Safeguard for Privileged Passwords
+("SPP") JIT integration end-to-end. A new `kind = 'safeguard'`
+credential profile resolves its password against the appliance at
+tunnel-open time, optionally caches the released password under Vault
+envelope encryption so a user with a long-lived shift can avoid the
+15-minute per-user Safeguard sign-in carousel, and exposes a dedicated
+**Bulk Checkout** workflow that pre-fetches every Safeguard-backed
+profile's password in one signed-in burst with mandatory
+justification, per-row failure visibility, and one-click bulk
+check-in. The integration is hardened against every Safeguard 8.2.x
+REST quirk encountered during integration (singular wrapper bucket
+names on `Me/ActionableRequests`, JSON-encoded string body on
+`Cancel`/`CheckIn`, the Code 90001 "duplicate access request"
+overlap, the Code 90010 "pending password reset" rotation race, and
+the Code 90114 "can't CheckIn before CheckOut" workflow-state error)
+and surfaces clean, actionable errors in the UI for everything it
+can't auto-recover from.
+
+The feature is opt-in everywhere: master `enabled` switch defaults
+`false`, password caching defaults `false`, and existing deployments
+upgrade with no behavioural change until an administrator turns it on
+from **Admin → Secrets & Security → Safeguard JIT**.
+
+Verified against **Safeguard for Privileged Passwords 8.2.2** with
+both A2A and per-user-browser (RSTS / federation) authentication.
+
+#### Added
+
+- **Per-user browser sign-in flow (`per_user_browser` auth mode)**
+  ([`backend/migrations/068_safeguard_user_tokens.sql`](backend/migrations/068_safeguard_user_tokens.sql), [`backend/src/services/safeguard/user_token.rs`](backend/src/services/safeguard/user_token.rs), [`backend/src/routes/user.rs`](backend/src/routes/user.rs), [`frontend/src/pages/credentials/SafeguardSigninCard.tsx`](frontend/src/pages/credentials/SafeguardSigninCard.tsx)).
+  Each user runs `Connect-Safeguard -Browser -IdentityProvider <alias>`
+  from the Safeguard PowerShell module (or pastes a previously-minted
+  API token), exchanges their browser session for a ~15-minute RSTS
+  bearer, and posts it to Strata via `POST /api/user/safeguard/token`.
+  The token is sealed with the same Vault transit-key envelope
+  (ciphertext + per-row DEK + nonce) used by `credential_profiles`,
+  stored in the new `safeguard_user_tokens` table keyed on `user_id`,
+  and surfaced via `GET /api/user/safeguard/status` so the UI can
+  render an accurate **Signed in · N min left** badge. Migration
+  `068_safeguard_user_tokens.sql` renames the legacy `per_user_oidc`
+  enum value to `per_user_browser`, back-fills existing rows, and
+  reinstalls the `auth_mode` CHECK constraint atomically. The legacy
+  spelling is still accepted by the `AuthMode::parse` deserializer
+  for one release so any in-flight admin form submission doesn't
+  400.
+- **JIT checkout orchestration (`jit_checkout` / `jit_checkin`)**
+  ([`backend/src/services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs), [`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs), [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)).
+  `jit_checkout` is the single entry-point the tunnel and bulk-checkout
+  paths share. It loads the singleton `safeguard_config`, unseals A2A
+  secrets via Vault, builds a per-request `reqwest::Client` (system
+  trust store + optional CA bundle layered on top + per-config TLS
+  verification + optional A2A client identity), acquires a bearer
+  using the configured `AuthMode` (per-user browser token, A2A
+  `LoginResponse`, or hybrid with per-user preferred), then runs a
+  three-step REST dance against `/service/core/v4/AccessRequests`:
+  preflight any stale requests this user already holds against the
+  same `(account_id, asset_id)` and release them, `POST` a new
+  request with `RequestedDurationHours = max(profile.ttl_hours, 1)`,
+  and `POST {id}/CheckoutPassword` to retrieve the plaintext. The
+  username is built from `AccountName` + `AccountDomainName` so RDP
+  receives the correct logon name rather than the numeric account
+  id. Every state transition (`pending` → `success`/`failed` →
+  `checked_in`/`expired`) is written to the append-only
+  `safeguard_checkout_audit` table.
+- **Safeguard 8.x preflight and stale-request release**
+  ([`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs#L410), [`backend/src/services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs#L210)).
+  Safeguard rejects a second simultaneous request for the same
+  account by the same user with Code 90001 and silently returns the
+  EXISTING request id and password — which then fails RDP auth
+  because the appliance rotates the password every time it accepts a
+  fresh request. The new `list_my_active_requests_for(...)` helper
+  enumerates the caller's open requests for a target account, parses
+  Safeguard 8.x's singular wrapper bucket names (`Requester`,
+  `Approver`, `Reviewer`, `Admin`) as well as the legacy plural
+  shape (`PersonalRequests`, `RequestorRequests`, `ApproverRequests`,
+  `ReviewerRequests`), and the verbatim `Vec<Row>` shape some 7.x
+  appliances return. The preflight loop dispatches the right release
+  verb based on workflow state — `CheckIn` once the password has
+  been checked out, `Cancel` for `RequestAvailable` /
+  `PendingApproval` — and falls back to the other verb if the first
+  returns Code 90114. The release body is the JSON-encoded string
+  literal `"\"strata preflight\""` with `Content-Type:
+  application/json` and a non-zero `Content-Length` — Safeguard
+  rejects `Content-Length: 0`, the empty object `{}`, and a raw
+  string with `415` / `411` / `70000` errors respectively, all of
+  which are now caught at the integration boundary rather than
+  surfacing to the user.
+- **Post-cancel rotation-race retry on `CheckoutPassword`**
+  ([`backend/src/services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs#L120) `checkout_password_with_retry`).
+  Cancelling a stale `RequestAvailable` request triggers an immediate
+  password rotation on the Safeguard side. The very next
+  `CheckoutPassword` against the freshly-created replacement request
+  returns Code 90010 ("You cannot access this account while another
+  request is pending password reset") for a few seconds until the
+  rotation finishes. `checkout_password_with_retry` wraps the bare
+  client call with an exponential-backoff loop
+  (`[0, 500, 1000, 2000, 3000, 4000]` ms, ~10 s total worst case),
+  retries only on the 90010 marker, logs `checkout_password: 90010
+  on attempt N for request {rid}, retrying`, and surfaces any other
+  error (auth, validation, not-found) immediately so a permanently-
+  broken state never blocks behind transient retries.
+- **Optional password caching (`password_cache_enabled`)**
+  ([`backend/migrations/069_safeguard_password_cache.sql`](backend/migrations/069_safeguard_password_cache.sql), [`backend/src/services/safeguard/password_cache.rs`](backend/src/services/safeguard/password_cache.rs)).
+  When the admin sets `safeguard_config.password_cache_enabled =
+  true`, every successful JIT checkout's plaintext password is sealed
+  (Vault envelope) and stored per `(user_id, profile_id)` in the new
+  `safeguard_cached_passwords` table for the lifetime configured by
+  the profile's own `ttl_hours`. Subsequent tunnel opens for the
+  same profile reuse the cached row without making any Safeguard API
+  call — so a user with a long-running shift doesn't have to resubmit
+  a fresh 15-minute RSTS token every time the previous one expires.
+  Auto-checkin is suppressed while caching is active: the
+  AccessRequest stays open on the appliance until the user
+  explicitly checks back in (or until Safeguard's own policy expires
+  it), giving the cache an actual lifetime to honour. The
+  `password_cache::load(...)` accessor eagerly deletes any row whose
+  `expires_at` has passed, so a stale entry can never silently
+  succeed.
+- **Bulk checkout workflow** ([`backend/src/routes/user.rs`](backend/src/routes/user.rs#L758), [`frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx`](frontend/src/pages/credentials/SafeguardBulkCheckoutCard.tsx)).
+  The Credentials page gains a third tab — **Request Checkout** —
+  that pairs a Safeguard sign-in card with a bulk-checkout card.
+  Users supply a single mandatory **Justification** (sent verbatim
+  as Safeguard's `ReasonComment` for every selected profile —
+  policy commonly mandates a meaningful comment, and a templated
+  marker like `Strata bulk:<uuid>` is rarely what a reviewer wants
+  to see in the audit log), select any subset of their Safeguard
+  profiles via per-row checkboxes plus a **Select all** convenience
+  toggle, and click **Checkout selected**. The server iterates
+  serially (so Safeguard never sees overlapping requests for the
+  same `(user, account)` pair), reports per-row success/failure with
+  the full Safeguard error body in-lined into the failing row, and —
+  on success — stores the plaintext password in the cache table so
+  the user is good for the duration their profile's TTL stipulates.
+  A matching **Check in all (N)** button releases every cached
+  password back to Safeguard in one POST, expiring the profile rows
+  immediately so the Profiles list never lies about whether a
+  cached credential is still usable.
+- **Per-profile expiry sync on bulk checkout / check-in**
+  ([`backend/src/services/credential_profiles.rs`](backend/src/services/credential_profiles.rs#L385) `set_expires_at`, [`backend/src/routes/user.rs`](backend/src/routes/user.rs)).
+  `credential_profiles.expires_at` is now kept in lock-step with the
+  cache row's TTL so the Profiles list reflects the freshly
+  checked-out window (the column was previously frozen at the last
+  profile edit and could lie about whether a Safeguard credential
+  was usable). On bulk check-in the column is slammed back to
+  `now()` so the row immediately renders the red **Expired — update
+  required** pill instead of a deceptive future timestamp — a
+  checked-in credential is, from the user's point of view, no
+  different from an expired one (the appliance has rotated the
+  password and a fresh checkout is required before it can be used
+  again).
+- **Safeguard JIT admin configuration & connectivity probe**
+  ([`backend/migrations/067_safeguard.sql`](backend/migrations/067_safeguard.sql), [`backend/src/services/safeguard/config.rs`](backend/src/services/safeguard/config.rs), [`backend/src/routes/admin/safeguard.rs`](backend/src/routes/admin/safeguard.rs), [`frontend/src/pages/admin/SafeguardTab.tsx`](frontend/src/pages/admin/SafeguardTab.tsx)).
+  Singleton `safeguard_config` row stores every appliance tunable
+  (`enabled`, `appliance_fqdn`, `appliance_port`, `verify_tls`,
+  `ca_cert_pem`, `idp_alias`, `auth_mode`, `default_checkout_hours`,
+  `request_reason_template`, `auto_checkin_on_session_end`,
+  `password_cache_enabled`, plus three sealed A2A secrets:
+  `a2a_api_key`, `a2a_client_cert_pem`, `a2a_client_key_pem`).
+  Sealed columns are returned as the eight-character mask
+  `"********"` on GET and accepted as the same literal on PUT to
+  mean "keep existing", so admins can edit unrelated fields without
+  re-typing the API key. `POST /api/admin/safeguard/test` performs
+  a live three-step probe — TCP, TLS, `GET /service/core/v4/Me` —
+  using the in-memory form values (not the persisted row), so an
+  operator can validate cert / key / API-key combinations before
+  committing them.
+- **Append-only Safeguard checkout audit table**
+  ([`backend/migrations/067_safeguard.sql`](backend/migrations/067_safeguard.sql)).
+  `safeguard_checkout_audit (id, user_id, profile_id, sg_account_id,
+  sg_asset, sg_request_id, session_id, opened_at, closed_at, outcome,
+  error_message)` with `outcome` constrained to `pending → success /
+  failed → checked_in / expired`, mirroring the
+  `share_participant_audit` shape so existing forensic tooling can
+  be reused without modification.
+
+#### Database
+
+- **Migration `067_safeguard.sql`** — `safeguard_config` singleton
+  row (PK `= 1`, CHECK enforced), `credential_profiles.kind`
+  (`'local'` / `'safeguard'`) + `safeguard_account_id` +
+  `safeguard_asset` columns, partial index
+  `idx_credential_profiles_kind ON kind WHERE kind <> 'local'`,
+  `safeguard_checkout_audit` append-only table.
+- **Migration `068_safeguard_user_tokens.sql`** — renames legacy
+  `auth_mode = 'per_user_oidc'` enum value to `'per_user_browser'`,
+  reinstalls the CHECK constraint, and creates
+  `safeguard_user_tokens (user_id PK FK→users ON DELETE CASCADE,
+  ciphertext, encrypted_dek, nonce, expires_at, created_at,
+  updated_at)` with an index on `expires_at`.
+- **Migration `069_safeguard_password_cache.sql`** — adds
+  `safeguard_config.password_cache_enabled BOOLEAN DEFAULT FALSE`
+  and creates `safeguard_cached_passwords (user_id, profile_id)`
+  composite PK, both FKs `ON DELETE CASCADE` so a deleted user or
+  profile evicts the cache row atomically. Index on `expires_at`
+  for the eager-delete sweep.
+
+#### REST surface
+
+| Endpoint                                          | Verb | Purpose                                                                                |
+| ------------------------------------------------- | ---- | -------------------------------------------------------------------------------------- |
+| `/api/admin/safeguard/config`                     | GET  | Read the singleton config with sealed fields rendered as `"********"`                  |
+| `/api/admin/safeguard/config`                     | PUT  | Update the config; `"********"` inputs preserve the existing sealed value              |
+| `/api/admin/safeguard/test`                       | POST | Live TCP + TLS + `GET /Me` probe against form values without persisting them           |
+| `/api/user/safeguard/enabled`                     | GET  | Public-to-the-SPA boolean kill-switch state (gates UI rendering of the Safeguard tab)  |
+| `/api/user/safeguard/status`                      | GET  | `{ signed_in, expires_at? }` for the per-user browser-flow token                       |
+| `/api/user/safeguard/token`                       | POST | Submit a freshly-minted Safeguard API token to seal in `safeguard_user_tokens`         |
+| `/api/user/safeguard/token`                       | DELETE | Eagerly purge the user's stored token (sign-out)                                     |
+| `/api/user/safeguard/bulk-checkout`               | POST | Run JIT checkout for the selected profile ids; returns per-row results                 |
+| `/api/user/safeguard/cached`                      | GET  | Non-decrypting status of the user's live cache rows (powers the bulk-checkout badges)  |
+| `/api/user/safeguard/checkin`                     | POST | Release one or many cached profiles; empty `profile_ids` means "everything I hold"     |
+
+#### Tests
+
+- **Backend** — Unit coverage for `safeguard::config::SafeguardConfig`
+  round-trip (mask in / mask out), `AuthMode::parse` legacy-value
+  acceptance, wrapper-bucket deserializer covering all
+  Safeguard-8.x singular and pre-8.x plural shapes plus the
+  raw-vec fallback, and the
+  `checkout_password_with_retry` 90010 retry / non-90010 fail-fast
+  contract.
+- **Frontend** — Vitest suite (82 files) continues to pass; new
+  tests cover the bulk-checkout card's mandatory-justification
+  guard, per-row error rendering, **Select all** toggle, **Check
+  in all (N)** counter binding, and the `signed_in` /
+  `expires_at` rendering of the sign-in card.
+
+#### Upgrade notes
+
+- **Apply migrations 067 / 068 / 069 in order** before rolling the
+  binary. Each migration is idempotent (`IF NOT EXISTS` /
+  `ON CONFLICT DO NOTHING`) and runs automatically at backend
+  startup via the existing `sqlx::migrate!` invocation. **No
+  back-fill is performed** — existing `credential_profiles` rows
+  are stamped `kind = 'local'` by default, and no `safeguard_*`
+  tables are populated until an administrator turns the feature on.
+- **No behavioural change without administrator action.**
+  `safeguard_config.enabled` defaults to `FALSE` so the credential
+  profile **Kind** selector hides the Safeguard option, the
+  Credentials page does not render the sign-in or bulk-checkout
+  cards, and the tunnel layer treats safeguard-backed profiles as
+  the existing expired-managed-credential rejection. Turning the
+  master switch on lights up the entire surface in one step.
+- **Password caching is also opt-in.** With caching disabled (the
+  default) every tunnel open issues a fresh JIT call against
+  Safeguard and Strata never persists the plaintext password.
+  Operators wishing to enable caching for the duration of a user's
+  shift can flip `password_cache_enabled` from the same admin tab —
+  the cache row TTL is governed by each profile's own `ttl_hours`
+  slider so shift length is per-user, not global.
+- **Verified against Safeguard for Privileged Passwords 8.2.2.**
+  The `Me/ActionableRequests` singular-bucket wire shape, the JSON-
+  encoded string body required by `Cancel` / `CheckIn`, and the
+  Code 90010 rotation race are all 8.2.x behaviours. If you are
+  running an older 7.x line, the deserializer accepts the legacy
+  plural wrapper shape and the raw `Vec<Row>` body — but you should
+  verify the integration end-to-end against your appliance before
+  enabling it for users.
+- **Per-user vs A2A: both work, hybrid mode is recommended.**
+  Per-user-browser maximises Safeguard audit fidelity (each
+  checkout is attributable to the human's IdP identity, not to the
+  Strata service account) but burns through 15-minute RSTS tokens
+  and demands a sign-in every time one expires. A2A authenticates
+  Strata as a single application identity to the appliance and
+  shows "Strata" as the requester in Safeguard's own audit log —
+  Strata's `safeguard_checkout_audit` still attributes each row to
+  the human via `user_id`. Hybrid mode (`auth_mode = 'hybrid'`)
+  prefers the per-user token when available and falls back to A2A
+  when it isn't, so a user who hasn't signed in yet still gets a
+  working checkout against shared-automation accounts.
+- **See `docs/safeguard.md`** for the implementation architecture
+  and operator runbook, and `docs/safeguard-user-guide.md` for the
+  step-by-step end-user guide on configuring profiles and
+  performing bulk checkouts.
+
 ## [1.9.6] — Unreleased
 
 ### Minor Release — Multiplayer / Co-Pilot Mode for shared sessions

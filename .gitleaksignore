@@ -1,0 +1,16 @@
+# Fingerprints of gitleaks findings to ignore. Format:
+#   <commit-sha>:<path>:<rule>:<line>
+#
+# Every entry must point to a finding that has either been replaced in
+# a later commit on the same branch or is a documented public test
+# vector. Inline justifications required.
+
+# False positive: a JWT-shaped placeholder ("eyJ0eXAiOiJKV1QiLCJhbGci...")
+# used as an example body for POST /api/user/safeguard/token in the
+# Safeguard JIT docs. The string is a syntactically valid but truncated
+# JWT header prefix with no signing material and no payload, copied
+# verbatim from the public Safeguard 8.x REST guide. Replaced with the
+# placeholder "<safeguard-api-token>" in commit bebcec2 so it no longer
+# appears on HEAD, but gitleaks still flags it in the diff history of
+# this PR. Cannot authenticate against any Safeguard appliance.
+9f7d75c2fa18a049537009656356b661139a6f4e:docs/api-reference.md:generic-api-key:1727

@@ -397,8 +397,10 @@ mod tests {
 
     #[test]
     fn validate_port_bounds() {
-        let mut c = SafeguardConfig::default();
-        c.appliance_port = 0;
+        let mut c = SafeguardConfig {
+            appliance_port: 0,
+            ..Default::default()
+        };
         assert!(validate(&c).is_err());
         c.appliance_port = 70000;
         assert!(validate(&c).is_err());

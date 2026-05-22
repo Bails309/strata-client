@@ -25,7 +25,6 @@ pub struct CredentialProfileRow {
     pub checkout_id: Option<Uuid>,
     /// 'local' (envelope-encrypted username+password) or 'safeguard'
     /// (JIT checkout from OneIdentity Safeguard at tunnel-open time).
-    #[serde(default = "default_kind")]
     pub kind: String,
     /// Safeguard AccountId for `kind='safeguard'` profiles.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -33,10 +32,6 @@ pub struct CredentialProfileRow {
     /// Safeguard AssetId / asset name for `kind='safeguard'` profiles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub safeguard_asset: Option<String>,
-}
-
-fn default_kind() -> String {
-    "local".to_string()
 }
 
 /// Maximum TTL (in hours) when a profile opts in to extended expiry.
@@ -125,6 +120,7 @@ pub async fn safeguard_target_for_connection(
 
 /// Variant for the one-off ticket path: look up safeguard target by
 /// profile_id rather than connection_id.
+#[allow(dead_code)]
 pub async fn safeguard_target_for_profile(
     pool: &PgPool,
     profile_id: Uuid,
@@ -204,6 +200,7 @@ pub async fn update_safeguard_target(
 
 /// Read the `kind` column for a profile (cheap; used by tunnel.rs to
 /// branch JIT vs. local without re-selecting the whole row).
+#[allow(dead_code)]
 pub async fn get_kind(pool: &PgPool, profile_id: Uuid) -> Result<Option<String>, AppError> {
     let k: Option<String> =
         sqlx::query_scalar("SELECT kind FROM credential_profiles WHERE id = $1")

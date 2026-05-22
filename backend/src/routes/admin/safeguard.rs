@@ -1,14 +1,13 @@
 //! Admin endpoints for the Safeguard JIT integration.
 //!
 //! Routes (all behind `require_admin` + `require_auth` + `require_csrf`):
-//!   * `GET  /api/admin/safeguard/config`  → masked config snapshot.
-//!   * `PUT  /api/admin/safeguard/config`  → upsert config (keep-on-mask
-//!                                            secrets, see `services::safeguard::config`).
-//!   * `POST /api/admin/safeguard/test`    → live connectivity probe
-//!                                            using the *submitted* draft
-//!                                            (NOT the persisted row), so
-//!                                            admins can verify before
-//!                                            saving.
+//!
+//! * `GET  /api/admin/safeguard/config` — masked config snapshot.
+//! * `PUT  /api/admin/safeguard/config` — upsert config (keep-on-mask
+//!   secrets, see `services::safeguard::config`).
+//! * `POST /api/admin/safeguard/test` — live connectivity probe using
+//!   the *submitted* draft (NOT the persisted row), so admins can
+//!   verify before saving.
 
 use axum::extract::State;
 use axum::Extension;

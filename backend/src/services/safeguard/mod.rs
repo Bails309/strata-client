@@ -156,6 +156,7 @@ async fn checkout_password_with_retry(
 /// open. Writes an audit row at request creation and at password
 /// release. The caller MUST call [`jit_checkin`] when the session
 /// ends (or accept Safeguard's policy-driven auto-checkin window).
+#[allow(clippy::too_many_arguments)]
 pub async fn jit_checkout(
     pool: &PgPool,
     vault: &crate::config::VaultConfig,

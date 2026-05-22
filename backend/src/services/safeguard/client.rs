@@ -241,6 +241,9 @@ pub struct CreatedAccessRequest {
     /// accounts, or the local username for local accounts).
     pub account_name: Option<String>,
     /// Safeguard `Account.DomainName` — empty for local accounts.
+    /// Snapshotted for future DOMAIN\\user RDP synthesis; currently
+    /// surfaced but not yet consumed.
+    #[allow(dead_code)]
     pub account_domain_name: Option<String>,
 }
 

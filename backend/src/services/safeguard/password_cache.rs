@@ -9,8 +9,8 @@
 //! resubmit a fresh 15-minute RSTS token every time the previous one
 //! expires.
 //!
-//! Storage mirrors `safeguard_user_tokens`: ciphertext + per-row DEK
-//! + nonce, with eager delete-on-expired in `load` so a stale row
+//! Storage mirrors `safeguard_user_tokens`: ciphertext, per-row DEK
+//! and nonce, with eager delete-on-expired in `load` so a stale row
 //! never silently succeeds.
 
 use crate::config::VaultConfig;
@@ -19,6 +19,21 @@ use crate::services::vault::{seal, unseal};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// `(ciphertext, encrypted_dek, nonce, username, request_id, expires_at)`
+/// — the raw row layout returned by [`load`]'s query.
+type CachedRow = (
+    Vec<u8>,
+    Vec<u8>,
+    Vec<u8>,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+);
+
+/// `(profile_id, username, request_id, expires_at)` — the row layout
+/// returned by [`status_for_user`]'s no-decrypt status query.
+type CachedStatusRow = (Uuid, Option<String>, Option<String>, DateTime<Utc>);
 
 /// Unsealed cached entry returned to the tunnel handler.
 pub struct CachedPassword {
@@ -34,6 +49,7 @@ pub struct CachedPassword {
 }
 
 /// Replace any existing cache row for `(user_id, profile_id)`.
+#[allow(clippy::too_many_arguments)]
 pub async fn store(
     pool: &PgPool,
     vault: &VaultConfig,
@@ -87,14 +103,7 @@ pub async fn load(
     user_id: Uuid,
     profile_id: Uuid,
 ) -> Result<Option<CachedPassword>, AppError> {
-    let row: Option<(
-        Vec<u8>,
-        Vec<u8>,
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<CachedRow> = sqlx::query_as(
         "SELECT ciphertext, encrypted_dek, nonce, username, request_id, expires_at
            FROM safeguard_cached_passwords
           WHERE user_id = $1 AND profile_id = $2",
@@ -148,7 +157,7 @@ pub struct CachedStatus {
 /// cached"). No decryption occurs — this is safe to call on every
 /// poll.
 pub async fn status_for_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<CachedStatus>, AppError> {
-    let rows: Vec<(Uuid, Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+    let rows: Vec<CachedStatusRow> = sqlx::query_as(
         "SELECT profile_id, username, request_id, expires_at
            FROM safeguard_cached_passwords
           WHERE user_id = $1 AND expires_at > now()

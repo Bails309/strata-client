@@ -77,7 +77,8 @@ pub async fn load(
     vault: &VaultConfig,
     user_id: Uuid,
 ) -> Result<Option<String>, AppError> {
-    let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>, DateTime<Utc>)> = sqlx::query_as(
+    type Row = (Vec<u8>, Vec<u8>, Vec<u8>, DateTime<Utc>);
+    let row: Option<Row> = sqlx::query_as(
         "SELECT ciphertext, encrypted_dek, nonce, expires_at
            FROM safeguard_user_tokens WHERE user_id = $1",
     )

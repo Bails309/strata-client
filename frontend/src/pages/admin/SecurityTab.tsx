@@ -217,9 +217,12 @@ export default function SecurityTab({
             <p className="text-txt-secondary text-sm mt-1">
               Automatically soft-delete any user who has not logged in for this many days. The
               countdown only starts after a user&apos;s first successful login &mdash; accounts that
-              have never logged in (e.g. fresh AD-sync imports) are never touched by this sweep.
-              Soft-deleted users still go through the normal hard-delete window above and can be
-              restored from <em>Show Deleted Users</em>. Set to <strong>0</strong> to disable.
+              have never logged in (e.g. fresh AD-sync imports) are never touched by this sweep. The
+              bootstrap admin account (matching <code>DEFAULT_ADMIN_USERNAME</code>, default{" "}
+              <code>admin</code>) is also always excluded so the sweep can never lock you out of
+              your own deployment. Soft-deleted users still go through the normal hard-delete window
+              above and can be restored from <em>Show Deleted Users</em>. Set to <strong>0</strong>{" "}
+              to disable.
             </p>
           </div>
         </div>

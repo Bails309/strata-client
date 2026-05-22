@@ -169,8 +169,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'backend/Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-v2-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'backend/Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-v2-
 
       - name: Check formatting
         # Scoped to the strata-backend package so this job stays focused on

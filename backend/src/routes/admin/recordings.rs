@@ -162,6 +162,7 @@ pub async fn session_stats(
 pub struct ListRecordingsQuery {
     pub user_id: Option<uuid::Uuid>,
     pub connection_id: Option<uuid::Uuid>,
+    pub search: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -180,6 +181,7 @@ pub async fn list_recordings(
         &db.pool,
         query.user_id,
         query.connection_id,
+        query.search,
         query.limit.unwrap_or(50),
         query.offset.unwrap_or(0),
     )

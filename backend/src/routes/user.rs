@@ -1188,6 +1188,7 @@ pub async fn my_observe_session(
 #[derive(Deserialize)]
 pub struct MyRecordingsQuery {
     pub connection_id: Option<Uuid>,
+    pub search: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -1204,6 +1205,7 @@ pub async fn my_recordings(
         &db.pool,
         auth.id,
         query.connection_id,
+        query.search,
         query.limit.unwrap_or(50),
         query.offset.unwrap_or(0),
     )

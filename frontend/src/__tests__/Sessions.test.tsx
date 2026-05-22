@@ -398,10 +398,17 @@ describe("Sessions", () => {
   });
 
   it("filters recordings by search", async () => {
-    vi.mocked(getRecordings).mockResolvedValue([
+    // Server-side search: the backend applies the filter, so the mock
+    // returns rows based on the search query supplied in params.
+    const all = [
       makeRecording({ id: "r1", connection_name: "Alpha" }),
       makeRecording({ id: "r2", connection_name: "Beta" }),
-    ]);
+    ];
+    vi.mocked(getRecordings).mockImplementation(async (params) => {
+      const q = (params?.search ?? "").toLowerCase();
+      if (!q) return all;
+      return all.filter((r) => r.connection_name.toLowerCase().includes(q));
+    });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await act(async () => {
       renderSessions();
@@ -410,8 +417,19 @@ describe("Sessions", () => {
     await screen.findByText("Alpha");
     const searchInput = screen.getByPlaceholderText(/Filter by connection/);
     await user.type(searchInput, "Alpha");
-    expect(screen.getByText("Alpha")).toBeInTheDocument();
-    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+    // 300 ms debounce on the search input before the next fetch fires.
+    await act(async () => {
+      vi.advanceTimersByTime(350);
+    });
+    await waitFor(() => {
+      expect(vi.mocked(getRecordings)).toHaveBeenCalledWith(
+        expect.objectContaining({ search: "Alpha" })
+      );
+    });
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+    });
   });
 
   it("shows recording error", async () => {

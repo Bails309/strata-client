@@ -579,18 +579,22 @@ pub async fn list_for_user(
     pool: &sqlx::Pool<sqlx::Postgres>,
     user_id: uuid::Uuid,
     connection_id: Option<uuid::Uuid>,
+    search: Option<String>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<crate::db::Recording>, crate::error::AppError> {
+    let search_pattern = search.map(|s| format!("%{}%", s));
     let rows = sqlx::query_as::<_, crate::db::Recording>(
         "SELECT * FROM recordings
          WHERE user_id = $1
            AND ($2::uuid IS NULL OR connection_id = $2)
+           AND ($3::text IS NULL OR connection_name ILIKE $3 OR username ILIKE $3)
          ORDER BY started_at DESC, id DESC
-         LIMIT $3 OFFSET $4",
+         LIMIT $4 OFFSET $5",
     )
     .bind(user_id)
     .bind(connection_id)
+    .bind(search_pattern)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
@@ -808,18 +812,22 @@ pub async fn list_admin(
     pool: &sqlx::Pool<sqlx::Postgres>,
     user_id: Option<uuid::Uuid>,
     connection_id: Option<uuid::Uuid>,
+    search: Option<String>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<crate::db::Recording>, crate::error::AppError> {
+    let search_pattern = search.map(|s| format!("%{}%", s));
     let rows = sqlx::query_as::<_, crate::db::Recording>(
         "SELECT * FROM recordings
          WHERE ($1::uuid IS NULL OR user_id = $1)
            AND ($2::uuid IS NULL OR connection_id = $2)
+           AND ($3::text IS NULL OR connection_name ILIKE $3 OR username ILIKE $3)
          ORDER BY started_at DESC, id DESC
-         LIMIT $3 OFFSET $4",
+         LIMIT $4 OFFSET $5",
     )
     .bind(user_id)
     .bind(connection_id)
+    .bind(search_pattern)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)

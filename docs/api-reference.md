@@ -1724,7 +1724,7 @@ stored in `safeguard_user_tokens` keyed on the calling user's
 **Body**
 
 ```json
-{ "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiI..." }
+{ "token": "<safeguard-api-token>" }
 ```
 
 **Response** `200 OK`

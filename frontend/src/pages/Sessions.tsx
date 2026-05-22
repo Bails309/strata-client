@@ -42,6 +42,9 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
   const [recError, setRecError] = useState("");
   const [selectedRec, setSelectedRec] = useState<HistoricalRecording | null>(null);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   // ── Live Sessions ───────────────────────────────────────────────
   const refreshLive = useCallback(async () => {
@@ -64,24 +67,45 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
   }, [tab, refreshLive]);
 
   // ── Recordings ──────────────────────────────────────────────────
+  const PAGE_SIZE = 50;
+
   const refreshRecordings = useCallback(async () => {
     setRecLoading(true);
     setRecError("");
     try {
+      const limit = PAGE_SIZE + 1;
+      const offset = (page - 1) * PAGE_SIZE;
       const data = isAdmin
-        ? await getRecordings({ limit: 200 })
-        : await getMyRecordings({ limit: 200 });
-      setRecordings(data);
+        ? await getRecordings({ limit, offset, search: debouncedSearch })
+        : await getMyRecordings({ limit, offset, search: debouncedSearch });
+
+      if (data.length > PAGE_SIZE) {
+        setRecordings(data.slice(0, PAGE_SIZE));
+        setHasMore(true);
+      } else {
+        setRecordings(data);
+        setHasMore(false);
+      }
     } catch {
       setRecError("Failed to load recordings");
     } finally {
       setRecLoading(false);
     }
-  }, [isAdmin]);
+  }, [isAdmin, page, debouncedSearch]);
 
   useEffect(() => {
-    if (tab === "recordings") refreshRecordings();
-  }, [tab, refreshRecordings]);
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (tab === "recordings") {
+      refreshRecordings();
+    }
+  }, [tab, page, debouncedSearch, refreshRecordings]);
 
   // ── Helpers ─────────────────────────────────────────────────────
   const toggleAll = () => {
@@ -148,12 +172,6 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
         return <span className="badge uppercase">{proto}</span>;
     }
   };
-
-  const filteredRecordings = recordings.filter(
-    (r) =>
-      r.connection_name.toLowerCase().includes(search.toLowerCase()) ||
-      (isAdmin && r.username.toLowerCase().includes(search.toLowerCase()))
-  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -467,7 +485,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
               />
               Loading recordings…
             </div>
-          ) : filteredRecordings.length === 0 ? (
+          ) : recordings.length === 0 ? (
             <div className="text-center py-12 text-txt-secondary">
               <svg
                 className="w-12 h-12 mx-auto mb-3 opacity-40"
@@ -483,7 +501,23 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                 />
               </svg>
               <p>No recordings found</p>
-              <p className="text-xs mt-1">Session recordings will appear here once completed.</p>
+              {debouncedSearch ? (
+                <>
+                  <p className="text-xs mt-1">No results matching "{debouncedSearch}"</p>
+                  <button
+                    className="btn-sm mt-4 inline-flex items-center gap-1.5"
+                    onClick={() => {
+                      setSearch("");
+                      setDebouncedSearch("");
+                      setPage(1);
+                    }}
+                  >
+                    Clear search filter
+                  </button>
+                </>
+              ) : (
+                <p className="text-xs mt-1">Session recordings will appear here once completed.</p>
+              )}
             </div>
           ) : (
             <div className="card p-0 overflow-hidden">
@@ -515,7 +549,7 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filteredRecordings.map((r) => (
+                  {recordings.map((r) => (
                     <tr key={r.id} className="hover:bg-nav-link-hover transition-colors">
                       {isAdmin && (
                         <td className="p-4">
@@ -564,6 +598,55 @@ export default function Sessions({ user }: { user: MeResponse | null }) {
                   ))}
                 </tbody>
               </table>
+
+              {/* Pagination Footer */}
+              <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-surface-secondary/30 backdrop-blur-md">
+                <div className="text-xs text-txt-secondary">
+                  Showing page <span className="font-semibold text-txt-primary">{page}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    className="btn-sm flex items-center gap-1"
+                    disabled={page === 1 || recLoading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M15 19l-7-7 7-7"
+                      />
+                    </svg>
+                    Previous
+                  </button>
+                  <button
+                    className="btn-sm flex items-center gap-1"
+                    disabled={!hasMore || recLoading}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Next
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

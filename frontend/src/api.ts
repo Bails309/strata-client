@@ -1353,11 +1353,18 @@ export interface HistoricalRecording {
 }
 
 export const getRecordings = (
-  params: { user_id?: string; connection_id?: string; limit?: number; offset?: number } = {}
+  params: {
+    user_id?: string;
+    connection_id?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {}
 ) => {
   const q = new URLSearchParams();
   if (params.user_id) q.set("user_id", params.user_id);
   if (params.connection_id) q.set("connection_id", params.connection_id);
+  if (params.search) q.set("search", params.search);
   if (params.limit) q.set("limit", String(params.limit));
   if (params.offset) q.set("offset", String(params.offset));
   return request<HistoricalRecording[]>(`/admin/recordings?${q.toString()}`);
@@ -1378,10 +1385,11 @@ export function buildRecordingStreamUrl(recordingId: string): string {
 // ── My Recordings (user-scoped) ─────────────────────────────────────
 
 export const getMyRecordings = (
-  params: { connection_id?: string; limit?: number; offset?: number } = {}
+  params: { connection_id?: string; search?: string; limit?: number; offset?: number } = {}
 ) => {
   const q = new URLSearchParams();
   if (params.connection_id) q.set("connection_id", params.connection_id);
+  if (params.search) q.set("search", params.search);
   if (params.limit) q.set("limit", String(params.limit));
   if (params.offset) q.set("offset", String(params.offset));
   return request<HistoricalRecording[]>(`/user/recordings?${q.toString()}`);

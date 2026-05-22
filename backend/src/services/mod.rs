@@ -7,6 +7,7 @@ pub mod audit;
 pub mod auth;
 pub mod checkouts;
 pub mod circuit_breaker;
+pub mod co_pilot;
 pub mod connections;
 pub mod credential_profiles;
 pub mod display;

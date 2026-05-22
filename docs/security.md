@@ -958,12 +958,31 @@ Session recording captures are managed by a background sync task:
 
 ## User Lifecycle Retention
 
-Soft-deleted users (admin UI → Users → Delete) are recoverable for a configurable window before the background cleanup worker removes their record and any associated recordings:
+Soft-deleted users (admin UI → Users → Delete) are recoverable for a configurable window before the background cleanup worker removes their record and any associated recordings. v1.9.5 adds a parallel **stale-account auto-soft-delete** sweep that runs ahead of the hard-delete pass and is driven by the new `last_login_at` column:
+
+### Hard-delete window (existing)
 
 - **Setting** — `user_hard_delete_days` (default **90 days**, valid range 1–3650). Editable in Admin Settings → Security → Data Retention.
 - **Worker** — `backend/src/services/user_cleanup.rs` runs every 24 h. It reads the current setting, pre-purges the user's recordings (Azure + local), then executes `DELETE FROM users WHERE deleted_at < now() - make_interval(days => $1)`.
 - **SQL safety** — The day window is parameter-bound via `make_interval(days => $1)` after an `i32` parse + positive-integer guard. No string interpolation is used on any retention query.
 - **Effect of shortening the window** — Shortening does not retroactively delete users; the next worker pass simply applies the new window and removes any row whose `deleted_at` is already older than the new threshold.
+
+### Stale-account auto-soft-delete (v1.9.5)
+
+- **Setting** — `user_stale_days` (default **0** = disabled, valid range 0–3650). Editable in Admin Settings → Security → Data Retention.
+- **Trigger column** — `users.last_login_at TIMESTAMPTZ` (added by migration `064_user_last_login.sql`). The column is updated best-effort on every successful local-login (`POST /api/auth/login`) and SSO-callback (`GET /api/auth/sso/callback`), immediately before audit logging. A DB failure on the update never blocks token issuance.
+- **Worker step** — The same daily `user_cleanup.rs` worker runs the stale sweep **before** the hard-delete pass:
+  ```sql
+  UPDATE users
+  SET deleted_at = now()
+  WHERE deleted_at IS NULL
+    AND last_login_at IS NOT NULL
+    AND last_login_at < now() - make_interval(days => $1)
+  ```
+- **NULL last_login_at is never aged out.** Users who have been provisioned (e.g. by AD sync) but have never signed in are explicitly excluded by the `last_login_at IS NOT NULL` predicate. The clock only starts after a user's first successful authentication, so a freshly-imported batch of accounts is never auto-deleted on the basis of when they were _created_.
+- **`user_stale_days = 0` disables the sweep entirely.** This is the default after upgrade — the feature is opt-in. Setting it back to `0` at any time halts further auto-deletions from the next worker pass.
+- **Audit trail** — Each affected row is written to `audit_logs` as `user.stale_auto_deleted` with `{ user_id, username, stale_days }`. `actor_id` is `NULL` to reflect that the worker (not a human operator) performed the action.
+- **Recoverability** — Stale soft-deletions are ordinary soft deletes. The affected rows continue to flow through the existing `user_hard_delete_days` retention window and remain restorable from the **Show Deleted Users** filter for the configured grace period.
 
 ---
 

@@ -786,7 +786,7 @@ strata-client/
 │           ├── session_registry.rs  NVR ring buffer + persistent-state log (v1.9.4) + live session tracking
 │           ├── settings.rs    system_settings CRUD
 │           ├── trusted_ca.rs  Trusted CA bundle CRUD + per-session NSS DB import via `certutil` (v1.2.0)
-│           ├── user_cleanup.rs  Hard-delete soft-deleted users after configurable window (default 90 days)
+│           ├── user_cleanup.rs  Daily worker: (1) stale-account sweep — soft-deletes users idle past `user_stale_days` (v1.9.5; `NULL last_login_at` excluded; `0` disables; audited as `user.stale_auto_deleted`), then (2) hard-deletes soft-deleted users older than `user_hard_delete_days` (default 90 days)
 │           ├── file_store.rs  Session-scoped temporary file storage
 │           ├── vault.rs       Envelope encryption
 │           ├── notifications.rs  Dispatcher: maps CheckoutEvent → recipients → EmailMessage; honours opt-outs; writes email_deliveries rows

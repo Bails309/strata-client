@@ -64,6 +64,12 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
     // signed in) are not aged out solely on the basis of their creation
     // time — the clock only starts ticking once the user has logged in
     // at least once. A value of 0 (the default) disables the sweep.
+    //
+    // The bootstrap admin account (matched case-insensitively against
+    // `DEFAULT_ADMIN_USERNAME`, default "admin") is *always* excluded from
+    // the sweep — losing it would leave the deployment with no way to
+    // recover. Operators who genuinely want to retire that account can
+    // still soft-delete it manually from the Users blade.
     let stale_days = crate::services::settings::get(&db.pool, "user_stale_days")
         .await
         .ok()
@@ -72,6 +78,9 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         .filter(|d| *d > 0);
 
     if let Some(stale_days) = stale_days {
+        let default_admin_username =
+            std::env::var("DEFAULT_ADMIN_USERNAME").unwrap_or_else(|_| "admin".into());
+
         // Collect candidates first so we can emit one audit-log entry per
         // user (the worker has no acting-user id, so audit::log is called
         // with `actor_id = None`).
@@ -80,9 +89,11 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
              FROM users
              WHERE deleted_at IS NULL
                AND last_login_at IS NOT NULL
-               AND last_login_at < now() - make_interval(days => $1)",
+               AND last_login_at < now() - make_interval(days => $1)
+               AND LOWER(username) <> LOWER($2)",
         )
         .bind(stale_days)
+        .bind(&default_admin_username)
         .fetch_all(&db.pool)
         .await?;
 
@@ -92,9 +103,11 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
                  SET deleted_at = now()
                  WHERE deleted_at IS NULL
                    AND last_login_at IS NOT NULL
-                   AND last_login_at < now() - make_interval(days => $1)",
+                   AND last_login_at < now() - make_interval(days => $1)
+                   AND LOWER(username) <> LOWER($2)",
             )
             .bind(stale_days)
+            .bind(&default_admin_username)
             .execute(&db.pool)
             .await?;
 

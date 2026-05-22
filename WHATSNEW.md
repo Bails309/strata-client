@@ -32,6 +32,7 @@ Two safety guarantees are explicit in the implementation and documented in the U
 
 1. **NULL `last_login_at` is never aged out.** Users who have been provisioned (e.g. by AD sync) but have never signed in are explicitly excluded — the clock only starts after a user's first successful authentication, so a freshly-imported batch of accounts is never auto-deleted on the basis of when they were _created_.
 2. **Setting `user_stale_days = 0` disables the sweep entirely.** This is the default after upgrade. The feature is opt-in; nothing happens until an administrator sets a positive threshold.
+3. **The bootstrap admin account is always excluded.** The user whose username matches `DEFAULT_ADMIN_USERNAME` (default `"admin"`, case-insensitive) is filtered out of the sweep so that an unattended deployment can never lock its own operators out by aging out the only break-glass account. Administrators who genuinely want to retire that account can still soft-delete it manually from the Users blade.
 
 Every affected row is written to the audit log as `user.stale_auto_deleted` with `{ user_id, username, stale_days }`, with `actor_id = None` to reflect that the worker (not a human operator) performed the action. Soft-deleted accounts continue to flow through the existing `user_hard_delete_days` retention window and remain restorable from the **Show Deleted Users** filter for the configured grace period.
 

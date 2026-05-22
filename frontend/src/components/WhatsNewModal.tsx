@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.9.6",
+    subtitle:
+      "Multiplayer / Co-Pilot Mode for shared sessions — up to six participants with arbitrated input control, live cursors, and in-room chat",
+    sections: [
+      {
+        title: "Multiplayer / Co-Pilot Mode for control-mode shares",
+        description:
+          "The Share popover gains a Multiplayer (co-pilot) toggle for control-mode shares with sub-controls for Max participants (2..=6), Allow chat (default on), and Allow audio (default off, wired through the schema for a follow-up release). The viewer page opens a sibling /api/shared/copilot/{share_token} WebSocket first, receives a Welcome envelope carrying its server-assigned pid, then opens the regular Guacamole tunnel with ?pid=<uuid> so the server can gate input forwarding on the in-memory input token.",
+      },
+      {
+        title: "Server-arbitrated input token with idle-grant",
+        description:
+          "A single-holder input token decides whose keyboard and mouse actually drive the session. The owner starts holding it; peers can request it with Take control, and if the current holder has been idle for two seconds the request is granted automatically — so no participant can monopolise the session indefinitely. The owner can force-revoke at any time. Every transition is broadcast as a roster update and rendered in the new roster strip with a CTRL badge next to whoever currently holds the token.",
+      },
+      {
+        title: "Live cursors and in-room chat",
+        description:
+          "Remote cursors are rendered live with name labels coloured from a deterministic 8-entry palette, throttled to ~30 Hz on the wire and decayed after 8 seconds of inactivity so a peer that drops without a clean leave doesn't leave a frozen pointer on screen. A collapsible chat panel (default on; capped at 500 characters per message and 200 messages in memory) keeps the cohort in sync without forcing them into a separate tool.",
+      },
+      {
+        title: "Kill switch and audit trail",
+        description:
+          "Operators can disable the entire feature without rolling back the binary by setting multiplayer_share_enabled = false in system_settings — the share-creation route silently downgrades multiplayer flags to a standard single-viewer share when this is set. A new share_participant_audit table records pid, display name, owner flag, join / leave timestamps, client IP and user agent for every participant, and matching share.multiplayer.joined / share.multiplayer.left events flow into the existing audit_log table.",
+      },
+    ],
+  },
+  {
     version: "1.9.5",
     subtitle:
       "Server-side recordings search & pagination, per-user last-login tracking, configurable stale-account auto-cleanup, Client IP visibility on the Sessions blade, and DMZ peer version visibility on the Health blade",

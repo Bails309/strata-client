@@ -5,7 +5,8 @@ Base URL: `http://localhost:8080/api` (or via nginx at `http://localhost:3000/ap
 All authenticated endpoints require an `Authorization: Bearer <token>` header with a valid OIDC access token.
 
 > [!NOTE]
-> **Global Security Headers (v1.8.3)**: 
+> **Global Security Headers (v1.8.3)**:
+>
 > - All API responses under `/api/*` carry `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` to prevent sensitive data caching.
 > - The Nginx gateway (via NJS) enforces `Content-Security-Policy: frame-ancestors 'none'`, masks the `Server` header to "Strata", and removes `X-Powered-By`.
 
@@ -344,12 +345,12 @@ Create/Register a new OIDC/SSO provider configuration. Client secrets are encryp
 }
 ```
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `name` | string | Yes | Display label/name of the identity provider for branding the login screen |
-| `issuer_url` | string | Yes | OIDC Issuer discovery URL |
-| `client_id` | string | Yes | OIDC client identifier |
-| `client_secret`| string | Yes | OIDC client secret |
+| Field           | Type   | Required | Description                                                               |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------- |
+| `name`          | string | Yes      | Display label/name of the identity provider for branding the login screen |
+| `issuer_url`    | string | Yes      | OIDC Issuer discovery URL                                                 |
+| `client_id`     | string | Yes      | OIDC client identifier                                                    |
+| `client_secret` | string | Yes      | OIDC client secret                                                        |
 
 **Response** `200 OK`
 
@@ -365,6 +366,7 @@ Create/Register a new OIDC/SSO provider configuration. Client secrets are encryp
 ```
 
 **Errors:**
+
 - `400 Bad Request` — Vault is unconfigured or sealed, client secret cannot be encrypted.
 - `400 Bad Request` — Invalid OIDC Issuer URL format.
 
@@ -421,20 +423,24 @@ Perform a live connection test to verify connection to the OIDC provider's disco
 }
 ```
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `id` | string | No | UUID of an existing provider to lookup stored secrets. |
-| `issuer_url` | string | Yes | OIDC Issuer discovery URL |
-| `client_id` | string | Yes | OIDC client identifier |
-| `client_secret` | string | No | OIDC client secret. Required if `id` is omitted. |
+| Field           | Type   | Required | Description                                            |
+| --------------- | ------ | -------- | ------------------------------------------------------ |
+| `id`            | string | No       | UUID of an existing provider to lookup stored secrets. |
+| `issuer_url`    | string | Yes      | OIDC Issuer discovery URL                              |
+| `client_id`     | string | Yes      | OIDC client identifier                                 |
+| `client_secret` | string | No       | OIDC client secret. Required if `id` is omitted.       |
 
 **Response** `200 OK`
 
 ```json
-{ "status": "success", "message": "Successfully retrieved OIDC discovery configuration." }
+{
+  "status": "success",
+  "message": "Successfully retrieved OIDC discovery configuration."
+}
 ```
 
 **Errors:**
+
 - `400 Bad Request` — Failed to fetch OIDC discovery configuration from issuer.
 
 #### `PUT /api/admin/settings/auth-methods`
@@ -1001,16 +1007,16 @@ by the **Admin → DMZ Links** tab; auto-refreshed every 15 seconds.
 }
 ```
 
-| Field                              | Type           | Description                                                                                                                                                                                                                                                                                          |
-| ---------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `configured`                       | bool           | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`.                                                                                                                                                                         |
-| `links[].endpoint`                 | string         | `host:port` for one DMZ peer.                                                                                                                                                                                                                                                                        |
-| `links[].state`                    | enum           | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`.                                                                                                                                                                                                                   |
-| `links[].connects`                 | int            | Successful link establishments since process start.                                                                                                                                                                                                                                                  |
-| `links[].failures`                 | int            | Failed handshake or TCP attempts since process start.                                                                                                                                                                                                                                                |
-| `links[].since_unix_secs`          | int            | Wall-clock instant the link entered its current `state`.                                                                                                                                                                                                                                             |
-| `links[].last_error`               | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run.                                                                                                                                                                           |
-| `links[].remote_software_version`  | string \| null | The `strata-dmz` binary version reported by the peer in its `AuthOutcome::Accept` frame on the most recent successful handshake. `null` until at least one handshake has completed, or when the DMZ is running a pre-1.9.6 build that does not yet echo its version over the link. Added in v1.9.6. |
+| Field                             | Type           | Description                                                                                                                                                                                                                                                                                         |
+| --------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `configured`                      | bool           | `true` when `STRATA_DMZ_ENDPOINTS` is set on the internal node. `false` indicates single-node mode and `links` will be `[]`.                                                                                                                                                                        |
+| `links[].endpoint`                | string         | `host:port` for one DMZ peer.                                                                                                                                                                                                                                                                       |
+| `links[].state`                   | enum           | One of `connecting`, `authenticating`, `initializing`, `up`, `backoff`, `stopped`.                                                                                                                                                                                                                  |
+| `links[].connects`                | int            | Successful link establishments since process start.                                                                                                                                                                                                                                                 |
+| `links[].failures`                | int            | Failed handshake or TCP attempts since process start.                                                                                                                                                                                                                                               |
+| `links[].since_unix_secs`         | int            | Wall-clock instant the link entered its current `state`.                                                                                                                                                                                                                                            |
+| `links[].last_error`              | string \| null | Verbatim error from the last failed attempt; `null` when the current `state` is `up` and no failure has occurred this run.                                                                                                                                                                          |
+| `links[].remote_software_version` | string \| null | The `strata-dmz` binary version reported by the peer in its `AuthOutcome::Accept` frame on the most recent successful handshake. `null` until at least one handshake has completed, or when the DMZ is running a pre-1.9.6 build that does not yet echo its version over the link. Added in v1.9.6. |
 
 `curl` example:
 
@@ -1515,13 +1521,13 @@ List the authenticated user's credential profiles.
 ]
 ```
 
-| Field             | Type           | Description                                                                                                                                                                                                                                                                                                                  |
-| ----------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ttl_hours`       | integer        | Effective TTL in hours. Limited to **1–12** when `extended_expiry` is `false` (the default), or **1–2160** (1 hour – 90 days) when `extended_expiry` is `true`. The bound is enforced by the database CHECK constraint `chk_ttl_hours`, the `resolve_profile_ttl` helper, and the frontend slider — bypass at any one layer is rejected at the next. |
-| `extended_expiry` | boolean        | Opt-in flag introduced in v1.7.0. When `true`, the profile's `ttl_hours` may be set anywhere from 1 to 2160 hours (90 days) instead of the standard 12-hour cap. Toggling the flag on its own does **not** recompute `expires_at` — `ttl_hours` must also change for the expiry to move.                                                                          |
-| `checkout_id`     | UUID \| null   | If non-null, the profile was populated from an active password checkout and its expiry is bounded by the checkout duration regardless of `ttl_hours`.                                                                                                                                                                                                                |
-| `expires_at`      | timestamp      | `created_at + ttl_hours`. After this point the profile is no longer considered a valid credential source by the tunnel and a renewal is required.                                                                                                                                                                                                                    |
-| `expired`         | boolean        | Server-computed convenience field equivalent to `expires_at <= now()`.                                                                                                                                                                                                                                                                                                |
+| Field             | Type         | Description                                                                                                                                                                                                                                                                                                                                          |
+| ----------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ttl_hours`       | integer      | Effective TTL in hours. Limited to **1–12** when `extended_expiry` is `false` (the default), or **1–2160** (1 hour – 90 days) when `extended_expiry` is `true`. The bound is enforced by the database CHECK constraint `chk_ttl_hours`, the `resolve_profile_ttl` helper, and the frontend slider — bypass at any one layer is rejected at the next. |
+| `extended_expiry` | boolean      | Opt-in flag introduced in v1.7.0. When `true`, the profile's `ttl_hours` may be set anywhere from 1 to 2160 hours (90 days) instead of the standard 12-hour cap. Toggling the flag on its own does **not** recompute `expires_at` — `ttl_hours` must also change for the expiry to move.                                                             |
+| `checkout_id`     | UUID \| null | If non-null, the profile was populated from an active password checkout and its expiry is bounded by the checkout duration regardless of `ttl_hours`.                                                                                                                                                                                                |
+| `expires_at`      | timestamp    | `created_at + ttl_hours`. After this point the profile is no longer considered a valid credential source by the tunnel and a renewal is required.                                                                                                                                                                                                    |
+| `expired`         | boolean      | Server-computed convenience field equivalent to `expires_at <= now()`.                                                                                                                                                                                                                                                                               |
 
 #### `POST /api/user/credential-profiles`
 
@@ -1539,13 +1545,13 @@ Create a new credential profile.
 }
 ```
 
-| Field             | Type     | Required | Default                                                                                          |
-| ----------------- | -------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `label`           | string   | Yes      | —                                                                                                |
-| `username`        | string   | Yes      | —                                                                                                |
-| `password`        | string   | Yes      | —                                                                                                |
-| `ttl_hours`       | integer  | No       | Admin's configured cap (12) when `extended_expiry` is `false`; **2160** (90 d) when `true`. Clamped to `[1, cap]`. |
-| `extended_expiry` | boolean  | No       | `false`                                                                                          |
+| Field             | Type    | Required | Default                                                                                                            |
+| ----------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `label`           | string  | Yes      | —                                                                                                                  |
+| `username`        | string  | Yes      | —                                                                                                                  |
+| `password`        | string  | Yes      | —                                                                                                                  |
+| `ttl_hours`       | integer | No       | Admin's configured cap (12) when `extended_expiry` is `false`; **2160** (90 d) when `true`. Clamped to `[1, cap]`. |
+| `extended_expiry` | boolean | No       | `false`                                                                                                            |
 
 The password is envelope-encrypted with Vault Transit before storage.
 The plaintext is never persisted. The audit log entry
@@ -1690,6 +1696,8 @@ Public WebSocket tunnel for shared sessions. No authentication required.
 
 **Path Parameter**: `share_token` (string) — a valid, non-expired, non-revoked share token.
 
+**Query Parameter (v1.9.6+)**: `pid` (UUID, optional) — the participant id issued by `GET /api/shared/copilot/:share_token`. Required for multiplayer shares so the server can gate input forwarding on the in-memory **input token**; ignored for single-viewer shares.
+
 The backend looks up the share token, finds the owner's **active session** in the in-memory session registry, and subscribes the shared viewer to the owner's NVR broadcast channel:
 
 - **View mode** — the shared viewer receives the owner's live display frames (read-only). Mouse and keyboard input from the viewer is discarded.
@@ -1698,6 +1706,30 @@ The backend looks up the share token, finds the owner's **active session** in th
 The shared viewer first receives the cached `size` instruction so the display initialises at the correct dimensions, then the persistent-state log (v1.9.4 — non-ephemeral drawing instructions salvaged from frames that have aged out of the 5-minute ring buffer), then a sync-stripped dump of the current ring buffer with a single flushing `sync` afterwards. After that initial reconstruction it transitions to live frame streaming from the owner's NVR broadcast channel. The lag-recovery rebuild inside the live-forwarding loop also re-sends the persistent log and re-dumps the ring buffer, so a viewer that falls behind the broadcast channel still recovers to a complete canvas.
 
 Returns `404` if the token is invalid, expired, revoked, or if the owner is not currently connected.
+
+### `GET /api/shared/copilot/:share_token` (v1.9.6+)
+
+Public WebSocket sibling endpoint for multiplayer / co-pilot shares. No authentication required. Only accessible when the underlying share has `multiplayer = true`; returns `404` for single-viewer shares.
+
+**Path Parameter**: `share_token` (string)
+
+**Query Parameter**: `name` (string, optional, default `"Guest"`) — the participant's display name. Sanitised, length-bounded to 40 characters, and disambiguated with a `" (n)"` suffix if it collides with an existing roster entry.
+
+**Protocol**: JSON-only envelope stream (no Guacamole framing). The discriminator is the top-level `type` field with `serde(rename_all = "snake_case")`. The server's first message is a `Welcome` envelope:
+
+```json
+{
+  "type": "welcome",
+  "pid": "f1c2…",
+  "allow_chat": true,
+  "allow_audio": false,
+  "max_participants": 6
+}
+```
+
+Subsequent messages include `roster`, `cursor`, `chat`, `input_claim`, `input_release`, `input_grant`, `input_revoke`, `audio_offer`, `audio_answer`, `ice`, and `leave`. The full type set is mirrored in [`frontend/src/co-pilot/protocol.ts`](../frontend/src/co-pilot/protocol.ts) and defined authoritatively in [`backend/src/services/co_pilot.rs`](../backend/src/services/co_pilot.rs). Server-only variants sent by clients are silently dropped.
+
+Returns `404` if the token is invalid, expired, revoked, points at a single-viewer share, or if the owner is not currently connected. Returns `4001` close code with a `join_error` envelope if the room is at capacity (`reason: "room_full"`) or the supplied name is empty (`reason: "empty_name"`).
 
 ---
 
@@ -1717,9 +1749,13 @@ Generate a temporary share link for a connection the user has access to.
 }
 ```
 
-| Field  | Type                    | Required | Default  | Description                                                     |
-| ------ | ----------------------- | -------- | -------- | --------------------------------------------------------------- |
-| `mode` | `"view"` \| `"control"` | No       | `"view"` | `"view"` = read-only, `"control"` = full keyboard & mouse input |
+| Field              | Type                    | Required | Default  | Description                                                                                                                                                                                          |
+| ------------------ | ----------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`             | `"view"` \| `"control"` | No       | `"view"` | `"view"` = read-only, `"control"` = full keyboard & mouse input                                                                                                                                      |
+| `multiplayer`      | `bool`                  | No       | `false`  | v1.9.6+ — opt the share into co-pilot mode. Silently forced to `false` unless `mode = "control"` and the `multiplayer_share_enabled` system setting is not exactly `"false"`.                        |
+| `max_participants` | `int`                   | No       | `2`      | v1.9.6+ — clamped server-side to `1..=6`. Only honoured when `multiplayer = true`.                                                                                                                   |
+| `allow_chat`       | `bool`                  | No       | `true`   | v1.9.6+ — enable the in-room text chat panel. Forced to `false` unless `multiplayer = true`.                                                                                                         |
+| `allow_audio`      | `bool`                  | No       | `false`  | v1.9.6+ — enable the WebRTC audio mesh. Forced to `false` unless `multiplayer = true`. The 1.9.6 client does not yet implement audio; the field is wired through the schema for a follow-up release. |
 
 **Response** `200 OK`
 

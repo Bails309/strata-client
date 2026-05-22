@@ -569,7 +569,7 @@ const ROADMAP: RoadmapTheme[] = [
       {
         id: "workflows-multiplayer",
         title: "Multiplayer / Co-Pilot Mode",
-        status: "Proposed",
+        status: "Shipped",
         areas: ["Sessions", "Collaboration"],
         description:
           "Extend share links into real-time collaboration with named multi-cursors, a chat overlay, optional WebRTC audio, and turn-based keyboard handoff. Built for pair programming, IT support, and on-boarding.",

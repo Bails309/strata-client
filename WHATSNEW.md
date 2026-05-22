@@ -1,3 +1,29 @@
+# What's New in v1.9.6
+
+> **Minor release: Multiplayer / Co-Pilot Mode for shared sessions.** Strata's share links graduate from a strict 1:1 (owner ↔ single viewer) model to a true **multiplayer / co-pilot** experience. Owners can now invite up to six participants into a single control-mode share, each with their own display name, deterministically-assigned cursor colour, and live presence on the screen. A server-arbitrated single-holder input token governs which participant currently drives the keyboard and mouse, with an idle-grant rule that automatically transfers control after two seconds of inactivity so no participant can monopolise the session indefinitely. An optional in-room text chat panel (default on) lets the cohort coordinate without leaving the session.
+
+## Multiplayer / Co-Pilot Mode for control-mode shares
+
+The **Share** popover in the session bar grows a new **Multiplayer (co-pilot)** toggle whenever you're creating a control-mode share. Switching it on reveals three sub-controls — **Max participants** (clamped 2..=6), **Allow chat** (default on), and **Allow audio** (default off, reserved for a follow-up release) — and decorates the generated share URL with `mp=1` so the viewer knows to open the new multiplayer plumbing.
+
+When a participant lands on a multiplayer URL, the viewer page opens a sibling WebSocket at `/api/shared/copilot/{share_token}?name=<your-name>` _before_ touching the existing screen tunnel. The server's first reply is a `Welcome { pid, allow_chat, allow_audio, max_participants }` envelope; once the client has its `pid`, it opens the regular Guacamole tunnel at `/api/shared/tunnel/{share_token}?pid=<uuid>` so the server can gate input forwarding on the in-memory **input token** — the single-holder permit that decides whose keyboard and mouse actually drive the session.
+
+The token starts with the owner. Peers can request it with **Take control**; if it's currently idle (no input activity for two seconds), the request is granted automatically. The owner can revoke at any time, and any holder can voluntarily **Release control** to hand the keyboard back. Every transition is broadcast as a roster update so all participants see who's driving in real time, and every join / leave / claim / revoke is audited so post-incident forensics can reconstruct who was in the room and when.
+
+The roster strip in the corner of the viewer shows each participant's name, their assigned colour, and a small **CTRL** badge next to whoever currently holds the input token. Remote cursors are rendered live with name labels — throttled to ~30 Hz on the wire — and a collapsible chat panel (capped at 500 characters per message and 200 messages in memory) keeps the cohort in sync without forcing them into a separate chat tool.
+
+## Kill switch and audit trail
+
+Operators who want to disable the feature entirely without rolling back the binary can `INSERT INTO system_settings (key, value) VALUES ('multiplayer_share_enabled', 'false')`. The share-creation route checks this setting on every request and silently downgrades multiplayer flags to a standard single-viewer share when it's set to `false`, so existing one-viewer share links keep working exactly as before.
+
+For audit purposes, the new `share_participant_audit` table records the `share_id`, server-assigned `pid`, display name, owner flag, join / leave timestamps, client IP and user agent for every participant — and matching `share.multiplayer.joined` and `share.multiplayer.left` events flow into the existing `audit_log` table so the multiplayer activity shows up in the same forensics view as every other security-relevant event.
+
+## Upgrade notes
+
+Apply migration 066 before rolling the binary. The schema additions are all backwards-compatible (`DEFAULT FALSE` / `DEFAULT 1`) so existing single-viewer shares continue to function without modification while the new column data lights up. The first release ships **without** the audio-mesh client and **without** an owner-side participant view; `allow_audio` is wired through the schema and protocol so a future release can light it up without a migration.
+
+---
+
 # What's New in v1.9.5
 
 > **Minor release: server-side recordings search and pagination, per-user last-login tracking, configurable stale-account auto-cleanup, and Client IP visibility on the Sessions blade.** v1.9.5 makes two operator workflows on the admin blade meaningfully faster and more compliant — the Recordings table now performs its search and pagination on the server (no more silent 200-row cap on the client), and the Users table surfaces a per-user **Last Login** column plus a new retention setting that auto-soft-deletes accounts that have been provisioned and signed in at least once but have since gone idle past a configurable threshold. The Sessions blade also gains a new **Client IP** column on both the Live and Recordings tabs so administrators can see the operator's public source address for both in-flight and historical sessions.

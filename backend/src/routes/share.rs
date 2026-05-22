@@ -128,7 +128,16 @@ pub async fn create_share(
     // Multiplayer is only meaningful with `control` mode — there's no
     // point in a multi-cursor read-only viewer. Reject the combination
     // up-front so the wire contract stays simple.
-    let multiplayer = body.multiplayer && mode == "control";
+    // Operators can also gate the entire feature off via the system
+    // setting `multiplayer_share_enabled` (default "true"); when off,
+    // any incoming multiplayer flag is silently downgraded to a
+    // standard single-viewer control share.
+    let multiplayer_enabled = crate::services::settings::get(&db.pool, "multiplayer_share_enabled")
+        .await
+        .unwrap_or(None)
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    let multiplayer = body.multiplayer && mode == "control" && multiplayer_enabled;
     let max_participants = if multiplayer {
         body.max_participants.clamp(1, MAX_MULTIPLAYER_PARTICIPANTS)
     } else {

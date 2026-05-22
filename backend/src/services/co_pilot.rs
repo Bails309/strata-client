@@ -114,6 +114,22 @@ pub enum CoPilotMsg {
         protocol_version: u16,
     },
 
+    /// Server → single client, sent immediately after a successful
+    /// `Hello` join. Carries the participant's server-assigned `pid`
+    /// (the client cannot derive it from `Roster` alone) plus the
+    /// room policy flags so the UI can decide whether to render chat
+    /// or audio controls.
+    Welcome {
+        /// Server-assigned participant id for this WebSocket.
+        pid: Uuid,
+        /// Whether the room exposes a chat channel.
+        allow_chat: bool,
+        /// Whether the room signals an optional WebRTC audio mesh.
+        allow_audio: bool,
+        /// DB-clamped participant cap (1..=6) for this share.
+        max_participants: u8,
+    },
+
     /// Server → all, broadcast on every join / leave / input-grant.
     Roster {
         /// Current room membership in stable join order.
@@ -236,6 +252,7 @@ impl CoPilotMsg {
                     check_len("color", &p.color, MAX_COLOR_LEN)?;
                 }
             }
+            Self::Welcome { .. } => {}
             Self::Cursor { .. } => {}
             Self::Chat { text, .. } => {
                 check_nonempty("text", text)?;

@@ -370,56 +370,24 @@ pub async fn ws_shared_tunnel(
     let revoke_pool = db.pool.clone();
     let revoke_token = share_token.clone();
 
-    // ── Multiplayer fork (v1.9.6+) ─────────────────────────────────
-    // When the share row has `multiplayer = true`, hand the WebSocket
-    // off to the co-pilot viewer loop which layers the JSON envelope
-    // protocol (cursor / chat / input-token arbitration / optional
-    // audio signalling) on top of the existing screen-replay + input
-    // forwarding path. Single-viewer shares fall through to the legacy
-    // closure below, byte-for-byte unchanged.
+    // ── Multiplayer input gating (v1.9.6+) ────────────────────────
+    // When the share is `multiplayer = true`, control-mode input is
+    // ALSO gated on the in-memory co-pilot room: only the participant
+    // currently holding the input token has their Guacamole frames
+    // forwarded to the owner's guacd. The `pid` arrives as a query
+    // param after the client completes its co-pilot handshake on the
+    // sibling `/api/shared/copilot/:token` WebSocket. Single-viewer
+    // shares ignore the room entirely (pid_opt remains `None`) — the
+    // existing behaviour is preserved byte-for-byte.
     let multiplayer = share.multiplayer;
-    let mp_share = share.clone();
-    let mp_session = session.clone();
-    let mp_display_name = qs
-        .get("name")
-        .cloned()
-        .unwrap_or_else(|| "Guest".to_string());
-    let mp_pool = db.pool.clone();
-    let mp_share_token = share_token.clone();
-    let mp_client_ip = client_ip.clone();
-    let mp_user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+    let pid_opt: Option<Uuid> = qs.get("pid").and_then(|v| Uuid::parse_str(v).ok());
+    let room_for_input = session.co_pilot_room.clone();
 
     Ok(ws
         .protocols(["guacamole"])
         .on_upgrade(move |mut socket| async move {
             use axum::extract::ws::Message;
 
-            if multiplayer {
-                multiplayer_viewer_loop(
-                    socket,
-                    mp_session,
-                    mp_share,
-                    mp_display_name,
-                    mp_share_token,
-                    mp_pool,
-                    mp_client_ip,
-                    mp_user_agent,
-                    size_inst,
-                    persistent_state,
-                    all_frames,
-                    rx,
-                    input_tx,
-                    buffer_for_recovery,
-                )
-                .await;
-                return;
-            }
-
-            // ── Single-viewer (legacy) path ────────────────────────
             // Send the last-known size instruction so the display renders
             // at the correct dimensions
             if let Some(size_inst) = size_inst {
@@ -554,12 +522,25 @@ pub async fn ws_shared_tunnel(
                     msg = socket.recv() => {
                         match msg {
                             None => break, // client disconnected
-                            Some(Ok(Message::Text(text)))
-                                if is_control
-                                // Forward input from control viewer to owner's guacd
-                                    && input_tx.send(text.to_string()).await.is_err() =>
-                            {
-                                break; // owner's session ended
+                            Some(Ok(Message::Text(text))) if is_control => {
+                                // Multiplayer shares gate every input frame
+                                // on whether this WebSocket's participant is
+                                // the room's current input-token holder.
+                                // Single-viewer control mode bypasses the
+                                // gate (pid_opt is None / multiplayer is
+                                // false) and forwards unconditionally.
+                                let should_forward = if multiplayer {
+                                    pid_opt
+                                        .map(|pid| room_for_input.note_input_activity(pid))
+                                        .unwrap_or(false)
+                                } else {
+                                    true
+                                };
+                                if should_forward
+                                    && input_tx.send(text.to_string()).await.is_err()
+                                {
+                                    break; // owner's session ended
+                                }
                             }
                             _ => {} // discard in view mode or for non-text messages
                         }
@@ -622,25 +603,92 @@ pub async fn ws_shared_tunnel(
         }))
 }
 
-// ── Multiplayer / co-pilot viewer loop (v1.9.6+) ─────────────────────
+// ── Co-pilot room WebSocket (v1.9.6+) ────────────────────────────────
 //
-// Layers the JSON envelope protocol (cursor / chat / input-token
-// arbitration / optional WebRTC audio signalling) on top of the legacy
-// screen-replay + input-forwarding path used by single-viewer shares.
+// `GET /api/shared/copilot/:share_token?name=Foo`
 //
-// Wire contract per text frame:
-//   - leading `{` → JSON envelope (`co_pilot::CoPilotMsg`), parsed,
-//     validated, server-stamps the participant's `pid`, then fans out
-//     via the room's broadcast channel.
-//   - anything else → Guacamole input instruction. Forwarded to the
-//     owner's `input_tx` **only when** the participant currently holds
-//     the input token (`room.note_input_activity(pid)`).
+// Sibling WebSocket to `/api/shared/tunnel/:share_token` carrying ONLY
+// the JSON envelope protocol (cursor / chat / input-token arbitration
+// / optional WebRTC signalling). The screen replay + Guacamole input
+// forwarding live exclusively on the tunnel WS.
 //
-// This means a non-holder's keystrokes / mouse events are silently
-// discarded server-side — defence-in-depth against a malicious client
-// that ignores the protocol-level grant/revoke envelopes.
+// Handshake:
+//   1. Client opens this WS with `?name=<display>`.
+//   2. Server validates the share is `multiplayer = true`, calls
+//      `room.join()`, and replies with a `Welcome { pid, ... }` frame.
+//   3. Server broadcasts the new `Roster` to everyone.
+//   4. Client then opens the tunnel WS with `?pid=<pid>` for screen +
+//      gated input.
+pub async fn ws_copilot_room(
+    ws: WebSocketUpgrade,
+    State(state): State<SharedState>,
+    Path(share_token): Path<String>,
+    Query(qs): Query<HashMap<String, String>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let db = {
+        let s = state.read().await;
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        s.db.clone().ok_or(AppError::SetupRequired)?
+    };
+
+    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
+        .unwrap_or_else(|| addr.ip().to_string());
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let share = crate::services::shares::find_active_by_token(&db.pool, &share_token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+
+    if !share.multiplayer {
+        return Err(AppError::NotFound(
+            "This share is not a multiplayer share".into(),
+        ));
+    }
+
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+    let session = registry
+        .find_by_connection_and_user(share.connection_id, share.owner_user_id)
+        .await
+        .ok_or_else(|| {
+            AppError::NotFound(
+                "The owner's session is not currently active. They must be connected for you to join.".into(),
+            )
+        })?;
+
+    let display_name = qs
+        .get("name")
+        .cloned()
+        .unwrap_or_else(|| "Guest".to_string());
+    let pool = db.pool.clone();
+
+    Ok(ws.on_upgrade(move |socket| async move {
+        copilot_room_loop(
+            socket,
+            session,
+            share,
+            display_name,
+            share_token,
+            pool,
+            client_ip,
+            user_agent,
+        )
+        .await;
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
-async fn multiplayer_viewer_loop(
+async fn copilot_room_loop(
     mut socket: axum::extract::ws::WebSocket,
     session: std::sync::Arc<crate::services::session_registry::ActiveSession>,
     share: crate::services::shares::ActiveShare,
@@ -649,69 +697,16 @@ async fn multiplayer_viewer_loop(
     pool: sqlx::PgPool,
     client_ip: String,
     user_agent: String,
-    size_inst: Option<String>,
-    persistent_state: String,
-    all_frames: Vec<(u64, String)>,
-    mut rx: tokio::sync::broadcast::Receiver<std::sync::Arc<String>>,
-    input_tx: tokio::sync::mpsc::Sender<String>,
-    buffer_for_recovery: std::sync::Arc<tokio::sync::RwLock<crate::services::session_registry::SessionBuffer>>,
 ) {
     use crate::services::co_pilot::{looks_like_envelope, CoPilotMsg};
     use axum::extract::ws::Message;
 
     let room = session.co_pilot_room.clone();
 
-    // ── Phase 1: screen replay (identical to single-viewer path) ──
-    if let Some(s) = size_inst {
-        if socket.send(Message::Text(s.into())).await.is_err() {
-            return;
-        }
-    }
-    if !persistent_state.is_empty()
-        && socket
-            .send(Message::Text(persistent_state.into()))
-            .await
-            .is_err()
-    {
-        return;
-    }
-    let mut last_sync_inst: Option<String> = None;
-    for (_, frame) in &all_frames {
-        let mut stripped = String::with_capacity(frame.len());
-        for inst in frame.split_inclusive(';') {
-            let trimmed = inst.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("4.sync,") || trimmed == "4.sync" {
-                last_sync_inst = Some(inst.to_string());
-            } else {
-                stripped.push_str(inst);
-            }
-        }
-        if !stripped.is_empty()
-            && socket
-                .send(Message::Text(stripped.into()))
-                .await
-                .is_err()
-        {
-            return;
-        }
-    }
-    if let Some(sync) = last_sync_inst.take() {
-        if socket.send(Message::Text(sync.into())).await.is_err() {
-            return;
-        }
-    }
-
-    // ── Phase 2: room join ────────────────────────────────────────
+    // Phase 1: join the room.
     let participant = match room.join(&display_name, false) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(error = ?e, "co-pilot join rejected");
-            // Best-effort wire-level error frame before close. Constructed
-            // by hand rather than via a typed variant because this is the
-            // only place we can ever emit a `room_full` / similar fatal.
             let reason = match e {
                 crate::services::co_pilot::JoinError::RoomFull => "room_full",
                 crate::services::co_pilot::JoinError::EmptyDisplayName => "empty_name",
@@ -726,13 +721,29 @@ async fn multiplayer_viewer_loop(
     };
     let pid = participant.pid;
 
-    // ── Phase 3: fan-out subscribe + initial roster broadcast ─────
+    // Phase 2: send Welcome to this socket only so the client learns
+    // its server-assigned pid before opening the sibling tunnel WS.
+    let welcome = CoPilotMsg::Welcome {
+        pid,
+        allow_chat: share.allow_chat,
+        allow_audio: share.allow_audio,
+        max_participants: share.max_participants.clamp(1, i16::from(u8::MAX)) as u8,
+    };
+    if let Ok(json) = serde_json::to_string(&welcome) {
+        if socket.send(Message::Text(json.into())).await.is_err() {
+            // Client gave up before we could welcome them — undo join.
+            let _ = room.leave(pid);
+            return;
+        }
+    }
+
+    // Phase 3: subscribe to fanout + broadcast new Roster to everyone.
     let mut fanout_rx = room.subscribe();
     let _ = room.broadcast(&CoPilotMsg::Roster {
         participants: room.roster(),
     });
 
-    // Audit join (best-effort — failure to log is not fatal).
+    // Audit join (best-effort).
     let _ = sqlx::query(
         "INSERT INTO share_participant_audit \
          (share_id, pid, display_name, is_owner, client_ip, user_agent) \
@@ -746,7 +757,6 @@ async fn multiplayer_viewer_loop(
     .bind(&user_agent)
     .execute(&pool)
     .await;
-
     let _ = crate::services::audit::log(
         &pool,
         None,
@@ -760,79 +770,16 @@ async fn multiplayer_viewer_loop(
     )
     .await;
 
-    // ── Phase 4: main select loop ─────────────────────────────────
-    let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(5));
+    // Phase 4: main loop. Envelope-only — no screen, no Guacamole input.
+    let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(15));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last_frame_at = std::time::Instant::now();
-    let revoke_check_every: u32 = 6;
+    let revoke_check_every: u32 = 2; // 30s @ 15s tick
     let mut ticks_since_check: u32 = 0;
     let revoke_pool = pool.clone();
     let revoke_token = share_token.clone();
 
     loop {
         tokio::select! {
-            // ── Owner's screen broadcast ──────────────────────────
-            result = rx.recv() => {
-                match result {
-                    Ok(frame) => {
-                        last_frame_at = std::time::Instant::now();
-                        if socket.send(Message::Text((*frame).clone().into())).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Co-pilot viewer lagged {n} frames — rebuilding display");
-                        let buf = buffer_for_recovery.read().await;
-                        let rebuild_persistent = buf.persistent_state();
-                        let rebuild = buf.frames_with_timing(300);
-                        drop(buf);
-                        if !rebuild_persistent.is_empty()
-                            && socket
-                                .send(Message::Text(rebuild_persistent.into()))
-                                .await
-                                .is_err()
-                        {
-                            break;
-                        }
-                        let mut send_ok = true;
-                        for (_, chunk) in &rebuild {
-                            let mut stripped = String::with_capacity(chunk.len());
-                            for inst in chunk.split_inclusive(';') {
-                                let t = inst.trim();
-                                if !t.is_empty()
-                                    && !t.starts_with("4.sync,")
-                                    && t != "4.sync"
-                                {
-                                    stripped.push_str(inst);
-                                }
-                            }
-                            if !stripped.is_empty()
-                                && socket
-                                    .send(Message::Text(stripped.into()))
-                                    .await
-                                    .is_err()
-                            {
-                                send_ok = false;
-                                break;
-                            }
-                        }
-                        if !send_ok { break; }
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis()
-                            .to_string();
-                        let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
-                        if socket.send(Message::Text(sync.into())).await.is_err() {
-                            break;
-                        }
-                        last_frame_at = std::time::Instant::now();
-                    }
-                    Err(_) => break, // channel closed (owner ended)
-                }
-            }
-
-            // ── Co-pilot envelope fan-out ─────────────────────────
             env = fanout_rx.recv() => {
                 match env {
                     Ok(text) => {
@@ -841,87 +788,55 @@ async fn multiplayer_viewer_loop(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        // On lag, resync this viewer's view of the
-                        // roster — every other envelope type is
-                        // ephemeral (cursor / chat / signalling) and
-                        // losing a handful is acceptable.
                         let roster = CoPilotMsg::Roster { participants: room.roster() };
                         if let Ok(json) = serde_json::to_string(&roster) {
-                            if socket.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
+                            if socket.send(Message::Text(json.into())).await.is_err() { break; }
                         }
                     }
                     Err(_) => {}
                 }
             }
-
-            // ── Client → server ───────────────────────────────────
             msg = socket.recv() => {
                 match msg {
                     None => break,
                     Some(Ok(Message::Text(text))) => {
-                        if looks_like_envelope(&text) {
-                            let env = match serde_json::from_str::<CoPilotMsg>(&text) {
-                                Ok(e) => e,
-                                Err(_) => continue,
-                            };
-                            if env.validate().is_err() { continue; }
-                            handle_client_envelope(env, pid, &share, &room).await;
-                        } else {
-                            // Guacamole input frame — gated on token.
-                            if room.note_input_activity(pid)
-                                && input_tx.send(text.to_string()).await.is_err()
-                            {
-                                break;
-                            }
-                        }
+                        if !looks_like_envelope(&text) { continue; }
+                        let env = match serde_json::from_str::<CoPilotMsg>(&text) {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+                        if env.validate().is_err() { continue; }
+                        handle_client_envelope(env, pid, &share, &room).await;
                     }
-                    Some(Ok(_)) => {} // binary / ping handled by axum
+                    Some(Ok(_)) => {}
                     Some(Err(_)) => break,
                 }
             }
-
-            // ── Keepalive + periodic revocation re-check ─────────
             _ = keepalive.tick() => {
-                if socket.send(Message::Text("3.nop;".into())).await.is_err() {
+                // Application-level ping. Axum handles ws-level pings
+                // transparently, but a no-op cursor keepalive lets us
+                // notice a half-open NAT translation.
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
                     break;
-                }
-                if last_frame_at.elapsed() > std::time::Duration::from_secs(5) {
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                        .to_string();
-                    let sync = format!("{}.sync,{}.{};", "4", ts.len(), ts);
-                    if socket.send(Message::Text(sync.into())).await.is_err() {
-                        break;
-                    }
                 }
                 ticks_since_check += 1;
                 if ticks_since_check >= revoke_check_every {
                     ticks_since_check = 0;
                     match crate::services::shares::find_active_by_token(
-                        &revoke_pool,
-                        &revoke_token,
-                    )
-                    .await
-                    {
+                        &revoke_pool, &revoke_token,
+                    ).await {
                         Ok(Some(_)) => {}
                         Ok(None) => {
                             tracing::info!(
                                 token_prefix = %hash_token_prefix(&revoke_token),
-                                "co-pilot viewer kicked: share no longer active"
+                                "co-pilot participant kicked: share no longer active"
                             );
-                            let _ = socket
-                                .send(Message::Text("0.10.disconnect;".into()))
-                                .await;
                             break;
                         }
                         Err(e) => {
                             tracing::warn!(
                                 error = %e,
-                                "co-pilot share revocation re-check failed; keeping viewer connected"
+                                "co-pilot revocation re-check failed; keeping participant"
                             );
                         }
                     }
@@ -930,7 +845,7 @@ async fn multiplayer_viewer_loop(
         }
     }
 
-    // ── Phase 5: leave + final roster broadcast + audit ──────────
+    // Phase 5: leave + final Roster + audit.
     if room.leave(pid) {
         let _ = room.broadcast(&CoPilotMsg::Leave { pid });
         let _ = room.broadcast(&CoPilotMsg::Roster {

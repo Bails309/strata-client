@@ -93,9 +93,7 @@ describe("SafeguardBulkCheckoutCard", () => {
   });
 
   it("warns when password caching is disabled", async () => {
-    (getSafeguardSigninStatus as any).mockResolvedValue(
-      status({ password_cache_enabled: false })
-    );
+    (getSafeguardSigninStatus as any).mockResolvedValue(status({ password_cache_enabled: false }));
     render(<SafeguardBulkCheckoutCard profiles={[sgProfile()]} safeguardEnabled />);
     await flush();
     expect(screen.getByText(/requires the administrator to enable/i)).toBeInTheDocument();

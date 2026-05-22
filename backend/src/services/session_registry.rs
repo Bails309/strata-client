@@ -265,6 +265,10 @@ pub struct ActiveSession {
     /// Channel for shared control viewers to inject input (mouse/keyboard)
     /// into the owner's guacd TCP stream.
     pub input_tx: tokio::sync::mpsc::Sender<String>,
+    /// Per-session co-pilot multiplayer room. Always present (zero-cost
+    /// when idle); becomes active once any participant joins via a
+    /// `multiplayer = true` share link.
+    pub co_pilot_room: Arc<crate::services::co_pilot::CoPilotRoom>,
 }
 
 // ── Session info (serialisable summary for the admin API) ──────────
@@ -332,6 +336,8 @@ impl SessionRegistry {
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let buffer = Arc::new(RwLock::new(SessionBuffer::new()));
         let (input_tx, input_rx) = tokio::sync::mpsc::channel::<String>(256);
+        let co_pilot_room =
+            crate::services::co_pilot::CoPilotRoom::new(session_id.clone());
 
         let session = Arc::new(ActiveSession {
             session_id: session_id.clone(),
@@ -349,6 +355,7 @@ impl SessionRegistry {
             client_ip,
             kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
             input_tx,
+            co_pilot_room,
         });
 
         sessions.insert(session_id, session);

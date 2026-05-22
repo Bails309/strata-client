@@ -50,11 +50,39 @@ pub struct CreateShareRequest {
     /// "view" (default, read-only) or "control" (full input forwarding).
     #[serde(default = "default_share_mode")]
     pub mode: String,
+    /// Multiplayer / co-pilot toggle (v1.9.6+). When `true`, the share
+    /// link admits up to [`MAX_MULTIPLAYER_PARTICIPANTS`] simultaneous
+    /// participants who can each be granted the input token in turn.
+    #[serde(default)]
+    pub multiplayer: bool,
+    /// Server-clamped to `1..=` [`MAX_MULTIPLAYER_PARTICIPANTS`]. Only
+    /// honoured when `multiplayer = true`.
+    #[serde(default = "default_max_participants")]
+    pub max_participants: i16,
+    /// Whether the co-pilot room exposes a chat channel.
+    #[serde(default = "default_true")]
+    pub allow_chat: bool,
+    /// Whether the co-pilot room signals an optional WebRTC audio mesh.
+    /// No server-side TURN is provisioned; opt-in mesh only.
+    #[serde(default)]
+    pub allow_audio: bool,
 }
 
 fn default_share_mode() -> String {
     "view".into()
 }
+
+fn default_max_participants() -> i16 {
+    2
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Hard server-side cap on participants per multiplayer room. Matches
+/// `co_pilot::MAX_PARTICIPANTS` and the DB-level CHECK in migration 066.
+pub const MAX_MULTIPLAYER_PARTICIPANTS: i16 = 6;
 
 #[derive(Serialize)]
 pub struct ShareLinkResponse {
@@ -97,6 +125,18 @@ pub async fn create_share(
     // Validate mode
     let mode = crate::routes::admin::validate_share_mode(&body.mode)?;
 
+    // Multiplayer is only meaningful with `control` mode — there's no
+    // point in a multi-cursor read-only viewer. Reject the combination
+    // up-front so the wire contract stays simple.
+    let multiplayer = body.multiplayer && mode == "control";
+    let max_participants = if multiplayer {
+        body.max_participants.clamp(1, MAX_MULTIPLAYER_PARTICIPANTS)
+    } else {
+        1
+    };
+    let allow_chat = body.allow_chat && multiplayer;
+    let allow_audio = body.allow_audio && multiplayer;
+
     // Generate a unique share token
     let share_token = format!("{}", Uuid::new_v4());
 
@@ -111,6 +151,10 @@ pub async fn create_share(
         read_only,
         &mode,
         DEFAULT_SHARE_EXPIRY_HOURS,
+        multiplayer,
+        max_participants,
+        allow_chat,
+        allow_audio,
     )
     .await?;
 
@@ -121,7 +165,11 @@ pub async fn create_share(
         &serde_json::json!({
             "connection_id": connection_id.to_string(),
             "share_token": &share_token,
-            "mode": &mode
+            "mode": &mode,
+            "multiplayer": multiplayer,
+            "max_participants": max_participants,
+            "allow_chat": allow_chat,
+            "allow_audio": allow_audio,
         }),
     )
     .await?;
@@ -251,7 +299,7 @@ pub async fn ws_shared_tunnel(
     // Look up the share and verify it's valid
     let share = crate::services::shares::find_active_by_token(&db.pool, &share_token).await?;
 
-    let (_share_id, connection_id, owner_user_id, mode) = match share {
+    let share = match share {
         Some(s) => s,
         None => {
             let _ = crate::services::audit::log(
@@ -267,6 +315,9 @@ pub async fn ws_shared_tunnel(
             return Err(AppError::NotFound("Invalid or expired share link".into()));
         }
     };
+    let connection_id = share.connection_id;
+    let owner_user_id = share.owner_user_id;
+    let mode = share.mode.clone();
 
     let is_control = mode == "control";
 
@@ -594,6 +645,39 @@ mod tests {
     fn create_share_request_arbitrary_string() {
         let r: CreateShareRequest = serde_json::from_str(r#"{"mode":"other"}"#).unwrap();
         assert_eq!(r.mode, "other");
+    }
+
+    // ── Multiplayer extension defaults (v1.9.6+) ──────────────────
+
+    #[test]
+    fn create_share_request_multiplayer_defaults_off() {
+        let r: CreateShareRequest = serde_json::from_str("{}").unwrap();
+        assert!(!r.multiplayer);
+        assert_eq!(r.max_participants, default_max_participants());
+        assert!(r.allow_chat);
+        assert!(!r.allow_audio);
+    }
+
+    #[test]
+    fn create_share_request_multiplayer_payload() {
+        let r: CreateShareRequest = serde_json::from_str(
+            r#"{"mode":"control","multiplayer":true,"max_participants":4,"allow_chat":true,"allow_audio":true}"#,
+        )
+        .unwrap();
+        assert!(r.multiplayer);
+        assert_eq!(r.max_participants, 4);
+        assert!(r.allow_chat);
+        assert!(r.allow_audio);
+    }
+
+    #[test]
+    fn max_multiplayer_participants_matches_protocol_constant() {
+        // Wire-level cap must match `co_pilot::MAX_PARTICIPANTS` so the
+        // DB-clamp, route-clamp, and in-memory room cap stay in lock-step.
+        assert_eq!(
+            MAX_MULTIPLAYER_PARTICIPANTS as u8,
+            crate::services::co_pilot::MAX_PARTICIPANTS
+        );
     }
 
     // ── Share link URL construction ────────────────────────────────

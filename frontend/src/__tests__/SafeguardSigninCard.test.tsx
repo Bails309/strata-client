@@ -34,7 +34,7 @@ const makeStatus = (over: Partial<SafeguardSigninStatus> = {}): SafeguardSigninS
 
 describe("SafeguardSigninCard", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.useFakeTimers();
     // jsdom doesn't provide clipboard by default
     Object.assign(navigator, {
@@ -204,9 +204,15 @@ describe("SafeguardSigninCard", () => {
     await flush();
     // Modal is open
     expect(screen.getByText(/Waiting for sign-in/)).toBeInTheDocument();
-    // Advance time past one polling tick (2s)
+    // Advance through polling ticks and allow async status refreshes to settle.
     await act(async () => {
       vi.advanceTimersByTime(2500);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+      await Promise.resolve();
       await Promise.resolve();
     });
     // Modal should be closed

@@ -24,6 +24,15 @@ interface CoPilotOverlayProps {
    */
   onForceGrant?: (pid: string) => void;
   /**
+   * `true` once the room exposes a WebRTC audio mesh AND the local
+   * user has opted in. When defined together with `onToggleAudio`,
+   * the overlay renders a Join/Leave audio button next to the chat
+   * toggle. Without `onToggleAudio` the audio button is hidden.
+   */
+  audioJoined?: boolean;
+  /** Toggle handler for the Join/Leave audio button. */
+  onToggleAudio?: () => void;
+  /**
    * Pixel scale of the underlying display element. Cursors arrive in
    * display-space coordinates; we multiply by this scale to project
    * them onto the rendered canvas.
@@ -48,6 +57,8 @@ export default function CoPilotOverlay({
   onReleaseInput,
   onSendChat,
   onForceGrant,
+  audioJoined = false,
+  onToggleAudio,
   displayScale,
 }: CoPilotOverlayProps) {
   const [chatOpen, setChatOpen] = useState(false);
@@ -206,6 +217,16 @@ export default function CoPilotOverlay({
               style={smallBtn("#6b7280")}
             >
               {chatOpen ? "Hide chat" : "Chat"}
+            </button>
+          )}
+          {onToggleAudio && (
+            <button
+              type="button"
+              onClick={onToggleAudio}
+              style={smallBtn(audioJoined ? "#ef4444" : "#10b981")}
+              title={audioJoined ? "Leave voice chat" : "Join voice chat"}
+            >
+              {audioJoined ? "Leave audio" : "Join audio"}
             </button>
           )}
         </div>

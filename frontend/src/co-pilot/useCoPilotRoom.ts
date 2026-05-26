@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CoPilotMsg, RosterEntry } from "./protocol";
 import { looksLikeEnvelope } from "./protocol";
+import type { AudioSignalEnvelope } from "./useCoPilotAudio";
 
 /**
  * Per-participant live cursor position. Decays after `CURSOR_TTL_MS`
@@ -46,6 +47,18 @@ export interface CoPilotRoomActions {
   sendChat: (text: string) => boolean;
   claimInput: () => void;
   releaseInput: () => void;
+  /**
+   * Sends a WebRTC signalling envelope (offer/answer/ice) over the
+   * co-pilot WS. Used exclusively by `useCoPilotAudio`; no-op when
+   * the WS is closed.
+   */
+  sendAudio: (msg: AudioSignalEnvelope) => void;
+  /**
+   * Registers a handler for inbound audio envelopes. The audio hook
+   * subscribes here so signalling is dispatched without coupling this
+   * room hook to WebRTC.
+   */
+  setAudioHandler: (handler: ((msg: AudioSignalEnvelope) => void) | null) => void;
 }
 
 /** Throttle cursor sends to ~30 Hz to keep the WS quiet. */
@@ -81,6 +94,10 @@ export function useCoPilotRoom(
   const wsRef = useRef<WebSocket | null>(null);
   const pidRef = useRef<string | null>(null);
   const lastCursorSentRef = useRef(0);
+  // Audio envelopes are dispatched to a separately-registered handler
+  // (typically `useCoPilotAudio`). Stored as a ref so changing the
+  // handler doesn't reconnect the WS.
+  const audioHandlerRef = useRef<((msg: AudioSignalEnvelope) => void) | null>(null);
 
   // Sweep stale cursors so a peer that dropped without a clean leave
   // doesn't leave a frozen pointer on screen.
@@ -176,6 +193,13 @@ export function useCoPilotRoom(
         case "join_error":
           setJoinError(msg.reason);
           break;
+        case "audio_offer":
+        case "audio_answer":
+        case "ice": {
+          const h = audioHandlerRef.current;
+          if (h) h(msg);
+          break;
+        }
         // input_grant / input_revoke are reflected via the `has_input`
         // flag in the next Roster broadcast, so no extra handling here.
         default:
@@ -249,6 +273,17 @@ export function useCoPilotRoom(
     send({ type: "input_release", pid: self });
   }, [send]);
 
+  const sendAudio = useCallback(
+    (msg: AudioSignalEnvelope) => {
+      send(msg);
+    },
+    [send]
+  );
+
+  const setAudioHandler = useCallback((handler: ((msg: AudioSignalEnvelope) => void) | null) => {
+    audioHandlerRef.current = handler;
+  }, []);
+
   const hasInput = roster.find((p) => p.pid === pid)?.has_input ?? false;
 
   return [
@@ -264,6 +299,6 @@ export function useCoPilotRoom(
       joinError,
       ready,
     },
-    { sendCursor, sendChat, claimInput, releaseInput },
+    { sendCursor, sendChat, claimInput, releaseInput, sendAudio, setAudioHandler },
   ];
 }

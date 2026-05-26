@@ -36,6 +36,7 @@ import {
   DEFAULT_COMMAND_PALETTE_BINDING,
 } from "../utils/keybindings";
 import { useCoPilotRoom } from "../co-pilot/useCoPilotRoom";
+import { useCoPilotAudio } from "../co-pilot/useCoPilotAudio";
 import CoPilotOverlay from "../co-pilot/CoPilotOverlay";
 
 /*
@@ -222,6 +223,17 @@ export default function SessionClient() {
     mpEnabled,
     /* asOwner */ true
   );
+  // Owner-side audio. `audioJoined` reflects the user's opt-in via the
+  // overlay button; the hook owns the mic and PC mesh internally.
+  const [audioJoined, setAudioJoined] = useState(false);
+  useCoPilotAudio({
+    roster: coPilotRoom.roster,
+    selfPid: coPilotRoom.pid,
+    allowAudio: coPilotRoom.allowAudio,
+    joined: audioJoined,
+    sendAudio: coPilotActions.sendAudio,
+    setAudioHandler: coPilotActions.setAudioHandler,
+  });
   // Scale factor of the rendered display, used by the overlay to
   // project peer cursors (which arrive in display-space) onto the
   // canvas. SessionManager owns `display.onresize`, so we mirror its
@@ -1318,6 +1330,8 @@ export default function SessionClient() {
             // tick already reflects reality.
             forceGrantInput(token, pid).catch(() => {});
           }}
+          audioJoined={audioJoined}
+          onToggleAudio={coPilotRoom.allowAudio ? () => setAudioJoined((v) => !v) : undefined}
           displayScale={coPilotScale}
         />
       )}

@@ -8,6 +8,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import Guacamole from "guacamole-common-js";
 import { createWinKeyProxy } from "../utils/winKeyProxy";
 import { useCoPilotRoom } from "../co-pilot/useCoPilotRoom";
+import { useCoPilotAudio } from "../co-pilot/useCoPilotAudio";
 import CoPilotOverlay from "../co-pilot/CoPilotOverlay";
 /**
  * Shared session viewer. Accessible without authentication
@@ -33,6 +34,17 @@ export default function SharedViewer() {
   const multiplayer = searchParams.get("mp") === "1";
   const displayName = searchParams.get("name") ?? "Guest";
   const [room, roomActions] = useCoPilotRoom(shareToken, displayName, multiplayer);
+  // Optional WebRTC audio mesh. `audioJoined` reflects the viewer's
+  // opt-in via the overlay toggle.
+  const [audioJoined, setAudioJoined] = useState(false);
+  useCoPilotAudio({
+    roster: room.roster,
+    selfPid: room.pid,
+    allowAudio: room.allowAudio,
+    joined: audioJoined,
+    sendAudio: roomActions.sendAudio,
+    setAudioHandler: roomActions.setAudioHandler,
+  });
 
   useEffect(() => {
     const urlMode = searchParams.get("mode");
@@ -224,6 +236,8 @@ export default function SharedViewer() {
           onClaimInput={roomActions.claimInput}
           onReleaseInput={roomActions.releaseInput}
           onSendChat={roomActions.sendChat}
+          audioJoined={audioJoined}
+          onToggleAudio={room.allowAudio ? () => setAudioJoined((v) => !v) : undefined}
           displayScale={displayScale}
         />
       )}

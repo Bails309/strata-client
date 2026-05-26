@@ -206,5 +206,12 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         tracing::info!("Hard-deleted {} user(s)", result.rows_affected());
     }
 
+    // Keep one-shot Safeguard enrolment codes bounded over time.
+    if let Ok(purged) = crate::services::safeguard::enrolment::purge_expired(&db.pool).await {
+        if purged > 0 {
+            tracing::info!("Purged {} expired Safeguard enrolment code(s)", purged);
+        }
+    }
+
     Ok(())
 }

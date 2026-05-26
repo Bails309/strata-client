@@ -14,6 +14,7 @@ import {
   updateCredentialProfile,
   requestCheckout,
   linkCheckoutToProfile,
+  forceGrantInput,
   CredentialProfile,
   ConnectionInfo,
 } from "../api";
@@ -34,6 +35,9 @@ import {
   matchesBinding,
   DEFAULT_COMMAND_PALETTE_BINDING,
 } from "../utils/keybindings";
+import { useCoPilotRoom } from "../co-pilot/useCoPilotRoom";
+import { useCoPilotAudio } from "../co-pilot/useCoPilotAudio";
+import CoPilotOverlay from "../co-pilot/CoPilotOverlay";
 
 /*
  * Phases:
@@ -204,6 +208,82 @@ export default function SessionClient() {
     getLayout,
     updatePrimarySize,
   } = useMultiMonitor(currentSession, containerRef);
+
+  // ── Co-pilot (multiplayer) owner-side wiring ──────────────────────
+  // When the owner has created a multiplayer share for this session,
+  // they need to participate in the co-pilot room too: see peer
+  // cursors, exchange chat, and (with `is_owner=true` on the server)
+  // hold the implicit input token until they hand it off. Display
+  // name is filled in server-side from the authenticated user, so we
+  // pass an empty string here.
+  const mpEnabled = !!currentSession?.mpEnabled && !!currentSession?.mpShareToken;
+  const [coPilotRoom, coPilotActions] = useCoPilotRoom(
+    currentSession?.mpShareToken,
+    "",
+    mpEnabled,
+    /* asOwner */ true
+  );
+  // Owner-side audio. `audioJoined` reflects the user's opt-in via the
+  // overlay button; the hook owns the mic and PC mesh internally.
+  const [audioJoined, setAudioJoined] = useState(false);
+  useCoPilotAudio({
+    roster: coPilotRoom.roster,
+    selfPid: coPilotRoom.pid,
+    allowAudio: coPilotRoom.allowAudio,
+    joined: audioJoined,
+    sendAudio: coPilotActions.sendAudio,
+    setAudioHandler: coPilotActions.setAudioHandler,
+  });
+  // Scale factor of the rendered display, used by the overlay to
+  // project peer cursors (which arrive in display-space) onto the
+  // canvas. SessionManager owns `display.onresize`, so we mirror its
+  // scale formula via a ResizeObserver on the container.
+  const [coPilotScale, setCoPilotScale] = useState(1);
+  useEffect(() => {
+    if (!mpEnabled) return;
+    const container = containerRef.current;
+    const client = currentSession?.client;
+    if (!container || !client) return;
+    const recompute = () => {
+      const display = client.getDisplay();
+      const dw = display.getWidth();
+      const dh = display.getHeight();
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      if (dw <= 0 || dh <= 0 || cw <= 0 || ch <= 0) return;
+      setCoPilotScale(Math.min(cw / dw, ch / dh));
+    };
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [mpEnabled, currentSession?.client, phase]);
+
+  // Send the owner's cursor to the room so other participants see it.
+  // Guacamole's mouse handler is owned by SessionManager; we attach a
+  // parallel DOM listener on the display element which fires alongside
+  // it. Coordinates are translated to display-space before sending.
+  useEffect(() => {
+    if (!mpEnabled || !coPilotRoom.ready) return;
+    const displayEl = currentSession?.displayEl;
+    const client = currentSession?.client;
+    if (!displayEl || !client) return;
+    const onMove = (e: MouseEvent) => {
+      const display = client.getDisplay();
+      const dw = display.getWidth();
+      const dh = display.getHeight();
+      const rect = displayEl.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || dw <= 0 || dh <= 0) return;
+      const x = ((e.clientX - rect.left) / rect.width) * dw;
+      const y = ((e.clientY - rect.top) / rect.height) * dh;
+      coPilotActions.sendCursor(x, y);
+    };
+    displayEl.addEventListener("mousemove", onMove);
+    return () => displayEl.removeEventListener("mousemove", onMove);
+    // coPilotActions is stable across renders (refs internally); listing
+    // `sendCursor` directly would force re-binding on every roster tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mpEnabled, coPilotRoom.ready, currentSession?.displayEl, currentSession?.client]);
 
   // Keep errorRef in sync with the error state.
   errorRef.current = error;
@@ -1227,6 +1307,34 @@ export default function SessionClient() {
 
       {/* Touch controls and watermark */}
       {currentSession && <SessionWatermark connectionWatermark={connectionWatermark} />}
+
+      {/* Co-pilot (multiplayer) overlay: peer cursors, roster, chat. */}
+      {mpEnabled && coPilotRoom.ready && (
+        <CoPilotOverlay
+          roster={coPilotRoom.roster}
+          cursors={coPilotRoom.cursors}
+          chat={coPilotRoom.chat}
+          allowChat={coPilotRoom.allowChat}
+          hasInput={coPilotRoom.hasInput}
+          selfPid={coPilotRoom.pid}
+          selfIsOwner={true}
+          onClaimInput={coPilotActions.claimInput}
+          onReleaseInput={coPilotActions.releaseInput}
+          onSendChat={coPilotActions.sendChat}
+          onForceGrant={(pid) => {
+            const token = currentSession?.mpShareToken;
+            if (!token) return;
+            // Fire-and-forget: the room broadcast updates UI for
+            // everyone (including us) on success. On failure (e.g.
+            // pid just left) we silently no-op — the next Roster
+            // tick already reflects reality.
+            forceGrantInput(token, pid).catch(() => {});
+          }}
+          audioJoined={audioJoined}
+          onToggleAudio={coPilotRoom.allowAudio ? () => setAudioJoined((v) => !v) : undefined}
+          displayScale={coPilotScale}
+        />
+      )}
 
       {/* Pop-out placeholder */}
       {isPoppedOut && (

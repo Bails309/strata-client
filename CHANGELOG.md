@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.3] — 2026-05-27
+
+### Minor Release — Multiplayer co-pilot: owner participation, force-grant, and WebRTC audio
+
+v1.10.3 closes three gaps in the multiplayer co-pilot feature shipped
+in v1.9.x. Previously a session owner who created a multiplayer share
+could not participate in their own room, owners had no UI to take
+control back from a misbehaving viewer, and the `audio_offer` /
+`audio_answer` / `ice` envelopes in the wire protocol had no client
+implementation behind them. All three are addressed in this release.
+
+### Added
+
+- **Owner-side co-pilot WebSocket** — new authenticated endpoint
+  `GET /api/user/shared/copilot/:share_token` lets the session owner
+  join their own multiplayer room with `is_owner=true`. The owner now
+  sees peer cursors and chat, holds the input token implicitly, and
+  can supply the `by` attribution for InputGrant broadcasts. The
+  existing public `/api/shared/copilot/:share_token` endpoint is
+  unchanged for invited viewers.
+- **Force-grant route** — `POST
+  /api/user/shared/copilot/:share_token/grant/:target_pid` lets the
+  owner transfer the input token to any participant in the room.
+  Verifies share ownership, broadcasts `InputGrant` + `Roster`, and
+  writes a `connection.copilot_force_grant` audit row.
+- **Per-row "Give" button** in the co-pilot overlay (owner only) that
+  calls the force-grant route for any roster row that doesn't already
+  hold the token.
+- **WebRTC full-mesh audio** — opt-in browser-to-browser voice using
+  a new `useCoPilotAudio` hook. Full-mesh topology capped by the
+  server's 6-peer room limit; STUN-only via
+  `stun:stun.l.google.com:19302`; lower-lexicographic pid is the
+  offerer to prevent glare; ICE candidates received before
+  `setRemoteDescription` are buffered per peer. The overlay footer
+  exposes a **Join audio** / **Leave audio** toggle whenever the
+  room's `allowAudio` policy bit is set. Wired in both
+  `SessionClient` (owner) and `SharedViewer` (viewer).
+
+### Changed
+
+- **Modern checkboxes** across the app — every native `<input
+  type="checkbox">` now renders with a unified Tailwind-styled
+  appearance that matches the existing button/toggle palette
+  (`d5bd26f`).
+- `CoPilotRoom::force_grant` is no longer dead code (the new HTTP
+  route is its first production call site); the
+  `#[allow(dead_code)]` attribute was removed.
+
 ## [1.10.2] — 2026-05-26
 
 ### Patch Release — Safeguard sign-in auto-post, account picker, and in-place credential-profile kind switching

@@ -1263,6 +1263,19 @@ export const createShareLink = (
 export const revokeShareLink = (shareId: string) =>
   request<{ status: string }>(`/user/shares/${shareId}`, { method: "DELETE" });
 
+/**
+ * Owner-only: transfer the input token in a multiplayer co-pilot room
+ * to `targetPid`, overriding the idle-timer arbitration. Resolves with
+ * no body on success. Throws `ApiError(404)` when the share is unknown,
+ * not owned by the caller, not multiplayer, has no active session, or
+ * the pid is no longer present.
+ */
+export const forceGrantInput = (shareToken: string, targetPid: string) =>
+  request<void>(
+    `/user/shared/copilot/${encodeURIComponent(shareToken)}/grant/${encodeURIComponent(targetPid)}`,
+    { method: "POST" }
+  );
+
 // ── Favorites ───────────────────────────────────────────────────────
 
 export const getFavorites = () => request<string[]>("/user/favorites");

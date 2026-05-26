@@ -972,6 +972,16 @@ async fn handle_guac_handshake(
             (0i64, 0i64)
         };
 
+        // Wake any viewers waiting on this session before we drop the
+        // registry's Arc. The viewer WS handlers (shared tunnel +
+        // co-pilot room) hold their own Arc<ActiveSession> clones, so
+        // the session struct outlives `unregister`; without an explicit
+        // signal they'd never notice the host disconnected and would
+        // sit on a silent socket forever.
+        if let Some(ref sess) = bandwidth {
+            sess.mark_ended();
+        }
+
         ctx.registry.unregister(&ctx.session_id).await;
         tracing::info!("NVR session {} unregistered", ctx.session_id);
 

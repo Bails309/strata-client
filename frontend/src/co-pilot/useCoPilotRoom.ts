@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CoPilotMsg, RosterEntry } from "./protocol";
 import { looksLikeEnvelope } from "./protocol";
+import type { AudioSignalEnvelope } from "./useCoPilotAudio";
 
 /**
  * Per-participant live cursor position. Decays after `CURSOR_TTL_MS`
@@ -37,6 +38,12 @@ export interface CoPilotRoomState {
   hasInput: boolean;
   /** Last fatal join error, if any. */
   joinError: string | null;
+  /**
+   * Reason string when the host has ended the underlying session.
+   * `null` while the session is still live; non-null means the WS
+   * has closed and the UI should show a terminal banner.
+   */
+  sessionEnded: string | null;
   /** `true` once the WS is open AND `Welcome` has been received. */
   ready: boolean;
 }
@@ -46,6 +53,18 @@ export interface CoPilotRoomActions {
   sendChat: (text: string) => boolean;
   claimInput: () => void;
   releaseInput: () => void;
+  /**
+   * Sends a WebRTC signalling envelope (offer/answer/ice) over the
+   * co-pilot WS. Used exclusively by `useCoPilotAudio`; no-op when
+   * the WS is closed.
+   */
+  sendAudio: (msg: AudioSignalEnvelope) => void;
+  /**
+   * Registers a handler for inbound audio envelopes. The audio hook
+   * subscribes here so signalling is dispatched without coupling this
+   * room hook to WebRTC.
+   */
+  setAudioHandler: (handler: ((msg: AudioSignalEnvelope) => void) | null) => void;
 }
 
 /** Throttle cursor sends to ~30 Hz to keep the WS quiet. */
@@ -55,11 +74,18 @@ const CURSOR_THROTTLE_MS = 1000 / 30;
  * Manages the co-pilot WebSocket for one participant. The screen +
  * input tunnel is a separate WS owned by `SharedViewer.tsx`; the two
  * are correlated server-side via the `pid` we obtain here.
+ *
+ * When `asOwner` is true, the hook connects to the authenticated owner
+ * endpoint at `/api/user/shared/copilot/:share_token` instead of the
+ * public `/api/shared/copilot/:share_token`. The server verifies the
+ * caller owns the share and joins the room with `is_owner = true`,
+ * which unlocks owner force-grant and the implicit input-token hold.
  */
 export function useCoPilotRoom(
   shareToken: string | undefined,
   displayName: string,
-  enabled: boolean
+  enabled: boolean,
+  asOwner: boolean = false
 ): [CoPilotRoomState, CoPilotRoomActions] {
   const [pid, setPid] = useState<string | null>(null);
   const [allowChat, setAllowChat] = useState(false);
@@ -69,11 +95,16 @@ export function useCoPilotRoom(
   const [cursors, setCursors] = useState<Map<string, RemoteCursor>>(() => new Map());
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [sessionEnded, setSessionEnded] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pidRef = useRef<string | null>(null);
   const lastCursorSentRef = useRef(0);
+  // Audio envelopes are dispatched to a separately-registered handler
+  // (typically `useCoPilotAudio`). Stored as a ref so changing the
+  // handler doesn't reconnect the WS.
+  const audioHandlerRef = useRef<((msg: AudioSignalEnvelope) => void) | null>(null);
 
   // Sweep stale cursors so a peer that dropped without a clean leave
   // doesn't leave a frozen pointer on screen.
@@ -100,9 +131,16 @@ export function useCoPilotRoom(
     if (!enabled || !shareToken) return;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}/api/shared/copilot/${encodeURIComponent(
-      shareToken
-    )}?name=${encodeURIComponent(displayName || "Guest")}`;
+    // Owner uses the authenticated endpoint so the server joins the
+    // room with `is_owner = true`. Viewers use the public endpoint and
+    // pass their display name in the query string (owner's name comes
+    // from `AuthUser` server-side).
+    const path = asOwner
+      ? `/api/user/shared/copilot/${encodeURIComponent(shareToken)}`
+      : `/api/shared/copilot/${encodeURIComponent(shareToken)}?name=${encodeURIComponent(
+          displayName || "Guest"
+        )}`;
+    const url = `${proto}//${window.location.host}${path}`;
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -162,6 +200,17 @@ export function useCoPilotRoom(
         case "join_error":
           setJoinError(msg.reason);
           break;
+        case "session_ended":
+          setSessionEnded(msg.reason || "Host ended session");
+          setReady(false);
+          break;
+        case "audio_offer":
+        case "audio_answer":
+        case "ice": {
+          const h = audioHandlerRef.current;
+          if (h) h(msg);
+          break;
+        }
         // input_grant / input_revoke are reflected via the `has_input`
         // flag in the next Roster broadcast, so no extra handling here.
         default:
@@ -235,6 +284,17 @@ export function useCoPilotRoom(
     send({ type: "input_release", pid: self });
   }, [send]);
 
+  const sendAudio = useCallback(
+    (msg: AudioSignalEnvelope) => {
+      send(msg);
+    },
+    [send]
+  );
+
+  const setAudioHandler = useCallback((handler: ((msg: AudioSignalEnvelope) => void) | null) => {
+    audioHandlerRef.current = handler;
+  }, []);
+
   const hasInput = roster.find((p) => p.pid === pid)?.has_input ?? false;
 
   return [
@@ -248,8 +308,9 @@ export function useCoPilotRoom(
       chat,
       hasInput,
       joinError,
+      sessionEnded,
       ready,
     },
-    { sendCursor, sendChat, claimInput, releaseInput },
+    { sendCursor, sendChat, claimInput, releaseInput, sendAudio, setAudioHandler },
   ];
 }

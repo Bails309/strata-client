@@ -50,6 +50,21 @@ export interface GuacSession {
     windows: Window[];
     cleanup: () => void;
   };
+  // ── Multiplayer / co-pilot share state (v1.10.3+) ──────────────────
+  // When the owner generates a multiplayer share via the SessionBar
+  // popover, the share token and per-share toggles are stashed here so
+  // SessionClient.tsx can mount the owner-side CoPilotOverlay over this
+  // session's display. Cleared by revokeShareLink and on session close.
+  /** Active multiplayer share token (the owner's own). `undefined` when no multiplayer share is live. */
+  mpShareToken?: string;
+  /** Mirror of the toggle that produced `mpShareToken`. Owner-side overlay only mounts when both this and `mpShareToken` are set. */
+  mpEnabled?: boolean;
+  /** Whether the share permits the in-room chat panel. */
+  mpAllowChat?: boolean;
+  /** Whether the share permits WebRTC audio (Commit C wires the actual mesh). */
+  mpAllowAudio?: boolean;
+  /** Max participants the room will accept (incl. the owner). 2..=6. */
+  mpMaxParticipants?: number;
 }
 
 interface SessionManagerValue {
@@ -59,6 +74,14 @@ interface SessionManagerValue {
   createSession: (opts: CreateSessionOpts) => GuacSession;
   closeSession: (id: string) => void;
   getSession: (connectionId: string) => GuacSession | undefined;
+  /**
+   * Partially update fields on a session in-place. Mutates the existing
+   * `GuacSession` object (so live `client`/`tunnel` refs stay valid) and
+   * triggers a re-render via `setSessions(prev => [...prev])`. Used by
+   * the SessionBar share popover to attach multiplayer share metadata
+   * to the owning session, and by future cleanup paths to clear it.
+   */
+  updateSession: (id: string, partial: Partial<GuacSession>) => void;
   /** IDs of sessions displayed in the tiled view (empty = single-session mode) */
   tiledSessionIds: string[];
   setTiledSessionIds: (ids: string[]) => void;
@@ -486,6 +509,19 @@ export function SessionManagerProvider({
     [cleanupPopout, cleanupMultiMonitor]
   );
 
+  // Partial-update a session in-place. Mutates the existing object so live
+  // refs (`client`, `tunnel`, `keyboard`) keep working, then triggers a
+  // shallow re-render with `setSessions(prev => [...prev])` — same pattern
+  // used by the existing `createSession`/popout code paths above.
+  const updateSession = useCallback((id: string, partial: Partial<GuacSession>) => {
+    setSessions((prev) => {
+      const target = prev.find((s) => s.id === id);
+      if (!target) return prev;
+      Object.assign(target, partial);
+      return [...prev];
+    });
+  }, []);
+
   // Tear down every active session. Used by the logout flow (manual + idle
   // timeout) so backend tunnels close and the live-sessions list updates.
   const closeAllSessions = useCallback(() => {
@@ -536,6 +572,7 @@ export function SessionManagerProvider({
         createSession,
         closeSession,
         getSession,
+        updateSession,
         tiledSessionIds,
         setTiledSessionIds,
         focusedSessionIds,

@@ -709,6 +709,144 @@ pub async fn clear_safeguard_token(
     Ok(Json(serde_json::json!({ "signed_in": false })))
 }
 
+/// `POST /api/user/safeguard/signin/start` — mint a one-shot
+/// enrolment code so the PowerShell snippet rendered in the
+/// Safeguard sign-in card can POST the resulting `$SGToken` back to
+/// Strata without the user having to copy/paste the JWT.
+///
+/// The returned code is single-use, expires in 5 minutes, and is
+/// scoped to this user_id at consume time. The unauthenticated
+/// `/api/safeguard/enrol` endpoint validates and consumes it.
+pub async fn start_safeguard_signin(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    // Guard against minting codes when JIT is off — pointless and
+    // potentially confusing for the operator.
+    let cfg = crate::services::safeguard::config::load(&db.pool).await?;
+    if !cfg.enabled || cfg.auth_mode.as_str() == "a2a" {
+        return Err(AppError::Validation(
+            "Safeguard JIT browser sign-in is not enabled.".into(),
+        ));
+    }
+
+    let client_ip = crate::routes::auth::extract_client_ip(&headers);
+    let minted = crate::services::safeguard::enrolment::mint(
+        &db.pool,
+        user.id,
+        Some(&client_ip),
+    )
+    .await?;
+
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "safeguard.enrolment.minted",
+        &json!({
+            "expires_at": minted.expires_at,
+            "ip": client_ip,
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "code": minted.code,
+        "expires_at": minted.expires_at,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct SafeguardEnrolBody {
+    /// One-shot code minted by `POST /api/user/safeguard/signin/start`.
+    pub code: String,
+    /// The Safeguard API access token from PowerShell's `$SGToken`.
+    pub token: String,
+    /// Optional override of the token's lifetime in seconds. Mirrors
+    /// the manual paste endpoint: 15-min default, 24h cap.
+    #[serde(default)]
+    pub expires_in_seconds: Option<i64>,
+}
+
+/// `POST /api/safeguard/enrol` — UNAUTHENTICATED. The one-shot code
+/// IS the authentication: it was minted for a specific user_id at a
+/// specific time and is consumed atomically. The PS snippet rendered
+/// in the sign-in card POSTs `{ code, token }` here so the operator
+/// never has to copy the JWT out of their terminal.
+pub async fn enrol_safeguard_token(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SafeguardEnrolBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = require_running(&state).await?;
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+    };
+
+    let token = body.token.trim().to_string();
+    if token.is_empty() {
+        return Err(AppError::Validation("token is required".into()));
+    }
+    let client_ip = crate::routes::auth::extract_client_ip(&headers);
+
+    // Consume the code first — same uniform "invalid or expired"
+    // error in every failure path so the caller can't fingerprint
+    // unknown vs used vs expired.
+    let user_id = match crate::services::safeguard::enrolment::consume(
+        &db.pool, &body.code,
+    )
+    .await
+    {
+        Ok(uid) => uid,
+        Err(e) => {
+            // Audit even the failure so a brute-force attempt shows
+            // up in the log. user_id is None because we don't know
+            // who the rejected code was for.
+            crate::services::audit::log(
+                &db.pool,
+                None,
+                "safeguard.enrolment.rejected",
+                &json!({ "ip": client_ip }),
+            )
+            .await
+            .ok();
+            return Err(e);
+        }
+    };
+
+    let ttl_secs = body
+        .expires_in_seconds
+        .unwrap_or(15 * 60)
+        .clamp(60, 24 * 60 * 60);
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
+
+    crate::services::safeguard::user_token::store(
+        &db.pool, &vault_cfg, user_id, &token, expires_at,
+    )
+    .await?;
+
+    crate::services::audit::log(
+        &db.pool,
+        Some(user_id),
+        "safeguard.enrolment.consumed",
+        &json!({
+            "expires_at": expires_at,
+            "ip": client_ip,
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "signed_in": true,
+        "expires_at": expires_at,
+    })))
+}
+
 #[derive(Deserialize)]
 pub struct BulkSafeguardCheckoutBody {
     pub profile_ids: Vec<Uuid>,

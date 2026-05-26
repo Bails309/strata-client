@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 
 vi.mock("../api", () => ({
   getSafeguardSigninStatus: vi.fn(),
+  startSafeguardSignin: vi.fn(),
   submitSafeguardToken: vi.fn(),
   clearSafeguardToken: vi.fn(),
 }));
@@ -16,6 +17,7 @@ vi.mock("../contexts/SettingsContext", () => ({
 import SafeguardSigninCard from "../pages/credentials/SafeguardSigninCard";
 import {
   getSafeguardSigninStatus,
+  startSafeguardSignin,
   submitSafeguardToken,
   clearSafeguardToken,
   type SafeguardSigninStatus,
@@ -98,81 +100,213 @@ describe("SafeguardSigninCard", () => {
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   });
 
-  it("opens form, copies snippet, submits token, and notifies parent", async () => {
+  it("calls startSafeguardSignin and opens form with code on Sign in click", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "ABCD-1234",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    expect(startSafeguardSignin).toHaveBeenCalled();
+    // Snippet should contain the code
+    expect(screen.getByText(/ABCD-1234/)).toBeInTheDocument();
+    // Should show countdown badge
+    expect(screen.getByText(/Waiting for sign-in/)).toBeInTheDocument();
+  });
+
+  it("shows Copy snippet button and code countdown", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "TEST-5678",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Copy snippet" }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining("Connect-Safeguard sg.corp.example")
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      expect.stringContaining("TEST-5678")
+    );
+  });
+
+  it("shows 'Having trouble?' toggle to reveal fallback paste form", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-1234",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    // Fallback is initially hidden
+    expect(screen.queryByPlaceholderText(/eyJ\.\.\./)).not.toBeInTheDocument();
+    // Toggle it on
+    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
+    expect(screen.getByPlaceholderText(/eyJ\.\.\./)).toBeInTheDocument();
+  });
+
+  it("accepts manual paste via fallback form", async () => {
     (getSafeguardSigninStatus as any)
       .mockResolvedValueOnce(makeStatus())
       .mockResolvedValueOnce(
         makeStatus({ signed_in: true, expires_at: new Date(Date.now() + 600_000).toISOString() })
       );
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-XXXX",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
     (submitSafeguardToken as any).mockResolvedValue({ signed_in: true, expires_at: "x" });
     const onStatusChange = vi.fn();
     render(<SafeguardSigninCard onStatusChange={onStatusChange} />);
     await flush();
-
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    const textarea = screen.getByPlaceholderText(/eyJ\.\.\./);
-
-    // Copy snippet
-    fireEvent.click(screen.getByRole("button", { name: "Copy snippet" }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      expect.stringContaining("Connect-Safeguard sg.corp.example")
-    );
-
-    fireEvent.change(textarea, { target: { value: "  my-token  " } });
-    fireEvent.submit(textarea.closest("form")!);
     await flush();
-
-    expect(submitSafeguardToken).toHaveBeenCalledWith("my-token");
+    // Open fallback
+    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
+    const textarea = screen.getByPlaceholderText(/eyJ\.\.\./);
+    fireEvent.change(textarea, { target: { value: "  manual-token  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit token" }));
+    await flush();
+    expect(submitSafeguardToken).toHaveBeenCalledWith("manual-token");
     expect(onStatusChange).toHaveBeenCalled();
   });
 
-  it("ignores submit when token input is empty", async () => {
+  it("auto-closes modal when polling detects signed_in=true", async () => {
+    const initialStatus = makeStatus();
+    const signedInStatus = makeStatus({
+      signed_in: true,
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    (getSafeguardSigninStatus as any)
+      .mockResolvedValueOnce(initialStatus) // Initial fetch
+      .mockResolvedValueOnce(initialStatus) // After startSafeguardSignin
+      .mockResolvedValueOnce(signedInStatus); // Polling finds it signed in
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-POLL",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    const onStatusChange = vi.fn();
+    render(<SafeguardSigninCard onStatusChange={onStatusChange} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    // Modal is open
+    expect(screen.getByText(/Waiting for sign-in/)).toBeInTheDocument();
+    // Advance time past one polling tick (2s)
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+      await Promise.resolve();
+    });
+    // Modal should be closed
+    expect(screen.queryByText(/Waiting for sign-in/)).not.toBeInTheDocument();
+    expect(onStatusChange).toHaveBeenCalled();
+  });
+
+  it("shows 'Code expired' badge and 'Get a new code' button when code expires", async () => {
+    const now = Date.now();
     (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "EXPIRES-123",
+      expires_at: new Date(now + 5 * 60_000).toISOString(),
+    });
     render(<SafeguardSigninCard />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    // Wait for code to expire (5 min + 1 sec)
+    await act(async () => {
+      vi.advanceTimersByTime(301_000);
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Code expired")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Get a new code" })).toBeInTheDocument();
+  });
+
+  it("ignores empty token in fallback form submit", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-EMPTY",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
     const submit = screen.getByRole("button", { name: "Submit token" });
     expect(submit).toBeDisabled();
-    // Force submit via form to exercise the early-return branch
+    // Even if we force submit, it should return early
     fireEvent.submit(screen.getByPlaceholderText(/eyJ\.\.\./).closest("form")!);
     await flush();
     expect(submitSafeguardToken).not.toHaveBeenCalled();
   });
 
-  it("shows error when submit fails", async () => {
+  it("shows error when startSafeguardSignin fails", async () => {
     (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockRejectedValue(new Error("rate limited"));
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    expect(screen.getByText("rate limited")).toBeInTheDocument();
+  });
+
+  it("shows error when submitSafeguardToken (fallback) fails", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-FAIL",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
     (submitSafeguardToken as any).mockRejectedValue(new Error("bad token"));
     render(<SafeguardSigninCard />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
     const textarea = screen.getByPlaceholderText(/eyJ\.\.\./);
-    fireEvent.change(textarea, { target: { value: "tok" } });
-    fireEvent.submit(textarea.closest("form")!);
+    fireEvent.change(textarea, { target: { value: "invalid-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit token" }));
     await flush();
     expect(screen.getByText("bad token")).toBeInTheDocument();
   });
 
-  it("shows generic error message when submit throws non-Error", async () => {
+  it("cancels the sign-in form and clears state", async () => {
     (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
-    (submitSafeguardToken as any).mockRejectedValue("oops");
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-CANCEL",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
     render(<SafeguardSigninCard />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    const textarea = screen.getByPlaceholderText(/eyJ\.\.\./);
-    fireEvent.change(textarea, { target: { value: "tok" } });
-    fireEvent.submit(textarea.closest("form")!);
     await flush();
-    expect(screen.getByText("Failed to submit token")).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for sign-in/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText(/Waiting for sign-in/)).not.toBeInTheDocument();
   });
 
-  it("cancels the sign-in form", async () => {
-    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+  it("uses placeholder fqdn/idp in snippet when missing", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(
+      makeStatus({ appliance_fqdn: "", idp_alias: "" })
+    );
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "CODE-PLACEHOLDER",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
     render(<SafeguardSigninCard />);
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(screen.getByPlaceholderText(/eyJ\.\.\./)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByPlaceholderText(/eyJ\.\.\./)).not.toBeInTheDocument();
+    await flush();
+    expect(screen.getByText(/<appliance-fqdn>/)).toBeInTheDocument();
+    expect(screen.getByText(/<idp-alias>/)).toBeInTheDocument();
   });
 
   it("signs out and refreshes status", async () => {
@@ -189,17 +323,6 @@ describe("SafeguardSigninCard", () => {
     await flush();
     expect(clearSafeguardToken).toHaveBeenCalled();
     expect(onStatusChange).toHaveBeenCalled();
-  });
-
-  it("uses placeholder fqdn/idp in snippet when missing", async () => {
-    (getSafeguardSigninStatus as any).mockResolvedValue(
-      makeStatus({ appliance_fqdn: "", idp_alias: "" })
-    );
-    render(<SafeguardSigninCard />);
-    await flush();
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(screen.getByText(/<appliance-fqdn>/)).toBeInTheDocument();
-    expect(screen.getByText(/<idp-alias>/)).toBeInTheDocument();
   });
 
   it("sets up a polling interval on mount", async () => {

@@ -29,6 +29,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.2",
+    subtitle:
+      "Patch release — Safeguard automated token enrolment via one-shot codes. Operators now sign in to Safeguard via the browser RSTS flow and the token is automatically submitted back to Strata without manual copy-paste",
+    sections: [
+      {
+        title: "Automated Safeguard token submission via enrolment codes",
+        description:
+          "The Safeguard sign-in card on the Credentials page now uses one-shot enrolment codes (8-character Crockford base-32, 5-minute TTL, single-use, rate-limited 5/min/user) to bridge the gap between the browser-based RSTS sign-in flow and automated token submission. Operators click Sign in, receive a copy-paste PowerShell snippet with an embedded enrolment code, run the snippet to Connect-Safeguard and post the resulting bearer token back to Strata via Invoke-RestMethod. The UI displays a live countdown timer (MM:SS) showing time remaining before the code window expires, and polls /api/user/safeguard/status to auto-close the modal when sign-in completes. A fallback text field (toggled via Having trouble?) is available for operators who need manual paste.",
+      },
+      {
+        title: "One-shot enrolment code lifecycle",
+        description:
+          "Authed /api/user/safeguard/signin/start mints an 8-character code tied to the user's ID with a 5-minute expiry, rate-limited to 5 mints per minute per user. Unauthed /api/safeguard/enrol atomically validates the code (not used, not expired, valid alphabet), looks up the bound user_id, seals the bearer token via Vault, and stores it in safeguard_user_tokens (same path as v1.10.0 manual paste). Returns uniform Invalid or expired errors for all failure paths. Daily background job purges codes that expired >1 day ago.",
+      },
+      {
+        title: "PowerShell auto-post snippet and countdown timer",
+        description:
+          "The modal renders a copy-paste PowerShell snippet with the embedded enrolment code already filled in. The snippet calls Connect-Safeguard to authenticate against the RSTS appliance, then Invoke-RestMethod to POST the code + bearer token to /api/safeguard/enrol. A countdown timer displays remaining time before the code window closes; when the window expires, operators click Get a new code to mint a fresh one. While the modal is open, the UI polls every 2 seconds and auto-closes when signed_in=true.",
+      },
+    ],
+  },
+  {
     version: "1.10.1",
     subtitle:
       "Patch release — Safeguard sign-in PowerShell snippet is now idempotent, plus routine dependency hygiene (nginx runtime base, frontend dev-deps, and pinned-by-SHA GitHub Actions)",

@@ -55,6 +55,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))
         .route(
+            "/api/safeguard/enrol",
+            post(user::enrol_safeguard_token),
+        )
+        .route(
             "/api/shared/tunnel/{share_token}",
             get(share::ws_shared_tunnel),
         )
@@ -351,6 +355,10 @@ pub fn build_router(state: SharedState) -> Router {
         .route(
             "/api/user/safeguard/token",
             post(user::submit_safeguard_token).delete(user::clear_safeguard_token),
+        )
+        .route(
+            "/api/user/safeguard/signin/start",
+            post(user::start_safeguard_signin),
         )
         .route(
             "/api/user/safeguard/bulk-checkout",

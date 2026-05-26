@@ -1842,6 +1842,24 @@ export const startSafeguardSignin = () =>
     method: "POST",
   });
 
+/** One row from the `Me/RequestEntitlements` catalog — an account the
+ * signed-in user can request a Safeguard password checkout for. */
+export interface SafeguardEntitledAccount {
+  account_id: string;
+  account_name?: string | null;
+  account_domain_name?: string | null;
+  asset_id: string;
+  asset_name?: string | null;
+  asset_network_address?: string | null;
+}
+
+/** Fetch the Safeguard accounts the signed-in user is entitled to
+ * password-checkout against. Returns the appliance-published catalog
+ * scoped to the calling user; empty array when the appliance does
+ * not expose the entitlements endpoint. */
+export const listSafeguardAccounts = () =>
+  request<SafeguardEntitledAccount[]>("/user/safeguard/accounts");
+
 // -- Safeguard bulk pre-checkout -------------------------------------
 export interface SafeguardCachedStatus {
   profile_id: string;

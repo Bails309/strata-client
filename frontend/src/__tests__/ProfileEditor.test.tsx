@@ -1,8 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ProfileEditor, { type EditingProfile } from "../pages/credentials/ProfileEditor";
-import type { CheckoutRequest, CredentialProfile } from "../api";
+import type { CheckoutRequest, CredentialProfile, SafeguardEntitledAccount } from "../api";
+
+// Stub the API module so the entitlement-picker useEffect does not
+// hit the network. Individual tests override `listSafeguardAccounts`
+// via `mockResolvedValueOnce` / `mockRejectedValueOnce`.
+const listSafeguardAccountsMock = vi.fn<() => Promise<SafeguardEntitledAccount[]>>();
+vi.mock("../api", () => ({
+  listSafeguardAccounts: (...args: unknown[]) => listSafeguardAccountsMock(...(args as [])),
+}));
 
 const baseEditing: EditingProfile = {
   label: "",
@@ -83,7 +91,10 @@ function renderEditor(opts: {
 }
 
 describe("ProfileEditor", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listSafeguardAccountsMock.mockResolvedValue([]);
+  });
 
   it("renders 'New Credential Profile' heading when editing has no id", () => {
     renderEditor({});
@@ -285,5 +296,180 @@ describe("ProfileEditor", () => {
       allCheckouts: [live],
     });
     expect(screen.getByText("Link Checked-Out Account")).toBeInTheDocument();
+  });
+
+  // -- Safeguard entitlement picker ----------------------------------
+
+  it("does not call listSafeguardAccounts when kind is local", () => {
+    renderEditor({
+      editing: { ...baseEditing, kind: "local" },
+      safeguardEnabled: true,
+    });
+    expect(listSafeguardAccountsMock).not.toHaveBeenCalled();
+  });
+
+  it("shows empty-catalog hint when Safeguard returns no entitlements", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([]);
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+    });
+    await waitFor(() => expect(listSafeguardAccountsMock).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/Safeguard did not return any entitled accounts/i)
+    ).toBeInTheDocument();
+  });
+
+  it("shows sign-in hint when API rejects with safeguard.signin_required", async () => {
+    listSafeguardAccountsMock.mockRejectedValueOnce(new Error("safeguard.signin_required"));
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+    });
+    expect(
+      await screen.findByText(/Sign in to Safeguard to pick from your assigned accounts/i)
+    ).toBeInTheDocument();
+  });
+
+  it("shows load-failed hint when API rejects with a generic error", async () => {
+    listSafeguardAccountsMock.mockRejectedValueOnce(new Error("boom"));
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+    });
+    expect(await screen.findByText(/Could not load your Safeguard accounts/i)).toBeInTheDocument();
+  });
+
+  it("autofills account/asset/label when an entitlement is selected", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+    ]);
+    const setEditing = vi.fn();
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+      setEditing,
+    });
+    // Wait until the picker renders the option button (Select component
+    // exposes a button trigger with the placeholder label).
+    const trigger = await screen.findByRole("button", {
+      name: /Select a Safeguard account/i,
+    });
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByText(/jsmith@corp\.local — db-prod-01/i));
+    expect(setEditing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        safeguard_account_id: "42",
+        safeguard_asset: "db-prod-01",
+        label: "jsmith@corp.local",
+      })
+    );
+  });
+
+  it("hides entitlement rows that are already claimed by other profiles", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+      {
+        account_id: "43",
+        account_name: "asmith",
+        account_domain_name: "corp.local",
+        asset_id: "8",
+        asset_name: "db-prod-02",
+      },
+    ]);
+    // An existing profile already claims account 42 / asset 7 (by name).
+    const claimed = makeProfile({
+      id: "p-claimed",
+      kind: "safeguard",
+      safeguard_account_id: "42",
+      safeguard_asset: "db-prod-01",
+    });
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+      profiles: [claimed],
+    });
+    const trigger = await screen.findByRole("button", {
+      name: /Select a Safeguard account/i,
+    });
+    await userEvent.click(trigger);
+    // Only the un-claimed row should be offered.
+    expect(await screen.findByText(/asmith@corp\.local — db-prod-02/i)).toBeInTheDocument();
+    expect(screen.queryByText(/jsmith@corp\.local — db-prod-01/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the currently-edited profile's own entitlement visible", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+    ]);
+    // The same profile we're editing claims this row — it should
+    // still appear (and be the selected value) so the user can see
+    // their existing choice.
+    const editingProfile = makeProfile({
+      id: "p-me",
+      kind: "safeguard",
+      safeguard_account_id: "42",
+      safeguard_asset: "db-prod-01",
+    });
+    renderEditor({
+      editing: {
+        ...baseEditing,
+        id: editingProfile.id,
+        kind: "safeguard",
+        safeguard_account_id: "42",
+        safeguard_asset: "db-prod-01",
+      },
+      safeguardEnabled: true,
+      profiles: [editingProfile],
+    });
+    expect(
+      await screen.findByRole("button", { name: /jsmith@corp\.local — db-prod-01/i })
+    ).toBeInTheDocument();
+  });
+
+  it("shows 'all entitlements claimed' hint when every row is already taken", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+    ]);
+    const claimed = makeProfile({
+      id: "p-claimed",
+      kind: "safeguard",
+      safeguard_account_id: "42",
+      safeguard_asset: "db-prod-01",
+    });
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+      profiles: [claimed],
+    });
+    expect(
+      await screen.findByText(
+        /Every Safeguard account you are entitled to already has a credential profile/i
+      )
+    ).toBeInTheDocument();
   });
 });

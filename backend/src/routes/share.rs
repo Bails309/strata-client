@@ -770,9 +770,7 @@ pub async fn ws_copilot_room_owner(
     let session = registry
         .find_by_connection_and_user(share.connection_id, share.owner_user_id)
         .await
-        .ok_or_else(|| {
-            AppError::NotFound("The owner's session is not currently active.".into())
-        })?;
+        .ok_or_else(|| AppError::NotFound("The owner's session is not currently active.".into()))?;
 
     // Use the authenticated user's Strata username as the host's
     // room display name. The room sanitises and disambiguates the
@@ -841,9 +839,7 @@ pub async fn copilot_force_grant(
     let session = registry
         .find_by_connection_and_user(share.connection_id, share.owner_user_id)
         .await
-        .ok_or_else(|| {
-            AppError::NotFound("The owner's session is not currently active.".into())
-        })?;
+        .ok_or_else(|| AppError::NotFound("The owner's session is not currently active.".into()))?;
 
     let room = &session.co_pilot_room;
 

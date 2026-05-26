@@ -820,6 +820,41 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 - **Audio mesh client.** `allow_audio`, the envelope variants (`audio_offer` / `audio_answer` / `ice`), and the server-side validation are all wired through, but the 1.9.6 frontend does not implement a WebRTC peer mesh.
 - **Owner-side participant view.** The 1.9.6 owner sees the screen and can revoke; they don't see peer cursors or the chat panel in their own session view. A future commit will add a `/api/user/sessions/:id/co-pilot` endpoint and reuse `CoPilotOverlay` from the owner's `SessionManager`.
 
+### v1.10.3 — owner participation, force-grant, and audio
+
+The two carve-outs above are now closed:
+
+- **Owner-side participant view.** A new authenticated WebSocket
+  `GET /api/user/shared/copilot/{share_token}` lets the connection
+  owner join their own multiplayer room with `is_owner = true`. The
+  handler verifies share ownership, picks `display_name` from the
+  authenticated user (`full_name` or `username`), and reuses
+  `copilot_room_loop` with the owner flag threaded through. The
+  frontend `useCoPilotRoom` hook gained an `asOwner` flag and
+  `SessionClient` mounts `CoPilotOverlay` whenever the active
+  session has an `mpShareToken`. The public
+  `/api/shared/copilot/{share_token}` endpoint is unchanged for
+  invited viewers.
+- **Owner force-grant route.** `POST
+  /api/user/shared/copilot/{share_token}/grant/{target_pid}` exposes
+  the room's existing `force_grant` FSM transition over HTTP. The
+  handler verifies share ownership, looks up an owner pid in the
+  room for the `InputGrant.by` attribution, broadcasts
+  `input_grant` + `roster`, and writes a
+  `connection.copilot_force_grant` audit row. The overlay renders a
+  "Give" button next to every roster row that doesn't currently
+  hold the token (owner only).
+- **WebRTC full-mesh audio.** The `audio_offer` / `audio_answer` /
+  `ice` envelopes are now backed by `useCoPilotAudio`, a frontend
+  hook that owns a full-mesh `RTCPeerConnection` map (implicitly
+  capped at 6 peers by the room limit). STUN-only via
+  `stun:stun.l.google.com:19302`. Lower-lexicographic pid is the
+  offerer to avoid glare. ICE candidates received before
+  `setRemoteDescription` are buffered per peer and flushed after
+  the SDP exchange. Mic acquisition is strictly opt-in via the
+  overlay's **Join audio** / **Leave audio** toggle; toggling off
+  tears down every PC + stops the local stream.
+
 ## Safeguard JIT credential checkout (v1.10.0+)
 
 v1.10.0 ships a first-class integration with **OneIdentity Safeguard for

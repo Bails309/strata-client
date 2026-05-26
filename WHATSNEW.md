@@ -1,3 +1,49 @@
+# What's New in v1.10.3
+
+> **Minor release: Multiplayer co-pilot completion — owner participation, force-grant, and WebRTC audio.** v1.10.3 closes three gaps in the multiplayer co-pilot feature shipped in v1.9.x. The session owner can now join their own multiplayer room and see peer cursors + chat instead of being a silent third party; a new force-grant route + overlay button lets the owner transfer the input token to any participant on demand; and the `audio_offer` / `audio_answer` / `ice` envelopes in the wire protocol are now wired up to a real full-mesh WebRTC audio mesh that any participant can opt into. Native checkboxes across the app also get a unified modern look.
+
+## Owner-side co-pilot WebSocket
+
+A new authenticated endpoint `GET /api/user/shared/copilot/:share_token` lets the connection owner join the multiplayer room for their own share with `is_owner=true`. The handler verifies share ownership, picks `display_name` from the authenticated user (`full_name` if set, otherwise `username`), and reuses the existing `copilot_room_loop` with the owner flag threaded through so the room knows the implicit input-token holder. The public `/api/shared/copilot/:share_token` endpoint is unchanged for invited viewers. The frontend `useCoPilotRoom` hook gained an `asOwner` flag that switches to the authenticated endpoint; `SessionClient` mounts `CoPilotOverlay` whenever the active session has an `mpShareToken`.
+
+## Force-grant route + "Give" button
+
+The owner can now take control back from a viewer (or hand control to a specific viewer) via `POST /api/user/shared/copilot/:share_token/grant/:target_pid`. The handler:
+
+- Verifies the caller owns the share.
+- Looks up an owner pid in the room (best-effort) to fill the `InputGrant.by` attribution.
+- Calls `CoPilotRoom::force_grant`, broadcasts `InputGrant` + `Roster`, and writes a `connection.copilot_force_grant` audit row.
+
+In the overlay, when `selfIsOwner` is true and a roster row is for someone other than the current token holder, a small **Give** button appears next to that participant. Clicking it fires the force-grant route; the next `Roster` broadcast reconciles UI state for everyone.
+
+## WebRTC full-mesh audio
+
+The `audio_offer` / `audio_answer` / `ice` envelopes that have lived in the co-pilot wire protocol since v1.9.x are now backed by a real implementation. A new `useCoPilotAudio` hook owns the WebRTC peer connections for a room:
+
+- **Topology**: full-mesh, implicitly capped at 6 peers by the server-side room limit. STUN-only via `stun:stun.l.google.com:19302` — no TURN server required for the typical intranet deployment topology.
+- **Glare avoidance**: the lower-lexicographic pid in each pair is the offerer.
+- **ICE buffering**: candidates received before `setRemoteDescription` are buffered per peer and flushed after the SDP exchange.
+- **Opt-in mic acquisition**: `getUserMedia` only runs while the user has toggled the **Join audio** button in the overlay; toggling **Leave audio** tears down every PC and stops the local stream.
+
+`useCoPilotRoom` exposes `sendAudio` for outbound envelopes and `setAudioHandler` for routing inbound audio envelopes to the hook, keeping the audio mesh decoupled from the chat / cursor / input-token plane. Both `SessionClient` (owner) and `SharedViewer` (viewer) instantiate `useCoPilotAudio` and surface the toggle, so audio works in either direction across the mesh whenever the room's `allowAudio` policy bit is set.
+
+## Modern checkboxes
+
+Every native `<input type="checkbox">` in the app now renders with a unified Tailwind-styled appearance matching the existing button and toggle palette, so the share-mode dialog, the credential-profile editor, the connection picker, and every settings page share a consistent look on both light and dark themes (`d5bd26f`).
+
+## Upgrade
+
+Drop-in upgrade from v1.10.x — no new migrations, no configuration changes. Rebuild the backend and frontend containers:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend frontend
+```
+
+---
+
 # What's New in v1.10.2
 
 > **Patch release: Safeguard sign-in auto-post, account picker, and in-place credential-profile kind switching.** v1.10.2 is a UX-focused refinement of the Safeguard JIT integration shipped in v1.10.0 and hardened in v1.10.1. Three related changes land together: (1) **automated token enrolment via one-shot codes** — operators sign in via the RSTS browser flow and the resulting bearer is auto-posted back to Strata, eliminating the manual JWT copy-paste step; (2) a **Safeguard account picker** in the credential profile editor that surfaces the user's Safeguard entitlement catalogue and hides accounts that already back an existing profile; and (3) **in-place kind switching** so an existing `local` profile can be converted to `safeguard` (or back) without delete-and-recreate.

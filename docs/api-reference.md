@@ -2109,6 +2109,39 @@ Subsequent messages include `roster`, `cursor`, `chat`, `input_claim`, `input_re
 
 Returns `404` if the token is invalid, expired, revoked, points at a single-viewer share, or if the owner is not currently connected. Returns `4001` close code with a `join_error` envelope if the room is at capacity (`reason: "room_full"`) or the supplied name is empty (`reason: "empty_name"`).
 
+### `GET /api/user/shared/copilot/:share_token` (v1.10.3+)
+
+Authenticated WebSocket sibling of `/api/shared/copilot/:share_token` reserved for the session **owner**. Requires a valid Strata session (cookie auth) and verifies that the caller owns the share. Lets the owner participate in their own multiplayer co-pilot room with `is_owner=true` so the room knows the implicit input-token holder.
+
+**Path Parameter**: `share_token` (string)
+
+**Query Parameter**: `name` — ignored. The owner's `display_name` is taken from the authenticated user (`full_name` if set, otherwise `username`).
+
+**Protocol**: Identical envelope stream to the public endpoint. The only differences are server-side: the owner row in the roster carries `is_owner = true`, force-grant attribution can name this participant as `by`, and `InputClaim` from the owner is short-circuited to an immediate `InputGrant` without the 2-second idle wait.
+
+Returns `404` if the token is invalid, expired, revoked, points at a single-viewer share, or the authenticated user does not own the underlying connection.
+
+### `POST /api/user/shared/copilot/:share_token/grant/:target_pid` (v1.10.3+)
+
+Force-grant the co-pilot input token to a specific participant. The session owner can transfer control to any roster participant on demand, overriding the normal claim / 2-second-idle / grant flow.
+
+**Path Parameters**
+
+| Param         | Type   | Description                                                                    |
+| ------------- | ------ | ------------------------------------------------------------------------------ |
+| `share_token` | string | The multiplayer share token.                                                   |
+| `target_pid`  | UUID   | The participant id (issued by `welcome`) of the participant to receive control. |
+
+**Response** `204 No Content` on success. The room broadcasts `input_grant` (with `by` populated from the owner's pid if one is in the room) and `roster` to all participants.
+
+**Errors**
+
+- `403 Forbidden` if the authenticated user does not own the underlying connection.
+- `404 Not Found` if the share token is invalid, expired, revoked, or not multiplayer.
+- `409 Conflict` if `target_pid` is not currently in the room.
+
+Audit row `connection.copilot_force_grant` is written on success with the share id, share token, and target pid.
+
 ---
 
 ## Connection Sharing

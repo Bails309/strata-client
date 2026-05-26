@@ -29,6 +29,33 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.3",
+    subtitle:
+      "Minor release — Multiplayer co-pilot: owner participation, force-grant, and WebRTC full-mesh audio. Plus a unified modern look for native checkboxes app-wide.",
+    sections: [
+      {
+        title: "Owner-side co-pilot WebSocket",
+        description:
+          "The session owner can finally join their own multiplayer co-pilot room. A new authenticated endpoint GET /api/user/shared/copilot/:share_token verifies share ownership, picks display_name from the signed-in user (full_name or username), and runs the same copilot_room_loop with is_owner=true so the room knows the implicit input-token holder. The frontend useCoPilotRoom hook gained an asOwner flag and SessionClient mounts CoPilotOverlay whenever the active session has an mpShareToken. The public /api/shared/copilot/:share_token endpoint is unchanged for invited viewers.",
+      },
+      {
+        title: "Force-grant route and Give button",
+        description:
+          "Owners can now transfer the input token to any participant via POST /api/user/shared/copilot/:share_token/grant/:target_pid. The handler verifies share ownership, looks up an owner pid in the room for the InputGrant.by attribution, calls CoPilotRoom::force_grant, broadcasts InputGrant + Roster, and writes a connection.copilot_force_grant audit row. The overlay shows a Give button next to every roster row that doesn't currently hold the token (owner only) — clicking it fires the route and the next Roster broadcast reconciles every participant's UI.",
+      },
+      {
+        title: "WebRTC full-mesh audio",
+        description:
+          "The audio_offer / audio_answer / ice envelopes that have been in the co-pilot wire protocol since v1.9.x are now backed by a real implementation. A new useCoPilotAudio hook owns a full-mesh RTCPeerConnection map (implicitly capped at 6 peers by the server's room limit). STUN-only via stun:stun.l.google.com:19302 so no TURN server is required for typical intranet deployments. Lower-lexicographic pid is the offerer to prevent glare. ICE candidates received before setRemoteDescription are buffered per peer and flushed after the SDP exchange. Mic acquisition is strictly opt-in: a Join audio / Leave audio toggle in the overlay footer drives getUserMedia and full PC + stream teardown. Wired into both SessionClient (owner) and SharedViewer (viewer).",
+      },
+      {
+        title: "Modern checkboxes app-wide",
+        description:
+          "Every native <input type='checkbox'> across the app now renders with a unified Tailwind-styled appearance matching the existing button and toggle palette. The share-mode dialog, credential-profile editor, connection picker, and every settings page share a consistent look on both light and dark themes.",
+      },
+    ],
+  },
+  {
     version: "1.10.2",
     subtitle:
       "Patch release — Safeguard sign-in auto-post, account picker in the credential profile editor, and in-place credential-profile kind switching",

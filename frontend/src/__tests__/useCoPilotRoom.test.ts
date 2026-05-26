@@ -208,4 +208,43 @@ describe("useCoPilotRoom", () => {
     unmount();
     expect(ws.closed).toBe(true);
   });
+
+  it("exposes session_ended reason and clears ready when host disconnects", () => {
+    const { result } = renderHook(() => useCoPilotRoom("tok-E", "Eve", true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => {
+      ws.emit({
+        type: "welcome",
+        pid: SELF,
+        allow_chat: true,
+        allow_audio: false,
+        max_participants: 4,
+        protocol_version: 1,
+      });
+    });
+    expect(result.current[0].ready).toBe(true);
+    expect(result.current[0].sessionEnded).toBeNull();
+    act(() => {
+      ws.emit({ type: "session_ended", reason: "Host ended session" });
+    });
+    expect(result.current[0].sessionEnded).toBe("Host ended session");
+    expect(result.current[0].ready).toBe(false);
+  });
+
+  it("defaults session_ended reason when empty string supplied", () => {
+    const { result } = renderHook(() => useCoPilotRoom("tok-F", "Fay", true));
+    const ws = FakeWebSocket.instances[0];
+    act(() => {
+      ws.emit({
+        type: "welcome",
+        pid: SELF,
+        allow_chat: true,
+        allow_audio: false,
+        max_participants: 2,
+        protocol_version: 1,
+      });
+      ws.emit({ type: "session_ended", reason: "" });
+    });
+    expect(result.current[0].sessionEnded).toBe("Host ended session");
+  });
 });

@@ -136,6 +136,47 @@ describe("SafeguardSigninCard", () => {
     );
   });
 
+  it("flips Copy snippet button to 'Copied!' on success then reverts after 2s", async () => {
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "COPIED-OK",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Copy snippet" }));
+    // Let the resolved clipboard promise settle so setSnippetCopied runs.
+    await flush();
+    const copied = screen.getByRole("button", { name: "Copied!" });
+    expect(copied).toBeInTheDocument();
+    expect(copied.className).toContain("btn-success");
+    // After 2s the label reverts.
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "Copy snippet" })).toBeInTheDocument();
+  });
+
+  it("leaves Copy snippet button unchanged when clipboard write rejects", async () => {
+    (navigator.clipboard.writeText as any).mockRejectedValueOnce(new Error("denied"));
+    (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
+    (startSafeguardSignin as any).mockResolvedValue({
+      code: "COPIED-REJ",
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    render(<SafeguardSigninCard />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Copy snippet" }));
+    await flush();
+    expect(screen.getByRole("button", { name: "Copy snippet" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copied!" })).not.toBeInTheDocument();
+  });
+
   it("shows 'Having trouble?' toggle to reveal fallback paste form", async () => {
     (getSafeguardSigninStatus as any).mockResolvedValue(makeStatus());
     (startSafeguardSignin as any).mockResolvedValue({

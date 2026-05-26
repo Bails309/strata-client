@@ -840,6 +840,7 @@ backend/src/services/safeguard/
 ├── config.rs          # SafeguardConfig load / save / unseal (Vault)
 ├── client.rs          # REST client: AccessRequests, CheckoutPassword,
 │                      # Me/ActionableRequests deserializer
+├── enrolment.rs       # v1.10.2 one-shot sign-in code mint/consume/purge
 ├── user_token.rs      # safeguard_user_tokens seal / store / read
 └── password_cache.rs  # safeguard_cached_passwords seal / store /
                        # load (eager-purge on expiry)
@@ -848,6 +849,7 @@ backend/src/services/safeguard/
 | Layer                 | Responsibility                                                                                                                                                |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `config.rs`           | Loads the singleton `safeguard_config` row, unseals A2A secrets via Vault, applies `"********"` mask semantics on PUT.                                        |
+| `enrolment.rs`        | v1.10.2 one-shot code bridge for browser sign-in auto-post: mint (5-minute TTL, 5/min/user cap), atomic consume (single-use), and expiry purge hook.          |
 | `user_token.rs`       | Per-user RSTS bearer storage in `safeguard_user_tokens`; Vault-sealed (ciphertext + per-row DEK + nonce). Expiry-aware accessor returns `None` after RSTS TTL. |
 | `client.rs`           | Bearer-aware `reqwest::Client` builder (system trust + optional CA + per-config TLS verify + optional A2A client identity), AccessRequests CRUD.              |
 | `password_cache.rs`   | Per-(user, profile) sealed plaintext cache with eager-purge on stale read.                                                                                    |
@@ -858,9 +860,11 @@ backend/src/services/safeguard/
 `safeguard_config.auth_mode` selects between three modes:
 
 - **`per_user_browser`** — Each user runs `Connect-Safeguard -Browser
-  -IdentityProvider <alias>` from the Safeguard PowerShell module and
-  pastes the resulting bearer into Strata's sign-in card. The token
-  is sealed in `safeguard_user_tokens` and reused for every
+  -IdentityProvider <alias>` from the Safeguard PowerShell module.
+  Since v1.10.2, Strata mints a one-shot enrolment code and embeds it
+  in a copy-paste snippet that auto-POSTs `{ code, token }` to
+  `/api/safeguard/enrol`; manual token paste remains as fallback. The
+  resulting bearer is sealed in `safeguard_user_tokens` and reused for every
   subsequent checkout until its ~15 minute RSTS TTL expires. Every
   checkout is attributed to the user's IdP identity in the Safeguard
   audit log.
@@ -874,6 +878,19 @@ backend/src/services/safeguard/
   when present, falls back to A2A when it isn't. Users who haven't
   signed in yet still get a working checkout against
   shared-automation accounts.
+
+### v1.10.2 sign-in auto-post bridge
+
+The browser flow and backend user-bound token store are bridged via a
+short-lived one-shot code:
+
+1. `POST /api/user/safeguard/signin/start` (authed) mints code bound to caller `user_id`.
+2. UI renders PowerShell snippet containing code + enrol endpoint.
+3. PowerShell obtains `$SGToken` from `Connect-Safeguard` and posts it to `POST /api/safeguard/enrol`.
+4. Backend atomically consumes code (`used_at IS NULL AND expires_at > now()`), resolves bound `user_id`, seals token, stores in `safeguard_user_tokens`.
+
+Atomic consume ensures single-winner semantics under concurrency; a
+code cannot be successfully used twice.
 
 ### Data flow — `jit_checkout`
 
@@ -1052,7 +1069,7 @@ strata-client/
 │           ├── session_registry.rs  NVR ring buffer + persistent-state log (v1.9.4) + live session tracking
 │           ├── settings.rs    system_settings CRUD
 │           ├── trusted_ca.rs  Trusted CA bundle CRUD + per-session NSS DB import via `certutil` (v1.2.0)
-│           ├── user_cleanup.rs  Daily worker: (1) stale-account sweep — soft-deletes users idle past `user_stale_days` (v1.9.5; `NULL last_login_at` excluded; `0` disables; audited as `user.stale_auto_deleted`), then (2) hard-deletes soft-deleted users older than `user_hard_delete_days` (default 90 days)
+│           ├── user_cleanup.rs  Daily worker: (1) stale-account sweep — soft-deletes users idle past `user_stale_days` (v1.9.5; `NULL last_login_at` excluded; `0` disables; audited as `user.stale_auto_deleted`), (2) hard-deletes soft-deleted users older than `user_hard_delete_days` (default 90 days), and (3) purges stale `safeguard_enrolment_codes` rows (v1.10.2)
 │           ├── file_store.rs  Session-scoped temporary file storage
 │           ├── vault.rs       Envelope encryption
 │           ├── notifications.rs  Dispatcher: maps CheckoutEvent → recipients → EmailMessage; honours opt-outs; writes email_deliveries rows

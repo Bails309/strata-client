@@ -198,6 +198,57 @@ pub async fn update_safeguard_target(
     Ok(())
 }
 
+/// Convert an existing profile to `kind='safeguard'` in-place so
+/// existing connection mappings remain attached to the same profile id.
+///
+/// Local sealed credential blobs are blanked because they are not used
+/// in Safeguard JIT mode.
+pub async fn set_kind_safeguard(
+    pool: &PgPool,
+    profile_id: Uuid,
+    account_id: &str,
+    asset: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE credential_profiles
+         SET kind = 'safeguard',
+             safeguard_account_id = $2,
+             safeguard_asset = $3,
+             encrypted_username = $4,
+             encrypted_password = $4,
+             encrypted_dek = $4,
+             nonce = $4,
+             checkout_id = NULL,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(profile_id)
+    .bind(account_id)
+    .bind(asset)
+    .bind(&[] as &[u8])
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Convert an existing profile to `kind='local'` in-place so existing
+/// connection mappings remain attached to the same profile id.
+pub async fn set_kind_local(pool: &PgPool, profile_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE credential_profiles
+         SET kind = 'local',
+             safeguard_account_id = NULL,
+             safeguard_asset = NULL,
+             checkout_id = NULL,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(profile_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Read the `kind` column for a profile (cheap; used by tunnel.rs to
 /// branch JIT vs. local without re-selecting the whole row).
 #[allow(dead_code)]

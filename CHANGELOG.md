@@ -30,6 +30,14 @@ countdown timer showing when the code window expires, and polls the
 `/api/user/safeguard/status` endpoint to auto-close the modal when the
 token has been successfully stored.
 
+Security characteristics: code consumption is atomic (`used_at IS NULL`
+guard + `RETURNING user_id`) so concurrent submits cannot cross-assign
+tokens between users; the winning submit always resolves to the user
+bound at mint time. All invalid-code paths deliberately return the same
+error (`Invalid or expired sign-in code.`) to avoid code-state probing.
+Daily cleanup also purges stale enrolment-code rows so long-expired
+codes do not accumulate indefinitely.
+
 ## [1.10.1] — 2026-05-26
 
 ### Patch Release — Safeguard sign-in snippet hardening and dependency hygiene

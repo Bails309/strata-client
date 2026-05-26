@@ -1074,6 +1074,36 @@ as ciphertext at rest and validated at every trust boundary.
   The `expires_at` column is consulted on every read and rows past
   TTL return `None` without being returned (and are eligible for
   the next purge sweep).
+- **One-shot enrolment code binding (v1.10.2).** Browser sign-in
+  auto-post uses `safeguard_enrolment_codes` where each code row is
+  minted for exactly one `user_id`, short-lived (5 minutes), and
+  single-use. `POST /api/safeguard/enrol` performs an atomic
+  `UPDATE ... SET used_at = now() ... RETURNING user_id` with
+  `used_at IS NULL AND expires_at > now()` guard. This gives
+  single-winner semantics under concurrent submits and prevents
+  cross-user race assignment: whichever request wins can only store
+  against the user already bound at mint time.
+- **Uniform failure responses deny code-state probing.** Enrol
+  consume returns the same user-facing error string (`Invalid or
+  expired sign-in code.`) for malformed, unknown, already-used, and
+  expired codes. Attackers cannot distinguish which code states are
+  valid by response text.
+- **Mint abuse controls.** Code minting is capped at 5 per minute per
+  user and each mint/reject/consume path is audit logged. Long-expired
+  rows are purged by the daily `user_cleanup` worker, preventing
+  unbounded growth of stale enrolment material.
+- **Residual risk model.** The enrolment code is an authenticator for
+  the unauthenticated enrol endpoint. If code material is leaked
+  before first consume (clipboard capture, terminal history capture,
+  proxy logs, shoulder-surfing), an attacker who posts first can bind
+  a token for that code's user. This is not a race bug in assignment;
+  it is equivalent to bearer-token theft.
+- **TLS trust is mandatory in production.** Operators must keep
+  `verify_tls = true` and ensure the Strata HTTPS certificate chain is
+  trusted by client workstations. Session-level bypasses such as
+  PowerShell `-SkipCertificateCheck` are acceptable only for local/dev
+  troubleshooting because they materially weaken MITM resistance and
+  increase code/token interception risk.
 - **Cache TTL is per-profile, never per-server.** The cache row's
   `expires_at` is set from `credential_profiles.ttl_hours` — there
   is no global "cache for N hours" override. The

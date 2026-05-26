@@ -170,12 +170,29 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
     try {
       const isSafeguard = editing.kind === "safeguard";
       if (editing.id) {
+        if (isSafeguard && (!editing.safeguard_account_id || !editing.safeguard_asset)) {
+          setError("AccountId and Asset are required for a Safeguard profile");
+          setSaving(false);
+          return;
+        }
+        if (
+          editing.original_kind === "safeguard" &&
+          !isSafeguard &&
+          (!editing.username || !editing.password)
+        ) {
+          setError(
+            "Username and password are required when converting a Safeguard profile to local"
+          );
+          setSaving(false);
+          return;
+        }
         await updateCredentialProfile(editing.id, {
           label: editing.label,
           username: editing.username || undefined,
           password: editing.password || undefined,
           ttl_hours: editing.ttl_hours,
           extended_expiry: editing.extended_expiry,
+          kind: editing.kind,
           safeguard_account_id: editing.safeguard_account_id,
           safeguard_asset: editing.safeguard_asset,
         });
@@ -961,6 +978,7 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
                                 ttl_hours: profile.ttl_hours,
                                 extended_expiry: profile.extended_expiry,
                                 kind: profile.kind ?? "local",
+                                original_kind: profile.kind ?? "local",
                                 safeguard_account_id: profile.safeguard_account_id,
                                 safeguard_asset: profile.safeguard_asset,
                               });

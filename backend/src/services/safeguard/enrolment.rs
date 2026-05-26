@@ -124,9 +124,8 @@ pub async fn consume(pool: &PgPool, submitted: &str) -> Result<Uuid, AppError> {
     .fetch_optional(pool)
     .await?;
 
-    row.map(|(uid,)| uid).ok_or_else(|| {
-        AppError::Validation("Invalid or expired sign-in code.".into())
-    })
+    row.map(|(uid,)| uid)
+        .ok_or_else(|| AppError::Validation("Invalid or expired sign-in code.".into()))
 }
 
 /// Delete codes whose TTL has long elapsed. Called from the existing

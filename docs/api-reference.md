@@ -1713,6 +1713,76 @@ left** badge on the sign-in card.
 When no token is present, `signed_in` is `false` and `expires_at`
 is `null`.
 
+#### `POST /api/user/safeguard/signin/start` (v1.10.2)
+
+Mint a one-shot enrolment code for the authenticated caller. The
+code is rendered into the frontend's PowerShell snippet so the
+Safeguard token can be POSTed back to Strata without manual JWT
+copy/paste.
+
+- Auth required: **yes**
+- CSRF required: **yes**
+- Rate limit: **5 mints/minute per user**
+- Code lifetime: **5 minutes**
+- Code format: 8-char Crockford base32, displayed as `XXXX-XXXX`
+
+**Body** — none.
+
+**Response** `200 OK`
+
+```json
+{
+  "code": "FW9Q-644S",
+  "expires_at": "2026-05-26T17:25:00Z"
+}
+```
+
+**Error** `400 Bad Request`
+
+- `"Safeguard JIT browser sign-in is not enabled."` when Safeguard is
+  disabled or running in A2A-only mode.
+- `"Too many sign-in attempts. Wait a minute and try again."` when
+  the per-user mint cap is exceeded.
+
+#### `POST /api/safeguard/enrol` (v1.10.2)
+
+Unauthenticated enrol endpoint consumed by the PowerShell snippet.
+The one-shot code is the authenticator: it is user-bound at mint
+time, single-use, and expires after 5 minutes.
+
+- Auth required: **no** (code-authenticated)
+- CSRF required: **no** (public route)
+- Success semantics: atomically consumes the code and stores token
+  against the bound `user_id` in `safeguard_user_tokens`
+
+**Body**
+
+```json
+{
+  "code": "FW9Q-644S",
+  "token": "<safeguard-api-token>",
+  "expires_in_seconds": 900
+}
+```
+
+`expires_in_seconds` is optional; default 900, clamped to `60..86400`.
+
+**Response** `200 OK`
+
+```json
+{
+  "signed_in": true,
+  "expires_at": "2026-05-26T17:34:12Z"
+}
+```
+
+**Error** `400 Bad Request`
+
+- `"token is required"` when token is empty.
+- `"Invalid or expired sign-in code."` for all code-failure paths
+  (unknown, malformed, expired, already-used), intentionally uniform
+  to prevent code-state probing.
+
 #### `POST /api/user/safeguard/token`
 
 Submit a Safeguard API token freshly minted from
@@ -1738,10 +1808,15 @@ stored in `safeguard_user_tokens` keyed on the calling user's
 
 #### `DELETE /api/user/safeguard/token`
 
-Eagerly purge the calling user's stored token (sign-out). Returns
-`204 No Content`. The user's existing cached passwords (if any)
-are **not** evicted by this call — they remain valid until their
-own `expires_at`.
+Eagerly purge the calling user's stored token (sign-out). The user's
+existing cached passwords (if any) are **not** evicted by this call —
+they remain valid until their own `expires_at`.
+
+**Response** `200 OK`
+
+```json
+{ "signed_in": false }
+```
 
 #### `POST /api/user/safeguard/bulk-checkout`
 

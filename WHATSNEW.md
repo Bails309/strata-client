@@ -17,7 +17,14 @@ The **Safeguard sign-in card** on the Credentials page now uses **one-shot enrol
   Operators paste this once, the PowerShell flow handles `Connect-Safeguard`, and `Invoke-RestMethod` automatically posts the resulting token back to Strata.
 - **Live countdown timer**: The modal displays a countdown (MM:SS) showing how much time remains before the code window expires. When the window closes, operators can click "Get a new code" to mint a fresh code.
 - **Auto-close polling**: While the modal is open, the UI polls `/api/user/safeguard/status` every 2 seconds. When `signed_in=true`, the modal automatically closes and clears the enrolment state.
-- **Fallback manual paste**: If the PowerShell paste fails for any reason, operators can click "Having trouble?" to toggle a text field, paste the bearer token directly (old v1.10.0 flow), and submit via the button. The fallback uses the existing `/api/user/safeguard/submit` endpoint.
+- **Fallback manual paste**: If the PowerShell paste fails for any reason, operators can click "Having trouble?" to toggle a text field, paste the bearer token directly (old v1.10.0 flow), and submit via the button. The fallback uses the existing `/api/user/safeguard/token` endpoint.
+
+## Security and operational guidance
+
+- **No cross-user race assignment**: Enrolment code consumption is atomic (`used_at IS NULL` + `expires_at > now()` + `RETURNING user_id`) and stores the token for the `user_id` bound at mint time. Concurrent POSTs cannot cause one user's token to land on another user by race.
+- **Leak model remains important**: The enrolment code itself is an authenticator. If a code leaks before first consume, a first-writer attacker can submit a token for that bound user. This is handled as bearer-material protection rather than a route-level race defect.
+- **Uniform rejection response**: Unknown, expired, malformed, and already-used codes all return `Invalid or expired sign-in code.` so callers cannot probe code state.
+- **TLS trust requirement**: In production, ensure workstation trust for the Strata certificate chain. Bypassing validation with PowerShell `-SkipCertificateCheck` is suitable only for local troubleshooting and materially weakens MITM resistance.
 
 ## Backend implementation
 

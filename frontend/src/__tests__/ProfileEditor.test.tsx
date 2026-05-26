@@ -46,6 +46,7 @@ function renderEditor(opts: {
   activeCheckouts?: CheckoutRequest[];
   allCheckouts?: CheckoutRequest[];
   saving?: boolean;
+  safeguardEnabled?: boolean;
   setEditing?: (p: EditingProfile | null) => void;
   onSave?: () => void;
   onLinkCheckout?: (profileId: string, checkoutId: string | null) => Promise<void>;
@@ -75,6 +76,7 @@ function renderEditor(opts: {
         isCheckoutExpired={isCheckoutExpired}
         getTimeRemaining={(d) => (d ? "1h 0m" : "—")}
         formatDateTime={(d) => (d ? "2026-01-01 12:00" : "—")}
+        safeguardEnabled={opts.safeguardEnabled}
       />
     ),
   };
@@ -93,6 +95,17 @@ describe("ProfileEditor", () => {
     renderEditor({ editing: { ...baseEditing, id: "p1", label: "Existing" } });
     expect(screen.getByText("Edit Profile")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update" })).toBeInTheDocument();
+  });
+
+  it("shows Credential Source selector for existing profile when Safeguard is enabled", () => {
+    renderEditor({
+      editing: { ...baseEditing, id: "p1", label: "Existing", kind: "local" },
+      safeguardEnabled: true,
+    });
+    expect(screen.getByText("Credential Source")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Local — username \+ password/i })
+    ).toBeInTheDocument();
   });
 
   it("updates label via setEditing on input change", async () => {

@@ -166,7 +166,7 @@ export default function SafeguardSigninCard({
     // Use the page origin so the rendered snippet works regardless
     // of subpath / custom port / split DNS.
     () => `${window.location.origin}/api/safeguard/enrol`,
-    [],
+    []
   );
 
   const psSnippet = useMemo(() => {
@@ -241,12 +241,7 @@ export default function SafeguardSigninCard({
               Sign out
             </button>
           )}
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleStart}
-            disabled={busy}
-          >
+          <button type="button" className="btn btn-primary" onClick={handleStart} disabled={busy}>
             {status.signed_in ? "Refresh token" : "Sign in"}
           </button>
         </div>

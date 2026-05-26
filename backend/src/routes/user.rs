@@ -733,12 +733,8 @@ pub async fn start_safeguard_signin(
     }
 
     let client_ip = crate::routes::auth::extract_client_ip(&headers);
-    let minted = crate::services::safeguard::enrolment::mint(
-        &db.pool,
-        user.id,
-        Some(&client_ip),
-    )
-    .await?;
+    let minted =
+        crate::services::safeguard::enrolment::mint(&db.pool, user.id, Some(&client_ip)).await?;
 
     crate::services::audit::log(
         &db.pool,
@@ -797,11 +793,7 @@ pub async fn enrol_safeguard_token(
     // Consume the code first — same uniform "invalid or expired"
     // error in every failure path so the caller can't fingerprint
     // unknown vs used vs expired.
-    let user_id = match crate::services::safeguard::enrolment::consume(
-        &db.pool, &body.code,
-    )
-    .await
-    {
+    let user_id = match crate::services::safeguard::enrolment::consume(&db.pool, &body.code).await {
         Ok(uid) => uid,
         Err(e) => {
             // Audit even the failure so a brute-force attempt shows
@@ -1398,6 +1390,8 @@ pub struct UpdateCredentialProfileRequest {
     #[serde(default)]
     pub extended_expiry: Option<bool>,
     #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
     pub safeguard_account_id: Option<String>,
     #[serde(default)]
     pub safeguard_asset: Option<String>,
@@ -1416,96 +1410,155 @@ pub async fn update_credential_profile(
     }
 
     let admin_max = cp_svc::admin_max_ttl_hours(&db.pool).await;
-    // The effective extended-expiry value for clamping the TTL is whatever
-    // the body sent, falling back to whatever's currently stored.
-    let extended_expiry = match body.extended_expiry {
-        Some(v) => v,
-        None => cp_svc::get_extended_expiry(&db.pool, profile_id).await?,
-    };
+    let current_kind = cp_svc::get_kind(&db.pool, profile_id)
+        .await?
+        .unwrap_or_else(|| "local".to_string());
+    let requested_kind = body.kind.as_deref().unwrap_or(current_kind.as_str());
+    let switching_to_safeguard = current_kind != "safeguard" && requested_kind == "safeguard";
+    let switching_to_local = current_kind != "local" && requested_kind == "local";
 
-    // If credentials are being updated, re-encrypt
-    if body.username.is_some() || body.password.is_some() {
-        let vault_cfg = {
-            let s = state.read().await;
-            s.config
-                .as_ref()
-                .and_then(|c| c.vault.clone())
-                .ok_or_else(|| AppError::Config("Vault not configured".into()))?
-        };
+    if requested_kind != "local" && requested_kind != "safeguard" {
+        return Err(AppError::Validation(
+            "kind must be 'local' or 'safeguard'".into(),
+        ));
+    }
 
-        // We need both username and password for re-encryption.
-        // If only one is provided, we must decrypt the existing to get the other.
-        let (username, password) = match (&body.username, &body.password) {
-            (Some(u), Some(p)) => (u.clone(), p.clone()),
-            _ => {
-                let existing = cp_svc::get_sealed(&db.pool, profile_id).await?;
-
-                let plaintext = vault::unseal(
-                    &vault_cfg,
-                    &existing.encrypted_dek,
-                    &existing.ciphertext,
-                    &existing.nonce,
+    if requested_kind == "safeguard" {
+        let account_id = body
+            .safeguard_account_id
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "safeguard_account_id is required for Safeguard profiles".into(),
                 )
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to decrypt existing credential profile: {e}");
-                    AppError::Validation("Existing profile data uses outdated encryption. To update this profile, please re-type both your Username and Password to securely overwrite it.".into())
-                })?;
-                let plain_str = String::from_utf8(plaintext).unwrap_or_default();
-                let parsed: serde_json::Value = serde_json::from_str(&plain_str)
-                    .unwrap_or_else(|_| json!({ "u": "", "p": plain_str }));
+            })?;
+        let asset = body
+            .safeguard_asset
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("safeguard_asset is required for Safeguard profiles".into())
+            })?;
 
-                let existing_u = parsed["u"].as_str().unwrap_or("").to_string();
-                let existing_p = parsed["p"].as_str().unwrap_or("").to_string();
-
-                (
-                    body.username.clone().unwrap_or(existing_u),
-                    body.password.clone().unwrap_or(existing_p),
-                )
-            }
-        };
-
-        let combined = serde_json::json!({ "u": username, "p": password });
-        let sealed_raw = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
-        let sealed = cp_svc::SealedPayload {
-            ciphertext: sealed_raw.ciphertext,
-            encrypted_dek: sealed_raw.encrypted_dek,
-            nonce: sealed_raw.nonce,
-        };
-
-        let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
-        cp_svc::update_sealed(
-            &db.pool,
-            profile_id,
-            &sealed,
-            ttl_hours,
-            extended_expiry,
-            body.label.as_deref(),
-        )
-        .await?;
-    } else {
-        // No credential change — update label and/or TTL and/or extended flag.
+        // Safeguard TTL is always clamped against non-extended policy.
         let ttl_hours = body
             .ttl_hours
-            .map(|h| resolve_profile_ttl(Some(h), admin_max, extended_expiry));
+            .map(|h| resolve_profile_ttl(Some(h), admin_max, false));
         cp_svc::update_metadata(
             &db.pool,
             profile_id,
             body.label.as_deref(),
             ttl_hours,
-            body.extended_expiry,
+            Some(false),
         )
         .await?;
-    }
 
-    // Safeguard targets (no-op when the profile is `kind='local'`).
-    cp_svc::update_safeguard_target(
-        &db.pool,
-        profile_id,
-        body.safeguard_account_id.as_deref(),
-        body.safeguard_asset.as_deref(),
-    )
-    .await?;
+        if switching_to_safeguard {
+            cp_svc::set_kind_safeguard(&db.pool, profile_id, account_id, asset).await?;
+        } else {
+            cp_svc::update_safeguard_target(&db.pool, profile_id, Some(account_id), Some(asset))
+                .await?;
+        }
+    } else {
+        // The effective extended-expiry value for clamping the TTL is whatever
+        // the body sent, falling back to whatever's currently stored.
+        let extended_expiry = match body.extended_expiry {
+            Some(v) => v,
+            None => cp_svc::get_extended_expiry(&db.pool, profile_id).await?,
+        };
+
+        // If converting safeguard->local, require explicit username+password
+        // because safeguard profiles do not carry a reusable local payload.
+        if switching_to_local
+            && (body.username.as_deref().unwrap_or("").trim().is_empty()
+                || body.password.as_deref().unwrap_or("").trim().is_empty())
+        {
+            return Err(AppError::Validation(
+                "username and password are required when converting a Safeguard profile to local"
+                    .into(),
+            ));
+        }
+
+        // If credentials are being updated, re-encrypt.
+        if body.username.is_some() || body.password.is_some() || switching_to_local {
+            let vault_cfg = {
+                let s = state.read().await;
+                s.config
+                    .as_ref()
+                    .and_then(|c| c.vault.clone())
+                    .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+            };
+
+            // We need both username and password for re-encryption.
+            // If only one is provided, we must decrypt the existing to get the other.
+            let (username, password) = match (&body.username, &body.password) {
+                (Some(u), Some(p)) => (u.clone(), p.clone()),
+                _ => {
+                    let existing = cp_svc::get_sealed(&db.pool, profile_id).await?;
+
+                    let plaintext = vault::unseal(
+                        &vault_cfg,
+                        &existing.encrypted_dek,
+                        &existing.ciphertext,
+                        &existing.nonce,
+                    )
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("Failed to decrypt existing credential profile: {e}");
+                        AppError::Validation("Existing profile data uses outdated encryption. To update this profile, please re-type both your Username and Password to securely overwrite it.".into())
+                    })?;
+                    let plain_str = String::from_utf8(plaintext).unwrap_or_default();
+                    let parsed: serde_json::Value = serde_json::from_str(&plain_str)
+                        .unwrap_or_else(|_| json!({ "u": "", "p": plain_str }));
+
+                    let existing_u = parsed["u"].as_str().unwrap_or("").to_string();
+                    let existing_p = parsed["p"].as_str().unwrap_or("").to_string();
+
+                    (
+                        body.username.clone().unwrap_or(existing_u),
+                        body.password.clone().unwrap_or(existing_p),
+                    )
+                }
+            };
+
+            let combined = serde_json::json!({ "u": username, "p": password });
+            let sealed_raw = vault::seal(&vault_cfg, combined.to_string().as_bytes()).await?;
+            let sealed = cp_svc::SealedPayload {
+                ciphertext: sealed_raw.ciphertext,
+                encrypted_dek: sealed_raw.encrypted_dek,
+                nonce: sealed_raw.nonce,
+            };
+
+            let ttl_hours = resolve_profile_ttl(body.ttl_hours, admin_max, extended_expiry);
+            cp_svc::update_sealed(
+                &db.pool,
+                profile_id,
+                &sealed,
+                ttl_hours,
+                extended_expiry,
+                body.label.as_deref(),
+            )
+            .await?;
+        } else {
+            // No credential change — update label and/or TTL and/or extended flag.
+            let ttl_hours = body
+                .ttl_hours
+                .map(|h| resolve_profile_ttl(Some(h), admin_max, extended_expiry));
+            cp_svc::update_metadata(
+                &db.pool,
+                profile_id,
+                body.label.as_deref(),
+                ttl_hours,
+                body.extended_expiry,
+            )
+            .await?;
+        }
+
+        if switching_to_local {
+            cp_svc::set_kind_local(&db.pool, profile_id).await?;
+        }
+    }
 
     crate::services::audit::log(
         &db.pool,
@@ -1516,7 +1569,11 @@ pub async fn update_credential_profile(
     .await?;
 
     // Revoke active share links for connections using this profile
-    if body.username.is_some() || body.password.is_some() {
+    if body.username.is_some()
+        || body.password.is_some()
+        || switching_to_local
+        || switching_to_safeguard
+    {
         cp_svc::revoke_shares_for_profile(&db.pool, user.id, profile_id).await?;
     }
 
@@ -2737,6 +2794,20 @@ mod tests {
         assert_eq!(req.ttl_hours, Some(4));
         assert!(req.username.is_none());
         assert!(req.password.is_none());
+        assert!(req.kind.is_none());
+    }
+
+    #[test]
+    fn update_profile_request_deserializes_kind() {
+        let j = json!({
+            "kind": "safeguard",
+            "safeguard_account_id": "42",
+            "safeguard_asset": "prod-asset"
+        });
+        let req: UpdateCredentialProfileRequest = serde_json::from_value(j).unwrap();
+        assert_eq!(req.kind.as_deref(), Some("safeguard"));
+        assert_eq!(req.safeguard_account_id.as_deref(), Some("42"));
+        assert_eq!(req.safeguard_asset.as_deref(), Some("prod-asset"));
     }
 
     // ── SetMappingRequest ──────────────────────────────────────────────

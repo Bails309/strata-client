@@ -17,6 +17,17 @@ import FileBrowser from "./FileBrowser";
 import QuickShare from "./QuickShare";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
 
+// Modern flat checkbox: borderless until checked, accent-filled with a crisp
+// check glyph drawn via `:after`. Strips native chrome with `appearance-none`
+// so the popover stays on-brand across Chromium / Firefox / Safari.
+const MODERN_CHECKBOX_CLASS =
+  "appearance-none w-4 h-4 shrink-0 rounded-[5px] border border-white/25 bg-white/5 " +
+  "hover:border-white/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-light/60 " +
+  "checked:bg-accent-light checked:border-accent-light transition-colors cursor-pointer relative " +
+  "checked:after:content-[''] checked:after:absolute checked:after:left-[4px] checked:after:top-[0px] " +
+  "checked:after:w-[5px] checked:after:h-[10px] checked:after:border-r-[2px] checked:after:border-b-[2px] " +
+  "checked:after:border-white checked:after:rotate-45";
+
 export default function SessionBar() {
   const {
     sessions,
@@ -704,7 +715,7 @@ export default function SessionBar() {
                             type="checkbox"
                             checked={mpEnabled}
                             onChange={(e) => setMpEnabled(e.target.checked)}
-                            className="accent-accent-light"
+                            className={MODERN_CHECKBOX_CLASS}
                           />
                           <span className="font-medium">Multiplayer (co-pilot)</span>
                           <span className="text-txt-secondary text-[0.6rem]">
@@ -732,7 +743,7 @@ export default function SessionBar() {
                                 type="checkbox"
                                 checked={mpChat}
                                 onChange={(e) => setMpChat(e.target.checked)}
-                                className="accent-accent-light"
+                                className={MODERN_CHECKBOX_CLASS}
                               />
                             </label>
                             <label className="flex items-center justify-between gap-2 cursor-pointer">
@@ -741,7 +752,7 @@ export default function SessionBar() {
                                 type="checkbox"
                                 checked={mpAudio}
                                 onChange={(e) => setMpAudio(e.target.checked)}
-                                className="accent-accent-light"
+                                className={MODERN_CHECKBOX_CLASS}
                               />
                             </label>
                           </div>

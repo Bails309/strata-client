@@ -1832,6 +1832,15 @@ export const submitSafeguardToken = (api_token: string, expires_in_seconds?: num
 export const clearSafeguardToken = () =>
   request<{ signed_in: false }>("/user/safeguard/token", { method: "DELETE" });
 
+/** Mint a one-shot Safeguard sign-in code so the rendered PowerShell
+ * snippet can auto-POST `$SGToken` back to Strata. The code is
+ * single-use, expires in 5 minutes, and is bound to the calling
+ * user_id. */
+export const startSafeguardSignin = () =>
+  request<{ code: string; expires_at: string }>("/user/safeguard/signin/start", {
+    method: "POST",
+  });
+
 // -- Safeguard bulk pre-checkout -------------------------------------
 export interface SafeguardCachedStatus {
   profile_id: string;

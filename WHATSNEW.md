@@ -1,3 +1,49 @@
+# What's New in v1.10.2
+
+> **Patch release: Safeguard automated token enrolment via one-shot codes.** The **Safeguard sign-in** workflow is enhanced with **automated token enrolment**, eliminating the manual copy-paste step. Operators now sign in via the RSTS browser flow and the token is automatically submitted to Strata using **one-shot enrolment codes** (8-char Crockford base-32, 5-minute TTL, single-use, rate-limited 5/min/user). The **Safeguard sign-in card** on the Credentials page renders a PowerShell snippet with an embedded enrolment code ready to paste; the snippet calls `Invoke-RestMethod` to POST the code + bearer token to `/api/safeguard/enrol`, which validates, consumes, seals, and stores the token. The UI displays a live countdown timer and polls `/api/user/safeguard/status` to auto-close when sign-in completes. A fallback text field with manual paste (toggled via "Having trouble?" button) is available for operators who need it.
+
+## Automated Safeguard token submission via enrolment codes
+
+The **Safeguard sign-in card** on the Credentials page now uses **one-shot enrolment codes** to bridge the gap between the browser-based RSTS sign-in flow and automated token submission:
+
+- **Enrolment code generation** (`/api/user/safeguard/signin/start` — authed): Mints an 8-character Crockford base-32 code, stores it with the authed user's ID and a 5-minute expiry timestamp, and returns `{ code, expires_at }` to the frontend. Rate-limited to 5 mints per minute per user.
+- **Enrolment code consumption** (`/api/safeguard/enrol` — unauthed): Accepts `{ code, token, expires_in_seconds }`, atomically validates the code (not yet consumed, not expired, valid alphabet), looks up the bound user_id, seals the token via Vault, stores it in `safeguard_user_tokens` (same as the v1.10.0 manual paste flow), and logs audit events "safeguard.enrolment.consumed" (success) or "safeguard.enrolment.rejected" (failure). Returns uniform "Invalid or expired" errors for all failure paths (not used, expired, not found, malformed).
+- **Code cleanup** (daily background job): Automatically purges enrolment codes that expired >1 day ago.
+- **PowerShell auto-post snippet**: The UI renders a copy-paste snippet with the embedded enrolment code:
+  ```powershell
+  $SGToken = Connect-Safeguard -Appliance <appliance-fqdn> -IdentityProvider <idp-alias> -Verbose
+  Invoke-RestMethod -Method POST -Uri 'https://<strata-fqdn>/api/safeguard/enrol' -ContentType 'application/json' -Body (@{ code = '<code>'; token = $SGToken } | ConvertTo-Json)
+  ```
+  Operators paste this once, the PowerShell flow handles `Connect-Safeguard`, and `Invoke-RestMethod` automatically posts the resulting token back to Strata.
+- **Live countdown timer**: The modal displays a countdown (MM:SS) showing how much time remains before the code window expires. When the window closes, operators can click "Get a new code" to mint a fresh code.
+- **Auto-close polling**: While the modal is open, the UI polls `/api/user/safeguard/status` every 2 seconds. When `signed_in=true`, the modal automatically closes and clears the enrolment state.
+- **Fallback manual paste**: If the PowerShell paste fails for any reason, operators can click "Having trouble?" to toggle a text field, paste the bearer token directly (old v1.10.0 flow), and submit via the button. The fallback uses the existing `/api/user/safeguard/submit` endpoint.
+
+## Backend implementation
+
+- **Database**: New migration `070_safeguard_enrolment_codes.sql` creates the `safeguard_enrolment_codes` table (code TEXT PK, user_id UUID FK, expires_at TIMESTAMPTZ, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, created_ip TEXT) with indexes on (user_id) and (expires_at).
+- **Enrolment service** (`backend/src/services/safeguard/enrolment.rs`): Provides `mint()` (generates code, stores in DB, returns code + expiry), `consume()` (atomically validates, returns user_id, uniform error), and `purge_expired()` (cleanup job).
+- **Routes**: `/api/user/safeguard/signin/start` (authed POST) and `/api/safeguard/enrol` (unauthed POST) with audit logging.
+
+## Frontend implementation
+
+- **API** (`frontend/src/api.ts`): New `startSafeguardSignin()` function POSTs to `/user/safeguard/signin/start`, returns `{ code, expires_at }`.
+- **SafeguardSigninCard** (`frontend/src/pages/credentials/SafeguardSigninCard.tsx`): Complete rewrite with enrolment code flow, countdown timer, polling, and fallback toggles.
+- **Tests**: Updated `SafeguardSigninCard.test.tsx` with new test cases covering auto-post flow, code countdown, copy snippet, fallback toggle, manual paste, auto-close polling, code expiry, error handling.
+
+## Upgrade
+
+Drop-in upgrade from v1.10.0 or v1.10.1 — one new migration (idempotent), no behaviour changes to existing features. Rebuild the backend and frontend containers:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend frontend
+```
+
+---
+
 # What's New in v1.10.1
 
 > **Patch release: Safeguard sign-in snippet hardening and dependency hygiene.** A small follow-up to the v1.10.0 Safeguard JIT release. The copy-paste PowerShell bootstrap on the **Safeguard sign-in** card is now idempotent — re-running it on an already-onboarded workstation no longer triggers a redundant `Install-Module` download, and the snippet now sets the `RemoteSigned` execution policy scoped to `CurrentUser` before invoking `Connect-Safeguard`. The release also bundles a routine batch of low-risk Dependabot bumps: the nginx runtime base image used by the frontend container, four frontend dev-dependencies (`@types/react`, `@vitest/coverage-v8`, `vite`, `vitest`), and six pinned-by-SHA GitHub Actions used across CI, release, CodeQL, Trivy, and the stale-issue workflow. No runtime behaviour changes, no migrations, no configuration changes.

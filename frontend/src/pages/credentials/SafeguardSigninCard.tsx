@@ -1,10 +1,11 @@
 /* eslint-disable react-hooks/set-state-in-effect, react-hooks/purity --
    prop->state sync + render-time time formatting are intentional. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "../../contexts/SettingsContext";
 import {
   clearSafeguardToken,
   getSafeguardSigninStatus,
+  startSafeguardSignin,
   submitSafeguardToken,
   type SafeguardSigninStatus,
 } from "../../api";
@@ -13,17 +14,19 @@ import {
  * Per-user Safeguard sign-in card, shown on the Credentials page when
  * the admin has enabled Safeguard JIT in browser/RSTS mode.
  *
- * Flow (mirrors the existing PowerShell helper users already run for
- * Royal TS at Capita):
- *  1. User runs `Connect-Safeguard <fqdn> -Browser -IdentityProvider <alias>`
- *     in PowerShell, which opens a federated SSO browser window.
- *  2. After successful login, `$SGToken` holds a 15-minute Safeguard
- *     API access token.
- *  3. User pastes that token into Strata; we Vault-seal it server-side.
+ * Flow (auto-post, v1.10.2):
+ *  1. User clicks **Sign in** — frontend mints a one-shot enrolment
+ *     code via `POST /api/user/safeguard/signin/start`.
+ *  2. Card renders a PowerShell snippet that runs
+ *     `Connect-Safeguard -Browser`, then `Invoke-RestMethod`s
+ *     `{ code, token }` to `POST /api/safeguard/enrol`.
+ *  3. While the modal is open, the card polls
+ *     `GET /api/user/safeguard/status` every 2s. As soon as
+ *     `signed_in = true` the modal closes itself.
  *
- * No A2A registration on the Safeguard appliance is required — we
- * piggy-back on the same browser-SSO flow the Safeguard-PS module
- * uses.
+ * Fallback (collapsed under "Having trouble?"): the user can still
+ * paste the token by hand — same endpoint the v1.10.0 card used,
+ * unchanged.
  */
 export default function SafeguardSigninCard({
   onStatusChange,
@@ -42,21 +45,34 @@ export default function SafeguardSigninCard({
   const [tokenInput, setTokenInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [enrolment, setEnrolment] = useState<{
+    code: string;
+    expires_at: string;
+  } | null>(null);
+  const [showFallback, setShowFallback] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Suppresses the auto-close path when the user has cancelled the
+  // modal between two polling ticks.
+  const cancelled = useRef(false);
 
   const refresh = async () => {
     try {
       const s = await getSafeguardSigninStatus();
       setStatus(s);
+      return s;
     } catch {
       setStatus(null);
+      return null;
     } finally {
       setLoading(false);
     }
   };
 
   const refreshAndNotify = async () => {
-    await refresh();
+    const s = await refresh();
     onStatusChange?.();
+    return s;
   };
 
   useEffect(() => {
@@ -68,6 +84,55 @@ export default function SafeguardSigninCard({
     return () => clearInterval(t);
   }, []);
 
+  // Fast poll + countdown ticker, scoped to "modal open & waiting for
+  // the PS snippet to POST the token back". Polls /status every 2s;
+  // closes the modal as soon as the backend reports the token landed.
+  useEffect(() => {
+    if (!showSignin || !enrolment) return;
+    cancelled.current = false;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    const poll = setInterval(async () => {
+      const s = await refresh();
+      if (cancelled.current) return;
+      if (s?.signed_in) {
+        setShowSignin(false);
+        setEnrolment(null);
+        setTokenInput("");
+        setShowFallback(false);
+        onStatusChange?.();
+      }
+    }, 2000);
+    return () => {
+      clearInterval(tick);
+      clearInterval(poll);
+    };
+  }, [showSignin, enrolment, onStatusChange]);
+
+  const handleStart = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const e = await startSafeguardSignin();
+      setEnrolment(e);
+      setTokenInput("");
+      setShowFallback(false);
+      setShowSignin(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to start sign-in");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancel = () => {
+    cancelled.current = true;
+    setShowSignin(false);
+    setEnrolment(null);
+    setTokenInput("");
+    setError("");
+    setShowFallback(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tokenInput.trim()) return;
@@ -77,6 +142,8 @@ export default function SafeguardSigninCard({
       await submitSafeguardToken(tokenInput.trim());
       setTokenInput("");
       setShowSignin(false);
+      setEnrolment(null);
+      setShowFallback(false);
       await refreshAndNotify();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to submit token");
@@ -95,16 +162,32 @@ export default function SafeguardSigninCard({
     }
   };
 
+  const enrolEndpoint = useMemo(
+    // Use the page origin so the rendered snippet works regardless
+    // of subpath / custom port / split DNS.
+    () => `${window.location.origin}/api/safeguard/enrol`,
+    [],
+  );
+
   const psSnippet = useMemo(() => {
     if (!status) return "";
     const fqdn = status.appliance_fqdn || "<appliance-fqdn>";
     const idp = status.idp_alias || "<idp-alias>";
-    // Safeguard-PS one-liner the user already has installed for the
-    // existing Royal TS workflow at Capita. `-NoSessionVariable` skips
-    // the module's global state pollution; `-NoWindowTitle` keeps the
-    // launcher quiet.
-    return `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser\nif (-not (Get-Module -ListAvailable -Name Safeguard-PS)) { Install-Module -Name Safeguard-PS -Scope CurrentUser -Force -AllowClobber }\n$SGToken = Connect-Safeguard ${fqdn} -Browser -IdentityProvider ${idp} -NoSessionVariable -NoWindowTitle\nSet-Clipboard $SGToken`;
-  }, [status]);
+    const code = enrolment?.code ?? "<click Sign in to get a code>";
+    // Backticks here are PowerShell line continuations, not JS template marks.
+    return [
+      "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser",
+      "if (-not (Get-Module -ListAvailable -Name Safeguard-PS)) {",
+      "  Install-Module -Name Safeguard-PS -Scope CurrentUser -Force -AllowClobber",
+      "}",
+      `$SGToken = Connect-Safeguard ${fqdn} -Browser -IdentityProvider ${idp} -NoSessionVariable -NoWindowTitle`,
+      "Invoke-RestMethod -Method POST `",
+      `  -Uri '${enrolEndpoint}' \``,
+      "  -ContentType 'application/json' `",
+      `  -Body (@{ code = '${code}'; token = $SGToken } | ConvertTo-Json) | Out-Null`,
+      "Write-Host '[OK] Strata sign-in complete. You can close this window.'",
+    ].join("\n");
+  }, [status, enrolment, enrolEndpoint]);
 
   // Hide entirely when JIT is disabled or admin chose A2A-only mode.
   if (loading) return null;
@@ -114,6 +197,11 @@ export default function SafeguardSigninCard({
   const minutesLeft = status.expires_at
     ? Math.max(0, Math.round((new Date(status.expires_at).getTime() - Date.now()) / 60_000))
     : 0;
+
+  const codeSecondsLeft = enrolment
+    ? Math.max(0, Math.round((new Date(enrolment.expires_at).getTime() - now) / 1000))
+    : 0;
+  const codeExpired = enrolment !== null && codeSecondsLeft <= 0;
 
   return (
     <section className="card animate-fade-in mb-4">
@@ -156,11 +244,7 @@ export default function SafeguardSigninCard({
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => {
-              setError("");
-              setTokenInput("");
-              setShowSignin(true);
-            }}
+            onClick={handleStart}
             disabled={busy}
           >
             {status.signed_in ? "Refresh token" : "Sign in"}
@@ -168,58 +252,107 @@ export default function SafeguardSigninCard({
         </div>
       </div>
 
-      {showSignin && (
-        <form onSubmit={handleSubmit} className="mt-4 space-y-3">
+      {showSignin && enrolment && (
+        <div className="mt-4 space-y-3">
           <div className="rounded-md border border-border/50 p-3 bg-bg-secondary/40 text-xs space-y-2">
-            <div className="font-semibold">1. Run this in PowerShell</div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-semibold">Run this in PowerShell</div>
+              {codeExpired ? (
+                <span className="badge badge-danger text-xs">Code expired</span>
+              ) : (
+                <span className="badge badge-info text-xs">
+                  Waiting for sign-in · {Math.floor(codeSecondsLeft / 60)}:
+                  {String(codeSecondsLeft % 60).padStart(2, "0")} left
+                </span>
+              )}
+            </div>
             <pre className="font-mono text-[11px] whitespace-pre-wrap break-all bg-bg-tertiary/60 rounded p-2 m-0">
               {psSnippet}
             </pre>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => navigator.clipboard.writeText(psSnippet)}
-            >
-              Copy snippet
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => navigator.clipboard.writeText(psSnippet)}
+              >
+                Copy snippet
+              </button>
+              {codeExpired && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleStart}
+                  disabled={busy}
+                >
+                  Get a new code
+                </button>
+              )}
+            </div>
             <div className="text-txt-secondary">
-              A browser window opens for federated sign-in. After it completes, your Safeguard API
-              token is copied to the clipboard.
+              A browser window opens for federated sign-in. After it completes, PowerShell sends
+              your token back to Strata automatically — this card will flip to{" "}
+              <strong>Signed in</strong> within a couple of seconds.
             </div>
           </div>
 
-          <div className="form-group !mb-0">
-            <label htmlFor="sg-token-paste">2. Paste the token from PowerShell ($SGToken)</label>
-            <textarea
-              id="sg-token-paste"
-              rows={3}
-              value={tokenInput}
-              onChange={(e) => setTokenInput(e.target.value)}
-              placeholder="eyJ... (long base64 string)"
-              className="font-mono text-[11px]"
-              autoComplete="off"
-              spellCheck={false}
-            />
+          <div className="text-xs">
+            <button
+              type="button"
+              className="text-txt-secondary underline decoration-dotted hover:text-txt-primary"
+              onClick={() => setShowFallback((v) => !v)}
+            >
+              {showFallback ? "Hide manual paste" : "Having trouble? Paste the token manually"}
+            </button>
           </div>
+
+          {showFallback && (
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <div className="form-group !mb-0">
+                <label htmlFor="sg-token-paste">
+                  Paste the value of <code className="text-[11px]">$SGToken</code> from PowerShell
+                </label>
+                <textarea
+                  id="sg-token-paste"
+                  rows={3}
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  placeholder="eyJ... (long base64 string)"
+                  className="font-mono text-[11px]"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={busy || !tokenInput.trim()}
+                >
+                  {busy ? "Submitting…" : "Submit token"}
+                </button>
+              </div>
+            </form>
+          )}
 
           {error && (
             <div className="rounded-md px-3 py-2 text-xs bg-danger/10 text-danger">{error}</div>
           )}
 
-          <div className="flex gap-2 justify-end">
+          <div className="flex justify-end">
             <button
               type="button"
-              className="btn btn-secondary"
-              onClick={() => setShowSignin(false)}
+              className="btn btn-secondary btn-sm"
+              onClick={handleCancel}
               disabled={busy}
             >
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={busy || !tokenInput.trim()}>
-              {busy ? "Submitting…" : "Submit token"}
-            </button>
           </div>
-        </form>
+        </div>
+      )}
+
+      {error && !showSignin && (
+        <div className="rounded-md px-3 py-2 mt-3 text-xs bg-danger/10 text-danger">{error}</div>
       )}
     </section>
   );

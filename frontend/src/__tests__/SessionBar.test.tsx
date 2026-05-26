@@ -56,6 +56,7 @@ function defaultManagerMock(overrides = {}) {
     closeSession: vi.fn(),
     createSession: vi.fn() as any,
     getSession: vi.fn(),
+    updateSession: vi.fn(),
     tiledSessionIds: [],
     setTiledSessionIds: vi.fn(),
     focusedSessionIds: [],

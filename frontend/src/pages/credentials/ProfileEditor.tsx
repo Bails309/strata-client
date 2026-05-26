@@ -219,7 +219,13 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                   type="password"
                   value={editing.password}
                   onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-                  placeholder={switchingFromSafeguardToLocal ? "Enter password" : editing.id ? "(unchanged)" : "Enter password"}
+                  placeholder={
+                    switchingFromSafeguardToLocal
+                      ? "Enter password"
+                      : editing.id
+                        ? "(unchanged)"
+                        : "Enter password"
+                  }
                   autoComplete="new-password"
                 />
               </div>

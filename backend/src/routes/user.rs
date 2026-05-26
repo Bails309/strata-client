@@ -1445,8 +1445,14 @@ pub async fn update_credential_profile(
         let ttl_hours = body
             .ttl_hours
             .map(|h| resolve_profile_ttl(Some(h), admin_max, false));
-        cp_svc::update_metadata(&db.pool, profile_id, body.label.as_deref(), ttl_hours, Some(false))
-            .await?;
+        cp_svc::update_metadata(
+            &db.pool,
+            profile_id,
+            body.label.as_deref(),
+            ttl_hours,
+            Some(false),
+        )
+        .await?;
 
         if switching_to_safeguard {
             cp_svc::set_kind_safeguard(&db.pool, profile_id, account_id, asset).await?;
@@ -1563,7 +1569,11 @@ pub async fn update_credential_profile(
     .await?;
 
     // Revoke active share links for connections using this profile
-    if body.username.is_some() || body.password.is_some() || switching_to_local || switching_to_safeguard {
+    if body.username.is_some()
+        || body.password.is_some()
+        || switching_to_local
+        || switching_to_safeguard
+    {
         cp_svc::revoke_shares_for_profile(&db.pool, user.id, profile_id).await?;
     }
 

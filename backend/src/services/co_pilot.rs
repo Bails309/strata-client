@@ -230,6 +230,14 @@ pub enum CoPilotMsg {
         /// Departing participant.
         pid: Uuid,
     },
+
+    /// Server → all, when the host's underlying session has ended.
+    /// Participants should treat this as a terminal frame — the server
+    /// will close the WebSocket immediately after fan-out.
+    SessionEnded {
+        /// Short human-readable reason ("Host ended session", etc.).
+        reason: String,
+    },
 }
 
 fn default_protocol_version() -> u16 {
@@ -276,6 +284,10 @@ impl CoPilotMsg {
                 check_len("candidate", candidate, MAX_ICE_CANDIDATE_LEN)?;
             }
             Self::Leave { .. } => {}
+            Self::SessionEnded { reason } => {
+                check_len("reason", reason, MAX_REVOKE_REASON_LEN)?;
+                check_no_control("reason", reason)?;
+            }
         }
         Ok(())
     }

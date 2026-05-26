@@ -391,6 +391,7 @@ pub async fn ws_shared_tunnel(
     let multiplayer = share.multiplayer;
     let pid_opt: Option<Uuid> = qs.get("pid").and_then(|v| Uuid::parse_str(v).ok());
     let room_for_input = session.co_pilot_room.clone();
+    let session_for_end = session.clone();
 
     Ok(ws
         .protocols(["guacamole"])
@@ -464,6 +465,16 @@ pub async fn ws_shared_tunnel(
 
             loop {
                 tokio::select! {
+                    // Host's session ended — notify and disconnect.
+                    // Sends a Guacamole `disconnect` opcode so the
+                    // client-side tunnel reports a clean close rather
+                    // than a network error.
+                    _ = session_for_end.ended() => {
+                        let _ = socket
+                            .send(Message::Text("0.10.disconnect;".into()))
+                            .await;
+                        break;
+                    }
                     result = rx.recv() => {
                         match result {
                             Ok(frame) => {
@@ -763,13 +774,10 @@ pub async fn ws_copilot_room_owner(
             AppError::NotFound("The owner's session is not currently active.".into())
         })?;
 
-    // Prefer the user's full name when present; fall back to username.
-    // The room sanitises and disambiguates the final display name.
-    let display_name = user
-        .full_name
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or(user.username.clone());
+    // Use the authenticated user's Strata username as the host's
+    // room display name. The room sanitises and disambiguates the
+    // final string.
+    let display_name = user.username.clone();
     let pool = db.pool.clone();
 
     Ok(ws.on_upgrade(move |socket| async move {
@@ -974,6 +982,21 @@ async fn copilot_room_loop(
 
     loop {
         tokio::select! {
+            // Host's session ended — fan out a terminal envelope so
+            // participants can render a "session ended" banner, then
+            // close the WS. Skipped for the owner's own loop (they
+            // initiated the end and their tab is closing anyway).
+            _ = session.ended() => {
+                if !is_owner {
+                    let env = CoPilotMsg::SessionEnded {
+                        reason: "Host ended session".to_string(),
+                    };
+                    if let Ok(json) = serde_json::to_string(&env) {
+                        let _ = socket.send(Message::Text(json.into())).await;
+                    }
+                }
+                break;
+            }
             env = fanout_rx.recv() => {
                 match env {
                     Ok(text) => {

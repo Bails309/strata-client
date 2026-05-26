@@ -38,6 +38,12 @@ export interface CoPilotRoomState {
   hasInput: boolean;
   /** Last fatal join error, if any. */
   joinError: string | null;
+  /**
+   * Reason string when the host has ended the underlying session.
+   * `null` while the session is still live; non-null means the WS
+   * has closed and the UI should show a terminal banner.
+   */
+  sessionEnded: string | null;
   /** `true` once the WS is open AND `Welcome` has been received. */
   ready: boolean;
 }
@@ -89,6 +95,7 @@ export function useCoPilotRoom(
   const [cursors, setCursors] = useState<Map<string, RemoteCursor>>(() => new Map());
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [sessionEnded, setSessionEnded] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -192,6 +199,10 @@ export function useCoPilotRoom(
           break;
         case "join_error":
           setJoinError(msg.reason);
+          break;
+        case "session_ended":
+          setSessionEnded(msg.reason || "Host ended session");
+          setReady(false);
           break;
         case "audio_offer":
         case "audio_answer":
@@ -297,6 +308,7 @@ export function useCoPilotRoom(
       chat,
       hasInput,
       joinError,
+      sessionEnded,
       ready,
     },
     { sendCursor, sendChat, claimInput, releaseInput, sendAudio, setAudioHandler },

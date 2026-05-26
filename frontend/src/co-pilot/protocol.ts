@@ -58,6 +58,9 @@ export type CoPilotMsg =
   | { type: "audio_answer"; pid: string; to: string; sdp: string }
   | { type: "ice"; pid: string; to: string; candidate: string }
   | { type: "leave"; pid: string }
+  // Server → all: the host's underlying session has ended. The WS
+  // will close immediately after this frame.
+  | { type: "session_ended"; reason: string }
   // Wire-only fatal — sent by the server before close on join failure.
   | { type: "join_error"; reason: "room_full" | "empty_name" | string };
 

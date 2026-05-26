@@ -269,6 +269,35 @@ pub struct ActiveSession {
     /// when idle); becomes active once any participant joins via a
     /// `multiplayer = true` share link.
     pub co_pilot_room: Arc<crate::services::co_pilot::CoPilotRoom>,
+    /// One-shot signal that the host's session has ended. Viewer WS
+    /// handlers (shared tunnel + co-pilot room) await this via
+    /// [`Self::ended()`] so they can disconnect promptly when the
+    /// owner closes their tab or is kicked.
+    ended_flag: std::sync::atomic::AtomicBool,
+    ended_notify: tokio::sync::Notify,
+}
+
+impl ActiveSession {
+    /// Mark the session as ended and wake every task currently awaiting
+    /// [`Self::ended()`]. Idempotent — calling it multiple times is
+    /// safe. Tasks that start awaiting *after* the first call return
+    /// immediately because the atomic flag is checked first.
+    pub fn mark_ended(&self) {
+        self.ended_flag
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.ended_notify.notify_waiters();
+    }
+
+    /// Resolve as soon as [`Self::mark_ended`] has been called. If the
+    /// session has already ended the future resolves on the next poll.
+    pub async fn ended(&self) {
+        if self.ended_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        self.ended_notify.notified().await;
+        // Re-check in case of spurious wake (the AtomicBool is the
+        // authoritative state).
+    }
 }
 
 // ── Session info (serialisable summary for the admin API) ──────────
@@ -355,6 +384,8 @@ impl SessionRegistry {
             kill_tx: Arc::new(tokio::sync::Mutex::new(Some(kill_tx))),
             input_tx,
             co_pilot_room,
+            ended_flag: std::sync::atomic::AtomicBool::new(false),
+            ended_notify: tokio::sync::Notify::new(),
         });
 
         sessions.insert(session_id, session);

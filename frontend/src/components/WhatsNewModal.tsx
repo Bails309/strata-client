@@ -29,6 +29,23 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.1",
+    subtitle:
+      "Patch release — Safeguard sign-in PowerShell snippet is now idempotent, plus routine dependency hygiene (nginx runtime base, frontend dev-deps, and pinned-by-SHA GitHub Actions)",
+    sections: [
+      {
+        title: "Idempotent Safeguard sign-in PowerShell snippet",
+        description:
+          "The copy-paste PowerShell helper rendered by the Safeguard sign-in card on the Credentials page now wraps the Install-Module Safeguard-PS call in a Get-Module -ListAvailable guard and prefixes the snippet with Set-ExecutionPolicy RemoteSigned -Scope CurrentUser — matching the pattern Strata's other PowerShell helpers use. Operators who re-run the snippet at the start of every shift no longer pay the cost of a redundant module download against the PowerShell Gallery, and the Connect-Safeguard -Browser -IdentityProvider <alias> tail is unchanged so existing notes and runbooks keep working without edits.",
+      },
+      {
+        title: "Dependency hygiene",
+        description:
+          "frontend/Dockerfile rebases onto nginx:1.31.1-alpine (pinned by digest) to pick up the latest upstream Alpine package security patches. Four frontend dev-dependencies are rolled forward lockfile-only — @types/react 19.2.14 → 19.2.15, @vitest/coverage-v8 4.1.6 → 4.1.7, vite 8.0.13 → 8.0.14, and vitest 4.1.6 → 4.1.7. Six pinned-by-SHA GitHub Actions are bumped per the repo's pinning policy — docker/setup-buildx-action v4.0.0 → v4.1.0, docker/build-push-action v7.1.0 → v7.2.0, docker/login-action v4.1.0 → v4.2.0, docker/metadata-action v6.0.0 → v6.1.0, github/codeql-action v4.35.5 → v4.36.0, and actions/stale v10.2.0 → v10.3.0. No runtime behaviour changes, no migrations, no configuration changes.",
+      },
+    ],
+  },
+  {
     version: "1.10.0",
     subtitle:
       "OneIdentity Safeguard JIT credential checkout — fetch privileged-account passwords from Safeguard at tunnel-open time with bulk checkout, per-user browser sign-in, A2A, optional Vault-sealed caching, and full hardening against every 8.x REST quirk",

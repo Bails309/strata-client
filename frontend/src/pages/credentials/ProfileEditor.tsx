@@ -103,7 +103,30 @@ export default function ProfileEditor(props: ProfileEditorProps) {
     };
   }, [safeguardEnabled, isSafeguard]);
 
-  const entitlementOptions = (entitlements ?? []).map((row) => {
+  // Build the set of (account_id|asset_id-or-asset_name) keys for
+  // Safeguard profiles that already exist for this user, so we can
+  // hide their entitlement rows from the picker. The currently-edited
+  // profile is intentionally excluded so its own row stays visible.
+  const claimedKeys = new Set<string>();
+  for (const p of profiles) {
+    if (editing.id && p.id === editing.id) continue;
+    if (p.kind !== "safeguard") continue;
+    const acctId = p.safeguard_account_id?.trim();
+    const asset = p.safeguard_asset?.trim();
+    if (!acctId || !asset) continue;
+    claimedKeys.add(`${acctId}|${asset}`);
+  }
+  const isRowClaimed = (row: SafeguardEntitledAccount) => {
+    const acctId = row.account_id;
+    // A stored profile may reference the asset by its numeric AssetId
+    // or by its human-readable AssetName — check both forms.
+    return (
+      claimedKeys.has(`${acctId}|${row.asset_id}`) ||
+      (!!row.asset_name && claimedKeys.has(`${acctId}|${row.asset_name}`))
+    );
+  };
+  const availableEntitlements = (entitlements ?? []).filter((row) => !isRowClaimed(row));
+  const entitlementOptions = availableEntitlements.map((row) => {
     const acct = row.account_name?.trim() || `account#${row.account_id}`;
     const asset = row.asset_name?.trim() || `asset#${row.asset_id}`;
     const domain = row.account_domain_name?.trim();
@@ -113,14 +136,16 @@ export default function ProfileEditor(props: ProfileEditorProps) {
       label: labelText,
     };
   });
+  const allEntitlementsClaimed =
+    entitlements !== null && entitlements.length > 0 && availableEntitlements.length === 0;
   const selectedEntitlementValue =
     editing.safeguard_account_id && editing.safeguard_asset
-      ? entitlements?.find(
+      ? availableEntitlements.find(
           (r) =>
             r.account_id === editing.safeguard_account_id &&
             (r.asset_id === editing.safeguard_asset || r.asset_name === editing.safeguard_asset)
         )
-        ? `${editing.safeguard_account_id}|${entitlements?.find((r) => r.account_id === editing.safeguard_account_id)?.asset_id ?? editing.safeguard_asset}`
+        ? `${editing.safeguard_account_id}|${availableEntitlements.find((r) => r.account_id === editing.safeguard_account_id)?.asset_id ?? editing.safeguard_asset}`
         : ""
       : "";
 
@@ -251,6 +276,11 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                   <p className="text-txt-tertiary text-xs">
                     Safeguard did not return any entitled accounts for your user. Enter the
                     AccountId and Asset manually below.
+                  </p>
+                ) : allEntitlementsClaimed ? (
+                  <p className="text-txt-tertiary text-xs">
+                    Every Safeguard account you are entitled to already has a credential profile.
+                    Edit an existing profile, or enter an AccountId and Asset manually below.
                   </p>
                 ) : (
                   <>

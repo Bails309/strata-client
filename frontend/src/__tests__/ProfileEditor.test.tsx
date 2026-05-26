@@ -337,9 +337,7 @@ describe("ProfileEditor", () => {
       editing: { ...baseEditing, kind: "safeguard" },
       safeguardEnabled: true,
     });
-    expect(
-      await screen.findByText(/Could not load your Safeguard accounts/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load your Safeguard accounts/i)).toBeInTheDocument();
   });
 
   it("autofills account/asset/label when an entitlement is selected", async () => {
@@ -372,5 +370,106 @@ describe("ProfileEditor", () => {
         label: "jsmith@corp.local",
       })
     );
+  });
+
+  it("hides entitlement rows that are already claimed by other profiles", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+      {
+        account_id: "43",
+        account_name: "asmith",
+        account_domain_name: "corp.local",
+        asset_id: "8",
+        asset_name: "db-prod-02",
+      },
+    ]);
+    // An existing profile already claims account 42 / asset 7 (by name).
+    const claimed = makeProfile({
+      id: "p-claimed",
+      kind: "safeguard",
+      safeguard_account_id: "42",
+      safeguard_asset: "db-prod-01",
+    });
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+      profiles: [claimed],
+    });
+    const trigger = await screen.findByRole("button", {
+      name: /Select a Safeguard account/i,
+    });
+    await userEvent.click(trigger);
+    // Only the un-claimed row should be offered.
+    expect(await screen.findByText(/asmith@corp\.local — db-prod-02/i)).toBeInTheDocument();
+    expect(screen.queryByText(/jsmith@corp\.local — db-prod-01/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the currently-edited profile's own entitlement visible", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+    ]);
+    // The same profile we're editing claims this row — it should
+    // still appear (and be the selected value) so the user can see
+    // their existing choice.
+    const editingProfile = makeProfile({
+      id: "p-me",
+      kind: "safeguard",
+      safeguard_account_id: "42",
+      safeguard_asset: "db-prod-01",
+    });
+    renderEditor({
+      editing: {
+        ...baseEditing,
+        id: editingProfile.id,
+        kind: "safeguard",
+        safeguard_account_id: "42",
+        safeguard_asset: "db-prod-01",
+      },
+      safeguardEnabled: true,
+      profiles: [editingProfile],
+    });
+    expect(
+      await screen.findByRole("button", { name: /jsmith@corp\.local — db-prod-01/i })
+    ).toBeInTheDocument();
+  });
+
+  it("shows 'all entitlements claimed' hint when every row is already taken", async () => {
+    listSafeguardAccountsMock.mockResolvedValueOnce([
+      {
+        account_id: "42",
+        account_name: "jsmith",
+        account_domain_name: "corp.local",
+        asset_id: "7",
+        asset_name: "db-prod-01",
+      },
+    ]);
+    const claimed = makeProfile({
+      id: "p-claimed",
+      kind: "safeguard",
+      safeguard_account_id: "42",
+      safeguard_asset: "db-prod-01",
+    });
+    renderEditor({
+      editing: { ...baseEditing, kind: "safeguard" },
+      safeguardEnabled: true,
+      profiles: [claimed],
+    });
+    expect(
+      await screen.findByText(
+        /Every Safeguard account you are entitled to already has a credential profile/i
+      )
+    ).toBeInTheDocument();
   });
 });

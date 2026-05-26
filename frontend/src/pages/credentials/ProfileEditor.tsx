@@ -12,6 +12,8 @@ export interface EditingProfile {
   friendly_name?: string;
   /** "local" (default) or "safeguard" (JIT). */
   kind?: "local" | "safeguard";
+  /** Original kind when editing an existing profile. */
+  original_kind?: "local" | "safeguard";
   safeguard_account_id?: string;
   safeguard_asset?: string;
 }
@@ -55,6 +57,8 @@ export default function ProfileEditor(props: ProfileEditorProps) {
 
   const kind = editing.kind ?? "local";
   const isSafeguard = kind === "safeguard";
+  const switchingFromSafeguardToLocal =
+    !!editing.id && editing.original_kind === "safeguard" && !isSafeguard;
 
   const currentProfile = editing.id ? profiles.find((p) => p.id === editing.id) : null;
   const editLinkedCheckout = currentProfile?.checkout_id
@@ -80,8 +84,8 @@ export default function ProfileEditor(props: ProfileEditorProps) {
           autoFocus
         />
       </div>
-      {/* Kind selector — only shown for new profiles when Safeguard is configured. */}
-      {!editing.id && safeguardEnabled && !editing.managed_ad_dn ? (
+      {/* Kind selector — shown whenever Safeguard is configured, except managed profiles. */}
+      {safeguardEnabled && !editing.managed_ad_dn ? (
         <div className="form-group">
           <label htmlFor="prof-kind">Credential Source</label>
           <Select
@@ -195,7 +199,13 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                   id="prof-username"
                   value={editing.username}
                   onChange={(e) => setEditing({ ...editing, username: e.target.value })}
-                  placeholder={editing.id ? "(unchanged)" : "sAMAccountName (e.g. jsmith)"}
+                  placeholder={
+                    switchingFromSafeguardToLocal
+                      ? "sAMAccountName (e.g. jsmith)"
+                      : editing.id
+                        ? "(unchanged)"
+                        : "sAMAccountName (e.g. jsmith)"
+                  }
                   autoComplete="off"
                 />
                 <p className="text-txt-tertiary text-[0.6875rem] mt-1">
@@ -209,7 +219,7 @@ export default function ProfileEditor(props: ProfileEditorProps) {
                   type="password"
                   value={editing.password}
                   onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-                  placeholder={editing.id ? "(unchanged)" : "Enter password"}
+                  placeholder={switchingFromSafeguardToLocal ? "Enter password" : editing.id ? "(unchanged)" : "Enter password"}
                   autoComplete="new-password"
                 />
               </div>

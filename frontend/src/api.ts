@@ -1141,6 +1141,7 @@ export const updateCredentialProfile = (
     password?: string;
     ttl_hours?: number;
     extended_expiry?: boolean;
+    kind?: "local" | "safeguard";
     safeguard_account_id?: string;
     safeguard_asset?: string;
   }

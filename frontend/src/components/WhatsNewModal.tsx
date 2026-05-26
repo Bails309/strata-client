@@ -48,6 +48,11 @@ export const RELEASE_CARDS: ReleaseCard[] = [
         description:
           "The modal renders a copy-paste PowerShell snippet with the embedded enrolment code already filled in. The snippet calls Connect-Safeguard to authenticate against the RSTS appliance, then Invoke-RestMethod to POST the code + bearer token to /api/safeguard/enrol. A countdown timer displays remaining time before the code window closes; when the window expires, operators click Get a new code to mint a fresh one. While the modal is open, the UI polls every 2 seconds and auto-closes when signed_in=true.",
       },
+      {
+        title: "Security model and TLS guidance",
+        description:
+          "Code consume is atomic and user-bound: the first successful POST marks the code used and stores the token for the user attached at mint time, so concurrent submits do not cross-assign tokens between users. Invalid, expired, malformed, and already-used codes all return the same Invalid or expired error to prevent code-state probing. Operationally, production environments should keep TLS validation enabled and trust the Strata certificate chain on client workstations; SkipCertificateCheck-style bypasses are for local troubleshooting only.",
+      },
     ],
   },
   {

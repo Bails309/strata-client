@@ -733,12 +733,8 @@ pub async fn start_safeguard_signin(
     }
 
     let client_ip = crate::routes::auth::extract_client_ip(&headers);
-    let minted = crate::services::safeguard::enrolment::mint(
-        &db.pool,
-        user.id,
-        Some(&client_ip),
-    )
-    .await?;
+    let minted =
+        crate::services::safeguard::enrolment::mint(&db.pool, user.id, Some(&client_ip)).await?;
 
     crate::services::audit::log(
         &db.pool,
@@ -797,11 +793,7 @@ pub async fn enrol_safeguard_token(
     // Consume the code first — same uniform "invalid or expired"
     // error in every failure path so the caller can't fingerprint
     // unknown vs used vs expired.
-    let user_id = match crate::services::safeguard::enrolment::consume(
-        &db.pool, &body.code,
-    )
-    .await
-    {
+    let user_id = match crate::services::safeguard::enrolment::consume(&db.pool, &body.code).await {
         Ok(uid) => uid,
         Err(e) => {
             // Audit even the failure so a brute-force attempt shows

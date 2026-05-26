@@ -149,7 +149,9 @@ describe("SafeguardSigninCard", () => {
     // Fallback is initially hidden
     expect(screen.queryByPlaceholderText(/eyJ\.\.\./)).not.toBeInTheDocument();
     // Toggle it on
-    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Having trouble? Paste the token manually" })
+    );
     expect(screen.getByPlaceholderText(/eyJ\.\.\./)).toBeInTheDocument();
   });
 
@@ -170,7 +172,9 @@ describe("SafeguardSigninCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await flush();
     // Open fallback
-    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Having trouble? Paste the token manually" })
+    );
     const textarea = screen.getByPlaceholderText(/eyJ\.\.\./);
     fireEvent.change(textarea, { target: { value: "  manual-token  " } });
     fireEvent.click(screen.getByRole("button", { name: "Submit token" }));
@@ -240,7 +244,9 @@ describe("SafeguardSigninCard", () => {
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await flush();
-    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Having trouble? Paste the token manually" })
+    );
     const submit = screen.getByRole("button", { name: "Submit token" });
     expect(submit).toBeDisabled();
     // Even if we force submit, it should return early
@@ -270,7 +276,9 @@ describe("SafeguardSigninCard", () => {
     await flush();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await flush();
-    fireEvent.click(screen.getByRole("button", { name: "Having trouble? Paste the token manually" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Having trouble? Paste the token manually" })
+    );
     const textarea = screen.getByPlaceholderText(/eyJ\.\.\./);
     fireEvent.change(textarea, { target: { value: "invalid-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Submit token" }));

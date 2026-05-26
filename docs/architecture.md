@@ -846,21 +846,21 @@ backend/src/services/safeguard/
                        # load (eager-purge on expiry)
 ```
 
-| Layer                 | Responsibility                                                                                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.rs`           | Loads the singleton `safeguard_config` row, unseals A2A secrets via Vault, applies `"********"` mask semantics on PUT.                                        |
-| `enrolment.rs`        | v1.10.2 one-shot code bridge for browser sign-in auto-post: mint (5-minute TTL, 5/min/user cap), atomic consume (single-use), and expiry purge hook.          |
-| `user_token.rs`       | Per-user RSTS bearer storage in `safeguard_user_tokens`; Vault-sealed (ciphertext + per-row DEK + nonce). Expiry-aware accessor returns `None` after RSTS TTL. |
-| `client.rs`           | Bearer-aware `reqwest::Client` builder (system trust + optional CA + per-config TLS verify + optional A2A client identity), AccessRequests CRUD.              |
-| `password_cache.rs`   | Per-(user, profile) sealed plaintext cache with eager-purge on stale read.                                                                                    |
-| `mod.rs`              | Public surface: `jit_checkout(profile, user, ctx)`, `jit_checkin(profile, user, ctx)`, retry/preflight glue.                                                  |
+| Layer               | Responsibility                                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.rs`         | Loads the singleton `safeguard_config` row, unseals A2A secrets via Vault, applies `"********"` mask semantics on PUT.                                                                                                                                              |
+| `enrolment.rs`      | v1.10.2 one-shot code bridge for browser sign-in auto-post: mint (5-minute TTL, 5/min/user cap), atomic consume (single-use), and expiry purge hook.                                                                                                                |
+| `user_token.rs`     | Per-user RSTS bearer storage in `safeguard_user_tokens`; Vault-sealed (ciphertext + per-row DEK + nonce). Expiry-aware accessor returns `None` after RSTS TTL.                                                                                                      |
+| `client.rs`         | Bearer-aware `reqwest::Client` builder (system trust + optional CA + per-config TLS verify + optional A2A client identity), AccessRequests CRUD, and `list_password_entitlements` (v1.10.2 proxy for `Me/RequestEntitlements?wellKnownType=PasswordAccessRequest`). |
+| `password_cache.rs` | Per-(user, profile) sealed plaintext cache with eager-purge on stale read.                                                                                                                                                                                          |
+| `mod.rs`            | Public surface: `jit_checkout(profile, user, ctx)`, `jit_checkin(profile, user, ctx)`, retry/preflight glue.                                                                                                                                                        |
 
 ### Authentication modes
 
 `safeguard_config.auth_mode` selects between three modes:
 
 - **`per_user_browser`** — Each user runs `Connect-Safeguard -Browser
-  -IdentityProvider <alias>` from the Safeguard PowerShell module.
+-IdentityProvider <alias>` from the Safeguard PowerShell module.
   Since v1.10.2, Strata mints a one-shot enrolment code and embeds it
   in a copy-paste snippet that auto-POSTs `{ code, token }` to
   `/api/safeguard/enrol`; manual token paste remains as fallback. The
@@ -870,10 +870,10 @@ backend/src/services/safeguard/
   audit log.
 - **`a2a`** — Strata authenticates to the appliance as a single
   application identity using a Vault-sealed client certificate + key
-  + API key triple. Every checkout shows the "Strata" application
-  identity in the Safeguard audit log; Strata's own
-  `safeguard_checkout_audit` still attributes the row to the human
-  `user_id`.
+  - API key triple. Every checkout shows the "Strata" application
+    identity in the Safeguard audit log; Strata's own
+    `safeguard_checkout_audit` still attributes the row to the human
+    `user_id`.
 - **`hybrid`** (recommended default) — Prefers the per-user token
   when present, falls back to A2A when it isn't. Users who haven't
   signed in yet still get a working checkout against
@@ -891,6 +891,52 @@ short-lived one-shot code:
 
 Atomic consume ensures single-winner semantics under concurrency; a
 code cannot be successfully used twice.
+
+### v1.10.2 entitlement picker — `GET /api/user/safeguard/accounts`
+
+The credential profile editor (Credentials → New / Edit) renders an
+inline **Safeguard account picker** whenever the **Kind** selector is
+set to `safeguard`. The picker is backed by a new authed route in
+`backend/src/routes/user.rs::list_safeguard_accounts` that calls
+`client::list_password_entitlements(...)`, which in turn proxies the
+appliance's
+`GET /service/core/v4/Me/RequestEntitlements?wellKnownType=PasswordAccessRequest`
+endpoint using the caller's own Safeguard identity (per-user RSTS
+bearer when `auth_mode = per_user_browser`/`hybrid`, A2A identity when
+`auth_mode = a2a`). The deserializer tolerates both the nested
+8.x DTO (entitlements grouped by `Account`/`Asset` blocks) and the
+flat row shape some appliance versions return, then projects every
+row into a uniform `SafeguardEntitledAccount { account_id,
+account_name?, account_domain_name?, asset_id, asset_name?,
+asset_network_address? }` struct.
+
+Strata never enumerates other users' entitlements: the appliance
+itself filters the catalogue server-side based on the bearer Strata
+forwards, and the backend route never persists or cross-correlates
+the response. The frontend additionally hides any row that already
+backs an existing Safeguard profile owned by the same user
+(`isRowClaimed` predicate matches on `asset_id` or `asset_name`); when
+editing an existing profile, that profile's own row stays visible so
+it can be re-selected without abandoning the edit.
+
+### v1.10.2 in-place credential-profile kind switching
+
+`PUT /api/user/credential-profiles/:id` now accepts an optional
+`kind` field (`"local"` | `"safeguard"`). When the new kind differs
+from the row's current kind, the backend dispatches to
+`cp_svc::set_kind_safeguard(...)` or `cp_svc::set_kind_local(...)`
+inside a single transaction so a partially-converted row can never
+be observed by a concurrent reader. Switching to `safeguard` nulls
+the stored password ciphertext + DEK + nonce and populates the
+`safeguard_account_id` / `safeguard_asset` pointers; switching to
+`local` clears the Safeguard pointers and seals a fresh plaintext
+password via Vault envelope encryption. `expires_at` is recomputed
+via `resolve_profile_ttl` against the new kind's resolution path, so
+the Profiles list reflects the correct expiry semantics immediately.
+The profile's UUID and any connection mappings are preserved across
+the switch, so a misconfigured profile no longer has to be deleted
+and recreated (which would have evicted any per-user connection
+mapping referring to the old UUID).
 
 ### Data flow — `jit_checkout`
 
@@ -951,10 +997,10 @@ emit.
 The release verb is dispatched based on the workflow state in each
 candidate row:
 
-| Reported state                            | Verb used    | Fallback on 90114 |
-| ----------------------------------------- | ------------ | ----------------- |
-| `RequestAvailable`, `PendingApproval`     | `Cancel`     | try `CheckIn`     |
-| `PasswordCheckedOut`, `RequestCheckedOut` | `CheckIn`    | try `Cancel`      |
+| Reported state                            | Verb used                                 | Fallback on 90114 |
+| ----------------------------------------- | ----------------------------------------- | ----------------- |
+| `RequestAvailable`, `PendingApproval`     | `Cancel`                                  | try `CheckIn`     |
+| `PasswordCheckedOut`, `RequestCheckedOut` | `CheckIn`                                 | try `Cancel`      |
 | Anything else / unknown                   | `Cancel` then `CheckIn` until one accepts |
 
 The request body is the JSON-encoded string literal `"strata

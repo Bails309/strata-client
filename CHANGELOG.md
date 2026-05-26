@@ -7,36 +7,174 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.2] — 2026-05-26
 
-### Patch Release — Safeguard automated token enrolment via one-shot codes
+### Patch Release — Safeguard sign-in auto-post, account picker, and in-place credential-profile kind switching
 
-v1.10.2 enhances the **Safeguard sign-in** workflow introduced in v1.10.0
-and refined in v1.10.1 by enabling **automated token enrolment**. The new
-auto-post feature allows operators to sign in to their Safeguard identity
-provider (via the RSTS browser flow) and automatically submit the resulting
-bearer token back to Strata without manual copy-paste, eliminating both
-the keyboard-interactive step of pasting snippets and the cognitive load
-of manual token submission. The implementation uses **one-shot enrolment
-codes** (8-character Crockford base-32 identifiers, 5-minute TTL, single-use)
-minted by the authed `/api/user/safeguard/signin/start` endpoint and
-consumed by the unauthed `/api/safeguard/enrol` endpoint. Each code is
-rate-limited to 5 mints per minute per user, and the **Safeguard sign-in
-card** on the Credentials page now renders a **PowerShell snippet with an
-embedded one-shot code** ready for copy-paste; the snippet calls
-`Invoke-RestMethod` to POST the code + bearer token to the `/api/safeguard/enrol`
-endpoint, which validates, consumes, seals, and stores the token.
-Operators can still manually paste tokens using a fallback text field
-(toggled via "Having trouble?" button) if needed. The UI displays a live
-countdown timer showing when the code window expires, and polls the
-`/api/user/safeguard/status` endpoint to auto-close the modal when the
-token has been successfully stored.
+v1.10.2 is a UX-focused refinement of the Safeguard JIT integration
+shipped in v1.10.0 and hardened in v1.10.1. Three related changes land
+together:
 
-Security characteristics: code consumption is atomic (`used_at IS NULL`
-guard + `RETURNING user_id`) so concurrent submits cannot cross-assign
-tokens between users; the winning submit always resolves to the user
-bound at mint time. All invalid-code paths deliberately return the same
-error (`Invalid or expired sign-in code.`) to avoid code-state probing.
-Daily cleanup also purges stale enrolment-code rows so long-expired
-codes do not accumulate indefinitely.
+1. **Automated token enrolment via one-shot codes** (PR
+   [#186](https://github.com/Bails309/strata-client/pull/186)) — the
+   **Safeguard sign-in** card on the Credentials page now bridges the
+   browser-based RSTS sign-in flow and Strata's per-user token store
+   without manual copy-paste of the bearer JWT. Operators paste a
+   PowerShell snippet with an embedded **one-shot enrolment code**
+   (8-character Crockford base-32, 5-minute TTL, single-use,
+   rate-limited 5 mints/min/user) that auto-posts the resulting
+   bearer token back to Strata via `Invoke-RestMethod`.
+2. **Safeguard account picker** (PR
+   [#188](https://github.com/Bails309/strata-client/pull/188)) — the
+   credential profile editor now offers an **entitlements picker**
+   that lists every Safeguard account the signed-in user is
+   entitled to request a password for. Selecting a row populates
+   the `account_id`, `account_name`, `asset_id`, and `asset_name`
+   fields automatically, eliminating the manual lookup-and-typing
+   step that v1.10.0/1.10.1 required. Rows that already back an
+   existing Safeguard profile owned by the same user are
+   automatically hidden so the picker only ever shows accounts a
+   user can still claim.
+3. **In-place credential-profile kind switching** (PR
+   [#187](https://github.com/Bails309/strata-client/pull/187)) — an
+   existing `local` credential profile can now be converted to
+   `safeguard` (or vice versa) without deleting and recreating the
+   row. The `PUT /api/user/credential-profiles/:id` endpoint
+   accepts an optional `kind` field; the backend transactionally
+   wipes the fields that don't apply to the target kind, populates
+   the new ones, and recomputes `expires_at` according to the new
+   resolution path.
+
+#### Added
+
+- **One-shot Safeguard enrolment-code endpoints**
+  ([`backend/src/services/safeguard/enrolment.rs`](backend/src/services/safeguard/enrolment.rs),
+  [`backend/migrations/070_safeguard_enrolment_codes.sql`](backend/migrations/070_safeguard_enrolment_codes.sql),
+  [`backend/src/routes/user.rs`](backend/src/routes/user.rs),
+  [`backend/src/routes/mod.rs`](backend/src/routes/mod.rs)).
+  Authed `POST /api/user/safeguard/signin/start` mints an 8-character
+  Crockford base-32 code (no `I`/`L`/`O`/`U`), records it in the
+  new `safeguard_enrolment_codes` table keyed on the user_id, and
+  returns `{ code, expires_at }` (5-minute window). Unauthed
+  `POST /api/safeguard/enrol` consumes the code atomically
+  (`UPDATE … WHERE used_at IS NULL AND expires_at > now() RETURNING
+user_id`), seals the supplied bearer token with the same Vault
+  envelope encryption (ciphertext + per-row DEK + nonce) used by
+  `safeguard_user_tokens`, and stores it against the bound user. All
+  failure paths return `Invalid or expired sign-in code.` so callers
+  cannot probe code state. Rate-limited to 5 mints/min/user via the
+  shared rate-limit table.
+- **Safeguard entitlement picker — `GET /api/user/safeguard/accounts`**
+  ([`backend/src/routes/user.rs`](backend/src/routes/user.rs) `list_safeguard_accounts`,
+  [`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs)
+  `list_password_entitlements`,
+  [`backend/src/routes/mod.rs`](backend/src/routes/mod.rs)).
+  New authed route that calls the appliance's
+  `GET /service/core/v4/Me/RequestEntitlements?wellKnownType=PasswordAccessRequest`
+  endpoint and returns the caller's password-access entitlement
+  catalogue as a flat list of `SafeguardEntitledAccount { account_id,
+account_name?, account_domain_name?, asset_id, asset_name?,
+asset_network_address? }` rows. The deserializer tolerates both
+  Safeguard 8.x's nested DTO shape (entitlements grouped by
+  `Account`/`Asset` blocks) and the flat shape returned by some
+  appliance versions, so the same call works across the supported
+  Safeguard 8.x range. Audit events: `safeguard.entitlements.listed`.
+- **Frontend account-picker UI**
+  ([`frontend/src/pages/credentials/ProfileEditor.tsx`](frontend/src/pages/credentials/ProfileEditor.tsx),
+  [`frontend/src/api.ts`](frontend/src/api.ts)).
+  When the **Kind** selector is set to **Safeguard**, the profile
+  editor now renders an inline picker that fetches
+  `listSafeguardAccounts()`, surfaces five distinct states
+  (`loading`, `signin_required`, `load_failed`, `empty`,
+  `all_claimed`, and the populated list), and lets the operator
+  click a row to populate `safeguard_account_id`, `account_name`,
+  `safeguard_asset`, and `asset_network_address` in one go.
+  Already-claimed entitlements — accounts that the same user has
+  already created a Safeguard profile for — are filtered out by an
+  `isRowClaimed` predicate that matches on either `asset_id` or
+  `asset_name`. When editing an existing profile, that profile's
+  own asset stays visible in the list so the row can be re-selected
+  without first abandoning the edit.
+- **In-place kind switching on `PUT /api/user/credential-profiles/:id`**
+  ([`backend/src/services/credential_profiles.rs`](backend/src/services/credential_profiles.rs)
+  `set_kind_safeguard`, `set_kind_local`,
+  [`backend/src/routes/user.rs`](backend/src/routes/user.rs)).
+  The `UpdateCredentialProfileRequest` body now accepts an optional
+  `kind` field (`"local"` | `"safeguard"`). When the new kind
+  differs from the row's current kind, the backend dispatches to
+  `cp_svc::set_kind_safeguard(...)` or `cp_svc::set_kind_local(...)`
+  inside a single transaction: rows switching to `safeguard` have
+  their stored password ciphertext + DEK + nonce nulled out and the
+  new `safeguard_account_id` / `safeguard_asset` fields populated;
+  rows switching to `local` have those Safeguard pointers cleared
+  and a fresh plaintext password sealed. `expires_at` is recomputed
+  via `resolve_profile_ttl` against the new kind so the Profiles
+  list reflects the correct expiry semantics immediately. The
+  existing same-kind update path (label/username/password/TTL only)
+  is unchanged.
+
+#### Changed
+
+- **Daily cleanup now purges expired Safeguard enrolment codes**
+  ([`backend/src/services/user_cleanup.rs`](backend/src/services/user_cleanup.rs),
+  [`backend/src/services/safeguard/enrolment.rs`](backend/src/services/safeguard/enrolment.rs)
+  `purge_expired`).
+  The background cleanup worker (which already prunes expired
+  password-reset tokens, stale shares, and idle MFA challenges) now
+  also deletes rows from `safeguard_enrolment_codes` whose
+  `expires_at` is older than 24 hours, so long-expired codes do not
+  accumulate indefinitely. Idempotent and safe to re-run.
+- **Safeguard sign-in card auto-closes on success**
+  ([`frontend/src/pages/credentials/SafeguardSigninCard.tsx`](frontend/src/pages/credentials/SafeguardSigninCard.tsx)).
+  While the sign-in modal is open, the card polls
+  `GET /api/user/safeguard/status` every two seconds and closes
+  itself the moment `signed_in === true` is observed — operators
+  no longer have to click a Done button after the PowerShell
+  snippet has posted the token. A live MM:SS countdown next to the
+  embedded code shows time remaining in the current 5-minute
+  window; when the window expires the UI offers a one-click **Get
+  a new code** button.
+
+#### Database
+
+- **Migration `070_safeguard_enrolment_codes.sql`**: creates the
+  `safeguard_enrolment_codes` table (`code TEXT PRIMARY KEY`,
+  `user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE`,
+  `expires_at TIMESTAMPTZ NOT NULL`, `used_at TIMESTAMPTZ`,
+  `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `created_ip
+TEXT`) with indexes on `(user_id)` and `(expires_at)` for the
+  rate-limit count and the purge job respectively. Idempotent
+  (`CREATE TABLE IF NOT EXISTS`) and runs automatically on
+  startup.
+
+#### Security
+
+- **Atomic, user-bound code consumption.** Consume is a single
+  `UPDATE … WHERE code = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id` — concurrent submits cannot cross-assign a
+  token between users; the bearer is always sealed against the
+  `user_id` bound at mint time. Unknown, expired, malformed, and
+  already-used codes all return the same opaque
+  `Invalid or expired sign-in code.` to prevent state probing.
+- **Per-user entitlement scope.** `GET /api/user/safeguard/accounts`
+  forwards the caller's own RSTS bearer (or A2A identity, per
+  `auth_mode`) when talking to the appliance, so the returned
+  catalogue is filtered server-side by Safeguard to the accounts
+  this user is entitled to request a password for. Strata does no
+  client-side enumeration of other users' entitlements and never
+  caches the catalogue across requests.
+
+#### Upgrade
+
+Drop-in upgrade from v1.10.0 or v1.10.1. One idempotent migration
+(`070_safeguard_enrolment_codes.sql`) runs on backend startup. No
+configuration changes, no behavioural changes to existing
+profiles. Rebuild backend and frontend containers:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend frontend
+```
 
 ## [1.10.1] — 2026-05-26
 
@@ -164,8 +302,7 @@ both A2A and per-user-browser (RSTS / federation) authentication.
   enum value to `per_user_browser`, back-fills existing rows, and
   reinstalls the `auth_mode` CHECK constraint atomically. The legacy
   spelling is still accepted by the `AuthMode::parse` deserializer
-  for one release so any in-flight admin form submission doesn't
-  400.
+  for one release so any in-flight admin form submission doesn't 400.
 - **JIT checkout orchestration (`jit_checkout` / `jit_checkin`)**
   ([`backend/src/services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs), [`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs), [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)).
   `jit_checkout` is the single entry-point the tunnel and bulk-checkout
@@ -203,7 +340,7 @@ both A2A and per-user-browser (RSTS / federation) authentication.
   `PendingApproval` — and falls back to the other verb if the first
   returns Code 90114. The release body is the JSON-encoded string
   literal `"\"strata preflight\""` with `Content-Type:
-  application/json` and a non-zero `Content-Length` — Safeguard
+application/json` and a non-zero `Content-Length` — Safeguard
   rejects `Content-Length: 0`, the empty object `{}`, and a raw
   string with `415` / `411` / `70000` errors respectively, all of
   which are now caught at the integration boundary rather than
@@ -219,13 +356,13 @@ both A2A and per-user-browser (RSTS / federation) authentication.
   client call with an exponential-backoff loop
   (`[0, 500, 1000, 2000, 3000, 4000]` ms, ~10 s total worst case),
   retries only on the 90010 marker, logs `checkout_password: 90010
-  on attempt N for request {rid}, retrying`, and surfaces any other
+on attempt N for request {rid}, retrying`, and surfaces any other
   error (auth, validation, not-found) immediately so a permanently-
   broken state never blocks behind transient retries.
 - **Optional password caching (`password_cache_enabled`)**
   ([`backend/migrations/069_safeguard_password_cache.sql`](backend/migrations/069_safeguard_password_cache.sql), [`backend/src/services/safeguard/password_cache.rs`](backend/src/services/safeguard/password_cache.rs)).
   When the admin sets `safeguard_config.password_cache_enabled =
-  true`, every successful JIT checkout's plaintext password is sealed
+true`, every successful JIT checkout's plaintext password is sealed
   (Vault envelope) and stored per `(user_id, profile_id)` in the new
   `safeguard_cached_passwords` table for the lifetime configured by
   the profile's own `ttl_hours`. Subsequent tunnel opens for the
@@ -290,9 +427,9 @@ both A2A and per-user-browser (RSTS / federation) authentication.
 - **Append-only Safeguard checkout audit table**
   ([`backend/migrations/067_safeguard.sql`](backend/migrations/067_safeguard.sql)).
   `safeguard_checkout_audit (id, user_id, profile_id, sg_account_id,
-  sg_asset, sg_request_id, session_id, opened_at, closed_at, outcome,
-  error_message)` with `outcome` constrained to `pending → success /
-  failed → checked_in / expired`, mirroring the
+sg_asset, sg_request_id, session_id, opened_at, closed_at, outcome,
+error_message)` with `outcome` constrained to `pending → success /
+failed → checked_in / expired`, mirroring the
   `share_participant_audit` shape so existing forensic tooling can
   be reused without modification.
 
@@ -308,8 +445,8 @@ both A2A and per-user-browser (RSTS / federation) authentication.
   `auth_mode = 'per_user_oidc'` enum value to `'per_user_browser'`,
   reinstalls the CHECK constraint, and creates
   `safeguard_user_tokens (user_id PK FK→users ON DELETE CASCADE,
-  ciphertext, encrypted_dek, nonce, expires_at, created_at,
-  updated_at)` with an index on `expires_at`.
+ciphertext, encrypted_dek, nonce, expires_at, created_at,
+updated_at)` with an index on `expires_at`.
 - **Migration `069_safeguard_password_cache.sql`** — adds
   `safeguard_config.password_cache_enabled BOOLEAN DEFAULT FALSE`
   and creates `safeguard_cached_passwords (user_id, profile_id)`
@@ -319,18 +456,18 @@ both A2A and per-user-browser (RSTS / federation) authentication.
 
 #### REST surface
 
-| Endpoint                                          | Verb | Purpose                                                                                |
-| ------------------------------------------------- | ---- | -------------------------------------------------------------------------------------- |
-| `/api/admin/safeguard/config`                     | GET  | Read the singleton config with sealed fields rendered as `"********"`                  |
-| `/api/admin/safeguard/config`                     | PUT  | Update the config; `"********"` inputs preserve the existing sealed value              |
-| `/api/admin/safeguard/test`                       | POST | Live TCP + TLS + `GET /Me` probe against form values without persisting them           |
-| `/api/user/safeguard/enabled`                     | GET  | Public-to-the-SPA boolean kill-switch state (gates UI rendering of the Safeguard tab)  |
-| `/api/user/safeguard/status`                      | GET  | `{ signed_in, expires_at? }` for the per-user browser-flow token                       |
-| `/api/user/safeguard/token`                       | POST | Submit a freshly-minted Safeguard API token to seal in `safeguard_user_tokens`         |
-| `/api/user/safeguard/token`                       | DELETE | Eagerly purge the user's stored token (sign-out)                                     |
-| `/api/user/safeguard/bulk-checkout`               | POST | Run JIT checkout for the selected profile ids; returns per-row results                 |
-| `/api/user/safeguard/cached`                      | GET  | Non-decrypting status of the user's live cache rows (powers the bulk-checkout badges)  |
-| `/api/user/safeguard/checkin`                     | POST | Release one or many cached profiles; empty `profile_ids` means "everything I hold"     |
+| Endpoint                            | Verb   | Purpose                                                                               |
+| ----------------------------------- | ------ | ------------------------------------------------------------------------------------- |
+| `/api/admin/safeguard/config`       | GET    | Read the singleton config with sealed fields rendered as `"********"`                 |
+| `/api/admin/safeguard/config`       | PUT    | Update the config; `"********"` inputs preserve the existing sealed value             |
+| `/api/admin/safeguard/test`         | POST   | Live TCP + TLS + `GET /Me` probe against form values without persisting them          |
+| `/api/user/safeguard/enabled`       | GET    | Public-to-the-SPA boolean kill-switch state (gates UI rendering of the Safeguard tab) |
+| `/api/user/safeguard/status`        | GET    | `{ signed_in, expires_at? }` for the per-user browser-flow token                      |
+| `/api/user/safeguard/token`         | POST   | Submit a freshly-minted Safeguard API token to seal in `safeguard_user_tokens`        |
+| `/api/user/safeguard/token`         | DELETE | Eagerly purge the user's stored token (sign-out)                                      |
+| `/api/user/safeguard/bulk-checkout` | POST   | Run JIT checkout for the selected profile ids; returns per-row results                |
+| `/api/user/safeguard/cached`        | GET    | Non-decrypting status of the user's live cache rows (powers the bulk-checkout badges) |
+| `/api/user/safeguard/checkin`       | POST   | Release one or many cached profiles; empty `profile_ids` means "everything I hold"    |
 
 #### Tests
 

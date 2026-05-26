@@ -1067,7 +1067,7 @@ as ciphertext at rest and validated at every trust boundary.
   that could lag the toggle.
 - **Per-user token isolation.** `safeguard_user_tokens` is keyed on
   `user_id` (PK) with a foreign key onto `users` and `ON DELETE
-  CASCADE`. The bearer used for a checkout is **only** loaded from
+CASCADE`. The bearer used for a checkout is **only** loaded from
   the row matching the authenticated principal's `user_id`; one
   user's token can never be used for another user's checkout. A
   user being deleted (soft or hard) atomically evicts their token.
@@ -1085,7 +1085,7 @@ as ciphertext at rest and validated at every trust boundary.
   against the user already bound at mint time.
 - **Uniform failure responses deny code-state probing.** Enrol
   consume returns the same user-facing error string (`Invalid or
-  expired sign-in code.`) for malformed, unknown, already-used, and
+expired sign-in code.`) for malformed, unknown, already-used, and
   expired codes. Attackers cannot distinguish which code states are
   valid by response text.
 - **Mint abuse controls.** Code minting is capped at 5 per minute per
@@ -1120,7 +1120,7 @@ as ciphertext at rest and validated at every trust boundary.
   `audit_log` against the calling user.
 - **State-machine bounded outcomes.** The `outcome` column is
   constrained to the closed set `pending → success | failed →
-  checked_in | expired`. Every transition is written
+checked_in | expired`. Every transition is written
   append-only; rows are never updated to rewrite history. A
   checkout that timed out without an explicit check-in is recorded
   as `expired`, not silently overwritten as `checked_in`.
@@ -1160,6 +1160,32 @@ as ciphertext at rest and validated at every trust boundary.
   recorded as `failed` in `safeguard_checkout_audit` — no silent
   retries that could mask a permission revocation or a typo'd
   account id.
+- **Entitlement enumeration is appliance-side (v1.10.2).**
+  `GET /api/user/safeguard/accounts` proxies the appliance's
+  `Me/RequestEntitlements?wellKnownType=PasswordAccessRequest`
+  endpoint using the caller's own Safeguard identity, so the
+  catalogue is filtered server-side by Safeguard's own policy
+  engine to the accounts this user is entitled to request a
+  password for. Strata neither persists the response nor
+  cross-correlates it against other users' results, so there is no
+  Strata-side surface that could leak one user's entitlement
+  catalogue to another. The frontend's claimed-row filter that
+  hides accounts already used by an existing profile is a UX
+  convenience — it does not, and cannot, prevent the operator from
+  re-attempting a checkout against an account they own a profile
+  for via the existing `bulk-checkout` path.
+- **Kind switching is transactional (v1.10.2).** The
+  `PUT /api/user/credential-profiles/:id` kind-switch path
+  (`cp_svc::set_kind_safeguard` / `cp_svc::set_kind_local`) runs
+  inside a single database transaction so a partially-converted
+  row — one that simultaneously carries a sealed local password
+  and a Safeguard pointer, or one that carries neither — can never
+  be observed by a concurrent tunnel-open. The transaction nulls
+  the fields that do not apply to the target kind and populates the
+  new ones before commit; on rollback the row is unchanged. The
+  same audit row used for label/username/password edits records
+  the kind transition so the change is recoverable from the audit
+  log.
 
 ---
 

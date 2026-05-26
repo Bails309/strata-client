@@ -34,6 +34,7 @@ export default function SessionBar() {
     activeSessionId,
     setActiveSessionId,
     closeSession,
+    updateSession,
     tiledSessionIds,
     setTiledSessionIds,
     sessionBarCollapsed,
@@ -244,13 +245,25 @@ export default function SessionBar() {
         const fullUrl = `${window.location.origin}${result.share_url}${mpQs}`;
         setShareUrl(fullUrl);
         setShareOpen(true);
+        // Attach multiplayer state to the owning session so SessionClient
+        // can mount the owner-side CoPilotOverlay. Only set on multiplayer
+        // shares — single-viewer shares need no owner-side chrome.
+        if (useMp) {
+          updateSession(activeSession.id, {
+            mpShareToken: result.share_token,
+            mpEnabled: true,
+            mpAllowChat: mpChat,
+            mpAllowAudio: mpAudio,
+            mpMaxParticipants: mpMax,
+          });
+        }
       } catch {
         // ignore
       } finally {
         setShareLoading(false);
       }
     },
-    [activeSession, mpEnabled, mpMax, mpChat, mpAudio]
+    [activeSession, mpEnabled, mpMax, mpChat, mpAudio, updateSession]
   );
 
   const handleCopy = useCallback(() => {

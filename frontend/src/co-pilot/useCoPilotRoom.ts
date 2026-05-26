@@ -55,11 +55,18 @@ const CURSOR_THROTTLE_MS = 1000 / 30;
  * Manages the co-pilot WebSocket for one participant. The screen +
  * input tunnel is a separate WS owned by `SharedViewer.tsx`; the two
  * are correlated server-side via the `pid` we obtain here.
+ *
+ * When `asOwner` is true, the hook connects to the authenticated owner
+ * endpoint at `/api/user/shared/copilot/:share_token` instead of the
+ * public `/api/shared/copilot/:share_token`. The server verifies the
+ * caller owns the share and joins the room with `is_owner = true`,
+ * which unlocks owner force-grant and the implicit input-token hold.
  */
 export function useCoPilotRoom(
   shareToken: string | undefined,
   displayName: string,
-  enabled: boolean
+  enabled: boolean,
+  asOwner: boolean = false
 ): [CoPilotRoomState, CoPilotRoomActions] {
   const [pid, setPid] = useState<string | null>(null);
   const [allowChat, setAllowChat] = useState(false);
@@ -100,9 +107,16 @@ export function useCoPilotRoom(
     if (!enabled || !shareToken) return;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}/api/shared/copilot/${encodeURIComponent(
-      shareToken
-    )}?name=${encodeURIComponent(displayName || "Guest")}`;
+    // Owner uses the authenticated endpoint so the server joins the
+    // room with `is_owner = true`. Viewers use the public endpoint and
+    // pass their display name in the query string (owner's name comes
+    // from `AuthUser` server-side).
+    const path = asOwner
+      ? `/api/user/shared/copilot/${encodeURIComponent(shareToken)}`
+      : `/api/shared/copilot/${encodeURIComponent(shareToken)}?name=${encodeURIComponent(
+          displayName || "Guest"
+        )}`;
+    const url = `${proto}//${window.location.host}${path}`;
 
     const ws = new WebSocket(url);
     wsRef.current = ws;

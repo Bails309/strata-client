@@ -691,6 +691,98 @@ pub async fn ws_copilot_room(
             pool,
             client_ip,
             user_agent,
+            false,
+        )
+        .await;
+    }))
+}
+
+// `GET /api/user/shared/copilot/:share_token`
+//
+// Authenticated sibling of `ws_copilot_room` for the session owner.
+// The public `/api/shared/copilot/:share_token` endpoint joins every
+// caller as `is_owner = false` by design (viewers don't have accounts),
+// which left the actual owner with no way to appear in their own
+// multiplayer room — no remote-cursor preview, no chat panel, no
+// implicit input-token hold.
+//
+// This route requires `AuthUser`, verifies the share belongs to the
+// caller, and joins the room with `is_owner = true` so the existing
+// room arbitration (`Participant.is_owner`, force_grant, audit) sees
+// the owner correctly. The wire protocol is otherwise identical to
+// the public endpoint.
+pub async fn ws_copilot_room_owner(
+    ws: WebSocketUpgrade,
+    State(state): State<SharedState>,
+    Path(share_token): Path<String>,
+    Extension(user): Extension<AuthUser>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    let db = {
+        let s = state.read().await;
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        s.db.clone().ok_or(AppError::SetupRequired)?
+    };
+
+    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
+        .unwrap_or_else(|| addr.ip().to_string());
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let share = crate::services::shares::find_active_by_token(&db.pool, &share_token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+
+    // Authorization: only the share's owner may join as `is_owner`.
+    // Return the same 404 we'd return for an unknown share so the
+    // endpoint doesn't leak share existence to other users.
+    if share.owner_user_id != user.id {
+        return Err(AppError::NotFound("Invalid or expired share link".into()));
+    }
+
+    if !share.multiplayer {
+        return Err(AppError::NotFound(
+            "This share is not a multiplayer share".into(),
+        ));
+    }
+
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+    let session = registry
+        .find_by_connection_and_user(share.connection_id, share.owner_user_id)
+        .await
+        .ok_or_else(|| {
+            AppError::NotFound("The owner's session is not currently active.".into())
+        })?;
+
+    // Prefer the user's full name when present; fall back to username.
+    // The room sanitises and disambiguates the final display name.
+    let display_name = user
+        .full_name
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(user.username.clone());
+    let pool = db.pool.clone();
+
+    Ok(ws.on_upgrade(move |socket| async move {
+        copilot_room_loop(
+            socket,
+            session,
+            share,
+            display_name,
+            share_token,
+            pool,
+            client_ip,
+            user_agent,
+            true,
         )
         .await;
     }))
@@ -706,6 +798,7 @@ async fn copilot_room_loop(
     pool: sqlx::PgPool,
     client_ip: String,
     user_agent: String,
+    is_owner: bool,
 ) {
     use crate::services::co_pilot::CoPilotMsg;
     use axum::extract::ws::Message;
@@ -713,7 +806,7 @@ async fn copilot_room_loop(
     let room = session.co_pilot_room.clone();
 
     // Phase 1: join the room.
-    let participant = match room.join(&display_name, false) {
+    let participant = match room.join(&display_name, is_owner) {
         Ok(p) => p,
         Err(e) => {
             let reason = match e {
@@ -761,7 +854,7 @@ async fn copilot_room_loop(
     .bind(share.share_id)
     .bind(pid)
     .bind(&participant.display_name)
-    .bind(false)
+    .bind(is_owner)
     .bind(&client_ip)
     .bind(&user_agent)
     .execute(&pool)

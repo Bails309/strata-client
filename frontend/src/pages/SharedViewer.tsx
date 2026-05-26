@@ -62,11 +62,14 @@ export default function SharedViewer() {
     const container = containerRef.current;
     const dpr = window.devicePixelRatio || 1;
 
-    const tunnelQs = new URLSearchParams();
-    if (multiplayer && room.pid) tunnelQs.set("pid", room.pid);
-    const qs = tunnelQs.toString();
-    const wsUrl =
-      `${wsProto}//${window.location.host}/api/shared/tunnel/${shareToken}` + (qs ? `?${qs}` : "");
+    // NOTE: Do NOT append `?pid=...` to the tunnel URL — Guacamole's
+    // WebSocketTunnel hard-codes `tunnelURL + "?" + data` when it opens
+    // the socket (guacamole-common-js 1.5.0), which would produce a
+    // malformed `...?pid=UUID?width=...&height=...` URL where the
+    // server parses `pid` as `UUID?width=1920` and UUID parsing fails.
+    // Instead we pass `pid` through the connect-data string so it lands
+    // after Guacamole's own `?` separator. See `client.connect(...)` below.
+    const wsUrl = `${wsProto}//${window.location.host}/api/shared/tunnel/${shareToken}`;
     const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
     const client = new Guacamole.Client(tunnel);
     clientRef.current = client;
@@ -163,6 +166,11 @@ export default function SharedViewer() {
     connectParams.set("width", String(container.clientWidth));
     connectParams.set("height", String(container.clientHeight));
     connectParams.set("dpi", String(Math.round(96 * dpr)));
+    // Multiplayer input gating: server reads `pid` from the query
+    // string to identify which room participant is sending input
+    // frames. Must be set here (not on the tunnel URL) — see comment
+    // above the WebSocketTunnel construction.
+    if (multiplayer && room.pid) connectParams.set("pid", room.pid);
 
     client.connect(connectParams.toString());
 

@@ -66,11 +66,7 @@ export default function SharedViewer() {
   }, [queryName]);
 
   const displayName = resolvedName ?? "Guest";
-  const [room, roomActions] = useCoPilotRoom(
-    shareToken,
-    displayName,
-    multiplayer && nameResolved
-  );
+  const [room, roomActions] = useCoPilotRoom(shareToken, displayName, multiplayer && nameResolved);
   // Optional WebRTC audio mesh. `audioJoined` reflects the viewer's
   // opt-in via the overlay toggle.
   const [audioJoined, setAudioJoined] = useState(false);
@@ -319,9 +315,7 @@ export default function SharedViewer() {
         >
           <div style={{ textAlign: "center", color: "#fff", maxWidth: 400, padding: 32 }}>
             <div style={{ fontSize: "2rem", marginBottom: 8 }}>👋</div>
-            <div style={{ color: "#fbbf24", marginBottom: 16, fontWeight: 600 }}>
-              Session ended
-            </div>
+            <div style={{ color: "#fbbf24", marginBottom: 16, fontWeight: 600 }}>Session ended</div>
             <p style={{ fontSize: "0.85rem", color: "#ccc" }}>{room.sessionEnded}</p>
             <p style={{ fontSize: "0.75rem", color: "#999", marginTop: 12 }}>
               The host disconnected. You can safely close this tab.

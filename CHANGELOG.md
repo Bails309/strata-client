@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] — 2026-05-26
+
+### Patch Release — Safeguard sign-in snippet hardening and dependency hygiene
+
+v1.10.1 is a small follow-up to the v1.10.0 Safeguard JIT release. The
+**Safeguard sign-in** card on the Credentials page renders a copy-paste
+PowerShell snippet that bootstraps the Safeguard-PS module and runs
+`Connect-Safeguard` for the configured appliance and identity provider;
+the v1.10.0 snippet unconditionally re-installed the module on every
+paste, which on a busy operator's workstation produced a noisy
+`Install-Module` re-download even when the module was already current.
+This release rewrites the snippet so the install is idempotent and the
+session is bootstrapped with a `RemoteSigned` execution policy scoped
+to `CurrentUser`, matching the pattern Strata's other PowerShell
+helpers use. The companion `SafeguardSigninCard.test.tsx` suite
+continues to assert that the snippet contains the expected
+`Connect-Safeguard <fqdn>` substring so the change can't regress
+silently.
+
+Alongside the snippet fix, this release rolls forward a batch of
+low-risk dependency bumps surfaced by Dependabot — the nginx runtime
+base image used by the frontend container, four `devDependencies` in
+the frontend `package-lock.json`, and six pinned-by-SHA GitHub
+Actions used by CI / release / CodeQL / Trivy / stale-issue workflows.
+None of these touch runtime behaviour; they are bundled into the
+patch release so the v1.10.x line ships against the most current
+supported base image and toolchain.
+
+#### Changed
+
+- **Safeguard sign-in PowerShell snippet is now idempotent**
+  ([`frontend/src/pages/credentials/SafeguardSigninCard.tsx`](frontend/src/pages/credentials/SafeguardSigninCard.tsx),
+  PR [#181](https://github.com/Bails309/strata-client/pull/181)).
+  The snippet now prefixes the install line with
+  `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` and wraps the
+  `Install-Module Safeguard-PS` call in an
+  `if (-not (Get-Module -ListAvailable -Name Safeguard-PS)) { ... }`
+  guard so re-running the snippet on an already-onboarded workstation
+  no longer triggers a redundant module download. The
+  `Connect-Safeguard <fqdn> -Browser -IdentityProvider <idp> -NoSessionVariable -NoWindowTitle`
+  call and the `Set-Clipboard $SGToken` tail are unchanged, so any
+  user who has already copied the snippet into their session bootstrap
+  notes can keep using the previous copy without losing functionality.
+
+#### Dependencies
+
+- **`frontend/Dockerfile`**: nginx runtime base bumped from
+  `nginx:1.31.0-alpine@sha256:dc48b7a8…ebcb8` to
+  `nginx:1.31.1-alpine@sha256:8b1e7874…e589a` to pick up the latest
+  upstream Alpine package security patches. Pinned by digest so the
+  build is reproducible.
+- **Frontend devDependencies** (lockfile-only, caret ranges in
+  `package.json` already covered the bumps):
+  - `@types/react` 19.2.14 → 19.2.15
+  - `@vitest/coverage-v8` 4.1.6 → 4.1.7
+  - `vite` 8.0.13 → 8.0.14
+  - `vitest` 4.1.6 → 4.1.7
+- **GitHub Actions** (pinned by commit SHA with version comment, per
+  the repo's pinning policy in `docs/security.md`):
+  - `docker/setup-buildx-action` v4.0.0 → v4.1.0
+  - `docker/build-push-action` v7.1.0 → v7.2.0
+  - `docker/login-action` v4.1.0 → v4.2.0
+  - `docker/metadata-action` v6.0.0 → v6.1.0
+  - `github/codeql-action` v4.35.5 → v4.36.0 (init / analyze / upload-sarif)
+  - `actions/stale` v10.2.0 → v10.3.0
+
+#### Upgrade
+
+Drop-in upgrade from v1.10.0 — no migrations, no configuration
+changes, no behavioural changes. Rebuild backend and frontend
+containers to pick up the new nginx base image and toolchain bumps:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend frontend
+```
+
 ## [1.10.0] — 2026-05-22
 
 ### Minor Release — OneIdentity Safeguard JIT credential checkout (full release)

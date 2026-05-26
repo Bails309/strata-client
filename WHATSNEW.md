@@ -1,3 +1,30 @@
+# What's New in v1.10.1
+
+> **Patch release: Safeguard sign-in snippet hardening and dependency hygiene.** A small follow-up to the v1.10.0 Safeguard JIT release. The copy-paste PowerShell bootstrap on the **Safeguard sign-in** card is now idempotent — re-running it on an already-onboarded workstation no longer triggers a redundant `Install-Module` download, and the snippet now sets the `RemoteSigned` execution policy scoped to `CurrentUser` before invoking `Connect-Safeguard`. The release also bundles a routine batch of low-risk Dependabot bumps: the nginx runtime base image used by the frontend container, four frontend dev-dependencies (`@types/react`, `@vitest/coverage-v8`, `vite`, `vitest`), and six pinned-by-SHA GitHub Actions used across CI, release, CodeQL, Trivy, and the stale-issue workflow. No runtime behaviour changes, no migrations, no configuration changes.
+
+## Idempotent Safeguard sign-in PowerShell snippet
+
+The PowerShell helper rendered by the **Safeguard sign-in** card on the Credentials page now wraps the `Install-Module Safeguard-PS` call in a `Get-Module -ListAvailable -Name Safeguard-PS` guard and prefixes the snippet with `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` — matching the pattern Strata's other PowerShell helpers use. Operators who run the same snippet on every shift no longer pay the cost of a redundant module download against the PowerShell Gallery, and the `Connect-Safeguard -Browser -IdentityProvider <alias>` tail of the snippet is unchanged so existing notes and runbooks keep working without edits.
+
+## Dependency hygiene
+
+- **`frontend/Dockerfile`** is rebased onto `nginx:1.31.1-alpine` (pinned by digest) so the runtime image picks up the latest upstream Alpine package security patches.
+- **Frontend dev-dependencies** are rolled forward (lockfile-only, caret ranges in `package.json` already covered the bumps): `@types/react` 19.2.14 → 19.2.15, `@vitest/coverage-v8` 4.1.6 → 4.1.7, `vite` 8.0.13 → 8.0.14, and `vitest` 4.1.6 → 4.1.7.
+- **GitHub Actions** are rolled forward (still pinned by commit SHA with a version comment per the repo's policy in [`docs/security.md`](docs/security.md)): `docker/setup-buildx-action` v4.0.0 → v4.1.0, `docker/build-push-action` v7.1.0 → v7.2.0, `docker/login-action` v4.1.0 → v4.2.0, `docker/metadata-action` v6.0.0 → v6.1.0, `github/codeql-action` v4.35.5 → v4.36.0, and `actions/stale` v10.2.0 → v10.3.0.
+
+## Upgrade
+
+Drop-in upgrade from v1.10.0 — no migrations, no configuration changes, no behavioural changes. Rebuild the backend and frontend containers to pick up the new nginx base image and the bumped toolchain:
+
+```sh
+docker compose --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.internal.yml \
+  up -d --build backend frontend
+```
+
+---
+
 # What's New in v1.10.0
 
 > **Minor release: OneIdentity Safeguard JIT credential checkout.** Strata gains a first-class integration with **OneIdentity Safeguard for Privileged Passwords**. Privileged-account passwords for RDP / SSH targets no longer have to live in Strata's local credential store — instead, each session is opened against a fresh **just-in-time (JIT) checkout** retrieved from Safeguard at the moment the tunnel is built, optionally cached under Vault envelope encryption for the duration of a user's shift so a 12-hour operator isn't bounced through a 15-minute sign-in carousel every time their RSTS token expires. A new **Request Checkout** tab on the Credentials page lets users pre-fetch every Safeguard-backed profile they own in one signed-in burst with a single mandatory justification comment, and check them all back in with one click when the shift ends.

@@ -1,6 +1,6 @@
 # What's New in v1.10.2
 
-> **Patch release: Safeguard automated token enrolment via one-shot codes.** The **Safeguard sign-in** workflow is enhanced with **automated token enrolment**, eliminating the manual copy-paste step. Operators now sign in via the RSTS browser flow and the token is automatically submitted to Strata using **one-shot enrolment codes** (8-char Crockford base-32, 5-minute TTL, single-use, rate-limited 5/min/user). The **Safeguard sign-in card** on the Credentials page renders a PowerShell snippet with an embedded enrolment code ready to paste; the snippet calls `Invoke-RestMethod` to POST the code + bearer token to `/api/safeguard/enrol`, which validates, consumes, seals, and stores the token. The UI displays a live countdown timer and polls `/api/user/safeguard/status` to auto-close when sign-in completes. A fallback text field with manual paste (toggled via "Having trouble?" button) is available for operators who need it.
+> **Patch release: Safeguard sign-in auto-post, account picker, and in-place credential-profile kind switching.** v1.10.2 is a UX-focused refinement of the Safeguard JIT integration shipped in v1.10.0 and hardened in v1.10.1. Three related changes land together: (1) **automated token enrolment via one-shot codes** — operators sign in via the RSTS browser flow and the resulting bearer is auto-posted back to Strata, eliminating the manual JWT copy-paste step; (2) a **Safeguard account picker** in the credential profile editor that surfaces the user's Safeguard entitlement catalogue and hides accounts that already back an existing profile; and (3) **in-place kind switching** so an existing `local` profile can be converted to `safeguard` (or back) without delete-and-recreate.
 
 ## Automated Safeguard token submission via enrolment codes
 
@@ -37,6 +37,24 @@ The **Safeguard sign-in card** on the Credentials page now uses **one-shot enrol
 - **API** (`frontend/src/api.ts`): New `startSafeguardSignin()` function POSTs to `/user/safeguard/signin/start`, returns `{ code, expires_at }`.
 - **SafeguardSigninCard** (`frontend/src/pages/credentials/SafeguardSigninCard.tsx`): Complete rewrite with enrolment code flow, countdown timer, polling, and fallback toggles.
 - **Tests**: Updated `SafeguardSigninCard.test.tsx` with new test cases covering auto-post flow, code countdown, copy snippet, fallback toggle, manual paste, auto-close polling, code expiry, error handling.
+
+## Safeguard account picker in the credential profile editor
+
+The credential profile editor on the Credentials page now offers an **entitlement picker** whenever the **Kind** selector is set to **Safeguard**, removing the manual lookup-and-typing step that v1.10.0 and v1.10.1 required:
+
+- **New backend route** (`GET /api/user/safeguard/accounts` — authed): Calls the appliance's `Me/RequestEntitlements?wellKnownType=PasswordAccessRequest` endpoint with the caller's own RSTS bearer (or A2A identity, per `auth_mode`) and returns a flat list of `SafeguardEntitledAccount { account_id, account_name?, account_domain_name?, asset_id, asset_name?, asset_network_address? }` rows. The deserializer tolerates both Safeguard 8.x's nested DTO shape (entitlements grouped by `Account`/`Asset` blocks) and the flat shape returned by some appliance versions.
+- **Picker UI states**: `loading` (spinner while the catalogue fetch is in flight), `signin_required` (user has no RSTS bearer yet — surfaces a link back to the Safeguard sign-in card), `load_failed` (appliance returned an error — shows a retry button), `empty` (the catalogue came back zero-length — user has no entitlements), `all_claimed` (every entitlement already backs an existing profile — shows the hint "Every Safeguard account you are entitled to already has a credential profile."), and the populated list state.
+- **Claimed-row filtering**: Rows that already back an existing Safeguard profile owned by the same user are filtered out by an `isRowClaimed` predicate that matches on either `asset_id` or `asset_name`. When **editing** an existing profile, that profile's own asset stays visible in the list so the row can be re-selected without first abandoning the edit. The filter only applies to other profiles, so the operator's mental model — "show me what's still available to claim, plus what I'm currently editing" — is preserved.
+- **One-click row select**: Clicking a row populates `safeguard_account_id`, `account_name`, `safeguard_asset`, and `asset_network_address` in a single state update; the operator then just confirms the **Label** and clicks **Save**.
+
+## In-place credential-profile kind switching
+
+An existing `local` credential profile can now be converted to `safeguard` (or back) without deleting and recreating the row, preserving the connection-mapping history and the profile's UUID:
+
+- **`PUT /api/user/credential-profiles/:id`** now accepts an optional `kind` field (`"local"` | `"safeguard"`). When the new kind differs from the row's current kind, the backend dispatches to `cp_svc::set_kind_safeguard(...)` or `cp_svc::set_kind_local(...)` inside a single transaction.
+- **Switching to `safeguard`**: the row's stored password ciphertext + DEK + nonce are nulled out and the new `safeguard_account_id` / `safeguard_asset` fields are populated from the request body. `expires_at` is recomputed via `resolve_profile_ttl` against the Safeguard resolution path so the Profiles list reflects the correct expiry semantics immediately.
+- **Switching to `local`**: the Safeguard pointers are cleared and a fresh plaintext password is sealed via Vault envelope encryption. `expires_at` recomputes against the local-profile TTL slider.
+- **Same-kind updates** (label / username / password / TTL only) take the existing code path — no behavioural change.
 
 ## Upgrade
 

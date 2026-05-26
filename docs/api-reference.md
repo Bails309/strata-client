@@ -1574,7 +1574,10 @@ the fields you want to change.
   "username": "svc_prod",
   "password": "new-plaintext-password",
   "ttl_hours": 720,
-  "extended_expiry": true
+  "extended_expiry": true,
+  "kind": "safeguard",
+  "safeguard_account_id": 42,
+  "safeguard_asset": "PROD-DC-01"
 }
 ```
 
@@ -1587,6 +1590,20 @@ a metadata-only update that uses
 stored value. Toggling `extended_expiry` alone (without
 changing `ttl_hours`) does **not** recompute `expires_at` — the
 operator must also bump the TTL to actually push the expiry out.
+
+**Kind switching (v1.10.2)** — when the optional `kind` field is
+present and differs from the row's current kind, the backend
+transactionally dispatches to `cp_svc::set_kind_safeguard(...)` or
+`cp_svc::set_kind_local(...)` inside a single transaction. Switching
+to `safeguard` requires `safeguard_account_id` (and accepts an
+optional `safeguard_asset`); the row's stored password ciphertext,
+DEK, and nonce are nulled out and the new pointers populated.
+Switching to `local` requires `password` (and accepts an optional
+`username`); the Safeguard pointers are cleared and a fresh password
+is sealed via Vault envelope encryption. `expires_at` is recomputed
+against the new kind's resolution path so the Profiles list reflects
+the correct expiry semantics immediately. The profile's UUID and any
+connection mappings are preserved across the switch.
 
 **Response** `200 OK` — the updated profile row.
 
@@ -1913,6 +1930,57 @@ or
 Each successful row evicts the cache entry and slams the matching
 `credential_profiles.expires_at` to `now()` so the Profiles list
 immediately renders the credential as expired.
+
+#### `GET /api/user/safeguard/accounts` (v1.10.2)
+
+Return the caller's Safeguard **password-access entitlement
+catalogue** — the flat list of accounts on assets the user is
+currently entitled to request a password for. Powers the **Safeguard
+account picker** in the credential profile editor.
+
+The backend proxies the appliance's
+`GET /service/core/v4/Me/RequestEntitlements?wellKnownType=PasswordAccessRequest`
+endpoint using the caller's own Safeguard identity (per-user RSTS
+bearer when `auth_mode = per_user_browser` or `hybrid`; A2A identity
+when `auth_mode = a2a`). Strata does not cache the catalogue across
+requests, and never enumerates other users' entitlements.
+
+**Response** `200 OK`
+
+```json
+{
+  "rows": [
+    {
+      "account_id": 42,
+      "account_name": "Administrator",
+      "account_domain_name": "PROD.CORP",
+      "asset_id": 9,
+      "asset_name": "PROD-DC-01",
+      "asset_network_address": "10.1.0.10"
+    }
+  ]
+}
+```
+
+All fields except `account_id` and `asset_id` are nullable — the
+deserializer tolerates both Safeguard 8.x's nested DTO shape
+(entitlements grouped by `Account`/`Asset` blocks) and the flat
+shape returned by some appliance versions.
+
+**Error responses**
+
+- `400 Bad Request` with body `{ "error": "signin_required" }` when
+  the user has no usable Safeguard token and the configured auth
+  mode requires one (i.e. `per_user_browser`, or `hybrid` with no
+  A2A fallback). The frontend uses this signal to render the
+  picker's `signin_required` state instead of `load_failed`.
+- `502 Bad Gateway` when the appliance returns an error response or
+  the network call fails. The body includes the upstream Safeguard
+  error code and message verbatim so operators can diagnose without
+  shelling into the backend logs.
+
+**Audit events**: `safeguard.entitlements.listed` (on success, with
+the row count).
 
 ---
 

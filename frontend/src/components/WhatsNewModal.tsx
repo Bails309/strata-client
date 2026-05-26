@@ -31,7 +31,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.10.2",
     subtitle:
-      "Patch release — Safeguard automated token enrolment via one-shot codes. Operators now sign in to Safeguard via the browser RSTS flow and the token is automatically submitted back to Strata without manual copy-paste",
+      "Patch release — Safeguard sign-in auto-post, account picker in the credential profile editor, and in-place credential-profile kind switching",
     sections: [
       {
         title: "Automated Safeguard token submission via enrolment codes",
@@ -44,6 +44,16 @@ export const RELEASE_CARDS: ReleaseCard[] = [
           "Authed /api/user/safeguard/signin/start mints an 8-character code tied to the user's ID with a 5-minute expiry, rate-limited to 5 mints per minute per user. Unauthed /api/safeguard/enrol atomically validates the code (not used, not expired, valid alphabet), looks up the bound user_id, seals the bearer token via Vault, and stores it in safeguard_user_tokens (same path as v1.10.0 manual paste). Returns uniform Invalid or expired errors for all failure paths. Daily background job purges codes that expired >1 day ago.",
       },
       {
+        title: "Safeguard account picker in the credential profile editor",
+        description:
+          "When the Kind selector is set to Safeguard, the profile editor now renders an inline picker that fetches the caller's Safeguard entitlement catalogue via the new authed GET /api/user/safeguard/accounts route (which calls the appliance's Me/RequestEntitlements?wellKnownType=PasswordAccessRequest endpoint). Clicking a row populates account_id, account_name, asset_id, and asset_name in one go, eliminating the manual lookup-and-typing step. The picker surfaces five distinct states — loading, signin_required, load_failed, empty, all_claimed — plus the populated list, and rows that already back an existing Safeguard profile owned by the same user are filtered out so the picker only shows accounts the operator can still claim. When editing an existing profile, that profile's own row stays visible so it can be re-selected without abandoning the edit.",
+      },
+      {
+        title: "In-place credential-profile kind switching",
+        description:
+          "PUT /api/user/credential-profiles/:id now accepts an optional kind field (local or safeguard). When the new kind differs from the row's current kind, the backend transactionally clears the fields that don't apply to the target kind, populates the new ones, and recomputes expires_at against the new resolution path. Switching to safeguard wipes the stored password ciphertext/DEK/nonce; switching to local clears the safeguard_account_id/safeguard_asset pointers and seals a fresh password. The profile's UUID and connection-mapping history are preserved across the switch, so a misconfigured profile no longer has to be deleted and recreated.",
+      },
+      {
         title: "PowerShell auto-post snippet and countdown timer",
         description:
           "The modal renders a copy-paste PowerShell snippet with the embedded enrolment code already filled in. The snippet calls Connect-Safeguard to authenticate against the RSTS appliance, then Invoke-RestMethod to POST the code + bearer token to /api/safeguard/enrol. A countdown timer displays remaining time before the code window closes; when the window expires, operators click Get a new code to mint a fresh one. While the modal is open, the UI polls every 2 seconds and auto-closes when signed_in=true.",
@@ -51,7 +61,7 @@ export const RELEASE_CARDS: ReleaseCard[] = [
       {
         title: "Security model and TLS guidance",
         description:
-          "Code consume is atomic and user-bound: the first successful POST marks the code used and stores the token for the user attached at mint time, so concurrent submits do not cross-assign tokens between users. Invalid, expired, malformed, and already-used codes all return the same Invalid or expired error to prevent code-state probing. Operationally, production environments should keep TLS validation enabled and trust the Strata certificate chain on client workstations; SkipCertificateCheck-style bypasses are for local troubleshooting only.",
+          "Code consume is atomic and user-bound: the first successful POST marks the code used and stores the token for the user attached at mint time, so concurrent submits do not cross-assign tokens between users. Invalid, expired, malformed, and already-used codes all return the same Invalid or expired error to prevent code-state probing. The entitlements catalogue is fetched server-side using the caller's own Safeguard identity, so Strata never sees other users' entitlements. Operationally, production environments should keep TLS validation enabled and trust the Strata certificate chain on client workstations; SkipCertificateCheck-style bypasses are for local troubleshooting only.",
       },
     ],
   },

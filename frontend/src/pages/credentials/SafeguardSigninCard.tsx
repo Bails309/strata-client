@@ -51,6 +51,7 @@ export default function SafeguardSigninCard({
   } | null>(null);
   const [showFallback, setShowFallback] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [snippetCopied, setSnippetCopied] = useState(false);
 
   // Suppresses the auto-close path when the user has cancelled the
   // modal between two polling ticks.
@@ -267,10 +268,20 @@ export default function SafeguardSigninCard({
             <div className="flex gap-2">
               <button
                 type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => navigator.clipboard.writeText(psSnippet)}
+                className={`btn btn-sm ${snippetCopied ? "btn-success" : "btn-secondary"}`}
+                onClick={() => {
+                  navigator.clipboard.writeText(psSnippet).then(
+                    () => {
+                      setSnippetCopied(true);
+                      window.setTimeout(() => setSnippetCopied(false), 2000);
+                    },
+                    () => {
+                      /* clipboard write rejected — leave button unchanged */
+                    }
+                  );
+                }}
               >
-                Copy snippet
+                {snippetCopied ? "Copied!" : "Copy snippet"}
               </button>
               {codeExpired && (
                 <button

@@ -438,6 +438,10 @@ pub fn build_router(state: SharedState) -> Router {
             "/api/user/shared/copilot/{share_token}",
             get(share::ws_copilot_room_owner),
         )
+        .route(
+            "/api/user/shared/copilot/{share_token}/grant/{target_pid}",
+            post(share::copilot_force_grant),
+        )
         .route("/api/user/shares/{share_id}", delete(share::revoke_share))
         .route("/api/user/recordings", get(user::my_recordings))
         .route(

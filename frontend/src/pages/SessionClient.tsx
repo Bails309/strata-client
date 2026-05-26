@@ -14,6 +14,7 @@ import {
   updateCredentialProfile,
   requestCheckout,
   linkCheckoutToProfile,
+  forceGrantInput,
   CredentialProfile,
   ConnectionInfo,
 } from "../api";
@@ -1304,9 +1305,19 @@ export default function SessionClient() {
           allowChat={coPilotRoom.allowChat}
           hasInput={coPilotRoom.hasInput}
           selfPid={coPilotRoom.pid}
+          selfIsOwner={true}
           onClaimInput={coPilotActions.claimInput}
           onReleaseInput={coPilotActions.releaseInput}
           onSendChat={coPilotActions.sendChat}
+          onForceGrant={(pid) => {
+            const token = currentSession?.mpShareToken;
+            if (!token) return;
+            // Fire-and-forget: the room broadcast updates UI for
+            // everyone (including us) on success. On failure (e.g.
+            // pid just left) we silently no-op — the next Roster
+            // tick already reflects reality.
+            forceGrantInput(token, pid).catch(() => {});
+          }}
           displayScale={coPilotScale}
         />
       )}

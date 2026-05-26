@@ -310,7 +310,6 @@ impl CoPilotRoom {
 
     /// Owner force-grant to a specific participant. Returns the
     /// previous holder, if any, on success. Caller validates `by`.
-    #[allow(dead_code)] // exposed for the deferred owner force-grant endpoint.
     pub fn force_grant(&self, to: Uuid) -> Result<Option<Uuid>, JoinError> {
         let mut state = self.state.write().expect("co-pilot room lock poisoned");
         if !state.participants.contains_key(&to) {

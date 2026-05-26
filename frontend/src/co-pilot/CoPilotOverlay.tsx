@@ -9,9 +9,20 @@ interface CoPilotOverlayProps {
   allowChat: boolean;
   hasInput: boolean;
   selfPid: string | null;
+  /**
+   * `true` when the local participant is the session owner. Unlocks
+   * the per-row force-grant control in the roster strip.
+   */
+  selfIsOwner?: boolean;
   onClaimInput: () => void;
   onReleaseInput: () => void;
   onSendChat: (text: string) => boolean;
+  /**
+   * Owner-only force-grant callback. Invoked with the target pid when
+   * the owner clicks "Give control" on a roster row. Ignored when
+   * `selfIsOwner` is `false`.
+   */
+  onForceGrant?: (pid: string) => void;
   /**
    * Pixel scale of the underlying display element. Cursors arrive in
    * display-space coordinates; we multiply by this scale to project
@@ -32,9 +43,11 @@ export default function CoPilotOverlay({
   allowChat,
   hasInput,
   selfPid,
+  selfIsOwner = false,
   onClaimInput,
   onReleaseInput,
   onSendChat,
+  onForceGrant,
   displayScale,
 }: CoPilotOverlayProps) {
   const [chatOpen, setChatOpen] = useState(false);
@@ -155,6 +168,24 @@ export default function CoPilotOverlay({
               >
                 CTRL
               </span>
+            )}
+            {selfIsOwner && p.pid !== selfPid && !p.has_input && onForceGrant && (
+              <button
+                type="button"
+                onClick={() => onForceGrant(p.pid)}
+                title="Give input control to this participant"
+                style={{
+                  fontSize: "0.65rem",
+                  padding: "1px 6px",
+                  borderRadius: 3,
+                  background: "#3b82f6",
+                  color: "#fff",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                Give
+              </button>
             )}
           </div>
         ))}

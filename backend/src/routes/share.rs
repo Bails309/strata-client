@@ -788,6 +788,98 @@ pub async fn ws_copilot_room_owner(
     }))
 }
 
+// `POST /api/user/shared/copilot/:share_token/grant/:target_pid`
+//
+// Owner force-grant: transfers the input token to `target_pid`
+// unconditionally (no idle-timer wait). Used by the owner to override
+// a stuck or idle viewer that still holds the token, or to deliberately
+// hand control to a specific participant. Requires `AuthUser` and the
+// caller must be the share's owner.
+//
+// Returns 204 on success. Returns 404 when the share doesn't exist,
+// isn't owned by the caller, isn't a multiplayer share, has no active
+// session, or the target pid is not currently in the room — using the
+// same status across cases so the route doesn't leak share state.
+pub async fn copilot_force_grant(
+    State(state): State<SharedState>,
+    Path((share_token, target_pid)): Path<(String, Uuid)>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<axum::http::StatusCode, AppError> {
+    let db = {
+        let s = state.read().await;
+        if s.phase != BootPhase::Running {
+            return Err(AppError::SetupRequired);
+        }
+        s.db.clone().ok_or(AppError::SetupRequired)?
+    };
+
+    let share = crate::services::shares::find_active_by_token(&db.pool, &share_token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Invalid or expired share link".into()))?;
+
+    if share.owner_user_id != user.id {
+        return Err(AppError::NotFound("Invalid or expired share link".into()));
+    }
+    if !share.multiplayer {
+        return Err(AppError::NotFound(
+            "This share is not a multiplayer share".into(),
+        ));
+    }
+
+    let registry = {
+        let s = state.read().await;
+        s.session_registry.clone()
+    };
+    let session = registry
+        .find_by_connection_and_user(share.connection_id, share.owner_user_id)
+        .await
+        .ok_or_else(|| {
+            AppError::NotFound("The owner's session is not currently active.".into())
+        })?;
+
+    let room = &session.co_pilot_room;
+
+    // Pick an owner pid (if any) for the `by` field of the broadcast.
+    // Multiple owner WS connections are possible (e.g. tab + popout);
+    // any of them works as the auditable origin. Falls back to nil if
+    // the owner hasn't joined the room yet — the broadcast is still
+    // valid, just unattributed.
+    let by_pid = room
+        .roster()
+        .into_iter()
+        .find(|r| r.is_owner)
+        .map(|r| r.pid)
+        .unwrap_or_else(uuid::Uuid::nil);
+
+    room.force_grant(target_pid)
+        .map_err(|_| AppError::NotFound("Participant not in room".into()))?;
+
+    // Broadcast the new state. Pattern mirrors the in-loop claim path:
+    // InputGrant first so listeners can react to the new holder, then
+    // a full Roster so `has_input` flags update everywhere.
+    let _ = room.broadcast(&crate::services::co_pilot::CoPilotMsg::InputGrant {
+        pid: target_pid,
+        by: by_pid,
+    });
+    let _ = room.broadcast(&crate::services::co_pilot::CoPilotMsg::Roster {
+        participants: room.roster(),
+    });
+
+    let _ = crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "connection.copilot_force_grant",
+        &serde_json::json!({
+            "share_id": share.share_id.to_string(),
+            "share_token": share_token,
+            "target_pid": target_pid.to_string(),
+        }),
+    )
+    .await;
+
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn copilot_room_loop(
     mut socket: axum::extract::ws::WebSocket,

@@ -103,7 +103,7 @@ export default function SafeguardSigninCard({
     // existing Royal TS workflow at Capita. `-NoSessionVariable` skips
     // the module's global state pollution; `-NoWindowTitle` keeps the
     // launcher quiet.
-    return `Install-Module -Name Safeguard-PS -Scope CurrentUser -Force -AllowClobber\n$SGToken = Connect-Safeguard ${fqdn} -Browser -IdentityProvider ${idp} -NoSessionVariable -NoWindowTitle\nSet-Clipboard $SGToken`;
+    return `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser\nif (-not (Get-Module -ListAvailable -Name Safeguard-PS)) { Install-Module -Name Safeguard-PS -Scope CurrentUser -Force -AllowClobber }\n$SGToken = Connect-Safeguard ${fqdn} -Browser -IdentityProvider ${idp} -NoSessionVariable -NoWindowTitle\nSet-Clipboard $SGToken`;
   }, [status]);
 
   // Hide entirely when JIT is disabled or admin chose A2A-only mode.

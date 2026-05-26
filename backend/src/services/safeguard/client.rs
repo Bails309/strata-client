@@ -681,6 +681,192 @@ pub async fn cancel(
     Ok(())
 }
 
+// ── User-scoped catalog ───────────────────────────────────────────────
+//
+// `Me/RequestEntitlements` returns the catalog of (account, asset,
+// access-request-type) tuples the calling user is allowed to request
+// against. This is the same data the Safeguard portal's "New Request"
+// dialog uses; surfacing it inside Strata lets the user pick a
+// Safeguard account when creating/converting a credential profile
+// instead of typing account ids by hand.
+
+/// One row returned by [`list_password_entitlements`]. Fields are
+/// pre-flattened so the frontend doesn't need to walk a nested DTO.
+#[derive(Debug, serde::Serialize)]
+pub struct EntitledAccount {
+    /// `Account.Id` as a string (Safeguard returns Int32; we stringify
+    /// for parity with the credential-profile column type).
+    pub account_id: String,
+    /// `Account.Name` (sAMAccountName for AD-managed accounts).
+    pub account_name: Option<String>,
+    /// `Account.DomainName` — empty for local accounts.
+    pub account_domain_name: Option<String>,
+    /// `Asset.Id` as a string.
+    pub asset_id: String,
+    /// `Asset.Name`.
+    pub asset_name: Option<String>,
+    /// `Asset.NetworkAddress` (FQDN/IP) when published by Safeguard.
+    pub asset_network_address: Option<String>,
+}
+
+/// GET `/Me/RequestEntitlements?wellKnownType=PasswordAccessRequest`.
+///
+/// Filters to password requests only — Strata's JIT flow only ever
+/// uses `AccessRequestType=Password`, so other types (SSH key,
+/// session) would just confuse the picker.
+///
+/// Returns an empty vec when the appliance does not expose this
+/// endpoint (very old firmware) rather than failing hard — the UI
+/// can fall back to the manual fields.
+pub async fn list_password_entitlements(
+    client: &Client,
+    base: &str,
+    bearer: &str,
+) -> Result<Vec<EntitledAccount>, AppError> {
+    // Different Safeguard versions expose subtly different DTOs here:
+    //   - Nested form: `{ "Account": { "Id": .., "Name": .., "DomainName": .. },
+    //                       "Asset":   { "Id": .., "Name": .., "NetworkAddress": .. } }`
+    //   - Flat form  : `{ "AccountId": .., "AccountName": ..,
+    //                       "AccountDomainName": .., "AssetId": ..,
+    //                       "AssetName": .., "AssetNetworkAddress": .. }`
+    // Some appliances also include both. We accept either and prefer
+    // the nested form when present.
+    #[derive(serde::Deserialize)]
+    struct InnerAccount {
+        #[serde(rename = "Id", default)]
+        id: serde_json::Value,
+        #[serde(rename = "Name", default)]
+        name: Option<String>,
+        #[serde(rename = "DomainName", default)]
+        domain_name: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct InnerAsset {
+        #[serde(rename = "Id", default)]
+        id: serde_json::Value,
+        #[serde(rename = "Name", default)]
+        name: Option<String>,
+        #[serde(rename = "NetworkAddress", default)]
+        network_address: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        #[serde(rename = "Account", default)]
+        account: Option<InnerAccount>,
+        #[serde(rename = "Asset", default)]
+        asset: Option<InnerAsset>,
+        #[serde(rename = "AccountId", default)]
+        account_id: serde_json::Value,
+        #[serde(rename = "AccountName", default)]
+        account_name: Option<String>,
+        #[serde(rename = "AccountDomainName", default)]
+        account_domain_name: Option<String>,
+        #[serde(rename = "AssetId", default)]
+        asset_id: serde_json::Value,
+        #[serde(rename = "AssetName", default)]
+        asset_name: Option<String>,
+        #[serde(rename = "AssetNetworkAddress", default)]
+        asset_network_address: Option<String>,
+        #[serde(rename = "AccessRequestType", default)]
+        access_request_type: Option<String>,
+    }
+
+    let url = format!(
+        "{base}/service/core/v4/Me/RequestEntitlements?wellKnownType=PasswordAccessRequest"
+    );
+    let resp = client
+        .get(&url)
+        .bearer_auth(bearer)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("safeguard list entitlements: {e}")))?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        tracing::info!(
+            "safeguard: Me/RequestEntitlements returned 404 — appliance does not expose this endpoint"
+        );
+        return Ok(Vec::new());
+    }
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(AppError::Internal(format!(
+            "Safeguard Me/RequestEntitlements returned HTTP {status}: {}",
+            text.chars().take(500).collect::<String>()
+        )));
+    }
+
+    let rows: Vec<Row> = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("safeguard entitlements decode: {e}")))?;
+
+    fn json_to_string(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    let mut out: Vec<EntitledAccount> = Vec::with_capacity(rows.len());
+    for r in rows {
+        // Skip non-password types defensively — the wellKnownType
+        // query string should already have filtered, but appliance
+        // builds vary.
+        if let Some(t) = r.access_request_type.as_deref() {
+            if !t.eq_ignore_ascii_case("Password") {
+                continue;
+            }
+        }
+        let account_id = r
+            .account
+            .as_ref()
+            .and_then(|a| json_to_string(&a.id))
+            .or_else(|| json_to_string(&r.account_id));
+        let asset_id = r
+            .asset
+            .as_ref()
+            .and_then(|a| json_to_string(&a.id))
+            .or_else(|| json_to_string(&r.asset_id));
+        let (Some(account_id), Some(asset_id)) = (account_id, asset_id) else {
+            continue;
+        };
+        let account_name = r
+            .account
+            .as_ref()
+            .and_then(|a| a.name.clone())
+            .or(r.account_name)
+            .filter(|s| !s.is_empty());
+        let account_domain_name = r
+            .account
+            .as_ref()
+            .and_then(|a| a.domain_name.clone())
+            .or(r.account_domain_name)
+            .filter(|s| !s.is_empty());
+        let asset_name = r
+            .asset
+            .as_ref()
+            .and_then(|a| a.name.clone())
+            .or(r.asset_name)
+            .filter(|s| !s.is_empty());
+        let asset_network_address = r
+            .asset
+            .as_ref()
+            .and_then(|a| a.network_address.clone())
+            .or(r.asset_network_address)
+            .filter(|s| !s.is_empty());
+        out.push(EntitledAccount {
+            account_id,
+            account_name,
+            account_domain_name,
+            asset_id,
+            asset_name,
+            asset_network_address,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

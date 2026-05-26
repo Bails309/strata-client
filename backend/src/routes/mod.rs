@@ -366,6 +366,10 @@ pub fn build_router(state: SharedState) -> Router {
             get(user::list_safeguard_cached),
         )
         .route(
+            "/api/user/safeguard/accounts",
+            get(user::list_safeguard_accounts),
+        )
+        .route(
             "/api/user/safeguard/checkin",
             post(user::bulk_safeguard_checkin),
         )

@@ -1109,6 +1109,62 @@ pub async fn list_safeguard_cached(
     Ok(Json(rows))
 }
 
+/// `GET /api/user/safeguard/accounts` — list the Safeguard accounts
+/// the currently-signed-in user is entitled to request password
+/// access against, so the credential-profile editor can offer them
+/// as a picker instead of forcing the user to type account ids.
+///
+/// Requires a live per-user Safeguard token (browser sign-in flow).
+/// When the token is missing/expired, returns the same
+/// `safeguard.signin_required` validation marker the JIT path uses
+/// so the frontend can prompt for a fresh sign-in.
+pub async fn list_safeguard_accounts(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+) -> Result<Json<Vec<crate::services::safeguard::client::EntitledAccount>>, AppError> {
+    let db = require_running(&state).await?;
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+    };
+
+    let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
+    if !sg_cfg.enabled {
+        return Err(AppError::Validation("Safeguard JIT is not enabled".into()));
+    }
+
+    // Per-user browser token is the only auth mode that makes sense
+    // here: A2A returns the appliance-wide catalog, not the user's
+    // own entitlements. Hybrid still requires a personal token to
+    // answer "what am *I* entitled to?".
+    let bearer = crate::services::safeguard::user_token::load(&db.pool, &vault_cfg, user.id)
+        .await?
+        .ok_or_else(|| AppError::Validation("safeguard.signin_required".into()))?;
+
+    let secrets = crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
+    let identity = crate::services::safeguard::client::a2a_identity(&secrets)?;
+    let http = crate::services::safeguard::client::build_client(&sg_cfg, identity)?;
+    let base = crate::services::safeguard::client::base_url(&sg_cfg);
+
+    let entitlements =
+        crate::services::safeguard::client::list_password_entitlements(&http, &base, &bearer)
+            .await?;
+
+    // Audit count only — never log account/asset names.
+    crate::services::audit::log(
+        &db.pool,
+        Some(user.id),
+        "safeguard.entitlements.listed",
+        &json!({ "count": entitlements.len() }),
+    )
+    .await?;
+
+    Ok(Json(entitlements))
+}
+
 #[derive(Deserialize)]
 pub struct BulkSafeguardCheckinBody {
     /// Profile IDs to release. An empty list means "all currently

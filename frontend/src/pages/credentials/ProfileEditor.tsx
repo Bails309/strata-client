@@ -1,5 +1,11 @@
+import { useEffect, useState } from "react";
 import Select from "../../components/Select";
-import type { CheckoutRequest, CredentialProfile } from "../../api";
+import {
+  listSafeguardAccounts,
+  type CheckoutRequest,
+  type CredentialProfile,
+  type SafeguardEntitledAccount,
+} from "../../api";
 
 export interface EditingProfile {
   id?: string;
@@ -59,6 +65,64 @@ export default function ProfileEditor(props: ProfileEditorProps) {
   const isSafeguard = kind === "safeguard";
   const switchingFromSafeguardToLocal =
     !!editing.id && editing.original_kind === "safeguard" && !isSafeguard;
+
+  // Safeguard entitlement picker: fetch the user's catalog when the
+  // Safeguard branch is visible. Empty array means "no picker shown,
+  // fall back to manual inputs". `signin_required` switches the
+  // picker UI into a sign-in prompt.
+  const [entitlements, setEntitlements] = useState<SafeguardEntitledAccount[] | null>(null);
+  const [entitlementsError, setEntitlementsError] = useState<
+    null | "signin_required" | "load_failed"
+  >(null);
+  const [entitlementsLoading, setEntitlementsLoading] = useState(false);
+  useEffect(() => {
+    if (!safeguardEnabled || !isSafeguard) return;
+    let cancelled = false;
+    setEntitlementsLoading(true);
+    setEntitlementsError(null);
+    listSafeguardAccounts()
+      .then((rows) => {
+        if (cancelled) return;
+        setEntitlements(rows);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("safeguard.signin_required")) {
+          setEntitlementsError("signin_required");
+        } else {
+          setEntitlementsError("load_failed");
+        }
+        setEntitlements([]);
+      })
+      .finally(() => {
+        if (!cancelled) setEntitlementsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [safeguardEnabled, isSafeguard]);
+
+  const entitlementOptions = (entitlements ?? []).map((row) => {
+    const acct = row.account_name?.trim() || `account#${row.account_id}`;
+    const asset = row.asset_name?.trim() || `asset#${row.asset_id}`;
+    const domain = row.account_domain_name?.trim();
+    const labelText = domain ? `${acct}@${domain} — ${asset}` : `${acct} — ${asset}`;
+    return {
+      value: `${row.account_id}|${row.asset_id}`,
+      label: labelText,
+    };
+  });
+  const selectedEntitlementValue =
+    editing.safeguard_account_id && editing.safeguard_asset
+      ? entitlements?.find(
+          (r) =>
+            r.account_id === editing.safeguard_account_id &&
+            (r.asset_id === editing.safeguard_asset || r.asset_name === editing.safeguard_asset)
+        )
+        ? `${editing.safeguard_account_id}|${entitlements?.find((r) => r.account_id === editing.safeguard_account_id)?.asset_id ?? editing.safeguard_asset}`
+        : ""
+      : "";
 
   const currentProfile = editing.id ? profiles.find((p) => p.id === editing.id) : null;
   const editLinkedCheckout = currentProfile?.checkout_id
@@ -163,34 +227,111 @@ export default function ProfileEditor(props: ProfileEditorProps) {
       ) : (
         <>
           {isSafeguard ? (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <>
+              {/* Safeguard entitlement picker. Shown above the manual
+                  inputs whenever the appliance returns a non-empty
+                  catalog for the signed-in user. Selecting a row
+                  autofills the AccountId/Asset fields (and the label,
+                  if the user hasn't typed one yet). */}
               <div className="form-group">
-                <label htmlFor="prof-sg-account">Safeguard AccountId</label>
-                <input
-                  id="prof-sg-account"
-                  value={editing.safeguard_account_id ?? ""}
-                  onChange={(e) => setEditing({ ...editing, safeguard_account_id: e.target.value })}
-                  placeholder="e.g. 42"
-                  autoComplete="off"
-                />
-                <p className="text-txt-tertiary text-[0.6875rem] mt-1">
-                  Numeric Safeguard AccountId from the appliance.
-                </p>
+                <label htmlFor="prof-sg-picker">Your Safeguard accounts</label>
+                {entitlementsLoading ? (
+                  <p className="text-txt-tertiary text-xs">Loading your Safeguard accounts…</p>
+                ) : entitlementsError === "signin_required" ? (
+                  <p className="text-txt-tertiary text-xs">
+                    Sign in to Safeguard to pick from your assigned accounts. You can still enter
+                    the AccountId and Asset manually below.
+                  </p>
+                ) : entitlementsError === "load_failed" ? (
+                  <p className="text-txt-tertiary text-xs">
+                    Could not load your Safeguard accounts. You can still enter the AccountId and
+                    Asset manually below.
+                  </p>
+                ) : entitlements && entitlements.length === 0 ? (
+                  <p className="text-txt-tertiary text-xs">
+                    Safeguard did not return any entitled accounts for your user. Enter the
+                    AccountId and Asset manually below.
+                  </p>
+                ) : (
+                  <>
+                    <Select
+                      value={selectedEntitlementValue}
+                      onChange={(val) => {
+                        if (!val) return;
+                        const sep = val.indexOf("|");
+                        if (sep < 0) return;
+                        const accountId = val.slice(0, sep);
+                        const assetId = val.slice(sep + 1);
+                        const row = entitlements?.find(
+                          (r) => r.account_id === accountId && r.asset_id === assetId
+                        );
+                        const acct = row?.account_name?.trim();
+                        const asset = row?.asset_name?.trim();
+                        const domain = row?.account_domain_name?.trim();
+                        const suggestedLabel = acct
+                          ? domain
+                            ? `${acct}@${domain}`
+                            : asset
+                              ? `${acct} — ${asset}`
+                              : acct
+                          : "";
+                        setEditing({
+                          ...editing,
+                          safeguard_account_id: accountId,
+                          // Prefer the human-readable AssetName for the
+                          // stored profile (matches the existing
+                          // "AssetId or asset name" semantics). Fall
+                          // back to the numeric AssetId.
+                          safeguard_asset: asset || assetId,
+                          label:
+                            editing.label && editing.label.trim().length > 0
+                              ? editing.label
+                              : suggestedLabel,
+                        });
+                      }}
+                      options={[
+                        { value: "", label: "— Select a Safeguard account —" },
+                        ...entitlementOptions,
+                      ]}
+                    />
+                    <p className="text-txt-tertiary text-[0.6875rem] mt-1">
+                      Picks an account/asset pair from Safeguard. You can still override the
+                      AccountId or Asset manually below.
+                    </p>
+                  </>
+                )}
               </div>
-              <div className="form-group">
-                <label htmlFor="prof-sg-asset">Safeguard Asset</label>
-                <input
-                  id="prof-sg-asset"
-                  value={editing.safeguard_asset ?? ""}
-                  onChange={(e) => setEditing({ ...editing, safeguard_asset: e.target.value })}
-                  placeholder="AssetId or asset name"
-                  autoComplete="off"
-                />
-                <p className="text-txt-tertiary text-[0.6875rem] mt-1">
-                  Numeric AssetId or label as configured in Safeguard.
-                </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                <div className="form-group">
+                  <label htmlFor="prof-sg-account">Safeguard AccountId</label>
+                  <input
+                    id="prof-sg-account"
+                    value={editing.safeguard_account_id ?? ""}
+                    onChange={(e) =>
+                      setEditing({ ...editing, safeguard_account_id: e.target.value })
+                    }
+                    placeholder="e.g. 42"
+                    autoComplete="off"
+                  />
+                  <p className="text-txt-tertiary text-[0.6875rem] mt-1">
+                    Numeric Safeguard AccountId from the appliance.
+                  </p>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="prof-sg-asset">Safeguard Asset</label>
+                  <input
+                    id="prof-sg-asset"
+                    value={editing.safeguard_asset ?? ""}
+                    onChange={(e) => setEditing({ ...editing, safeguard_asset: e.target.value })}
+                    placeholder="AssetId or asset name"
+                    autoComplete="off"
+                  />
+                  <p className="text-txt-tertiary text-[0.6875rem] mt-1">
+                    Numeric AssetId or label as configured in Safeguard.
+                  </p>
+                </div>
               </div>
-            </div>
+            </>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
               <div className="form-group">

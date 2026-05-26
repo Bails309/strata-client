@@ -241,7 +241,13 @@ export default function SessionBar() {
               }
             : mode
         );
-        const mpQs = useMp ? "?mp=1" : "";
+        // The backend already returns `?mode=control` for control shares,
+        // so any additional query parameter must be appended with `&` —
+        // a second `?` would make the query parser treat the rest as
+        // part of the previous value, hiding `mp=1` and breaking the
+        // viewer's multiplayer + control detection.
+        const sep = result.share_url.includes("?") ? "&" : "?";
+        const mpQs = useMp ? `${sep}mp=1` : "";
         const fullUrl = `${window.location.origin}${result.share_url}${mpQs}`;
         setShareUrl(fullUrl);
         setShareOpen(true);

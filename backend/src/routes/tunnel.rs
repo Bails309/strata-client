@@ -1248,8 +1248,13 @@ pub async fn ws_tunnel(
                     )
                     .await
                     {
+                        // Bind to a String before the macro so CodeQL's
+                        // rust/unused-variable query (which can't see
+                        // through tracing's macro expansion) doesn't
+                        // mis-flag `e` as unused. Same pattern as #142.
+                        let err_str = e.to_string();
                         tracing::warn!(
-                            "Safeguard auto-checkin failed for request_id={request_id}: {e}"
+                            "Safeguard auto-checkin failed for request_id={request_id}: {err_str}"
                         );
                     } else {
                         tracing::info!(

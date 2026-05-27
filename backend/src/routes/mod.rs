@@ -362,6 +362,10 @@ pub fn build_router(state: SharedState) -> Router {
             post(user::bulk_safeguard_checkout),
         )
         .route(
+            "/api/user/safeguard/release",
+            post(user::release_safeguard_pending),
+        )
+        .route(
             "/api/user/safeguard/cached",
             get(user::list_safeguard_cached),
         )

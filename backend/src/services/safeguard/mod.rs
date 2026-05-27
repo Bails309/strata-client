@@ -105,6 +105,31 @@ pub struct CheckoutResult {
     pub username: Option<String>,
 }
 
+/// Outcome of [`jit_checkout`].
+///
+/// `PendingApproval` means the appliance created the access request
+/// but it is queued behind a human approver; callers should keep the
+/// `request_id` and either poll [`release_pending`] or have the user
+/// press a manual Refresh after approval. The appliance keeps the
+/// queue position only while the request exists, so callers MUST NOT
+/// cancel the request on this outcome.
+pub enum JitOutcome {
+    Released(CheckoutResult),
+    PendingApproval {
+        request_id: String,
+        /// Account name Safeguard echoed at request-creation time, if
+        /// we know it (None when reusing an existing request). Kept on
+        /// the outcome so future callers can surface it in the
+        /// "Awaiting approval" UI without a second API round-trip.
+        #[allow(dead_code)]
+        username: Option<String>,
+        /// Appliance-reported request state — typically
+        /// `"PendingApproval"`. Surfaced for diagnostics; callers
+        /// should treat any `PendingApproval` outcome the same way.
+        appliance_state: Option<String>,
+    },
+}
+
 /// Wrapper around `client::checkout_password` that tolerates the
 /// post-cancel password-reset race. When the preflight cancels an
 /// existing `RequestAvailable` request, Safeguard immediately rotates
@@ -112,12 +137,15 @@ pub struct CheckoutResult {
 /// the freshly-created request returns Code 90010 ("another request
 /// is pending password reset") for a few seconds while the rotation
 /// completes. Retry with exponential backoff, capped at ~10s total.
+///
+/// Propagates [`client::CheckoutOutcome::PendingApproval`] unchanged
+/// — that's a workflow signal, not an error to retry-then-fail.
 async fn checkout_password_with_retry(
     http: &reqwest::Client,
     base: &str,
     bearer: &str,
     request_id: &str,
-) -> Result<String> {
+) -> Result<client::CheckoutOutcome> {
     let delays_ms = [0u64, 500, 1000, 2000, 3000, 4000];
     let mut last_err: Option<AppError> = None;
     for (i, d) in delays_ms.iter().enumerate() {
@@ -125,13 +153,13 @@ async fn checkout_password_with_retry(
             tokio::time::sleep(std::time::Duration::from_millis(*d)).await;
         }
         match client::checkout_password(http, base, bearer, request_id).await {
-            Ok(pw) => {
+            Ok(outcome) => {
                 if i > 0 {
                     tracing::info!(
                         "checkout_password: succeeded on retry {i} for request {request_id}"
                     );
                 }
-                return Ok(pw);
+                return Ok(outcome);
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -168,7 +196,7 @@ pub async fn jit_checkout(
     connection_id: Option<uuid::Uuid>,
     profile_id: Option<uuid::Uuid>,
     requested_hours: Option<u32>,
-) -> Result<CheckoutResult> {
+) -> Result<JitOutcome> {
     let cfg = config::load(pool).await?;
     if !cfg.enabled {
         return Err(AppError::Validation(
@@ -250,15 +278,39 @@ pub async fn jit_checkout(
     // ignore failures — if Safeguard has already closed the request
     // we don't want that to block the new checkout, and on a network
     // blip the user's POST below will surface the real error.
+    //
+    // Exception: a request in state `PendingApproval` is the user
+    // waiting for an approver — cancelling it would lose their queue
+    // position. Reuse it instead: call CheckoutPassword on the
+    // existing id (will return PendingApproval again until approved,
+    // or release the password once it has been).
+    let mut reuse_pending: Option<(String, Option<String>)> = None;
     match client::list_my_active_requests_for(&http, &base, &bearer, account_id, asset_id).await {
         Ok(stale) => {
             for (rid, state) in stale {
+                let is_pending_approval = state
+                    .as_deref()
+                    .map(|s| s.contains("PendingApproval") || s.contains("PendingAccountApproval"))
+                    .unwrap_or(false);
+                if is_pending_approval {
+                    if reuse_pending.is_none() {
+                        tracing::info!(
+                            "jit_checkout: reusing existing PendingApproval request {rid} (state={state:?}) for account {account_id}@{asset_id}"
+                        );
+                        reuse_pending = Some((rid.clone(), state.clone()));
+                    } else {
+                        tracing::warn!(
+                            "jit_checkout: extra PendingApproval request {rid} for account {account_id}@{asset_id} ignored (first one already chosen)"
+                        );
+                    }
+                    continue;
+                }
                 // Pick the right release verb based on Safeguard's
                 // workflow state. Once the password has been checked
                 // out the request is releasable via CheckIn; before
-                // that point (RequestAvailable, PendingApproval, etc.)
-                // CheckIn returns Code 90114 and the right call is
-                // Cancel. We try one, fall back to the other.
+                // that point (RequestAvailable, etc.) CheckIn returns
+                // Code 90114 and the right call is Cancel. We try
+                // one, fall back to the other.
                 let checked_out = state
                     .as_deref()
                     .map(|s| s.contains("CheckedOut"))
@@ -308,37 +360,48 @@ pub async fn jit_checkout(
         }
     }
 
-    let params = client::CreateAccessRequestParams {
-        account_id,
-        asset_id,
-        hours,
-        reason,
+    // If preflight found a PendingApproval request for this same
+    // account/asset, reuse its id and skip the create. We have no
+    // AccountName from the list response, so the username will be
+    // None until either Released succeeds (we'll cache the cred
+    // without a username — the user's profile keeps the canonical
+    // name) or the caller refetches the request details.
+    let (request_id, username): (String, Option<String>) = if let Some((rid, _)) = &reuse_pending {
+        (rid.clone(), None)
+    } else {
+        let params = client::CreateAccessRequestParams {
+            account_id,
+            asset_id,
+            hours,
+            reason,
+        };
+
+        let created = client::create_access_request(&http, &base, &bearer, &params).await?;
+        // Use Safeguard's `Account.Name` verbatim as the logon name.
+        // Some targets (Windows servers joined to the same domain as
+        // the Strata host) reject `DOMAIN\user` via NLA when the
+        // credential is a local account, and many AD targets accept
+        // the bare sAMAccountName when the RDP `domain` arg is left
+        // empty. Keep it simple: send what Safeguard says the
+        // account is called.
+        let username = created.account_name.clone();
+        insert_audit(
+            pool,
+            user_id,
+            connection_id,
+            profile_id,
+            Some(&created.request_id),
+            account_id,
+            asset_id,
+            "pending",
+            None,
+        )
+        .await;
+        (created.request_id, username)
     };
 
-    let created = client::create_access_request(&http, &base, &bearer, &params).await?;
-    let request_id = created.request_id;
-    // Use Safeguard's `Account.Name` verbatim as the logon name.
-    // Some targets (Windows servers joined to the same domain as the
-    // Strata host) reject `DOMAIN\user` via NLA when the credential
-    // is a local account, and many AD targets accept the bare
-    // sAMAccountName when the RDP `domain` arg is left empty. Keep
-    // it simple: send what Safeguard says the account is called.
-    let username = created.account_name.clone();
-    insert_audit(
-        pool,
-        user_id,
-        connection_id,
-        profile_id,
-        Some(&request_id),
-        account_id,
-        asset_id,
-        "pending",
-        None,
-    )
-    .await;
-
-    let password = match checkout_password_with_retry(&http, &base, &bearer, &request_id).await {
-        Ok(pw) => pw,
+    let outcome = match checkout_password_with_retry(&http, &base, &bearer, &request_id).await {
+        Ok(o) => o,
         Err(e) => {
             insert_audit(
                 pool,
@@ -356,6 +419,29 @@ pub async fn jit_checkout(
         }
     };
 
+    let password = match outcome {
+        client::CheckoutOutcome::Released(pw) => pw,
+        client::CheckoutOutcome::PendingApproval { state } => {
+            insert_audit(
+                pool,
+                user_id,
+                connection_id,
+                profile_id,
+                Some(&request_id),
+                account_id,
+                asset_id,
+                "pending_approval",
+                state.as_deref(),
+            )
+            .await;
+            return Ok(JitOutcome::PendingApproval {
+                request_id,
+                username,
+                appliance_state: state,
+            });
+        }
+    };
+
     insert_audit(
         pool,
         user_id,
@@ -369,11 +455,148 @@ pub async fn jit_checkout(
     )
     .await;
 
-    Ok(CheckoutResult {
+    Ok(JitOutcome::Released(CheckoutResult {
         request_id,
         password,
         username,
-    })
+    }))
+}
+
+/// Attempt to release the password for an *already-issued* access
+/// request. Used to resolve a [`JitOutcome::PendingApproval`] without
+/// creating a new request: the caller hands back the same
+/// `request_id` once an approver has acted (or to poll periodically
+/// in the meantime). No appliance state is mutated until the
+/// approver allows it, so this is safe to call repeatedly.
+///
+/// `account_id` / `asset_id` are required only for the audit row;
+/// the appliance does not need them at this stage.
+///
+/// Returns [`JitOutcome::Released`] when the appliance hands over the
+/// password (caller should cache it), [`JitOutcome::PendingApproval`]
+/// when still queued, or `Err` for anything else (cancelled, denied,
+/// expired, network).
+#[allow(clippy::too_many_arguments)]
+pub async fn release_pending(
+    pool: &PgPool,
+    vault: &crate::config::VaultConfig,
+    request_id: &str,
+    account_id: &str,
+    asset_id: &str,
+    user_id: Option<uuid::Uuid>,
+    connection_id: Option<uuid::Uuid>,
+    profile_id: Option<uuid::Uuid>,
+) -> Result<JitOutcome> {
+    let cfg = config::load(pool).await?;
+    if !cfg.enabled {
+        return Err(AppError::Validation(
+            "Safeguard JIT is disabled in admin settings".into(),
+        ));
+    }
+    if request_id.trim().is_empty() {
+        return Err(AppError::Validation(
+            "release_pending called with empty request_id".into(),
+        ));
+    }
+
+    let secrets = config::load_secrets(pool, vault).await?;
+    let identity = client::a2a_identity(&secrets)?;
+    let http = client::build_client(&cfg, identity)?;
+    let base = client::base_url(&cfg);
+
+    let bearer = match cfg.auth_mode {
+        config::AuthMode::PerUserBrowser => {
+            let uid = user_id.ok_or_else(|| {
+                AppError::Validation(
+                    "Safeguard per_user_browser mode requires an authenticated user".into(),
+                )
+            })?;
+            user_token::load(pool, vault, uid)
+                .await?
+                .ok_or_else(|| AppError::Validation("safeguard.signin_required".into()))?
+        }
+        config::AuthMode::A2a => {
+            let api_key = secrets
+                .a2a_api_key
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    AppError::Validation("Safeguard A2A API key is not configured".into())
+                })?;
+            client::a2a_login(&http, &base, api_key).await?
+        }
+        config::AuthMode::Hybrid => {
+            let user_bearer = match user_id {
+                Some(uid) => user_token::load(pool, vault, uid).await?,
+                None => None,
+            };
+            match user_bearer {
+                Some(t) => t,
+                None => {
+                    let api_key = secrets
+                        .a2a_api_key
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| AppError::Validation("safeguard.signin_required".into()))?;
+                    client::a2a_login(&http, &base, api_key).await?
+                }
+            }
+        }
+    };
+
+    let outcome = match checkout_password_with_retry(&http, &base, &bearer, request_id).await {
+        Ok(o) => o,
+        Err(e) => {
+            insert_audit(
+                pool,
+                user_id,
+                connection_id,
+                profile_id,
+                Some(request_id),
+                account_id,
+                asset_id,
+                "failed",
+                Some(&e.to_string()),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+
+    match outcome {
+        client::CheckoutOutcome::Released(password) => {
+            insert_audit(
+                pool,
+                user_id,
+                connection_id,
+                profile_id,
+                Some(request_id),
+                account_id,
+                asset_id,
+                "success",
+                None,
+            )
+            .await;
+            Ok(JitOutcome::Released(CheckoutResult {
+                request_id: request_id.to_string(),
+                password,
+                // The username Safeguard reported at request-creation
+                // time is not echoed back from CheckoutPassword; the
+                // caller is expected to use the profile's stored
+                // username or refetch the request details.
+                username: None,
+            }))
+        }
+        client::CheckoutOutcome::PendingApproval { state } => {
+            // No audit row for repeat polls — would otherwise flood
+            // the table during a long approval queue.
+            Ok(JitOutcome::PendingApproval {
+                request_id: request_id.to_string(),
+                username: None,
+                appliance_state: state,
+            })
+        }
+    }
 }
 
 /// Release a previously-issued access request. Safe to call even

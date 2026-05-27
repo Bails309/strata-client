@@ -384,7 +384,7 @@ pub async fn ws_tunnel(
                     &connection_id.to_string(),
                     &user.username,
                 );
-                let outcome = crate::services::safeguard::jit_checkout(
+                let jit = crate::services::safeguard::jit_checkout(
                     &db.pool,
                     vault_cfg,
                     &account_id,
@@ -396,6 +396,22 @@ pub async fn ws_tunnel(
                     Some(profile_ttl_hours.max(1) as u32),
                 )
                 .await?;
+                let outcome = match jit {
+                    crate::services::safeguard::JitOutcome::Released(o) => o,
+                    crate::services::safeguard::JitOutcome::PendingApproval {
+                        request_id, ..
+                    } => {
+                        // Approval-gated profile: the user can't
+                        // connect until an approver acts. Surface a
+                        // stable validation code so the frontend can
+                        // render a friendly modal pointing at the
+                        // bulk-checkout / Request Checkout tab where
+                        // the request can be tracked + released.
+                        return Err(AppError::Validation(format!(
+                            "safeguard.approval_required:{request_id}"
+                        )));
+                    }
+                };
                 tracing::info!(
                     "Safeguard JIT checkout succeeded: request_id={}, account_id={}, username={:?}",
                     outcome.request_id,

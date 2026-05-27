@@ -1890,6 +1890,17 @@ export interface BulkSafeguardCheckoutResult {
   expires_at?: string;
   username?: string;
   replaced_existing?: boolean;
+  /**
+   * Tri-state outcome. `"pending"` means the Safeguard request is
+   * queued for an approver — `request_id` will be set and the
+   * frontend should poll `/user/safeguard/release` or expose a manual
+   * Refresh button. Older backends omit this field, in which case
+   * `ok` alone decides the badge.
+   */
+  state?: "ok" | "pending" | "failed";
+  request_id?: string;
+  account_id?: string;
+  asset?: string;
 }
 
 export const listSafeguardCached = () => request<SafeguardCachedStatus[]>("/user/safeguard/cached");
@@ -1898,6 +1909,18 @@ export const bulkSafeguardCheckout = (profile_ids: string[], comment: string) =>
   request<BulkSafeguardCheckoutResult[]>("/user/safeguard/bulk-checkout", {
     method: "POST",
     body: JSON.stringify({ profile_ids, comment }),
+  });
+
+/**
+ * Retry CheckoutPassword for a Safeguard request that came back
+ * PendingApproval. Returns the same shape as bulk-checkout: `ok=true`
+ * means the approver acted and the password is now cached; `state ===
+ * "pending"` means still queued; anything else is a hard failure.
+ */
+export const releaseSafeguardPending = (profile_id: string, request_id: string) =>
+  request<BulkSafeguardCheckoutResult>("/user/safeguard/release", {
+    method: "POST",
+    body: JSON.stringify({ profile_id, request_id }),
   });
 
 export interface BulkSafeguardCheckinResult {

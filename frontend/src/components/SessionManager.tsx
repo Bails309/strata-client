@@ -197,6 +197,16 @@ export function SessionManagerProvider({
     const wsUrl = `${wsProto}//${window.location.host}/api/tunnel/${opts.connectionId}`;
 
     const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+    // Extend the client-side receive watchdog from the upstream default of
+    // 15 s to 30 s. The vendored guacamole-common-js fires `socket.close()`
+    // with no args when no inbound frame arrives within `receiveTimeout` ms,
+    // which the backend logs as `WebSocket closed by client: None`. Brief
+    // backend stalls (e.g. NVR ring-buffer lock contention when a guest joins
+    // a multiplayer share) can exceed 15 s; 30 s gives the system room to
+    // recover before tearing the host tunnel down. The Guacamole-level ping
+    // (every 500 ms) is unchanged so a truly dead server is still detected
+    // quickly by the keepalive on the backend side.
+    tunnel.receiveTimeout = 30000;
     const client = new Guacamole.Client(tunnel);
     const display = client.getDisplay();
     const displayEl = display.getElement();

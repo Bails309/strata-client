@@ -116,6 +116,10 @@ export default function SharedViewer() {
     // after Guacamole's own `?` separator. See `client.connect(...)` below.
     const wsUrl = `${wsProto}//${window.location.host}/api/shared/tunnel/${shareToken}`;
     const tunnel = new Guacamole.WebSocketTunnel(wsUrl);
+    // See SessionManager: bump the upstream 15 s `receiveTimeout` to 30 s so
+    // transient host-side stalls don't tear viewer tunnels down with a
+    // mysterious empty-payload close.
+    tunnel.receiveTimeout = 30000;
     const client = new Guacamole.Client(tunnel);
     clientRef.current = client;
     const display = client.getDisplay();

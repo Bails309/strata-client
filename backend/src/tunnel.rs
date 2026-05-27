@@ -1,7 +1,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -685,6 +685,15 @@ async fn handle_guac_handshake(
     /// instruction terminators the buffer is capped to prevent OOM.
     const MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
 
+    // Diagnostic: track how long since we last shipped a frame to the host's
+    // WebSocket. If this gap exceeds the threshold the host's guacamole-common-js
+    // `receiveTimeout` (15 s) will fire and tear the tunnel down with an
+    // empty Close frame — which surfaces as the dreaded "WebSocket closed by
+    // client: None" log. Warn at 1 s so we catch stalls early; the timing
+    // helps pinpoint which lock / await is starving the output path.
+    let mut last_host_send = Instant::now();
+    const HOST_SEND_GAP_WARN: Duration = Duration::from_secs(1);
+
     // WebSocket keepalive – send a Ping every 15 s, timeout if no Pong in 30 s.
     let mut ping_interval = tokio::time::interval(Duration::from_secs(15));
     ping_interval.tick().await; // consume the first immediate tick
@@ -844,17 +853,44 @@ async fn handle_guac_handshake(
 
                             // NVR: capture frame into ring buffer + broadcast
                             if let Some((ref tx, ref buffer, _, _, _)) = nvr_handles {
+                                let lock_wait_start = Instant::now();
                                 {
                                     let mut buf: tokio::sync::RwLockWriteGuard<'_, SessionBuffer> = buffer.write().await;
+                                    let lock_waited = lock_wait_start.elapsed();
+                                    if lock_waited >= HOST_SEND_GAP_WARN {
+                                        tracing::warn!(
+                                            waited_ms = lock_waited.as_millis() as u64,
+                                            "NVR buffer write-lock contention — host frame delayed (likely a reader holding the lock too long)"
+                                        );
+                                    }
                                     buf.push(text.clone());
                                 }
                                 let _ = tx.send(std::sync::Arc::new(text.clone()));
                             }
 
+                            let send_wait_start = Instant::now();
                             if ws_tx.send(Message::Text(text.into())).await.is_err() {
                                 tracing::info!("WebSocket send channel closed (writer task exited)");
                                 break;
                             }
+                            let send_waited = send_wait_start.elapsed();
+                            if send_waited >= HOST_SEND_GAP_WARN {
+                                tracing::warn!(
+                                    waited_ms = send_waited.as_millis() as u64,
+                                    "Host ws_tx mpsc full — writer task is not draining fast enough"
+                                );
+                            }
+
+                            let now = Instant::now();
+                            let gap = now.duration_since(last_host_send);
+                            if gap >= HOST_SEND_GAP_WARN {
+                                tracing::warn!(
+                                    gap_ms = gap.as_millis() as u64,
+                                    "Host output gap: no frames forwarded for {}ms — at 15s the client's receiveTimeout fires",
+                                    gap.as_millis()
+                                );
+                            }
+                            last_host_send = now;
                         }
                         // else: no complete instruction yet, keep buffering
                     }

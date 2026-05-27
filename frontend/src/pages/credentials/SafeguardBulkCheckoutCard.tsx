@@ -90,6 +90,106 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
     return () => clearInterval(t);
   }, [safeguardEnabled, sgProfiles.length, signinNonce]);
 
+  /**
+   * Retry CheckoutPassword for a single pending row. Used both by the
+   * inline Refresh button and the background poll loop. On success
+   * (approver acted) we replace the row in results and re-fetch the
+   * cache so the new "Cached" badge appears immediately. On still-
+   * pending we just update the row's error text.
+   *
+   * Declared up here (before the poll useEffect below) so the effect
+   * can reference it without tripping `no-use-before-define`.
+   */
+  const refreshOne = async (profileId: string, requestId: string, manual: boolean) => {
+    setPollingIds((prev) => {
+      const next = new Set(prev);
+      next.add(profileId);
+      return next;
+    });
+    // Manual refresh resets the 30-minute cap so a user actively
+    // chasing an approval doesn't get cut off.
+    if (manual) {
+      setPollStartedAt((prev) => {
+        const next = new Map(prev);
+        next.set(profileId, Date.now());
+        return next;
+      });
+    }
+    try {
+      const updated = await releaseSafeguardPending(profileId, requestId);
+      setResults((prev) => prev.map((r) => (r.profile_id === profileId ? updated : r)));
+      if (updated.state === "ok" || updated.ok) {
+        // Approver acted — clean up pending state and pull the new
+        // cache row into the table.
+        setPollStartedAt((prev) => {
+          const next = new Map(prev);
+          next.delete(profileId);
+          return next;
+        });
+        await refresh();
+      }
+    } catch (e: unknown) {
+      // Surface as inline error text on the row by overwriting it.
+      const msg = e instanceof Error ? e.message : "Refresh failed";
+      setResults((prev) =>
+        prev.map((r) =>
+          r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: msg } : r,
+        ),
+      );
+      setPollStartedAt((prev) => {
+        const next = new Map(prev);
+        next.delete(profileId);
+        return next;
+      });
+    } finally {
+      setPollingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(profileId);
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Background poll: every POLL_INTERVAL_MS, retry every pending row
+   * whose stamp is younger than POLL_MAX_MS. Pauses while the tab is
+   * hidden so we don't pile up requests against Safeguard in the
+   * background. Declared up here (before the early returns below) so
+   * the hook order stays stable across renders.
+   */
+  useEffect(() => {
+    const pending = results.filter(
+      (r) => r.state === "pending" && !!r.request_id && !!r.profile_id,
+    );
+    if (pending.length === 0) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled || document.hidden) return;
+      const now = Date.now();
+      pending.forEach((r) => {
+        if (!r.request_id) return;
+        const startedAt = pollStartedAt.get(r.profile_id) ?? now;
+        if (now - startedAt > POLL_MAX_MS) return;
+        if (pollingIds.has(r.profile_id)) return;
+        void refreshOne(r.profile_id, r.request_id, false);
+      });
+    };
+    const intervalId = setInterval(tick, POLL_INTERVAL_MS);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // Intentionally exclude pollingIds & pollStartedAt from deps —
+    // we read them via the closure on each tick and don't want to
+    // tear down/recreate the interval on every state mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results]);
+
   if (!safeguardEnabled) return null;
   if (sgProfiles.length === 0) return null;
 
@@ -194,102 +294,6 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       setBusy(false);
     }
   };
-
-  /**
-   * Retry CheckoutPassword for a single pending row. Used both by the
-   * inline Refresh button and the background poll loop. On success
-   * (approver acted) we replace the row in results and re-fetch the
-   * cache so the new "Cached" badge appears immediately. On still-
-   * pending we just update the row's error text.
-   */
-  const refreshOne = async (profileId: string, requestId: string, manual: boolean) => {
-    setPollingIds((prev) => {
-      const next = new Set(prev);
-      next.add(profileId);
-      return next;
-    });
-    // Manual refresh resets the 30-minute cap so a user actively
-    // chasing an approval doesn't get cut off.
-    if (manual) {
-      setPollStartedAt((prev) => {
-        const next = new Map(prev);
-        next.set(profileId, Date.now());
-        return next;
-      });
-    }
-    try {
-      const updated = await releaseSafeguardPending(profileId, requestId);
-      setResults((prev) => prev.map((r) => (r.profile_id === profileId ? updated : r)));
-      if (updated.state === "ok" || updated.ok) {
-        // Approver acted — clean up pending state and pull the new
-        // cache row into the table.
-        setPollStartedAt((prev) => {
-          const next = new Map(prev);
-          next.delete(profileId);
-          return next;
-        });
-        await refresh();
-      }
-    } catch (e: unknown) {
-      // Surface as inline error text on the row by overwriting it.
-      const msg = e instanceof Error ? e.message : "Refresh failed";
-      setResults((prev) =>
-        prev.map((r) =>
-          r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: msg } : r,
-        ),
-      );
-      setPollStartedAt((prev) => {
-        const next = new Map(prev);
-        next.delete(profileId);
-        return next;
-      });
-    } finally {
-      setPollingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(profileId);
-        return next;
-      });
-    }
-  };
-
-  /**
-   * Background poll: every POLL_INTERVAL_MS, retry every pending row
-   * whose stamp is younger than POLL_MAX_MS. Pauses while the tab is
-   * hidden so we don't pile up requests against Safeguard in the
-   * background.
-   */
-  useEffect(() => {
-    const pending = results.filter(
-      (r) => r.state === "pending" && !!r.request_id && !!r.profile_id,
-    );
-    if (pending.length === 0) return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled || document.hidden) return;
-      const now = Date.now();
-      pending.forEach((r) => {
-        if (!r.request_id) return;
-        const startedAt = pollStartedAt.get(r.profile_id) ?? now;
-        if (now - startedAt > POLL_MAX_MS) return;
-        if (pollingIds.has(r.profile_id)) return;
-        void refreshOne(r.profile_id, r.request_id, false);
-      });
-    };
-    const intervalId = setInterval(tick, POLL_INTERVAL_MS);
-    const onVis = () => {
-      if (!document.hidden) tick();
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-    // Intentionally exclude pollingIds & pollStartedAt from deps —
-    // we read them via the closure on each tick and don't want to
-    // tear down/recreate the interval on every state mutation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results]);
 
   return (
     <section className="card animate-fade-in mb-4">

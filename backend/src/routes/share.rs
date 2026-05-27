@@ -1322,9 +1322,7 @@ mod tests {
         // but blocking them starves the JS client's keepalive logic
         // and breaks guest input. Regression guard for the v1.1.0
         // multiplayer share fix.
-        assert!(
-            first_disallowed_guest_opcode("0.,4.ping,13.1779881696144;").is_none()
-        );
+        assert!(first_disallowed_guest_opcode("0.,4.ping,13.1779881696144;").is_none());
         assert!(first_disallowed_guest_opcode("0.,4.pong;").is_none());
     }
 

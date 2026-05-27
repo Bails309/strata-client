@@ -64,7 +64,26 @@ jobs:
         # the single resolved Cargo.lock lives at the repo root; point
         # cargo-audit at it explicitly so it audits the full closure
         # (backend + strata-protocol + strata-dmz).
-        run: cargo audit -f ../Cargo.lock --deny unsound --deny unmaintained
+        #
+        # cargo-audit fetches the RustSec advisory DB from GitHub on
+        # every run, which is occasionally flaky on hosted runners
+        # ("An IO error occurred when talking to the server"). Retry
+        # a few times with backoff before failing the gate so a single
+        # transient network blip doesn't break CI.
+        run: |
+          set -e
+          attempts=3
+          for i in $(seq 1 $attempts); do
+            if cargo audit -f ../Cargo.lock --deny unsound --deny unmaintained; then
+              exit 0
+            fi
+            if [ "$i" -lt "$attempts" ]; then
+              echo "::warning::cargo audit failed (attempt $i/$attempts); retrying in $((i * 10))s"
+              sleep $((i * 10))
+            fi
+          done
+          echo "::error::cargo audit failed after $attempts attempts"
+          exit 1
 
       # cargo-audit only catches RUSTSEC IDs. cargo-deny adds:
       #   • License allow-list — block GPL/AGPL/non-SPDX licenses

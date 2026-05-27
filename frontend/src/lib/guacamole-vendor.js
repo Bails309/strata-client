@@ -1290,6 +1290,23 @@ Guacamole.WebSocketTunnel = function(tunnelURL) {
         if (tunnel.state === Guacamole.Tunnel.State.CLOSED)
             return;
 
+        // [DIAG] Capture which call site closed the tunnel — bug hunt for
+        // the multiplayer host-disconnect issue. The "WebSocket closed by
+        // client: None" backend log doesn't tell us which JS path got us
+        // here. Log status code, status message, and a full stack trace so
+        // we can see whether it was receiveTimeout, an onmessage parse
+        // error, a server-sent disconnect, a socket.onclose cascade, or an
+        // explicit tunnel.disconnect().
+        try {
+            // eslint-disable-next-line no-console
+            console.warn(
+                "[guac-vendor] close_tunnel called",
+                "code=", status && status.code,
+                "message=", status && status.message,
+                "stack:\n", new Error("close_tunnel stack").stack
+            );
+        } catch (_) { /* ignore */ }
+
         // If connection closed abnormally, signal error.
         if (status.code !== Guacamole.Status.Code.SUCCESS && tunnel.onerror)
             tunnel.onerror(status);

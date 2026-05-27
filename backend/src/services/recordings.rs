@@ -509,9 +509,7 @@ async fn sync_pass(
                                     "Skipped expired recording on read-only FS: {name}"
                                 );
                             } else {
-                                tracing::warn!(
-                                    "Failed to delete expired recording: {name}: {e}"
-                                );
+                                tracing::warn!("Failed to delete expired recording: {name}: {e}");
                             }
                         } else {
                             synced.remove(&name);

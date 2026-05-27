@@ -50,9 +50,26 @@ const GUEST_INPUT_OPCODE_ALLOWLIST: &[&str] = &[
     "end",
     "ack",
     "pipe",
-    "sync",
     "nop",
     "argv",
+    // Empty string == `Guacamole.Tunnel.INTERNAL_DATA_OPCODE` in
+    // guacamole-common-js. The client sends `0.,<sub>,<args>;` frames
+    // (e.g. `0.,4.ping,13.<ts>;`) every ~1 s as a tunnel-layer
+    // keepalive; the subcommand is interpreted by the tunnel, not by
+    // guacd (which sees an empty opcode and ignores the instruction).
+    // Without this entry the JS client's keepalives never get through,
+    // backs off, and the guest can no longer drive input.
+    "",
+    // NOTE: `sync` is deliberately NOT in this list. Every sync the
+    // guest receives (both guacd-originated session-tick syncs via the
+    // broadcast channel and the share-layer keepalive syncs we send
+    // every 5 s) is auto-acknowledged by `Guacamole.Client` and would
+    // otherwise be forwarded into guacd, where it appears as a
+    // duplicate frame ack for the single user (the host). guacd's
+    // frame-throttling state machine accumulates the phantom acks and
+    // aborts the user ("User connection aborted") after a few seconds.
+    // The host's own Client already acks every sync — guacd needs no
+    // input from guests on frame timing.
 ];
 
 /// Walk a (possibly multi-instruction) Guac frame from a guest and return
@@ -1275,8 +1292,40 @@ mod tests {
         assert!(first_disallowed_guest_opcode("5.mouse,3.100,3.100,1.0;").is_none());
         assert!(first_disallowed_guest_opcode("3.key,4.0xff,1.1;").is_none());
         assert!(first_disallowed_guest_opcode("4.size,4.1920,3.911;").is_none());
-        assert!(first_disallowed_guest_opcode("4.sync,13.1779878919702;").is_none());
         assert!(first_disallowed_guest_opcode("3.nop;").is_none());
+    }
+
+    #[test]
+    fn guest_opcode_rejects_sync() {
+        // `Guacamole.Client` auto-acks every sync it sees, including
+        // both guacd-originated session-tick syncs and the share-layer
+        // keepalive syncs the backend sends. Forwarding those acks to
+        // guacd produces duplicate frame acks for the single user (the
+        // host), which trips guacd's frame-throttling state machine and
+        // aborts the host's user connection after a few seconds.
+        // Regression guard for the v1.1.0 multiplayer share fix.
+        assert_eq!(
+            first_disallowed_guest_opcode("4.sync,7.7550370;").as_deref(),
+            Some("sync")
+        );
+        assert_eq!(
+            first_disallowed_guest_opcode("4.sync,13.1779883312867;").as_deref(),
+            Some("sync")
+        );
+    }
+
+    #[test]
+    fn guest_opcode_allows_internal_tunnel_keepalive() {
+        // `guacamole-common-js` emits `0.,4.ping,13.<ts>;` every ~1 s
+        // as a tunnel-layer heartbeat. The opcode field is the empty
+        // string (`Tunnel.INTERNAL_DATA_OPCODE`); guacd ignores these,
+        // but blocking them starves the JS client's keepalive logic
+        // and breaks guest input. Regression guard for the v1.1.0
+        // multiplayer share fix.
+        assert!(
+            first_disallowed_guest_opcode("0.,4.ping,13.1779881696144;").is_none()
+        );
+        assert!(first_disallowed_guest_opcode("0.,4.pong;").is_none());
     }
 
     #[test]

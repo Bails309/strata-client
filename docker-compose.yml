@@ -99,7 +99,11 @@ services:
       - SETUID
     volumes:
       - backend-config:/app/config
-      - guac-recordings:/var/lib/guacamole/recordings:ro
+      # RW because the backend's retention sweeper (services::recordings)
+      # deletes expired .guac files in addition to streaming them for
+      # playback. Mounting :ro caused the cleanup loop to log a WARN
+      # per expired file every cycle (EROFS).
+      - guac-recordings:/var/lib/guacamole/recordings
       - guac-drive:/var/lib/guacamole/drive
       - krb5-config:/etc/krb5
       # Operator-supplied Playwright/Puppeteer login scripts for the

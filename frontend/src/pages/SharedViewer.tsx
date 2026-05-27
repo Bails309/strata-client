@@ -378,7 +378,8 @@ export default function SharedViewer() {
               Pick a name for this session
             </h2>
             <p style={{ fontSize: "0.85rem", color: "#9ca3af", marginTop: 0, marginBottom: 16 }}>
-              Other participants will see this name instead of "Guest" while you are connected.
+              Other participants will see this name instead of &ldquo;Guest&rdquo; while you are
+              connected.
             </p>
             <label
               style={{ display: "block", fontSize: "0.8rem", marginBottom: 6, color: "#d1d5db" }}

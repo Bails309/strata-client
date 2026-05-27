@@ -133,8 +133,8 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       const msg = e instanceof Error ? e.message : "Refresh failed";
       setResults((prev) =>
         prev.map((r) =>
-          r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: msg } : r,
-        ),
+          r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: msg } : r
+        )
       );
       setPollStartedAt((prev) => {
         const next = new Map(prev);
@@ -159,7 +159,7 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
    */
   useEffect(() => {
     const pending = results.filter(
-      (r) => r.state === "pending" && !!r.request_id && !!r.profile_id,
+      (r) => r.state === "pending" && !!r.request_id && !!r.profile_id
     );
     if (pending.length === 0) return;
     let cancelled = false;

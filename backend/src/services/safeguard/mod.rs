@@ -117,6 +117,11 @@ pub enum JitOutcome {
     Released(CheckoutResult),
     PendingApproval {
         request_id: String,
+        /// Account name Safeguard echoed at request-creation time, if
+        /// we know it (None when reusing an existing request). Kept on
+        /// the outcome so future callers can surface it in the
+        /// "Awaiting approval" UI without a second API round-trip.
+        #[allow(dead_code)]
         username: Option<String>,
         /// Appliance-reported request state — typically
         /// `"PendingApproval"`. Surfaced for diagnostics; callers

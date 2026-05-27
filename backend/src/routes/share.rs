@@ -27,6 +27,82 @@ const MAX_SHARE_RATE_ENTRIES: usize = 10_000;
 /// Default share link expiry: 24 hours.
 const DEFAULT_SHARE_EXPIRY_HOURS: i32 = 24;
 
+/// Opcodes a control-mode guest viewer is allowed to send. Anything else
+/// (notably `disconnect`, `error`, the handshake opcodes, and all
+/// server→client drawing opcodes) is dropped server-side.
+///
+/// Rationale: the guest's bytes are written verbatim to guacd's TCP
+/// socket. guacd sees one user — the host — so an unfiltered
+/// `10.disconnect;` from a guest kicks the host (guacd logs
+/// `WARNING: User connection aborted`) and propagates a `disconnect`
+/// instruction back to the host's browser, terminating the multiplayer
+/// session. `guacamole-common-js` `Client.disconnect()` proactively sends
+/// `disconnect` on tab-close / React cleanup, so without this gate any
+/// guest who has been granted control ends the session simply by
+/// navigating away.
+const GUEST_INPUT_OPCODE_ALLOWLIST: &[&str] = &[
+    "mouse",
+    "key",
+    "pointer",
+    "size",
+    "clipboard",
+    "blob",
+    "end",
+    "ack",
+    "pipe",
+    "sync",
+    "nop",
+    "argv",
+];
+
+/// Walk a (possibly multi-instruction) Guac frame from a guest and return
+/// the first opcode that is not in [`GUEST_INPUT_OPCODE_ALLOWLIST`], or
+/// `None` if every opcode in the frame is safe.
+///
+/// Parses only as much of each instruction as needed to extract its
+/// opcode; the argument list is skipped via the next `;` terminator.
+/// Returns a sentinel like `"<malformed>"` if the frame can't be parsed —
+/// callers should treat that as a rejection too.
+fn first_disallowed_guest_opcode(frame: &str) -> Option<String> {
+    let mut rem = frame;
+    while !rem.is_empty() {
+        // Tolerate whitespace between concatenated instructions.
+        rem = rem.trim_start();
+        if rem.is_empty() {
+            break;
+        }
+
+        let Some(dot) = rem.find('.') else {
+            return Some("<malformed>".into());
+        };
+        let Ok(len) = rem[..dot].parse::<usize>() else {
+            return Some("<malformed>".into());
+        };
+        let value_pool = &rem[dot + 1..];
+        let byte_offset = value_pool
+            .char_indices()
+            .nth(len)
+            .map(|(idx, _)| idx)
+            .unwrap_or(value_pool.len());
+        if byte_offset > value_pool.len() {
+            return Some("<truncated>".into());
+        }
+        let opcode = &value_pool[..byte_offset];
+
+        if !GUEST_INPUT_OPCODE_ALLOWLIST.contains(&opcode) {
+            return Some(opcode.to_string());
+        }
+
+        // Skip the rest of this instruction up to its `;`.
+        let after_op = &value_pool[byte_offset..];
+        match after_op.find(';') {
+            Some(pos) => rem = &after_op[pos + 1..],
+            None => return Some("<no terminator>".into()),
+        }
+    }
+    None
+}
+
 /// Short hash prefix of a share token, suitable for audit logs. Keeps the
 /// audit trail correlatable across events without persisting the raw token
 /// (which is effectively a bearer credential for the anonymous share path).
@@ -556,10 +632,25 @@ pub async fn ws_shared_tunnel(
                                 } else {
                                     true
                                 };
-                                if should_forward
-                                    && input_tx.send(text.to_string()).await.is_err()
-                                {
-                                    break; // owner's session ended
+                                if should_forward {
+                                    // Filter the guest's frame: drop any
+                                    // instruction with an opcode outside
+                                    // the allowlist. Forwarding a raw
+                                    // `disconnect` would let guacd
+                                    // disconnect the host (guacd sees
+                                    // only one user — see
+                                    // GUEST_INPUT_OPCODE_ALLOWLIST docs).
+                                    if let Some(bad) = first_disallowed_guest_opcode(&text) {
+                                        tracing::warn!(
+                                            opcode = %bad,
+                                            token_prefix = %hash_token_prefix(&share_token),
+                                            "Dropped disallowed Guac opcode from share viewer"
+                                        );
+                                        continue;
+                                    }
+                                    if input_tx.send(text.to_string()).await.is_err() {
+                                        break; // owner's session ended
+                                    }
                                 }
                             }
                             _ => {} // discard in view mode or for non-text messages
@@ -1175,6 +1266,68 @@ mod tests {
     fn create_share_request_control_mode() {
         let r: CreateShareRequest = serde_json::from_str(r#"{"mode":"control"}"#).unwrap();
         assert_eq!(r.mode, "control");
+    }
+
+    // ── Guest opcode allowlist ─────────────────────────────────────
+    #[test]
+    fn guest_opcode_allows_mouse_key_size() {
+        // Realistic frames `guacamole-common-js` sends for input.
+        assert!(first_disallowed_guest_opcode("5.mouse,3.100,3.100,1.0;").is_none());
+        assert!(first_disallowed_guest_opcode("3.key,4.0xff,1.1;").is_none());
+        assert!(first_disallowed_guest_opcode("4.size,4.1920,3.911;").is_none());
+        assert!(first_disallowed_guest_opcode("4.sync,13.1779878919702;").is_none());
+        assert!(first_disallowed_guest_opcode("3.nop;").is_none());
+    }
+
+    #[test]
+    fn guest_opcode_rejects_disconnect() {
+        // This is the bug: viewer's tab-close fires Client.disconnect()
+        // which sends `10.disconnect;` upstream → guacd kicks the host.
+        assert_eq!(
+            first_disallowed_guest_opcode("10.disconnect;").as_deref(),
+            Some("disconnect")
+        );
+    }
+
+    #[test]
+    fn guest_opcode_rejects_error_and_handshake() {
+        assert_eq!(
+            first_disallowed_guest_opcode("5.error,7.spoofed,3.521;").as_deref(),
+            Some("error")
+        );
+        assert_eq!(
+            first_disallowed_guest_opcode("7.connect;").as_deref(),
+            Some("connect")
+        );
+        assert_eq!(
+            first_disallowed_guest_opcode("6.select,3.rdp;").as_deref(),
+            Some("select")
+        );
+    }
+
+    #[test]
+    fn guest_opcode_rejects_disconnect_when_batched_with_safe_ops() {
+        // A guest could try to hide `disconnect` after a legitimate
+        // mouse event in the same frame. The first disallowed opcode
+        // must be surfaced and the entire frame dropped.
+        let frame = "5.mouse,3.100,3.100,1.0;10.disconnect;";
+        assert_eq!(
+            first_disallowed_guest_opcode(frame).as_deref(),
+            Some("disconnect")
+        );
+    }
+
+    #[test]
+    fn guest_opcode_handles_malformed() {
+        assert!(first_disallowed_guest_opcode("garbage").is_some());
+        assert!(first_disallowed_guest_opcode("3.key,1.a").is_some()); // no `;`
+    }
+
+    #[test]
+    fn guest_opcode_empty_frame_is_safe() {
+        // Empty / whitespace frames are no-ops and shouldn't be flagged.
+        assert!(first_disallowed_guest_opcode("").is_none());
+        assert!(first_disallowed_guest_opcode("   ").is_none());
     }
 
     // ── ShareLinkResponse serialization ────────────────────────────

@@ -855,6 +855,9 @@ pub struct BulkSafeguardCheckoutBody {
 pub struct BulkSafeguardCheckoutResult {
     pub profile_id: Uuid,
     pub label: String,
+    /// `true` only when the password is now cached and usable. For
+    /// pending-approval rows this stays `false` — the frontend keys
+    /// off `state` to render the third badge.
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -868,6 +871,34 @@ pub struct BulkSafeguardCheckoutResult {
     /// checking the old request back in first.
     #[serde(default)]
     pub replaced_existing: bool,
+    /// Tri-state result for the frontend: `"ok"` (default when `ok =
+    /// true`), `"pending"` (approver action required — request_id is
+    /// non-null), `"failed"` (everything else where `ok = false`).
+    /// Encoded as a separate field so old clients that only look at
+    /// `ok` continue to render pending rows as failed, which matches
+    /// pre-feature behaviour.
+    pub state: BulkCheckoutState,
+    /// Safeguard AccessRequest id. Always populated on `pending` so
+    /// the frontend can poll / manually release; populated on `ok`
+    /// for parity / debugging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Echo of the profile's account id; required by the release
+    /// endpoint to forge-proof the call (the user can't release an
+    /// id that doesn't belong to one of their own profiles).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Echo of the profile's asset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+}
+
+#[derive(Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BulkCheckoutState {
+    Ok,
+    Pending,
+    Failed,
 }
 
 /// `POST /api/user/safeguard/bulk-checkout` — pre-fetch passwords for
@@ -935,6 +966,10 @@ pub async fn bulk_safeguard_checkout(
                 expires_at: None,
                 username: None,
                 replaced_existing: false,
+                state: BulkCheckoutState::Failed,
+                request_id: None,
+                account_id: None,
+                asset: None,
             });
             continue;
         };
@@ -947,6 +982,10 @@ pub async fn bulk_safeguard_checkout(
                 expires_at: None,
                 username: None,
                 replaced_existing: false,
+                state: BulkCheckoutState::Failed,
+                request_id: None,
+                account_id: None,
+                asset: None,
             });
             continue;
         }
@@ -961,6 +1000,10 @@ pub async fn bulk_safeguard_checkout(
                 expires_at: None,
                 username: None,
                 replaced_existing: false,
+                state: BulkCheckoutState::Failed,
+                request_id: None,
+                account_id: None,
+                asset: None,
             });
             continue;
         }
@@ -1017,7 +1060,7 @@ pub async fn bulk_safeguard_checkout(
                 &user.username,
             ),
         };
-        let outcome = match crate::services::safeguard::jit_checkout(
+        let jit = match crate::services::safeguard::jit_checkout(
             &db.pool,
             &vault_cfg,
             &account_id,
@@ -1044,6 +1087,42 @@ pub async fn bulk_safeguard_checkout(
                     expires_at: None,
                     username: None,
                     replaced_existing,
+                    state: BulkCheckoutState::Failed,
+                    request_id: None,
+                    account_id: Some(account_id.clone()),
+                    asset: Some(asset.clone()),
+                });
+                continue;
+            }
+        };
+        let outcome = match jit {
+            crate::services::safeguard::JitOutcome::Released(o) => o,
+            crate::services::safeguard::JitOutcome::PendingApproval {
+                request_id,
+                appliance_state,
+                ..
+            } => {
+                // Approver action required. Keep the request id so
+                // the frontend can poll / press Refresh; do NOT
+                // mutate the password cache (no password to cache).
+                tracing::info!(
+                    "bulk-checkout: profile {pid} ({}) pending approval — request_id={request_id} state={appliance_state:?}",
+                    profile.label
+                );
+                out.push(BulkSafeguardCheckoutResult {
+                    profile_id: pid,
+                    label: profile.label.clone(),
+                    ok: false,
+                    error: Some(format!(
+                        "Awaiting approver — request {request_id} is queued in Safeguard."
+                    )),
+                    expires_at: None,
+                    username: None,
+                    replaced_existing,
+                    state: BulkCheckoutState::Pending,
+                    request_id: Some(request_id),
+                    account_id: Some(account_id.clone()),
+                    asset: Some(asset.clone()),
                 });
                 continue;
             }
@@ -1071,6 +1150,10 @@ pub async fn bulk_safeguard_checkout(
                 expires_at: None,
                 username: outcome.username.clone(),
                 replaced_existing,
+                state: BulkCheckoutState::Failed,
+                request_id: Some(outcome.request_id.clone()),
+                account_id: Some(account_id.clone()),
+                asset: Some(asset.clone()),
             });
             continue;
         }
@@ -1089,10 +1172,144 @@ pub async fn bulk_safeguard_checkout(
             expires_at: Some(expires_at),
             username: outcome.username,
             replaced_existing,
+            state: BulkCheckoutState::Ok,
+            request_id: Some(outcome.request_id),
+            account_id: Some(account_id.clone()),
+            asset: Some(asset.clone()),
         });
     }
 
     Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct ReleaseSafeguardPendingBody {
+    pub profile_id: Uuid,
+    pub request_id: String,
+}
+
+/// `POST /api/user/safeguard/release` — retry a previously-issued
+/// Safeguard `CheckoutPassword` for a request that came back
+/// `PendingApproval`. Used by the bulk-checkout UI as both the
+/// per-row Refresh button and the background poll: if an approver
+/// has acted since the last poll we cache the freshly-released
+/// password and tell the frontend; otherwise we report the request
+/// is still pending.
+///
+/// Forge-proof: the request id MUST belong to a Safeguard profile the
+/// caller owns, and the profile MUST still have account_id/asset
+/// configured. We don't trust the appliance to enforce ownership
+/// because the per_user_browser token IS the user — accepting an
+/// arbitrary request id would let any signed-in user resolve any
+/// pending approval they happen to know the id of.
+pub async fn release_safeguard_pending(
+    State(state): State<SharedState>,
+    Extension(user): Extension<AuthUser>,
+    Json(body): Json<ReleaseSafeguardPendingBody>,
+) -> Result<Json<BulkSafeguardCheckoutResult>, AppError> {
+    let db = require_running(&state).await?;
+    let vault_cfg = {
+        let s = state.read().await;
+        s.config
+            .as_ref()
+            .and_then(|c| c.vault.clone())
+            .ok_or_else(|| AppError::Config("Vault not configured".into()))?
+    };
+
+    let request_id = body.request_id.trim().to_string();
+    if request_id.is_empty() {
+        return Err(AppError::Validation("request_id is required".into()));
+    }
+
+    // Resolve the profile and confirm ownership in one go.
+    let rows = cp_svc::list_for_user(&db.pool, user.id).await?;
+    let profile = rows
+        .iter()
+        .find(|r| r.id == body.profile_id)
+        .ok_or_else(|| AppError::Validation("profile not found".into()))?;
+    if profile.kind != "safeguard" {
+        return Err(AppError::Validation("not a Safeguard profile".into()));
+    }
+    let account_id = profile.safeguard_account_id.clone().unwrap_or_default();
+    let asset = profile.safeguard_asset.clone().unwrap_or_default();
+    if account_id.trim().is_empty() || asset.trim().is_empty() {
+        return Err(AppError::Validation(
+            "profile is missing account_id or asset".into(),
+        ));
+    }
+
+    let jit = crate::services::safeguard::release_pending(
+        &db.pool,
+        &vault_cfg,
+        &request_id,
+        &account_id,
+        &asset,
+        Some(user.id),
+        None,
+        Some(body.profile_id),
+    )
+    .await?;
+
+    match jit {
+        crate::services::safeguard::JitOutcome::Released(outcome) => {
+            let expires_at =
+                chrono::Utc::now() + chrono::Duration::hours(profile.ttl_hours.max(1) as i64);
+            // `outcome.username` is None on the release path (the
+            // appliance only echoes the account name at request
+            // creation time). The frontend already has the profile
+            // label and can show "—" if needed.
+            let cached_username = outcome.username.clone();
+            crate::services::safeguard::password_cache::store(
+                &db.pool,
+                &vault_cfg,
+                user.id,
+                body.profile_id,
+                cached_username.as_deref(),
+                &outcome.password,
+                Some(&outcome.request_id),
+                expires_at,
+            )
+            .await?;
+            let _ = cp_svc::set_expires_at(&db.pool, body.profile_id, expires_at).await;
+
+            Ok(Json(BulkSafeguardCheckoutResult {
+                profile_id: body.profile_id,
+                label: profile.label.clone(),
+                ok: true,
+                error: None,
+                expires_at: Some(expires_at),
+                username: cached_username,
+                replaced_existing: false,
+                state: BulkCheckoutState::Ok,
+                request_id: Some(outcome.request_id),
+                account_id: Some(account_id),
+                asset: Some(asset),
+            }))
+        }
+        crate::services::safeguard::JitOutcome::PendingApproval {
+            request_id: rid,
+            appliance_state,
+            ..
+        } => Ok(Json(BulkSafeguardCheckoutResult {
+            profile_id: body.profile_id,
+            label: profile.label.clone(),
+            ok: false,
+            error: Some(format!(
+                "Awaiting approver — request {rid} is queued in Safeguard{}.",
+                appliance_state
+                    .as_deref()
+                    .map(|s| format!(" (state: {s})"))
+                    .unwrap_or_default()
+            )),
+            expires_at: None,
+            username: None,
+            replaced_existing: false,
+            state: BulkCheckoutState::Pending,
+            request_id: Some(rid),
+            account_id: Some(account_id),
+            asset: Some(asset),
+        })),
+    }
 }
 
 /// `GET /api/user/safeguard/cached` — lightweight (no-decrypt)

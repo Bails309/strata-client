@@ -5,6 +5,7 @@ import {
   bulkSafeguardCheckout,
   getSafeguardSigninStatus,
   listSafeguardCached,
+  releaseSafeguardPending,
   safeguardCheckin,
   type BulkSafeguardCheckoutResult,
   type CredentialProfile,
@@ -12,6 +13,17 @@ import {
   type SafeguardSigninStatus,
 } from "../../api";
 import { useSettings } from "../../contexts/SettingsContext";
+
+/**
+ * How often we re-call `/user/safeguard/release` for each
+ * `state === "pending"` row in the results list.
+ */
+const POLL_INTERVAL_MS = 15_000;
+/**
+ * Maximum time we'll keep polling a single pending row before giving
+ * up. The user can press Refresh to start the clock over.
+ */
+const POLL_MAX_MS = 30 * 60_000;
 
 interface Props {
   profiles: CredentialProfile[];
@@ -49,6 +61,14 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
   const [error, setError] = useState("");
   const [comment, setComment] = useState("");
   const [results, setResults] = useState<BulkSafeguardCheckoutResult[]>([]);
+  /** Profile ids currently being re-polled (manual refresh OR background tick). */
+  const [pollingIds, setPollingIds] = useState<Set<string>>(new Set());
+  /**
+   * When each pending row entered the pending state. Used to stop
+   * polling after `POLL_MAX_MS`. Reset by `refreshOne` so the manual
+   * Refresh button gives the user another full window.
+   */
+  const [pollStartedAt, setPollStartedAt] = useState<Map<string, number>>(new Map());
 
   const refresh = async () => {
     try {
@@ -113,8 +133,22 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       const ids = Array.from(selected);
       const res = await bulkSafeguardCheckout(ids, trimmed);
       setResults(res);
-      // Clear selection for rows that succeeded so a retry only sends
-      // the failed ones.
+      // Stamp the pending rows so the poll loop can cap them at
+      // POLL_MAX_MS from their first sighting.
+      const now = Date.now();
+      setPollStartedAt((prev) => {
+        const next = new Map(prev);
+        res.forEach((r) => {
+          if (r.state === "pending" && !next.has(r.profile_id)) {
+            next.set(r.profile_id, now);
+          }
+        });
+        return next;
+      });
+      // Only clear selection for rows that fully succeeded. Pending
+      // rows stay selected so a subsequent bulk-checkout press will
+      // re-trigger them (the appliance is idempotent on a reused
+      // request id, see jit_checkout preflight).
       const ok = new Set(res.filter((r) => r.ok).map((r) => r.profile_id));
       setSelected((prev) => {
         const next = new Set(prev);
@@ -160,6 +194,102 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
       setBusy(false);
     }
   };
+
+  /**
+   * Retry CheckoutPassword for a single pending row. Used both by the
+   * inline Refresh button and the background poll loop. On success
+   * (approver acted) we replace the row in results and re-fetch the
+   * cache so the new "Cached" badge appears immediately. On still-
+   * pending we just update the row's error text.
+   */
+  const refreshOne = async (profileId: string, requestId: string, manual: boolean) => {
+    setPollingIds((prev) => {
+      const next = new Set(prev);
+      next.add(profileId);
+      return next;
+    });
+    // Manual refresh resets the 30-minute cap so a user actively
+    // chasing an approval doesn't get cut off.
+    if (manual) {
+      setPollStartedAt((prev) => {
+        const next = new Map(prev);
+        next.set(profileId, Date.now());
+        return next;
+      });
+    }
+    try {
+      const updated = await releaseSafeguardPending(profileId, requestId);
+      setResults((prev) => prev.map((r) => (r.profile_id === profileId ? updated : r)));
+      if (updated.state === "ok" || updated.ok) {
+        // Approver acted — clean up pending state and pull the new
+        // cache row into the table.
+        setPollStartedAt((prev) => {
+          const next = new Map(prev);
+          next.delete(profileId);
+          return next;
+        });
+        await refresh();
+      }
+    } catch (e: unknown) {
+      // Surface as inline error text on the row by overwriting it.
+      const msg = e instanceof Error ? e.message : "Refresh failed";
+      setResults((prev) =>
+        prev.map((r) =>
+          r.profile_id === profileId ? { ...r, ok: false, state: "failed", error: msg } : r,
+        ),
+      );
+      setPollStartedAt((prev) => {
+        const next = new Map(prev);
+        next.delete(profileId);
+        return next;
+      });
+    } finally {
+      setPollingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(profileId);
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Background poll: every POLL_INTERVAL_MS, retry every pending row
+   * whose stamp is younger than POLL_MAX_MS. Pauses while the tab is
+   * hidden so we don't pile up requests against Safeguard in the
+   * background.
+   */
+  useEffect(() => {
+    const pending = results.filter(
+      (r) => r.state === "pending" && !!r.request_id && !!r.profile_id,
+    );
+    if (pending.length === 0) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled || document.hidden) return;
+      const now = Date.now();
+      pending.forEach((r) => {
+        if (!r.request_id) return;
+        const startedAt = pollStartedAt.get(r.profile_id) ?? now;
+        if (now - startedAt > POLL_MAX_MS) return;
+        if (pollingIds.has(r.profile_id)) return;
+        void refreshOne(r.profile_id, r.request_id, false);
+      });
+    };
+    const intervalId = setInterval(tick, POLL_INTERVAL_MS);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // Intentionally exclude pollingIds & pollStartedAt from deps —
+    // we read them via the closure on each tick and don't want to
+    // tear down/recreate the interval on every state mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results]);
 
   return (
     <section className="card animate-fade-in mb-4">
@@ -315,19 +445,46 @@ export default function SafeguardBulkCheckoutCard(props: Props) {
                     )}
                     {result && (
                       <span
-                        className={`badge text-xs ${result.ok ? "badge-success" : "badge-danger"}`}
+                        className={`badge text-xs ${
+                          result.state === "pending"
+                            ? "badge-warning"
+                            : result.ok
+                              ? "badge-success"
+                              : "badge-danger"
+                        }`}
                         title={result.error ?? undefined}
                       >
-                        {result.ok
-                          ? result.replaced_existing
-                            ? "Refreshed"
-                            : "Checked out"
-                          : "Failed"}
+                        {result.state === "pending"
+                          ? "Awaiting approval"
+                          : result.ok
+                            ? result.replaced_existing
+                              ? "Refreshed"
+                              : "Checked out"
+                            : "Failed"}
                       </span>
+                    )}
+                    {result?.state === "pending" && result.request_id && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        disabled={pollingIds.has(p.id)}
+                        onClick={() => void refreshOne(p.id, result.request_id!, true)}
+                        title="Re-check Safeguard for approval"
+                      >
+                        {pollingIds.has(p.id) ? "Checking…" : "Refresh"}
+                      </button>
                     )}
                   </div>
                 </div>
-                {result && !result.ok && result.error && (
+                {result?.state === "pending" && result.request_id && (
+                  <div className="text-[0.6875rem] text-warning mt-1 ml-8 break-words">
+                    Awaiting approver — request {result.request_id} is queued in Safeguard. We
+                    re-check every {Math.round(POLL_INTERVAL_MS / 1000)}s for up to{" "}
+                    {Math.round(POLL_MAX_MS / 60_000)} minutes; press Refresh to keep going past
+                    that window.
+                  </div>
+                )}
+                {result && result.state !== "pending" && !result.ok && result.error && (
                   <div className="text-[0.6875rem] text-danger mt-1 ml-8 break-words">
                     {result.error}
                   </div>

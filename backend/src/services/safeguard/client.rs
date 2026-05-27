@@ -317,14 +317,70 @@ pub async fn create_access_request(
     })
 }
 
-/// POST `/AccessRequests/{id}/CheckoutPassword`. Returns the
-/// plaintext password as Safeguard delivers it (raw JSON string).
+/// Outcome of a `CheckoutPassword` call. Two terminal-ish states:
+///
+/// * `Released(pw)` — appliance returned the plaintext, normal happy
+///   path.
+/// * `PendingApproval` — appliance returned HTTP 400 with Code
+///   `90117` ("the access request … is awaiting approval and the
+///   request cannot be used at this time"). The access request is
+///   **still valid**: the caller should hold on to the `request_id`
+///   and retry `CheckoutPassword` once the approver acts. Any other
+///   non-2xx remains an `Err` so the existing retry-then-fail
+///   behaviour is preserved for unrelated faults.
+#[derive(Debug)]
+pub enum CheckoutOutcome {
+    Released(String),
+    PendingApproval {
+        /// Appliance-reported request state (typically
+        /// `"PendingApproval"`). Surfaced for diagnostics; the
+        /// caller treats any 90117 as pending regardless of value.
+        state: Option<String>,
+    },
+}
+
+/// Safeguard appliance error code returned when CheckoutPassword is
+/// attempted on a request that still requires approver action.
+const SAFEGUARD_AWAITING_APPROVAL_CODE: i64 = 90117;
+
+/// Parse a Safeguard error body and return `Some(state)` when it
+/// matches the awaiting-approval signature, otherwise `None`.
+/// Extracted from [`checkout_password`] so we can unit-test the
+/// recognition logic without standing up a fake HTTP server.
+///
+/// Accepts both the structured form
+/// `{"Code":90117,"Message":"…","InnerError":null}` and falls back to
+/// substring matches for older appliances that wrap the body
+/// differently.
+fn parse_awaiting_approval(body: &str) -> Option<String> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        let code = v.get("Code").and_then(|c| c.as_i64());
+        if code == Some(SAFEGUARD_AWAITING_APPROVAL_CODE) {
+            return Some(
+                v.get("Message")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "PendingApproval".to_string()),
+            );
+        }
+    }
+    if body.contains("90117") || body.to_lowercase().contains("awaiting approval") {
+        return Some("PendingApproval".to_string());
+    }
+    None
+}
+
+/// POST `/AccessRequests/{id}/CheckoutPassword`. Returns
+/// [`CheckoutOutcome::Released`] with the plaintext on success and
+/// [`CheckoutOutcome::PendingApproval`] when the appliance reports
+/// Code 90117 (awaiting approval). All other non-2xx responses
+/// remain hard errors.
 pub async fn checkout_password(
     client: &Client,
     base: &str,
     bearer: &str,
     request_id: &str,
-) -> Result<String, AppError> {
+) -> Result<CheckoutOutcome, AppError> {
     let url = format!("{base}/service/core/v4/AccessRequests/{request_id}/CheckoutPassword");
     let resp = client
         .post(&url)
@@ -336,6 +392,11 @@ pub async fn checkout_password(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::BAD_REQUEST {
+            if let Some(state) = parse_awaiting_approval(&text) {
+                return Ok(CheckoutOutcome::PendingApproval { state: Some(state) });
+            }
+        }
         return Err(AppError::Internal(format!(
             "Safeguard CheckoutPassword returned HTTP {status}: {}",
             text.chars().take(500).collect::<String>()
@@ -346,7 +407,7 @@ pub async fn checkout_password(
         .json()
         .await
         .map_err(|e| AppError::Internal(format!("safeguard CheckoutPassword decode: {e}")))?;
-    Ok(pw)
+    Ok(CheckoutOutcome::Released(pw))
 }
 
 /// GET `/AccessRequests/{id}` and return the appliance-reported
@@ -937,5 +998,44 @@ mod tests {
             ..Default::default()
         };
         assert!(build_client(&cfg, None).is_err());
+    }
+
+    #[test]
+    fn parse_awaiting_approval_structured_90117() {
+        let body = r#"{"Code":90117,"Message":"The access request AR-123 is awaiting approval and the request cannot be used at this time.","InnerError":null}"#;
+        let parsed = parse_awaiting_approval(body).expect("should detect 90117");
+        assert!(
+            parsed.contains("awaiting approval"),
+            "expected message verbatim, got {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn parse_awaiting_approval_missing_message_falls_back() {
+        let body = r#"{"Code":90117}"#;
+        assert_eq!(
+            parse_awaiting_approval(body).as_deref(),
+            Some("PendingApproval")
+        );
+    }
+
+    #[test]
+    fn parse_awaiting_approval_other_code_is_none() {
+        let body = r#"{"Code":90010,"Message":"password reset in progress"}"#;
+        assert!(parse_awaiting_approval(body).is_none());
+    }
+
+    #[test]
+    fn parse_awaiting_approval_substring_fallback() {
+        // Old appliance variant wraps the error differently — only
+        // the numeric code is visible in the body text.
+        let body = "ERR 90117 — request requires approver action";
+        assert!(parse_awaiting_approval(body).is_some());
+    }
+
+    #[test]
+    fn parse_awaiting_approval_unrelated_body_is_none() {
+        assert!(parse_awaiting_approval("internal server error").is_none());
+        assert!(parse_awaiting_approval("").is_none());
     }
 }

@@ -6,6 +6,7 @@ vi.mock("../api", () => ({
   getSafeguardSigninStatus: vi.fn(),
   listSafeguardCached: vi.fn(),
   safeguardCheckin: vi.fn(),
+  releaseSafeguardPending: vi.fn(),
 }));
 
 vi.mock("../contexts/SettingsContext", () => ({
@@ -19,6 +20,7 @@ import {
   bulkSafeguardCheckout,
   getSafeguardSigninStatus,
   listSafeguardCached,
+  releaseSafeguardPending,
   safeguardCheckin,
   type CredentialProfile,
   type SafeguardSigninStatus,
@@ -65,6 +67,7 @@ describe("SafeguardBulkCheckoutCard", () => {
     (getSafeguardSigninStatus as any).mockResolvedValue(status());
     (bulkSafeguardCheckout as any).mockResolvedValue([]);
     (safeguardCheckin as any).mockResolvedValue([]);
+    (releaseSafeguardPending as any).mockResolvedValue({});
   });
 
   it("renders nothing when safeguardEnabled is false", () => {
@@ -240,5 +243,141 @@ describe("SafeguardBulkCheckoutCard", () => {
     await waitFor(() =>
       expect((listSafeguardCached as any).mock.calls.length).toBeGreaterThan(initial)
     );
+  });
+
+  it("renders Awaiting approval badge and Refresh button for pending rows", async () => {
+    (bulkSafeguardCheckout as any).mockResolvedValue([
+      {
+        profile_id: "p1",
+        label: "prod-db",
+        ok: false,
+        state: "pending",
+        request_id: "AR-99",
+        account_id: "42",
+        asset: "asset-1",
+        error: "Awaiting approver — request AR-99 is queued in Safeguard.",
+      },
+    ]);
+    render(<SafeguardBulkCheckoutCard profiles={[sgProfile()]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select prod-db"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "approval" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    expect(screen.getByText("Awaiting approval")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Refresh/ })).toBeInTheDocument();
+    expect(screen.getByText(/request AR-99/)).toBeInTheDocument();
+  });
+
+  it("manual Refresh on a pending row flips to Checked out when approver acts", async () => {
+    (bulkSafeguardCheckout as any).mockResolvedValue([
+      {
+        profile_id: "p1",
+        label: "prod-db",
+        ok: false,
+        state: "pending",
+        request_id: "AR-100",
+        account_id: "42",
+        asset: "asset-1",
+      },
+    ]);
+    (releaseSafeguardPending as any).mockResolvedValue({
+      profile_id: "p1",
+      label: "prod-db",
+      ok: true,
+      state: "ok",
+      request_id: "AR-100",
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    render(<SafeguardBulkCheckoutCard profiles={[sgProfile()]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select prod-db"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "approval" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
+    await flush();
+    expect(releaseSafeguardPending).toHaveBeenCalledWith("p1", "AR-100");
+    expect(screen.getByText("Checked out")).toBeInTheDocument();
+  });
+
+  it("manual Refresh failure surfaces error and clears pending state", async () => {
+    (bulkSafeguardCheckout as any).mockResolvedValue([
+      {
+        profile_id: "p1",
+        label: "prod-db",
+        ok: false,
+        state: "pending",
+        request_id: "AR-101",
+        account_id: "42",
+        asset: "asset-1",
+      },
+    ]);
+    (releaseSafeguardPending as any).mockRejectedValue(new Error("appliance down"));
+    render(<SafeguardBulkCheckoutCard profiles={[sgProfile()]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select prod-db"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "approval" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
+    await flush();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("appliance down")).toBeInTheDocument();
+  });
+
+  it("manual Refresh on a still-pending response keeps the Awaiting badge", async () => {
+    (bulkSafeguardCheckout as any).mockResolvedValue([
+      {
+        profile_id: "p1",
+        label: "prod-db",
+        ok: false,
+        state: "pending",
+        request_id: "AR-102",
+        account_id: "42",
+        asset: "asset-1",
+      },
+    ]);
+    (releaseSafeguardPending as any).mockResolvedValue({
+      profile_id: "p1",
+      label: "prod-db",
+      ok: false,
+      state: "pending",
+      request_id: "AR-102",
+      error: "Awaiting approver — request AR-102 is queued in Safeguard.",
+    });
+    render(<SafeguardBulkCheckoutCard profiles={[sgProfile()]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select prod-db"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "approval" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
+    await flush();
+    expect(releaseSafeguardPending).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Awaiting approval")).toBeInTheDocument();
+  });
+
+  it("pending rows are NOT removed from selection after bulk checkout (only ok rows are)", async () => {
+    const p1 = sgProfile({ id: "p1", label: "alpha" });
+    const p2 = sgProfile({ id: "p2", label: "beta" });
+    (bulkSafeguardCheckout as any).mockResolvedValue([
+      { profile_id: "p1", label: "alpha", ok: true, state: "ok" },
+      {
+        profile_id: "p2",
+        label: "beta",
+        ok: false,
+        state: "pending",
+        request_id: "AR-7",
+      },
+    ]);
+    render(<SafeguardBulkCheckoutCard profiles={[p1, p2]} safeguardEnabled />);
+    await flush();
+    fireEvent.click(screen.getByLabelText("Select all Safeguard profiles"));
+    fireEvent.change(screen.getByLabelText(/Justification/i), { target: { value: "audit" } });
+    fireEvent.click(screen.getByRole("button", { name: /Checkout selected/ }));
+    await flush();
+    // p1 (ok) removed, p2 (pending) retained → "1 selected".
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 });

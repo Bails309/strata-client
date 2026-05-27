@@ -482,6 +482,12 @@ async fn sync_pass(
             Err(_) => return Ok(()),
         };
 
+        // Aggregate read-only filesystem failures into a single warning per
+        // cleanup cycle. When the recordings volume is mounted RO the per-
+        // file warning loop flooded the logs (one line per expired file,
+        // every cycle, forever).
+        let mut ro_fs_count: usize = 0;
+
         while let Some(entry) = entries.next_entry().await? {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') {
@@ -492,7 +498,21 @@ async fn sync_pass(
                     if modified.elapsed().unwrap_or_default() > max_age {
                         let path = format!("{dir}/{name}");
                         if let Err(e) = tokio::fs::remove_file(&path).await {
-                            tracing::warn!("Failed to delete expired recording: {name}: {e}");
+                            // errno 30 (EROFS) on Linux / ErrorKind::ReadOnlyFilesystem
+                            // on newer Rust. Either way: the FS is RO, the
+                            // file will still be here next cycle, so don't
+                            // flood the logs.
+                            let is_ro = e.raw_os_error() == Some(30);
+                            if is_ro {
+                                ro_fs_count += 1;
+                                tracing::debug!(
+                                    "Skipped expired recording on read-only FS: {name}"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    "Failed to delete expired recording: {name}: {e}"
+                                );
+                            }
                         } else {
                             synced.remove(&name);
                             tracing::info!(
@@ -503,6 +523,13 @@ async fn sync_pass(
                     }
                 }
             }
+        }
+
+        if ro_fs_count > 0 {
+            tracing::warn!(
+                "Skipped {ro_fs_count} expired recording(s): recordings directory \
+                 is on a read-only filesystem ({dir})"
+            );
         }
 
         // W5-1: DB + Azure blob purge for rows older than retention.

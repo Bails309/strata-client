@@ -34,6 +34,11 @@ interface Props {
  *                  on Linux/macOS hosts. `-J` honours the `Content-Disposition`
  *                  filename the backend already sends, so the saved file keeps
  *                  its original name instead of being saved as the token.
+ * - `curl-win`   — `curl.exe -fLo "<filename>" "<url>"` one-liner for Windows
+ *                  cmd.exe / PowerShell shells. Uses double quotes (cmd.exe
+ *                  does not strip single quotes) and an explicit `-o` filename
+ *                  because `-OJ` on Windows curl prompts interactively before
+ *                  overwriting an existing file.
  * - `wget`       — `wget --content-disposition '<url>'` one-liner. Same idea
  *                  as curl but for hosts where `wget` is the default.
  * - `powershell` — `Invoke-WebRequest -Uri '<url>' -OutFile '<filename>'`.
@@ -41,7 +46,7 @@ interface Props {
  *                  Windows Server) where neither `curl.exe` nor `wget`
  *                  may be on PATH for the logged-in account.
  */
-type SnippetFormat = "url" | "curl" | "wget" | "powershell";
+type SnippetFormat = "url" | "curl" | "curl-win" | "wget" | "powershell";
 
 function defaultFormatFor(protocol: string | undefined): SnippetFormat {
   // Normalise so callers passing "SSH" / "Ssh" / undefined all work.
@@ -91,6 +96,17 @@ function snippetFor(
       // -J: honour Content-Disposition for the filename.
       // -k: skip TLS cert verification (only when `insecure`).
       return insecure ? `curl -kfLOJ '${url}'` : `curl -fLOJ '${url}'`;
+    case "curl-win": {
+      // Windows variant: cmd.exe does not strip single quotes, so we
+      // wrap in double quotes and escape any embedded double quote in
+      // the filename. We also pass the filename explicitly with -o
+      // because Windows curl prompts before overwriting when -OJ is
+      // used, which breaks unattended pastes.
+      const winFilename = filename.replace(/"/g, '\\"');
+      return insecure
+        ? `curl.exe -kfLo "${winFilename}" "${url}"`
+        : `curl.exe -fLo "${winFilename}" "${url}"`;
+    }
     case "wget":
       // --content-disposition: same intent as curl -J.
       // --no-check-certificate: skip TLS cert verification.
@@ -346,6 +362,7 @@ export default function QuickShare({
             options={[
               { value: "url", label: "URL" },
               { value: "curl", label: "curl (Linux / macOS)" },
+              { value: "curl-win", label: "curl (Windows)" },
               { value: "wget", label: "wget (Linux)" },
               { value: "powershell", label: "PowerShell (Windows)" },
             ]}

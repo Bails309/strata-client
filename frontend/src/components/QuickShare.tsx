@@ -98,11 +98,13 @@ function snippetFor(
       return insecure ? `curl -kfLOJ '${url}'` : `curl -fLOJ '${url}'`;
     case "curl-win": {
       // Windows variant: cmd.exe does not strip single quotes, so we
-      // wrap in double quotes and escape any embedded double quote in
-      // the filename. We also pass the filename explicitly with -o
-      // because Windows curl prompts before overwriting when -OJ is
-      // used, which breaks unattended pastes.
-      const winFilename = filename.replace(/"/g, '\\"');
+      // wrap in double quotes and escape any embedded backslash or
+      // double quote in the filename. Backslashes must be escaped
+      // before quotes so the second pass does not double-escape the
+      // `\` it just produced. We also pass the filename explicitly
+      // with -o because Windows curl prompts before overwriting when
+      // -OJ is used, which breaks unattended pastes.
+      const winFilename = filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       return insecure
         ? `curl.exe -kfLo "${winFilename}" "${url}"`
         : `curl.exe -fLo "${winFilename}" "${url}"`;

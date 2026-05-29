@@ -282,12 +282,20 @@ services:
         }
         listener "tcp" {
           address     = "0.0.0.0:8200"
+          # NOTE: tls_disable=1 is appropriate ONLY because Vault is on
+          # the private compose network and never exposed to the host
+          # (no `ports:` mapping). Operators publishing Vault on a
+          # routable address MUST switch this to a TLS-terminated
+          # listener with `tls_cert_file` / `tls_key_file` and mount
+          # the certs into /vault/config. See docs/security.md.
           tls_disable = 1
         }
         api_addr     = "http://vault:8200"
         cluster_addr = "http://vault:8201"
         ui           = false
-        disable_mlock = true
+        # mlock is enabled by default. The container is granted IPC_LOCK
+        # above precisely so Vault can lock its secret pages out of
+        # swap; disabling mlock here would defeat that hardening.
         EOF
         vault server -config=/vault/config/vault.hcl
     healthcheck:

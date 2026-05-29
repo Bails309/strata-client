@@ -196,7 +196,14 @@ impl EdgeSigner for HmacEdgeSigner {
         _method: &http::Method,
         _uri: &http::Uri,
     ) {
-        // Step 1: strip any pre-existing edge / proxy / admin headers a
+        // Step 1: resolve the client IP from the trusted-proxy XFF
+        // chain BEFORE we strip the address headers. If we stripped
+        // first, `resolve_client_ip` would never see `x-forwarded-for`
+        // and would fall back to the peer IP, defeating the whole
+        // trusted-proxy mechanism.
+        let client_ip = resolve_client_ip(headers, peer, &self.trusted_proxies);
+
+        // Step 2: strip any pre-existing edge / proxy / admin headers a
         // malicious client might have injected. We drop the entire
         // `x-strata-edge-*` and `x-strata-admin*` namespaces (so future
         // header additions are also defended retroactively), plus the
@@ -225,8 +232,8 @@ impl EdgeSigner for HmacEdgeSigner {
             headers.remove(&n);
         }
 
-        // Step 2: compute each canonical field.
-        let client_ip = resolve_client_ip(headers, peer, &self.trusted_proxies);
+        // Step 3: compute the remaining canonical fields. `client_ip`
+        // was already resolved above against the un-stripped headers.
         let user_agent = headers
             .get(http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok())

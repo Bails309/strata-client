@@ -30,6 +30,42 @@ const SSO_STATE_TTL_SECS: u64 = 300; // 5 minutes
 /// Hard cap on SSO state entries to prevent OOM from unauthenticated floods.
 const MAX_SSO_STATE_ENTRIES: usize = 10_000;
 
+/// Spawn a background task that periodically prunes expired entries
+/// from `SSO_STATE_STORE`. The login/callback fast paths only prune
+/// opportunistically (on a lock they already hold), so an attacker that
+/// abandons their callback can leave entries lingering until the next
+/// real login arrives. Running the sweep on a timer makes the upper
+/// bound on memory predictable. Idempotent: callers may invoke this
+/// multiple times; subsequent calls are no-ops thanks to the `Once`
+/// guard.
+pub fn spawn_sso_state_pruner() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        tokio::spawn(async {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(60));
+            // Skip the immediate first tick — there's nothing to prune yet
+            // and we don't want to race the boot phase.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let cutoff =
+                    Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
+                let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
+                let before = store.len();
+                store.retain(|_, (_, ts)| *ts >= cutoff);
+                let removed = before - store.len();
+                if removed > 0 {
+                    tracing::debug!(
+                        "SSO state pruner removed {removed} expired entries ({} remain)",
+                        store.len()
+                    );
+                }
+            }
+        });
+    });
+}
+
 // OIDC discovery is now cached in `services::auth::fetch_oidc_discovery_cached`
 // so the cache is shared between the SSO callback and the bearer-token
 // validator. Keeping a duplicate cache here used to result in TWO discovery
@@ -210,6 +246,12 @@ pub async fn login(
 
     let client_ip = extract_client_ip(&headers);
 
+    // Rate-limit key derived from the lower-cased username so an attacker
+    // can’t escape the per-account bucket by varying letter case (e.g.
+    // "Alice" vs "alice" hitting the same account would otherwise count
+    // against two independent buckets).
+    let rate_limit_key = body.username.to_lowercase();
+
     // ── Per-IP rate limiting ──
     {
         let mut map = IP_RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
@@ -231,7 +273,7 @@ pub async fn login(
         let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
         if check_rate_limit(
             &mut map,
-            &body.username,
+            &rate_limit_key,
             MAX_ATTEMPTS,
             WINDOW_SECS,
             MAX_RATE_LIMIT_ENTRIES,
@@ -279,7 +321,7 @@ pub async fn login(
         // Record failed attempt even when user is not found, to make
         // rate-limit behaviour identical for existing vs non-existing users.
         let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        map.entry(body.username.clone())
+        map.entry(rate_limit_key.clone())
             .or_default()
             .push(Instant::now());
         drop(map);
@@ -305,7 +347,7 @@ pub async fn login(
         .map_err(|_| {
             // Record failed attempt for both username and IP
             let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(body.username.clone())
+            map.entry(rate_limit_key.clone())
                 .or_default()
                 .push(Instant::now());
             drop(map);
@@ -320,7 +362,7 @@ pub async fn login(
     // Successful login — clear rate limit for this user
     {
         let mut map = RATE_LIMIT.lock().unwrap_or_else(|e| e.into_inner());
-        map.remove(&body.username);
+        map.remove(&rate_limit_key);
     }
 
     // Generate access token (short-lived) and refresh token (longer-lived)
@@ -984,9 +1026,46 @@ pub async fn refresh(
     let (username, role) =
         user_row.ok_or_else(|| AppError::Auth("User no longer exists".into()))?;
 
+    // Rotate the refresh token: revoke the bearer we just consumed and
+    // mint a fresh one. Without rotation, a single stolen refresh cookie
+    // could be replayed for the full refresh-token lifetime. The old
+    // token is added to both the in-memory revocation cache and the
+    // persistent table so a replay survives a restart. The previous
+    // token's exp is taken from its JWT claims so we don't keep it in
+    // the revocation table any longer than its natural lifetime.
+    {
+        // Re-decode purely to extract `exp` for the revocation entry. We
+        // already validated signature/exp/issuer above so any failure
+        // here would be a logic bug \u2014 fall back to ACCESS_TOKEN_TTL+
+        // REFRESH_TOKEN_TTL to be safe.
+        #[derive(serde::Deserialize)]
+        struct ExpOnly {
+            exp: u64,
+        }
+        let exp = jsonwebtoken::decode::<ExpOnly>(
+            refresh_token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &validation,
+        )
+        .map(|td| td.claims.exp)
+        .unwrap_or_else(|_| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                + REFRESH_TOKEN_TTL as u64
+        });
+        crate::services::token_revocation::revoke(refresh_token, exp);
+        crate::services::token_revocation::persist_revocation(&db.pool, refresh_token, exp).await;
+    }
+
     // Issue a new access token with the latest username/role
     let (access_token, _jti) =
         create_local_jwt(user_id, &username, &role, "access", ACCESS_TOKEN_TTL)?;
+    // Issue a rotated refresh token \u2014 short-circuits stolen-cookie replay
+    // and lets us also bind the new refresh to the current username/role.
+    let (new_refresh_token, _new_refresh_jti) =
+        create_local_jwt(user_id, &username, &role, "refresh", REFRESH_TOKEN_TTL)?;
 
     // Record the new access-token jti so the admin "active sessions" panel
     // and per-user revocation reflect refresh-rotated tokens. Without this
@@ -1023,6 +1102,15 @@ pub async fn refresh(
     let response = axum::response::Response::builder()
         .status(200)
         .header("Content-Type", "application/json")
+        // Rotated refresh-token cookie. Same scope/flags as /login so the
+        // SPA cannot tell which endpoint set it.
+        .header(
+            "Set-Cookie",
+            format!(
+                "refresh_token={}; HttpOnly; Secure; SameSite=Strict; Path=/api; Max-Age={}",
+                new_refresh_token, REFRESH_TOKEN_TTL
+            ),
+        )
         .header(
             "Set-Cookie",
             format!(
@@ -1035,7 +1123,7 @@ pub async fn refresh(
             format!(
                 "csrf_token={}; Secure; SameSite=Strict; Path=/; Max-Age={}",
                 csrf_token,
-                ACCESS_TOKEN_TTL + 60
+                REFRESH_TOKEN_TTL + 60
             ),
         )
         .header(

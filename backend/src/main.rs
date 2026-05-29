@@ -335,6 +335,12 @@ async fn main() -> anyhow::Result<()> {
         services::session_cleanup::spawn_vdi_reaper(state.clone(), shutdown.clone()),
     ];
 
+    // ── Spawn SSO state pruner ──
+    // Not tied to the cancellation token because the task only holds a
+    // short-lived in-process Mutex and has no I/O — letting it run until
+    // process exit is fine.
+    routes::auth::spawn_sso_state_pruner();
+
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
 

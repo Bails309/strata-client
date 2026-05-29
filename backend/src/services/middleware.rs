@@ -155,6 +155,69 @@ pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<Str
     None
 }
 
+/// Validate the `Origin` header on a WebSocket upgrade request to prevent
+/// cross-site WebSocket hijacking (CSWSH). Browsers ignore CORS on WS
+/// upgrades, so the only defence against a malicious page riding the user's
+/// cookies is to compare `Origin` against the request `Host` (same-origin)
+/// or against an operator-configured allowlist
+/// (`STRATA_ALLOWED_WS_ORIGINS`, comma-separated full origins like
+/// `https://strata.example.com`). Non-browser clients that omit `Origin`
+/// must authenticate via `Authorization: Bearer …` (also accepted); for
+/// cookie-authenticated WS upgrades the header is mandatory.
+pub fn check_ws_origin(headers: &http::HeaderMap) -> Result<(), &'static str> {
+    let has_bearer = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("Bearer "))
+        .unwrap_or(false);
+
+    let origin = headers
+        .get(http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string());
+
+    let Some(origin) = origin else {
+        // No Origin: only allow when the caller authenticates with a
+        // bearer token (CLI / programmatic clients, not browsers).
+        if has_bearer {
+            return Ok(());
+        }
+        return Err("missing Origin on cookie-authenticated WebSocket upgrade");
+    };
+
+    // Same-origin: compare the Origin authority (host[:port]) to the
+    // request's Host header. This is the common case for browser SPAs.
+    let host = headers
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string());
+
+    if let Some(host) = &host {
+        if let Some(origin_authority) = origin
+            .splitn(2, "://")
+            .nth(1)
+            .and_then(|rest| rest.split('/').next())
+        {
+            if origin_authority.eq_ignore_ascii_case(host) {
+                return Ok(());
+            }
+        }
+    }
+
+    // Explicit allowlist from environment. Each entry is a full origin
+    // (scheme + host[:port]) and must match `Origin` byte-for-byte
+    // after trimming.
+    if let Ok(allowed) = std::env::var("STRATA_ALLOWED_WS_ORIGINS") {
+        for entry in allowed.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if entry.eq_ignore_ascii_case(&origin) {
+                return Ok(());
+            }
+        }
+    }
+
+    Err("Origin not allowed")
+}
+
 /// CSRF protection middleware for cookie-authenticated requests (W4-3).
 ///
 /// Implements the **double-submit cookie** pattern:
@@ -266,6 +329,19 @@ pub async fn require_auth(
 
     if is_ws_upgrade {
         tracing::debug!("Detected WebSocket upgrade request");
+        // Cross-origin WebSocket attacks ("CSWSH"): a malicious page in a
+        // user's browser can open ws:// or wss:// to our origin and
+        // automatically attach the `access_token` cookie. Browsers do NOT
+        // apply CORS to WebSocket upgrades, so we must validate the
+        // `Origin` header ourselves before consuming the cookie.
+        if let Err(e) = check_ws_origin(req.headers()) {
+            tracing::warn!(
+                "Rejecting WS upgrade {} due to Origin check: {}",
+                req.uri().path(),
+                e
+            );
+            return Err(AppError::Forbidden);
+        }
     }
 
     let token = req

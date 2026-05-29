@@ -197,11 +197,15 @@ async fn bridge(
             "refusing to proxy loopback upgrade with malformed path"
         ));
     }
-    let host_header = parts
-        .headers
-        .get(http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("internal.local");
+    // h2 conveys the request authority via the `:authority` pseudo-header,
+    // which the h2 crate places on the URI rather than synthesising a Host
+    // header. Prefer Host if present (HTTP/1.1 over the link), otherwise
+    // fall back to the URI authority (h2 case), and only as a last resort
+    // use a synthetic placeholder. Without this fallback, downstream
+    // origin checks (e.g. `check_ws_origin`) compare the browser-supplied
+    // Origin (`https://public.example`) against `internal.local` and
+    // reject every WS upgrade coming through the DMZ link.
+    let host_header = resolve_loopback_host(&parts.headers, &parts.uri);
     // Same defence applied to the Host header — it is also
     // concatenated into the request line/headers verbatim.
     if host_header
@@ -397,6 +401,28 @@ fn generate_ws_key() -> String {
         rand::rng().fill(&mut bytes);
     }
     STANDARD.encode(bytes)
+}
+
+/// Resolve the `Host` header value to write on the loopback HTTP/1.1
+/// upgrade request.
+///
+/// h2 extended-CONNECT carries the request authority in the `:authority`
+/// pseudo-header, which the `h2` crate places on the `Uri` rather than
+/// synthesising a `Host` header. We therefore prefer an explicit `Host`
+/// header (HTTP/1.1 path), fall back to the URI authority (h2 path), and
+/// only as a last resort use a synthetic placeholder.
+///
+/// Without this fallback the loopback request reaches the backend with
+/// `Host: internal.local`, so the downstream `check_ws_origin` same-origin
+/// comparison against the browser-supplied `Origin` (e.g.
+/// `https://strata.example.com`) fails and the upgrade is rejected with
+/// 403.
+fn resolve_loopback_host<'a>(headers: &'a HeaderMap, uri: &'a http::Uri) -> &'a str {
+    headers
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| uri.authority().map(|a| a.as_str()))
+        .unwrap_or("internal.local")
 }
 
 /// Append every header that should travel on the inner HTTP/1.1
@@ -681,5 +707,42 @@ mod tests {
         head.extend(std::iter::repeat_n(b'x', MAX_LINE_BYTES + 10));
         head.extend_from_slice(b"\r\n");
         assert!(parse_status_line(&head).is_err());
+    }
+
+    #[test]
+    fn resolve_loopback_host_prefers_host_header() {
+        // HTTP/1.1 path: Host header is authoritative even when the URI
+        // also carries an authority.
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "public.example".parse().unwrap());
+        let uri: http::Uri = "https://other.example/api/tunnel/abc".parse().unwrap();
+        assert_eq!(resolve_loopback_host(&headers, &uri), "public.example");
+    }
+
+    #[test]
+    fn resolve_loopback_host_falls_back_to_uri_authority_for_h2() {
+        // h2 extended-CONNECT path: the h2 crate puts `:authority` on the
+        // URI and does NOT synthesise a Host header. Without this
+        // fallback the loopback request would carry `Host: internal.local`
+        // and the backend's same-origin WS check would reject every
+        // upgrade coming through the DMZ link with 403.
+        let headers = HeaderMap::new();
+        let uri: http::Uri = "https://strata.example.com/api/tunnel/abc"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            resolve_loopback_host(&headers, &uri),
+            "strata.example.com"
+        );
+    }
+
+    #[test]
+    fn resolve_loopback_host_falls_back_to_placeholder_when_unknown() {
+        // Defensive: if neither header nor URI authority is present we
+        // still produce a syntactically valid Host so the request line
+        // we build is well-formed.
+        let headers = HeaderMap::new();
+        let uri: http::Uri = "/api/tunnel/abc".parse().unwrap();
+        assert_eq!(resolve_loopback_host(&headers, &uri), "internal.local");
     }
 }

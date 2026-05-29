@@ -68,7 +68,7 @@ fn filter_sensitive_instructions(data: &str) -> String {
         // we match on the opcode itself, not a substring of the wire
         // payload.
         let is_sensitive = parse_opcode(trimmed)
-            .map(|op| SENSITIVE_OPCODES.iter().any(|s| *s == op))
+            .map(|op| SENSITIVE_OPCODES.contains(&op))
             .unwrap_or(false);
         if !is_sensitive {
             filtered.push_str(inst);
@@ -84,7 +84,7 @@ fn parse_opcode(inst: &str) -> Option<&str> {
     let (len_str, rest) = inst.split_once('.')?;
     let declared_len: usize = len_str.parse().ok()?;
     // Opcode runs up to the first ',' or ';'
-    let end = rest.find(|c| c == ',' || c == ';').unwrap_or(rest.len());
+    let end = rest.find([',', ';']).unwrap_or(rest.len());
     let opcode = &rest[..end];
     if opcode.len() != declared_len {
         return None;

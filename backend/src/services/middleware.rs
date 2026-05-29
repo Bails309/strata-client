@@ -227,8 +227,8 @@ pub fn check_ws_origin(headers: &http::HeaderMap) -> Result<(), &'static str> {
 
     if let Some(host) = &host {
         if let Some(origin_authority) = origin
-            .splitn(2, "://")
-            .nth(1)
+            .split_once("://")
+            .map(|x| x.1)
             .and_then(|rest| rest.split('/').next())
         {
             if origin_authority.eq_ignore_ascii_case(host) {
@@ -311,7 +311,7 @@ pub async fn require_csrf(req: Request, next: Next) -> Result<Response, AppError
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|tok| bearer_signature_valid(tok))
+        .map(bearer_signature_valid)
         .unwrap_or(false);
     if has_valid_bearer {
         return Ok(next.run(req).await);

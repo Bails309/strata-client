@@ -727,13 +727,8 @@ mod tests {
         // and the backend's same-origin WS check would reject every
         // upgrade coming through the DMZ link with 403.
         let headers = HeaderMap::new();
-        let uri: http::Uri = "https://strata.example.com/api/tunnel/abc"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            resolve_loopback_host(&headers, &uri),
-            "strata.example.com"
-        );
+        let uri: http::Uri = "https://strata.example.com/api/tunnel/abc".parse().unwrap();
+        assert_eq!(resolve_loopback_host(&headers, &uri), "strata.example.com");
     }
 
     #[test]

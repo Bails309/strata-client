@@ -17,6 +17,11 @@ export interface RemoteCursor {
 const CURSOR_TTL_MS = 8_000;
 /** Soft cap on the in-memory chat ring so a long session can't OOM. */
 const MAX_CHAT_HISTORY = 200;
+/// Hard cap on a single co-pilot chat message. Bigger payloads are
+/// dropped on the inbound path and rejected on the outbound path so a
+/// malicious/buggy peer can't fill another viewer's `chat` array with a
+/// few megabytes of text and trigger a tab-killing render.
+const MAX_CHAT_TEXT_LEN = 2000;
 
 export interface ChatMessage {
   /** Local-only id: server doesn't echo a stamp, so we synthesise one. */
@@ -176,6 +181,10 @@ export function useCoPilotRoom(
           break;
         }
         case "chat":
+          // Silently drop oversized messages — the server should already
+          // enforce this, but a defence-in-depth check here keeps a
+          // misbehaving server from being able to grief individual tabs.
+          if (typeof msg.text !== "string" || msg.text.length > MAX_CHAT_TEXT_LEN) break;
           setChat((prev) => {
             const entry: ChatMessage = {
               id: `${msg.pid}-${msg.ts}-${prev.length}`,

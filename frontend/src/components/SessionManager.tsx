@@ -320,7 +320,12 @@ export function SessionManagerProvider({
           session._popout && !session._popout.window.closed
             ? session._popout.window.navigator
             : navigator;
-        clipNav.clipboard?.writeText(data).catch(() => {});
+        clipNav.clipboard?.writeText(data).catch((err: unknown) => {
+          // Best-effort copy — don't surface this to users (it spams on
+          // every keystroke in the iframe), but log so devs can spot a
+          // Permissions-Policy or cross-origin clipboard denial.
+          console.warn("[session] clipboard write failed:", err);
+        });
         setSessions((prev) => [...prev]); // trigger re-render
       };
     };

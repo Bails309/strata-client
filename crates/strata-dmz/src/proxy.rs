@@ -370,7 +370,7 @@ async fn forward_streaming(
 
     // Body may have data — send with end_of_stream=false and let the
     // pump task close the stream after streaming any body bytes.
-    let (resp_fut, send_stream) = sender.send_request(up_req, false).map_err(|e| {
+    let (mut resp_fut, send_stream) = sender.send_request(up_req, false).map_err(|e| {
         tracing::debug!(error = %e, "send_request failed");
         ProxyError::LinkSendUnavailable
     })?;

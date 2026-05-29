@@ -1618,9 +1618,11 @@ mod tests {
 
     #[test]
     fn extract_client_ip_ipv6() {
+        // XFF parsing is now gated on STRATA_TRUST_XFF; exercise the pure
+        // parser to keep coverage without racing on env state.
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "::1".parse().unwrap());
-        assert_eq!(extract_client_ip(&headers), "::1");
+        assert_eq!(parse_xff_rightmost(&headers).as_deref(), Some("::1"));
     }
 
     #[test]
@@ -1632,7 +1634,10 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        assert_eq!(extract_client_ip(&headers), "203.0.113.50");
+        assert_eq!(
+            parse_xff_rightmost(&headers).as_deref(),
+            Some("203.0.113.50"),
+        );
     }
 
     #[test]
@@ -1823,8 +1828,9 @@ mod tests {
     fn extract_client_ip_trailing_comma() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "10.0.0.1,".parse().unwrap());
-        // Rightmost non-empty entry
-        assert_eq!(extract_client_ip(&headers), "10.0.0.1");
+        // Rightmost non-empty entry (XFF parsing gated on STRATA_TRUST_XFF;
+        // exercise the pure parser to avoid env-var races).
+        assert_eq!(parse_xff_rightmost(&headers).as_deref(), Some("10.0.0.1"));
     }
 
     // ── LoginRequest additional cases ──────────────────────────────

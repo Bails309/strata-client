@@ -17,51 +17,6 @@ pub async fn list(pool: &Pool<Postgres>, user_id: Uuid) -> Result<Vec<Uuid>, App
     Ok(ids)
 }
 
-/// Check whether a `(user, connection)` pair is favorited.
-pub async fn is_favorite(
-    pool: &Pool<Postgres>,
-    user_id: Uuid,
-    connection_id: Uuid,
-) -> Result<bool, AppError> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM user_favorites WHERE user_id = $1 AND connection_id = $2)",
-    )
-    .bind(user_id)
-    .bind(connection_id)
-    .fetch_one(pool)
-    .await?;
-    Ok(exists)
-}
-
-pub async fn remove(
-    pool: &Pool<Postgres>,
-    user_id: Uuid,
-    connection_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM user_favorites WHERE user_id = $1 AND connection_id = $2")
-        .bind(user_id)
-        .bind(connection_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-pub async fn add(
-    pool: &Pool<Postgres>,
-    user_id: Uuid,
-    connection_id: Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "INSERT INTO user_favorites (user_id, connection_id) VALUES ($1, $2)
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(user_id)
-    .bind(connection_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 /// Atomically toggle a `(user_id, connection_id)` favorite.
 ///
 /// Returns `true` when the row was just inserted (now favorited) and

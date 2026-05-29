@@ -1108,26 +1108,33 @@ mod tests {
         let (server_io, client_io) = duplex(256 * 1024);
 
         // Fake internal server: drain the body, ship it back to us
-        // for comparison, reply 200 with empty body.
+        // for comparison, reply 200 with empty body. The stream
+        // handler is spawned so the accept() loop keeps driving the
+        // connection (WINDOW_UPDATE, flow control, etc.) while the
+        // body is being received.
         let (body_tx, body_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
         let server_task = tokio::spawn(async move {
             let mut conn = H2ServerBuilder::new()
                 .handshake::<_, Bytes>(server_io)
                 .await
                 .expect("h2 server handshake");
-            if let Some(item) = conn.accept().await {
-                let (request, mut respond) = item.expect("h2 accept");
-                let (_p, mut body) = request.into_parts();
-                let mut buf = Vec::new();
-                while let Some(chunk) = body.data().await {
-                    let chunk = chunk.expect("body chunk");
-                    let _ = body.flow_control().release_capacity(chunk.len());
-                    buf.extend_from_slice(&chunk);
-                }
-                let _ = body_tx.send(buf);
-                let resp = HttpResponse::builder().status(200).body(()).unwrap();
-                let mut send = respond.send_response(resp, false).expect("send response");
-                send.send_data(Bytes::new(), true).expect("send EOS");
+            while let Some(item) = conn.accept().await {
+                let body_tx = body_tx;
+                tokio::spawn(async move {
+                    let (request, mut respond) = item.expect("h2 accept");
+                    let (_p, mut body) = request.into_parts();
+                    let mut buf = Vec::new();
+                    while let Some(chunk) = body.data().await {
+                        let chunk = chunk.expect("body chunk");
+                        let _ = body.flow_control().release_capacity(chunk.len());
+                        buf.extend_from_slice(&chunk);
+                    }
+                    let _ = body_tx.send(buf);
+                    let resp = HttpResponse::builder().status(200).body(()).unwrap();
+                    let mut send = respond.send_response(resp, false).expect("send response");
+                    send.send_data(Bytes::new(), true).expect("send EOS");
+                });
+                break;
             }
             while conn.accept().await.is_some() {}
         });
@@ -1226,22 +1233,26 @@ mod tests {
         // Fake upstream: try to drain the body. If the client resets
         // the stream, body.data() yields an Err — we just exit. We
         // do NOT send a response because the request was aborted.
+        // Stream handler is spawned so the accept loop keeps driving
+        // the connection (WINDOW_UPDATE, etc.) while body flows.
         let server_task = tokio::spawn(async move {
             let mut conn = H2ServerBuilder::new()
                 .handshake::<_, Bytes>(server_io)
                 .await
                 .expect("h2 server handshake");
-            if let Some(item) = conn.accept().await {
-                let (request, _respond) = item.expect("h2 accept");
-                let (_p, mut body) = request.into_parts();
-                while let Some(chunk) = body.data().await {
-                    match chunk {
-                        Ok(c) => {
-                            let _ = body.flow_control().release_capacity(c.len());
+            while let Some(item) = conn.accept().await {
+                tokio::spawn(async move {
+                    let (request, _respond) = item.expect("h2 accept");
+                    let (_p, mut body) = request.into_parts();
+                    while let Some(chunk) = body.data().await {
+                        match chunk {
+                            Ok(c) => {
+                                let _ = body.flow_control().release_capacity(c.len());
+                            }
+                            Err(_) => return, // client reset — expected
                         }
-                        Err(_) => return, // client reset — expected
                     }
-                }
+                });
             }
         });
 

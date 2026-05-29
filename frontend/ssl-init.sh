@@ -65,9 +65,14 @@ sed \
 
 # If njs module is not available, strip js_header_filter from the
 # templated fragment and remove the njs conf so nginx can still start.
+# Without njs we cannot fully rewrite the Server header, but we can
+# still hide the upstream's Server header via `proxy_hide_header Server`
+# so it does not leak through. Combined with `server_tokens off`
+# (already in common.fragment) nginx emits only its own short token
+# ("nginx") rather than the upstream identity.
 if [ "$NJS_AVAILABLE" = "false" ] || ! grep -q 'load_module.*ngx_http_js_module' /etc/nginx/nginx.conf 2>/dev/null; then
-    echo "ssl-init: stripping njs directives from config (module not loaded)"
-    sed -i '/js_header_filter/d' "$COMMON_DST"
+    echo "ssl-init: stripping njs directives from config (module not loaded); falling back to proxy_hide_header Server"
+    sed -i 's|js_header_filter remove_server.clearServer;|proxy_hide_header Server;|g' "$COMMON_DST"
     rm -f /etc/nginx/conf.d/00-njs.conf /etc/nginx/conf.d/remove_server.js
 fi
 

@@ -155,6 +155,106 @@ pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<Str
     None
 }
 
+/// Cheap, dependency-free signature check for a local HS256 JWT. Used to
+/// decide whether a bearer header should grant a CSRF / WS-Origin exemption.
+/// We deliberately do NOT validate `exp` or audience here — that's
+/// `require_auth`'s job. Returns false for OIDC tokens (different signer),
+/// for malformed tokens, and when `JWT_SECRET` is uninitialised.
+fn bearer_signature_valid(token: &str) -> bool {
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+    let secret = match crate::config::JWT_SECRET.get() {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => return false,
+    };
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&["strata-local"]);
+    // Don't require any spec claims — we're only proving the caller
+    // possesses a token the server signed. Lifetime checks live in
+    // `require_auth`.
+    validation.validate_exp = false;
+    validation.required_spec_claims.clear();
+
+    #[derive(serde::Deserialize)]
+    struct AnyClaims {}
+
+    decode::<AnyClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .is_ok()
+}
+
+/// Validate the `Origin` header on a WebSocket upgrade request to prevent
+/// cross-site WebSocket hijacking (CSWSH). Browsers ignore CORS on WS
+/// upgrades, so the only defence against a malicious page riding the user's
+/// cookies is to compare `Origin` against the request `Host` (same-origin)
+/// or against an operator-configured allowlist
+/// (`STRATA_ALLOWED_WS_ORIGINS`, comma-separated full origins like
+/// `https://strata.example.com`). Non-browser clients that omit `Origin`
+/// must authenticate via `Authorization: Bearer …` (also accepted); for
+/// cookie-authenticated WS upgrades the header is mandatory.
+pub fn check_ws_origin(headers: &http::HeaderMap) -> Result<(), &'static str> {
+    let has_valid_bearer = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(bearer_signature_valid)
+        .unwrap_or(false);
+
+    let origin = headers
+        .get(http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string());
+
+    let Some(origin) = origin else {
+        // No Origin: only allow when the caller authenticates with a
+        // signature-verified bearer token (CLI / programmatic clients).
+        // Without the signature check, an attacker could send an empty
+        // `Bearer x` from a malicious page to bypass the Origin gate.
+        if has_valid_bearer {
+            return Ok(());
+        }
+        return Err("missing Origin on cookie-authenticated WebSocket upgrade");
+    };
+
+    // Same-origin: compare the Origin authority (host[:port]) to the
+    // request's Host header. This is the common case for browser SPAs.
+    let host = headers
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string());
+
+    if let Some(host) = &host {
+        if let Some(origin_authority) = origin
+            .split_once("://")
+            .map(|x| x.1)
+            .and_then(|rest| rest.split('/').next())
+        {
+            if origin_authority.eq_ignore_ascii_case(host) {
+                return Ok(());
+            }
+        }
+    }
+
+    // Explicit allowlist from environment. Each entry is a full origin
+    // (scheme + host[:port]) and must match `Origin` byte-for-byte
+    // after trimming.
+    if let Ok(allowed) = std::env::var("STRATA_ALLOWED_WS_ORIGINS") {
+        for entry in allowed
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if entry.eq_ignore_ascii_case(&origin) {
+                return Ok(());
+            }
+        }
+    }
+
+    Err("Origin not allowed")
+}
+
 /// CSRF protection middleware for cookie-authenticated requests (W4-3).
 ///
 /// Implements the **double-submit cookie** pattern:
@@ -195,16 +295,25 @@ pub async fn require_csrf(req: Request, next: Next) -> Result<Response, AppError
         return Ok(next.run(req).await);
     }
 
-    // Bearer-authenticated requests are CSRF-exempt: bearer tokens are not
-    // automatically attached by browsers, so a third-party site cannot make
-    // an authenticated request on the user's behalf.
-    let has_bearer = req
+    // Bearer-authenticated requests are CSRF-exempt **only** when the bearer
+    // is a structurally valid, signature-verified local JWT. Without the
+    // signature check, an attacker could send `Authorization: Bearer x` from
+    // a malicious origin (browsers DO send Authorization on cross-origin
+    // fetch when the page sets it) and bypass CSRF entirely. Verifying the
+    // signature requires the JWT secret, which the attacker cannot forge.
+    //
+    // Note: we do NOT validate `exp` or audience here — that's `require_auth`'s
+    // job. We only need cryptographic proof that the caller possesses a token
+    // we issued, which is sufficient to rule out classic CSRF (the third-party
+    // site can't mint a signed token on the victim's behalf).
+    let has_valid_bearer = req
         .headers()
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.starts_with("Bearer "))
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(bearer_signature_valid)
         .unwrap_or(false);
-    if has_bearer {
+    if has_valid_bearer {
         return Ok(next.run(req).await);
     }
 
@@ -266,6 +375,19 @@ pub async fn require_auth(
 
     if is_ws_upgrade {
         tracing::debug!("Detected WebSocket upgrade request");
+        // Cross-origin WebSocket attacks ("CSWSH"): a malicious page in a
+        // user's browser can open ws:// or wss:// to our origin and
+        // automatically attach the `access_token` cookie. Browsers do NOT
+        // apply CORS to WebSocket upgrades, so we must validate the
+        // `Origin` header ourselves before consuming the cookie.
+        if let Err(e) = check_ws_origin(req.headers()) {
+            tracing::warn!(
+                "Rejecting WS upgrade {} due to Origin check: {}",
+                req.uri().path(),
+                e
+            );
+            return Err(AppError::Forbidden);
+        }
     }
 
     let token = req

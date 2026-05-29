@@ -207,6 +207,20 @@ export default function QuickShare({
 
   const buildSnippet = useCallback(
     (file: QuickShareFile) => {
+      // Reject any non-relative download URL. The server always returns
+      // a path like `/api/shared/quickshare/<token>` and we treat that
+      // as a security boundary: if a backend bug or supply-chain attack
+      // ever caused the API to hand back an absolute URL (or a
+      // protocol-relative one), pasting the generated cURL/PowerShell
+      // snippet would silently exfiltrate the user's cookies to a
+      // third-party host. Fail closed instead.
+      if (
+        !file.download_url ||
+        !file.download_url.startsWith("/") ||
+        file.download_url.startsWith("//")
+      ) {
+        throw new Error("Invalid Quick Share URL returned by server");
+      }
       const url = `${window.location.origin}${file.download_url}`;
       return snippetFor(format, url, file.filename, insecure);
     },

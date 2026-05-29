@@ -6,7 +6,14 @@ use uuid::Uuid;
 
 // ── Config row from DB ─────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+/// LDAP / AD sync configuration row.
+///
+/// Note: `Debug` is implemented manually below so `bind_password` and
+/// `pm_bind_password` are redacted whenever the struct is logged. At rest
+/// these fields are usually Vault ciphertext (`vault:…`) but are unsealed
+/// to plaintext in-memory at bind time — accidental `tracing::debug!("{:?}", cfg)`
+/// would otherwise leak the LDAP service-account password.
+#[derive(Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AdSyncConfig {
     pub id: Uuid,
     pub label: String,
@@ -76,6 +83,69 @@ fn default_pm_rotate_interval() -> i32 {
 }
 fn default_true() -> bool {
     true
+}
+
+impl std::fmt::Debug for AdSyncConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redact secret fields. Show only whether they are populated so logs
+        // remain useful for diagnosing config-shape problems.
+        let redact = |s: &str| -> &'static str {
+            if s.is_empty() {
+                "<unset>"
+            } else if s.starts_with("vault:") {
+                "<vault-encrypted>"
+            } else {
+                "<redacted>"
+            }
+        };
+        f.debug_struct("AdSyncConfig")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("ldap_url", &self.ldap_url)
+            .field("bind_dn", &self.bind_dn)
+            .field("bind_password", &redact(&self.bind_password))
+            .field("search_bases", &self.search_bases)
+            .field("search_filter", &self.search_filter)
+            .field("search_scope", &self.search_scope)
+            .field("protocol", &self.protocol)
+            .field("default_port", &self.default_port)
+            .field("domain_override", &self.domain_override)
+            .field("folder_id", &self.folder_id)
+            .field("tls_skip_verify", &self.tls_skip_verify)
+            .field("sync_interval_minutes", &self.sync_interval_minutes)
+            .field("enabled", &self.enabled)
+            .field("auth_method", &self.auth_method)
+            .field("keytab_path", &self.keytab_path)
+            .field("krb5_principal", &self.krb5_principal)
+            .field(
+                "ca_cert_pem",
+                &self.ca_cert_pem.as_deref().map(|_| "<present>"),
+            )
+            .field("connection_defaults", &self.connection_defaults)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .field("pm_enabled", &self.pm_enabled)
+            .field("pm_bind_user", &self.pm_bind_user)
+            .field(
+                "pm_bind_password",
+                &self.pm_bind_password.as_deref().map(redact),
+            )
+            .field("pm_target_filter", &self.pm_target_filter)
+            .field("pm_pwd_min_length", &self.pm_pwd_min_length)
+            .field("pm_pwd_require_uppercase", &self.pm_pwd_require_uppercase)
+            .field("pm_pwd_require_lowercase", &self.pm_pwd_require_lowercase)
+            .field("pm_pwd_require_numbers", &self.pm_pwd_require_numbers)
+            .field("pm_pwd_require_symbols", &self.pm_pwd_require_symbols)
+            .field("pm_auto_rotate_enabled", &self.pm_auto_rotate_enabled)
+            .field(
+                "pm_auto_rotate_interval_days",
+                &self.pm_auto_rotate_interval_days,
+            )
+            .field("pm_last_rotated_at", &self.pm_last_rotated_at)
+            .field("pm_search_bases", &self.pm_search_bases)
+            .field("pm_allow_emergency_bypass", &self.pm_allow_emergency_bypass)
+            .finish()
+    }
 }
 
 // ── Sync run row ───────────────────────────────────────────────────────
@@ -286,6 +356,19 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         serde_json::json!({})
     };
 
+    // Wrap phases 3 (upsert), 4 (soft-delete) and 5 (hard-delete) in a
+    // single transaction so a crash partway through cannot leave the
+    // discovered inventory partially applied (e.g. upserts committed
+    // while the matching soft-delete sweep never ran, causing the next
+    // run's "would soft-delete > 50%" guard to trip and abort).
+    let mut tx = pool.begin().await?;
+    // Large AD inventories can blow past the default 90 s statement
+    // timeout once the cluster grows past ~25 k computers. Pin a 5 min
+    // budget *inside* this transaction only.
+    sqlx::query("SET LOCAL statement_timeout = '300s'")
+        .execute(&mut *tx)
+        .await?;
+
     // High performance bulk upsert using UNNEST and ON CONFLICT.
     // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
     let stats: (i64, i64) = sqlx::query_as(
@@ -335,7 +418,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     .bind(config.folder_id)
     .bind(config.id)
     .bind(&defaults)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let created = stats.0 as i32;
@@ -355,7 +438,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     )
     .bind(config.id)
     .bind(&dns)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     let soft_deleted = soft_deleted_res.rows_affected() as i32;
 
@@ -364,9 +447,11 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         "DELETE FROM connections WHERE ad_source_id = $1 AND soft_deleted_at IS NOT NULL AND soft_deleted_at < now() - INTERVAL '7 days'",
     )
     .bind(config.id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     let hard_deleted = hard_result.rows_affected() as i32;
+
+    tx.commit().await?;
 
     // Update run stats
     sqlx::query(

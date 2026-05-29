@@ -66,6 +66,10 @@ pub fn revoke(token: &str, exp: u64) {
 
 /// Persist a revocation to the database (best-effort, non-blocking).
 /// Call this after `revoke()` to survive restarts.
+///
+/// DB errors are logged at `error!` level — they previously were silently
+/// swallowed, which meant a transient DB outage during logout could leave
+/// the revocation in-memory only and lost on the next restart.
 pub async fn persist_revocation(pool: &sqlx::Pool<sqlx::Postgres>, token: &str, exp: u64) {
     let hash = token_hash(token);
     let expires_at = match chrono::DateTime::from_timestamp(exp as i64, 0) {
@@ -78,13 +82,20 @@ pub async fn persist_revocation(pool: &sqlx::Pool<sqlx::Postgres>, token: &str, 
             chrono::Utc::now() + chrono::Duration::hours(24)
         }
     };
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO revoked_tokens (token_hash, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(&hash)
     .bind(expires_at)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::error!(
+            error = %e,
+            "persist_revocation: failed to write revoked_tokens row \
+             (in-memory revocation still active, but will be lost on restart)"
+        );
+    }
 }
 
 /// Load revoked tokens from the database into the in-memory cache.

@@ -34,6 +34,11 @@ async fn main() -> anyhow::Result<()> {
         "Strata Backend starting …"
     );
 
+    // Loud startup checks for security-relevant env vars. These do NOT
+    // refuse boot (a dev `docker compose up` should still work) but they
+    // emit `error!`-level lines so operators see them in production logs.
+    log_security_config_warnings();
+
     // ── Resolve configuration from environment + persisted config ──
     let config_path = AppConfig::config_path();
     let persisted = AppConfig::load(&config_path).ok();
@@ -335,6 +340,12 @@ async fn main() -> anyhow::Result<()> {
         services::session_cleanup::spawn_vdi_reaper(state.clone(), shutdown.clone()),
     ];
 
+    // ── Spawn SSO state pruner ──
+    // Not tied to the cancellation token because the task only holds a
+    // short-lived in-process Mutex and has no I/O — letting it run until
+    // process exit is fine.
+    routes::auth::spawn_sso_state_pruner();
+
     let addr: std::net::SocketAddr = "0.0.0.0:8080".parse()?;
     let app = routes::build_router(state.clone());
 
@@ -473,6 +484,85 @@ async fn shutdown_signal() {
     }
 }
 
+/// Emit `error!`-level lines for security-relevant env vars that are
+/// unset, weak, or known development defaults. Does NOT refuse boot —
+/// dev `docker compose up` should still work — but operators tailing
+/// production logs will see these immediately.
+fn log_security_config_warnings() {
+    // Postgres default-password sentinel from docker-compose.yml.
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        if url.contains("strata_default") || url.contains(":strata@") {
+            tracing::error!(
+                "DATABASE_URL contains the development default password \
+                 (`strata_default` / `strata`). Set POSTGRES_PASSWORD to a \
+                 strong unique value in production."
+            );
+        }
+    }
+
+    // Vault dev token (`root`) and TLS-disabled mode.
+    if std::env::var("VAULT_TOKEN").as_deref() == Ok("root") {
+        tracing::error!(
+            "VAULT_TOKEN is `root` (Vault dev mode). NEVER use this in \
+             production — generate a scoped token with a Transit-only policy."
+        );
+    }
+    if std::env::var("VAULT_ADDR")
+        .ok()
+        .filter(|a| a.starts_with("http://"))
+        .is_some()
+    {
+        tracing::error!(
+            "VAULT_ADDR uses plain http://. Vault should always be reached \
+             over TLS in production (https://)."
+        );
+    }
+
+    // CORS / XFF trust posture.
+    if std::env::var("STRATA_ALLOWED_ORIGINS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_none()
+        && std::env::var("STRATA_DOMAIN")
+            .ok()
+            .filter(|s| !s.is_empty() && s != ":80")
+            .is_none()
+    {
+        tracing::error!(
+            "Neither STRATA_ALLOWED_ORIGINS nor STRATA_DOMAIN is set. \
+             Browser cross-origin requests will be rejected by CORS."
+        );
+    }
+    if std::env::var("STRATA_TRUST_XFF").as_deref() == Ok("1") {
+        let trusted = std::env::var("STRATA_TRUSTED_PROXIES").unwrap_or_default();
+        if trusted.trim().is_empty() {
+            tracing::error!(
+                "STRATA_TRUST_XFF=1 is set but STRATA_TRUSTED_PROXIES is empty. \
+                 Any client can spoof X-Forwarded-For and evade rate limits or \
+                 forge audit-log source IPs. Either unset STRATA_TRUST_XFF or \
+                 populate STRATA_TRUSTED_PROXIES with your load-balancer CIDRs."
+            );
+        }
+    }
+
+    // JWT secret strength.
+    if let Ok(secret) = std::env::var("JWT_SECRET") {
+        if secret.len() < 32 {
+            tracing::error!(
+                "JWT_SECRET is shorter than 32 bytes ({} bytes). Use at least \
+                 32 random bytes (e.g. `openssl rand -hex 32`).",
+                secret.len()
+            );
+        }
+        if secret == "change_me" || secret == "secret" || secret.starts_with("dev") {
+            tracing::error!(
+                "JWT_SECRET looks like a development placeholder. Rotate it \
+                 before any production traffic."
+            );
+        }
+    }
+}
+
 /// Resolve Vault config from env vars, falling back to persisted config.
 /// For local vault mode, secrets are loaded from the vault-secrets file.
 fn resolve_vault_config(persisted: &Option<AppConfig>) -> Option<VaultConfig> {
@@ -576,7 +666,7 @@ async fn ensure_default_admin(db: &Database) -> anyhow::Result<()> {
     // Hash the password with Argon2
     let salt =
         argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let hash = argon2::Argon2::default()
+    let hash = crate::services::password::pinned_argon2()
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| anyhow::anyhow!("Password hashing failed: {}", e))?
         .to_string();

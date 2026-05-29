@@ -29,6 +29,58 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.4",
+    subtitle:
+      "Patch release — Security & DMZ hardening: CSRF/CSWSH bypass closure, DMZ proxy body streaming (~250× lower per-request memory), TLS 1.3 pin + HTTP/2 Rapid Reset mitigation, secret-redacting logs, and startup banners for production-default credentials.",
+    sections: [
+      {
+        title: "CSRF and CSWSH bearer-bypass closure",
+        description:
+          "The CSRF middleware previously short-circuited the moment it saw any Authorization: Bearer header, on the assumption a third-party origin cannot read a bearer token out of localStorage. A malicious origin could nonetheless mint Authorization: Bearer anything-at-all and bypass the check outright. The middleware now decodes the supplied bearer with the local JWT secret (signature only — exp/aud remain enforced by require_auth) and only exempts signature-valid bearers. Fake bearers fall through to the standard cookie + X-CSRF-Token check and are rejected. The same JWT-signature gate is applied to the WebSocket-upgrade no-Origin bearer fallback so the equivalent CSWSH vector is closed. External API clients using opaque (non-local-JWT) bearers must now also send the cookie + X-CSRF-Token pair on state-changing requests, or migrate to local JWTs.",
+      },
+      {
+        title: "DMZ reverse-proxy streams request and response bodies (M5)",
+        description:
+          "The DMZ reverse-proxy used to buffer each direction into a BytesMut up to 8 MiB before forwarding. Under N concurrent requests the resident set could grow by 2 × 8 × N MiB and the proxy was a built-in DoS amplifier. v1.10.4 streams both directions: a pump_request_body_upstream task writes chunks into the h2 SendStream honouring flow control via reserve_capacity/poll_capacity, and a new RecvStreamBody adapter streams responses back out via axum::body::Body::from_stream while releasing the flow-control window per chunk. Per-request memory dropped from up to ~16 MiB to roughly one h2 flow-control window (~64 KiB) — about a 250× reduction. Pre-flight Content-Length checks still return 413/507 before any byte flows; mid-stream overshoot triggers send_reset(CANCEL) or stream truncation. Four new streaming-mode tests guard the behaviour.",
+      },
+      {
+        title: "DMZ TLS 1.3 pin and HTTP/2 Rapid Reset mitigation",
+        description:
+          "The DMZ public listener is now constructed via builder_with_protocol_versions(&[&rustls::version::TLS13]), dropping TLS 1.2 from the internet-facing surface. The hyper-util auto-builder for the public h2 connection is configured with max_concurrent_streams=128, max_frame_size=64 KiB, max_header_list_size=16 KiB, max_send_buf_size=1 MiB, and a 20-second keep-alive interval. These settings mitigate CVE-2023-44487 (HTTP/2 Rapid Reset) where a single client opens and immediately cancels streams to exhaust server resources. Internal mTLS (consumed only by the two halves of the deployment) is unchanged.",
+      },
+      {
+        title: "X-Forwarded-For now opt-in on the backend",
+        description:
+          "The backend (not just the DMZ relay) now honours X-Forwarded-For for audit-log attribution and per-IP rate-limit bucketing only when STRATA_TRUST_XFF=1 is set. Without it, every request appears to come from the socket peer — the same fail-safe default the DMZ side already uses. Production deployments behind a reverse proxy must set this variable on upgrade (and ideally restrict the trust scope via STRATA_TRUSTED_PROXIES with comma-separated CIDRs), otherwise rate limits collapse to per-LB-IP buckets and audit logs lose source-IP fidelity. The new startup banner reminds operators on boot when the variable is missing.",
+      },
+      {
+        title: "Startup banner for production-default credentials",
+        description:
+          "A new log_security_config_warnings() runs at backend boot and emits error!-level entries whenever it detects DATABASE_URL containing the dev password strata_default, VAULT_TOKEN=root, an http:// VAULT_ADDR, a JWT_SECRET shorter than 32 bytes (or matching a known placeholder), or STRATA_TRUST_XFF=1 without a paired STRATA_TRUSTED_PROXIES. Dev/compose flows continue to work; production deployments get a loud reminder if any default is still in place. .env.example has been reorganised with a top-of-file warning block enumerating these five must-set production variables.",
+      },
+      {
+        title: "Secret-leak hardening",
+        description:
+          "AdSyncConfig no longer prints bind passwords via Debug — a manual impl now emits <unset> / <vault-encrypted> / <redacted> for bind_password and pm_bind_password while keeping every other field readable. The frontend api.ts no longer logs CSRF cookie presence to devtools. A new escapeSvgText() helper wraps every interpolated value in the SessionsTab session-activity SVG chart so the rendering is safe against future API-contract drift even if date fields ever change to include user-supplied text.",
+      },
+      {
+        title: "Token-revocation correctness",
+        description:
+          "POST /api/auth/logout now only persists revocations for cryptographically-verified JWTs — unauthenticated callers can no longer spam junk strings to bloat the revocation table (a slow DoS). change_password now revokes all three token sources (Authorization bearer, access_token cookie, refresh_token cookie) instead of only the bearer, forcing full re-authentication on the next request. token_revocation::persist_revocation now logs Postgres write failures at error! level instead of silently swallowing them.",
+      },
+      {
+        title: "Argon2 parameters pinned to OWASP minimum",
+        description:
+          "A new services::password::pinned_argon2() returns an Argon2 configured with Params::new(64 MiB, t=3, p=4) and Argon2id Version::V0x13. All write-side password-hashing call sites (default-admin bootstrap, admin user create/reset) now use the pinned helper. Verification continues to use the parameters embedded in the stored PHC string, so existing hashes remain verifiable. No migration step: newly-set passwords get the stronger parameters; existing hashes are rehashed lazily when users next change their password.",
+      },
+      {
+        title: "Edge-signer hardening",
+        description:
+          "The edge_signer header strip is widened to include x-real-ip, every x-forwarded-* variant, and every x-strata-admin-* header in addition to the existing x-strata-edge-* strip, closing a smuggling vector where a cooperative public client could pre-stamp a header to confuse internal trust logic. UA truncation is now char-boundary-safe via char_indices — a sufficiently exotic public User-Agent could previously panic the signer on a multi-byte UTF-8 boundary.",
+      },
+    ],
+  },
+  {
     version: "1.10.3",
     subtitle:
       "Minor release — Multiplayer co-pilot: owner participation, force-grant, and WebRTC full-mesh audio. Plus a unified modern look for native checkboxes app-wide.",

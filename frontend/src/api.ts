@@ -54,17 +54,16 @@ export async function refreshAccessToken(): Promise<boolean> {
   isRefreshing = true;
   refreshPromise = (async () => {
     try {
-      const csrf = readCookie("csrf_token");
-      console.log(`[refreshAccessToken] Attempting refresh (CSRF present: ${!!csrf})`);
+      // NOTE: do NOT log CSRF cookie presence here. Devtools / extensions
+      // can read console output, and the historical message exposed a CSRF
+      // state signal that an attacker could correlate with timing oracles.
       const res = await fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
         headers: buildHeaders("POST"),
         credentials: "include",
       });
       if (!res.ok) {
-        console.error(`[refreshAccessToken] Failed with status: ${res.status} ${res.statusText}`);
-      } else {
-        console.log(`[refreshAccessToken] Success: ${res.status} ${res.statusText}`);
+        console.error(`[refreshAccessToken] Failed with status: ${res.status}`);
       }
       return res.ok;
     } catch (e) {

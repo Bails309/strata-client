@@ -119,6 +119,35 @@ flow-control windows are honoured in both directions so back-pressure
 from a slow public client transparently slows the upstream guacd
 traffic.
 
+### Body streaming and HTTP/2 hardening (v1.10.4+)
+
+As of v1.10.4 the DMZ reverse-proxy streams request and response
+bodies end-to-end through the h2 link instead of buffering each
+direction into a `BytesMut` up to 8 MiB before forwarding. Both
+directions honour h2 flow control:
+
+- The request side uses a spawned `pump_request_body_upstream` task
+  that writes axum `Body` chunks into the upstream h2 `SendStream`
+  via `reserve_capacity` / `poll_capacity`. Mid-stream overshoot of
+  the per-request byte cap triggers `send_reset(h2::Reason::CANCEL)`.
+- The response side uses a `RecvStreamBody` adapter that implements
+  `futures::Stream` over `h2::RecvStream` and releases the
+  flow-control window per chunk. `axum::body::Body::from_stream`
+  wires it into the public response.
+
+Pre-flight `Content-Length` checks still return `413` (request too
+large) and `507` (response too large) before any byte flows.
+Per-request memory dropped from up to ~16 MiB to roughly one h2
+flow-control window (~64 KiB).
+
+The DMZ public TLS listener is also pinned to **TLS 1.3 only** as of
+v1.10.4, and the `hyper-util` auto-builder for the public h2
+connection is configured with `max_concurrent_streams=128`,
+`max_frame_size=64 KiB`, `max_header_list_size=16 KiB`,
+`max_send_buf_size=1 MiB`, and a 20-second keep-alive interval to
+mitigate CVE-2023-44487 ("HTTP/2 Rapid Reset"). Internal mTLS
+(consumed only by the two halves of the deployment) is unchanged.
+
 ---
 
 ## The three shared secrets

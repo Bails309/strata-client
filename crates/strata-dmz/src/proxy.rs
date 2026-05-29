@@ -17,14 +17,28 @@
 //!    method, path-and-query, hop-by-hop headers stripped, plus the
 //!    edge-header bundle injected by Phase 2d (no-op until 2d lands —
 //!    the adapter accepts an `EdgeSigner` trait so 2d can drop in).
-//! 4. Send the request with `end_of_stream = false` whenever the
-//!    incoming body is non-empty; stream the body up via
-//!    `SendStream::send_data` with backpressure honored by
-//!    `reserve_capacity` / `poll_capacity`.
+//! 4. Send the request with `end_of_stream = false` and stream the
+//!    request body upstream as the public client supplies it,
+//!    honoring h2 flow control via
+//!    [`SendStream::reserve_capacity`] / [`SendStream::poll_capacity`].
+//!    The pump is a spawned task so the response head can be awaited
+//!    concurrently (e.g. for early 4xx replies).
 //! 5. Read response headers, then stream body frames back to the
 //!    public client up to [`MAX_PROXY_BODY_BYTES`]; trailers are
 //!    dropped (axum can't stream HTTP/1.1 trailers reliably to all
 //!    clients and this proxy is HTTP/1.1 + h2 to public).
+//!
+//! ## Body caps
+//!
+//! Neither direction is buffered in full. Per-request memory is
+//! bounded by the negotiated h2 flow-control windows (typically ~64
+//! KiB) rather than [`MAX_PROXY_BODY_BYTES`]. The cap is still
+//! enforced byte-by-byte as data flows; over-cap requests are
+//! refused upfront when `Content-Length` is present and the upstream
+//! stream is reset mid-transfer otherwise. Over-cap responses are
+//! refused upfront when upstream advertises `Content-Length`;
+//! mid-stream overshoot truncates the response and the public
+//! connection is closed by the body stream returning an error.
 //!
 //! ## Hop-by-hop headers
 //!
@@ -33,15 +47,19 @@
 //! `te`, `trailer`, `upgrade`. Plus `host` (h2 uses `:authority`).
 //! Any header listed in the value of `connection:` is also hop-by-hop.
 
+use std::future::poll_fn;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::body::Body;
 use axum::extract::Request as AxumRequest;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use bytes::{Bytes, BytesMut};
-use futures_util::StreamExt;
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
 use h2::client::SendRequest;
+use h2::{RecvStream, SendStream};
 use http::{Request as HttpRequest, Uri};
 
 use crate::link_server::LinkSessionRegistry;
@@ -150,7 +168,6 @@ enum ProxyError {
     UpstreamProtocol,
     UpstreamTooLarge,
     InvalidRequestUri,
-    BodyReadFailed,
 }
 
 impl IntoResponse for ProxyError {
@@ -174,7 +191,6 @@ impl IntoResponse for ProxyError {
                 "upstream response exceeded proxy body limit",
             ),
             ProxyError::InvalidRequestUri => (StatusCode::BAD_REQUEST, "invalid request uri"),
-            ProxyError::BodyReadFailed => (StatusCode::BAD_REQUEST, "request body read failed"),
         };
         let mut resp = (status, msg).into_response();
         resp.headers_mut().insert(
@@ -231,67 +247,85 @@ async fn proxy(state: ProxyState, req: AxumRequest) -> Result<Response, ProxyErr
     // Phase 2d will inject the signed edge-header bundle here.
     state.signer.sign(&mut headers, peer, &method, &uri);
 
-    // Eagerly buffer the request body up to the limit. Streaming a
-    // partially-read body through h2 is supported by the h2 crate
-    // but adds a second backpressure axis we don't need for the v1
-    // surface (admin UI, OIDC callbacks, REST). If a future workload
-    // needs streaming uploads, this is the seam to extend.
-    let body_bytes = match read_body_capped(body, MAX_PROXY_BODY_BYTES).await {
-        Ok(b) => b,
-        Err(BodyReadError::TooLarge) => {
-            // Refuse before touching the link.
+    // Pre-flight: if the client advertised a Content-Length larger
+    // than the cap, refuse before touching the link. This is the
+    // honest-client fast path; bodies without a CL (chunked uploads)
+    // are still capped byte-by-byte by the streaming pump below.
+    if let Some(declared) = parts
+        .headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        if declared > MAX_PROXY_BODY_BYTES as u64 {
             return Ok((StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response());
         }
-        Err(BodyReadError::Io) => return Err(ProxyError::BodyReadFailed),
-    };
+    }
 
-    // Try twice: once with the first pick, once with a fresh pick if
-    // the first sender was already broken.
+    // Pick a ready sender. Body is not consumed until after we have
+    // one, so we can retry the pick if the first sender is dead.
+    // Once `send_request` is called we can no longer replay the body
+    // — any subsequent failure is fatal to this request (the public
+    // client must retry).
     let mut last_err: Option<ProxyError> = None;
-    for attempt in 0..2 {
+    let mut chosen: Option<(crate::link_server::LinkSessionInfo, h2::client::SendRequest<Bytes>)> =
+        None;
+    for _ in 0..2 {
         let (info, sender) = match state.registry.pick_any() {
             Some(p) => p,
             None => return Err(ProxyError::NoLinkUp),
         };
-
-        match forward_one(sender, &method, &upstream_uri, &headers, &body_bytes).await {
-            Ok(resp) => {
-                tracing::debug!(
-                    link_id = %info.link_id,
-                    node_id = %info.node_id,
-                    method = %method,
-                    path = %upstream_uri.path(),
-                    attempt,
-                    "DMZ proxied request"
-                );
-                return Ok(resp);
+        match sender.ready().await {
+            Ok(ready) => {
+                chosen = Some((info, ready));
+                break;
             }
-            Err(e @ ProxyError::LinkSendUnavailable) | Err(e @ ProxyError::UpstreamHandshake) => {
-                // Sender was broken. Evict it and try again.
+            Err(e) => {
+                tracing::debug!(error = %e, link_id = %info.link_id, "link sender not ready, evicting");
                 state.registry.remove(&info.link_id);
-                last_err = Some(e);
+                last_err = Some(ProxyError::LinkSendUnavailable);
                 continue;
             }
-            Err(e) => return Err(e),
         }
     }
-    Err(last_err.unwrap_or(ProxyError::LinkSendUnavailable))
+    let (info, sender) = match chosen {
+        Some(c) => c,
+        None => return Err(last_err.unwrap_or(ProxyError::LinkSendUnavailable)),
+    };
+
+    match forward_streaming(sender, &method, &upstream_uri, &headers, body).await {
+        Ok(resp) => {
+            tracing::debug!(
+                link_id = %info.link_id,
+                node_id = %info.node_id,
+                method = %method,
+                path = %upstream_uri.path(),
+                "DMZ proxied request"
+            );
+            Ok(resp)
+        }
+        Err(e) => {
+            // We already burned the body — evict the (possibly bad)
+            // sender so the next request doesn't pick it again, but
+            // no in-flight retry is possible.
+            if matches!(
+                e,
+                ProxyError::LinkSendUnavailable | ProxyError::UpstreamHandshake
+            ) {
+                state.registry.remove(&info.link_id);
+            }
+            Err(e)
+        }
+    }
 }
 
-async fn forward_one(
-    sender: SendRequest<Bytes>,
+async fn forward_streaming(
+    mut sender: SendRequest<Bytes>,
     method: &http::Method,
     upstream_uri: &Uri,
     headers: &HeaderMap,
-    body: &Bytes,
+    body: Body,
 ) -> Result<Response, ProxyError> {
-    // Wait for the sender to become ready. If it errors, the
-    // connection went away — caller will retry with another pick.
-    let mut sender = sender.ready().await.map_err(|e| {
-        tracing::debug!(error = %e, "link sender not ready (eviction will follow)");
-        ProxyError::LinkSendUnavailable
-    })?;
-
     // Build the upstream request.
     let mut up_req = HttpRequest::builder()
         .method(method.clone())
@@ -308,53 +342,57 @@ async fn forward_one(
         ProxyError::UpstreamProtocol
     })?;
 
-    let end_of_stream = body.is_empty();
-    let (resp_fut, mut send_stream) = sender.send_request(up_req, end_of_stream).map_err(|e| {
+    // Always send with end_of_stream=false and let the pump task
+    // close the stream after streaming any body bytes. For methods
+    // without a body (GET/HEAD/...) the pump sees an immediate
+    // end-of-stream from axum and sends an empty DATA frame with
+    // EOS, which is well-formed h2.
+    let (resp_fut, send_stream) = sender.send_request(up_req, false).map_err(|e| {
         tracing::debug!(error = %e, "send_request failed");
         ProxyError::LinkSendUnavailable
     })?;
 
-    // Push the body up. Honors h2 flow control via reserve_capacity.
-    if !body.is_empty() {
-        send_stream.reserve_capacity(body.len());
-        // We send the entire pre-buffered body as a single DATA frame;
-        // h2 will fragment per the negotiated MAX_FRAME_SIZE.
-        send_stream.send_data(body.clone(), true).map_err(|e| {
-            tracing::debug!(error = %e, "send_data failed");
-            ProxyError::UpstreamProtocol
-        })?;
-    }
+    // Pump request body upstream concurrently with awaiting the
+    // response head. Spawned so an upstream server that responds
+    // before reading the full body (e.g. early 4xx) is not blocked.
+    // Lifetime is bounded by: body stream EOF, peer reset (causes
+    // send_data to error), or cap exceeded (we send_reset).
+    let pump = tokio::spawn(pump_request_body_upstream(body, send_stream));
 
     // Receive the response head.
-    let resp = resp_fut.await.map_err(|e| {
-        tracing::debug!(error = %e, "upstream h2 response future errored");
-        ProxyError::UpstreamHandshake
-    })?;
-
-    let (head, mut recv) = resp.into_parts();
-
-    // Stream / accumulate response body up to the cap.
-    let mut buf = BytesMut::new();
-    while let Some(frame) = recv.data().await {
-        let chunk = frame.map_err(|e| {
-            tracing::debug!(error = %e, "upstream response data frame errored");
-            ProxyError::UpstreamProtocol
-        })?;
-        if buf.len().saturating_add(chunk.len()) > MAX_PROXY_BODY_BYTES {
-            return Err(ProxyError::UpstreamTooLarge);
+    let resp = match resp_fut.await {
+        Ok(r) => r,
+        Err(e) => {
+            // Cancel the pump if it's still running — peer is gone.
+            pump.abort();
+            tracing::debug!(error = %e, "upstream h2 response future errored");
+            return Err(ProxyError::UpstreamHandshake);
         }
-        let len = chunk.len();
-        buf.extend_from_slice(&chunk);
-        // Release flow-control window for the chunk we just consumed.
-        if let Err(e) = recv.flow_control().release_capacity(len) {
-            tracing::debug!(error = %e, "release_capacity failed");
+    };
+
+    let (head, recv) = resp.into_parts();
+
+    // Pre-flight: if upstream advertised an over-cap Content-Length,
+    // refuse before forwarding any bytes to the public client.
+    // Mid-stream overshoot is handled by the body stream below.
+    if let Some(declared) = head
+        .headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        if declared > MAX_PROXY_BODY_BYTES as u64 {
+            pump.abort();
+            // Dropping `recv` will close the response stream.
+            drop(recv);
+            return Err(ProxyError::UpstreamTooLarge);
         }
     }
 
-    // Drop trailers — see module docs.
-
     // Build the public response with the upstream status + headers,
-    // minus hop-by-hop fields.
+    // minus hop-by-hop fields. The body is a streaming adapter over
+    // the h2 RecvStream that releases flow-control window per chunk
+    // and enforces the byte cap as data flows.
     let mut public = Response::builder().status(head.status);
     {
         let h = public.headers_mut().expect("fresh builder has headers map");
@@ -364,10 +402,124 @@ async fn forward_one(
             }
         }
     }
-    public.body(Body::from(buf.freeze())).map_err(|e| {
-        tracing::warn!(error = %e, "failed to build public response");
-        ProxyError::UpstreamProtocol
-    })
+    let stream_body = RecvStreamBody {
+        recv,
+        remaining: MAX_PROXY_BODY_BYTES,
+    };
+    public
+        .body(Body::from_stream(stream_body))
+        .map_err(|e| {
+            tracing::warn!(error = %e, "failed to build public response");
+            ProxyError::UpstreamProtocol
+        })
+}
+
+/// Pump the public-client request body upstream over an h2
+/// [`SendStream`], honoring flow control and enforcing the proxy
+/// body cap byte-by-byte. On error (cap exceeded, body read failure,
+/// or upstream stream gone) the upstream stream is reset and the
+/// task exits. Always terminates the stream with an EOS frame on
+/// success.
+async fn pump_request_body_upstream(body: Body, mut send: SendStream<Bytes>) {
+    use http_body_util::BodyDataStream;
+    let mut stream = BodyDataStream::new(body);
+    let mut total: usize = 0;
+    while let Some(next) = stream.next().await {
+        let chunk = match next {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(error = %e, "request body read errored mid-stream");
+                send.send_reset(h2::Reason::INTERNAL_ERROR);
+                return;
+            }
+        };
+        if total.saturating_add(chunk.len()) > MAX_PROXY_BODY_BYTES {
+            tracing::debug!(
+                total,
+                chunk_len = chunk.len(),
+                cap = MAX_PROXY_BODY_BYTES,
+                "request body exceeded cap mid-stream"
+            );
+            send.send_reset(h2::Reason::CANCEL);
+            return;
+        }
+        // Reserve flow-control window for the full chunk; the peer
+        // may grant it in smaller increments, so loop on poll_capacity
+        // until the chunk is fully sent.
+        send.reserve_capacity(chunk.len());
+        let mut remaining = chunk;
+        while !remaining.is_empty() {
+            let granted = match poll_fn(|cx| send.poll_capacity(cx)).await {
+                Some(Ok(n)) => n,
+                Some(Err(e)) => {
+                    tracing::debug!(error = %e, "poll_capacity errored");
+                    return;
+                }
+                None => {
+                    // Stream closed by peer.
+                    return;
+                }
+            };
+            let take = granted.min(remaining.len());
+            let to_send = remaining.split_to(take);
+            if let Err(e) = send.send_data(to_send, false) {
+                tracing::debug!(error = %e, "send_data errored");
+                return;
+            }
+            total = total.saturating_add(take);
+        }
+    }
+    // End of stream — empty DATA with EOS flag.
+    if let Err(e) = send.send_data(Bytes::new(), true) {
+        tracing::debug!(error = %e, "send_data EOS errored");
+    }
+}
+
+/// Axum response body adapter over an h2 [`RecvStream`]. Releases
+/// flow-control window per chunk and enforces the proxy body cap.
+/// On cap overshoot or upstream error, yields an `Err` which axum
+/// converts into a premature connection close on the public side.
+struct RecvStreamBody {
+    recv: RecvStream,
+    remaining: usize,
+}
+
+impl Stream for RecvStreamBody {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        match Pin::new(&mut this.recv).poll_data(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(Err(e))) => {
+                tracing::debug!(error = %e, "upstream response data frame errored");
+                Poll::Ready(Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "upstream response stream error",
+                ))))
+            }
+            Poll::Ready(Some(Ok(chunk))) => {
+                let len = chunk.len();
+                if len > this.remaining {
+                    tracing::debug!(
+                        len,
+                        remaining = this.remaining,
+                        "upstream response exceeded proxy body cap mid-stream"
+                    );
+                    return Poll::Ready(Some(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "upstream response exceeded proxy body cap",
+                    ))));
+                }
+                this.remaining -= len;
+                if let Err(e) = this.recv.flow_control().release_capacity(len) {
+                    tracing::debug!(error = %e, "release_capacity failed");
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+        }
+    }
 }
 
 fn is_hop_by_hop(name: &HeaderName) -> bool {
@@ -396,29 +548,6 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
         // is already lowercase.
         headers.remove(*h);
     }
-}
-
-#[derive(Debug)]
-enum BodyReadError {
-    TooLarge,
-    Io,
-}
-
-async fn read_body_capped(body: Body, cap: usize) -> Result<Bytes, BodyReadError> {
-    use http_body_util::BodyDataStream;
-    let mut stream = BodyDataStream::new(body);
-    let mut buf = BytesMut::new();
-    while let Some(next) = stream.next().await {
-        let chunk = next.map_err(|e| {
-            tracing::debug!(error = %e, "request body read errored");
-            BodyReadError::Io
-        })?;
-        if buf.len().saturating_add(chunk.len()) > cap {
-            return Err(BodyReadError::TooLarge);
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(buf.freeze())
 }
 
 #[cfg(test)]
@@ -865,5 +994,335 @@ mod tests {
         let _ = ct1.await;
         let _ = st2.await;
         let _ = ct2.await;
+    }
+
+    // ── Streaming-specific tests (M5) ────────────────────────────────
+
+    /// Build a `ProxyState` with an empty registry and a real HMAC
+    /// signer. Used by tests that exercise paths which short-circuit
+    /// before touching the link (e.g. Content-Length pre-flight).
+    fn empty_registry_state() -> ProxyState {
+        let registry = LinkSessionRegistry::new();
+        let signer = HmacEdgeSigner::from_config(
+            Zeroizing::new(b"a-32-char-or-longer-edge-hmac-key!!".to_vec()),
+            "test-node".into(),
+            &[],
+        );
+        ProxyState::new(registry, Arc::new(signer))
+    }
+
+    #[tokio::test]
+    async fn request_oversized_content_length_returns_413_before_pick() {
+        // A request advertising a Content-Length larger than
+        // MAX_PROXY_BODY_BYTES must be refused with 413 *before* the
+        // proxy picks a link. Proof: the registry is empty — if the
+        // pre-flight didn't trigger, the next step would be NoLinkUp
+        // (503), not 413.
+        let state = empty_registry_state();
+
+        let too_big = (MAX_PROXY_BODY_BYTES as u64) + 1;
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("/api/upload")
+            .header("host", "public.example.com")
+            .header("content-length", too_big.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = proxy(state, req).await.expect("proxy returns response");
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn request_body_streams_intact_to_upstream() {
+        // A moderate (1 MiB) request body without a Content-Length
+        // hint, delivered as many small chunks, must arrive at the
+        // upstream byte-for-byte identical. This proves the pump
+        // task correctly stitches `poll_capacity`-granted slices.
+        let (server_io, client_io) = duplex(256 * 1024);
+
+        // Fake internal server: drain the body, ship it back to us
+        // for comparison, reply 200 with empty body.
+        let (body_tx, body_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+        let server_task = tokio::spawn(async move {
+            let mut conn = H2ServerBuilder::new()
+                .handshake::<_, Bytes>(server_io)
+                .await
+                .expect("h2 server handshake");
+            if let Some(item) = conn.accept().await {
+                let (request, mut respond) = item.expect("h2 accept");
+                let (_p, mut body) = request.into_parts();
+                let mut buf = Vec::new();
+                while let Some(chunk) = body.data().await {
+                    let chunk = chunk.expect("body chunk");
+                    let _ = body.flow_control().release_capacity(chunk.len());
+                    buf.extend_from_slice(&chunk);
+                }
+                let _ = body_tx.send(buf);
+                let resp = HttpResponse::builder().status(200).body(()).unwrap();
+                let mut send = respond.send_response(resp, false).expect("send response");
+                send.send_data(Bytes::new(), true).expect("send EOS");
+            }
+            while conn.accept().await.is_some() {}
+        });
+
+        let (sender, h2_conn) = h2::client::Builder::new()
+            .handshake::<_, Bytes>(client_io)
+            .await
+            .expect("h2 client handshake");
+        let conn_task = tokio::spawn(async move {
+            let _ = h2_conn.await;
+        });
+        let sender = sender.ready().await.expect("sender ready");
+
+        let registry = LinkSessionRegistry::new();
+        registry.insert(
+            LinkSessionInfo {
+                link_id: "test-link".into(),
+                cluster_id: "test-cluster".into(),
+                node_id: "test-node".into(),
+                software_version: "0.0.0-test".into(),
+                since: std::time::Instant::now(),
+            },
+            sender,
+        );
+        let signer = HmacEdgeSigner::from_config(
+            Zeroizing::new(b"a-32-char-or-longer-edge-hmac-key!!".to_vec()),
+            "test-node".into(),
+            &[],
+        );
+        let state = ProxyState::new(registry, Arc::new(signer));
+
+        // Build a 1 MiB body as 1024 chunks of 1 KiB each, no CL.
+        let chunks: Vec<Result<Bytes, std::io::Error>> = (0..1024)
+            .map(|i| {
+                let mut v = vec![0u8; 1024];
+                v[0] = (i & 0xff) as u8;
+                v[1] = ((i >> 8) & 0xff) as u8;
+                Ok(Bytes::from(v))
+            })
+            .collect();
+        let expected_total: usize = chunks.iter().map(|c| c.as_ref().unwrap().len()).sum();
+        let body = Body::from_stream(futures_util::stream::iter(chunks));
+
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("/api/upload")
+            .header("host", "public.example.com")
+            .body(body)
+            .unwrap();
+
+        let resp = proxy(state, req).await.expect("proxy ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Drain the (empty) response body to let upstream finish.
+        let _ = axum::body::to_bytes(resp.into_body(), MAX_PROXY_BODY_BYTES).await;
+
+        let upstream_body = body_rx.await.expect("upstream captured body");
+        assert_eq!(
+            upstream_body.len(),
+            expected_total,
+            "byte count mismatch: upstream got {}, sent {}",
+            upstream_body.len(),
+            expected_total
+        );
+        // Spot-check: first byte of every 1 KiB chunk encodes chunk index.
+        for i in 0..1024 {
+            let offset = i * 1024;
+            assert_eq!(upstream_body[offset], (i & 0xff) as u8, "chunk {i} hi byte");
+            assert_eq!(
+                upstream_body[offset + 1],
+                ((i >> 8) & 0xff) as u8,
+                "chunk {i} lo byte"
+            );
+        }
+
+        let _ = server_task.await;
+        let _ = conn_task.await;
+    }
+
+    #[tokio::test]
+    async fn request_body_oversize_without_cl_is_capped_and_request_fails() {
+        // A request body that is over-cap and has no Content-Length
+        // (so the pre-flight 413 path cannot fire) must be stopped
+        // mid-stream by the pump task issuing send_reset. The public
+        // client sees an error (not 200) because the upstream stream
+        // was reset before producing a successful response head.
+        let (server_io, client_io) = duplex(64 * 1024);
+
+        // Fake upstream: try to drain the body. If the client resets
+        // the stream, body.data() yields an Err — we just exit. We
+        // do NOT send a response because the request was aborted.
+        let server_task = tokio::spawn(async move {
+            let mut conn = H2ServerBuilder::new()
+                .handshake::<_, Bytes>(server_io)
+                .await
+                .expect("h2 server handshake");
+            if let Some(item) = conn.accept().await {
+                let (request, _respond) = item.expect("h2 accept");
+                let (_p, mut body) = request.into_parts();
+                while let Some(chunk) = body.data().await {
+                    match chunk {
+                        Ok(c) => {
+                            let _ = body.flow_control().release_capacity(c.len());
+                        }
+                        Err(_) => return, // client reset — expected
+                    }
+                }
+            }
+        });
+
+        let (sender, h2_conn) = h2::client::Builder::new()
+            .handshake::<_, Bytes>(client_io)
+            .await
+            .expect("h2 client handshake");
+        let conn_task = tokio::spawn(async move {
+            let _ = h2_conn.await;
+        });
+        let sender = sender.ready().await.expect("sender ready");
+
+        let registry = LinkSessionRegistry::new();
+        registry.insert(
+            LinkSessionInfo {
+                link_id: "test-link".into(),
+                cluster_id: "test-cluster".into(),
+                node_id: "test-node".into(),
+                software_version: "0.0.0-test".into(),
+                since: std::time::Instant::now(),
+            },
+            sender,
+        );
+        let signer = HmacEdgeSigner::from_config(
+            Zeroizing::new(b"a-32-char-or-longer-edge-hmac-key!!".to_vec()),
+            "test-node".into(),
+            &[],
+        );
+        let state = ProxyState::new(registry, Arc::new(signer));
+
+        // 9 MiB body (cap is 8 MiB), no Content-Length, in 9 chunks
+        // of 1 MiB. Pre-flight cannot save us; the pump must.
+        let chunks: Vec<Result<Bytes, std::io::Error>> =
+            (0..9).map(|_| Ok(Bytes::from(vec![0u8; 1024 * 1024]))).collect();
+        let body = Body::from_stream(futures_util::stream::iter(chunks));
+
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("/api/upload")
+            .header("host", "public.example.com")
+            .body(body)
+            .unwrap();
+
+        // We allow either an outright Err (resp_fut failed because
+        // upstream stream was reset) or a Response with a non-2xx
+        // status — both are valid "request was killed mid-stream"
+        // outcomes. The key property is that no 200 OK reaches the
+        // public client because the upstream never produced one.
+        match proxy(state, req).await {
+            Err(e) => {
+                assert!(
+                    matches!(
+                        e,
+                        ProxyError::UpstreamHandshake | ProxyError::UpstreamProtocol
+                    ),
+                    "unexpected error variant: {e:?}"
+                );
+            }
+            Ok(resp) => {
+                assert_ne!(
+                    resp.status(),
+                    StatusCode::OK,
+                    "over-cap streamed body must not produce 200"
+                );
+            }
+        }
+
+        let _ = server_task.await;
+        let _ = conn_task.await;
+    }
+
+    #[tokio::test]
+    async fn upstream_response_oversize_content_length_returns_507() {
+        // Upstream advertises an over-cap Content-Length on the
+        // response. The proxy must refuse with 507 before forwarding
+        // any body bytes to the public client. The CL on the wire is
+        // a lie (we send EOS immediately) but that's fine — the
+        // check is on the header only.
+        let (server_io, client_io) = duplex(64 * 1024);
+
+        let too_big = (MAX_PROXY_BODY_BYTES as u64) + 1;
+        let server_task = tokio::spawn(async move {
+            let mut conn = H2ServerBuilder::new()
+                .handshake::<_, Bytes>(server_io)
+                .await
+                .expect("h2 server handshake");
+            if let Some(item) = conn.accept().await {
+                let (request, mut respond) = item.expect("h2 accept");
+                let (_p, mut body) = request.into_parts();
+                while let Some(chunk) = body.data().await {
+                    if let Ok(c) = chunk {
+                        let _ = body.flow_control().release_capacity(c.len());
+                    }
+                }
+                let resp = HttpResponse::builder()
+                    .status(200)
+                    .header("content-length", too_big.to_string())
+                    .body(())
+                    .unwrap();
+                // EOS on headers — no body frames. The lying CL is
+                // what we want the proxy to react to.
+                let _ = respond.send_response(resp, true);
+            }
+            while conn.accept().await.is_some() {}
+        });
+
+        let (sender, h2_conn) = h2::client::Builder::new()
+            .handshake::<_, Bytes>(client_io)
+            .await
+            .expect("h2 client handshake");
+        let conn_task = tokio::spawn(async move {
+            let _ = h2_conn.await;
+        });
+        let sender = sender.ready().await.expect("sender ready");
+
+        let registry = LinkSessionRegistry::new();
+        registry.insert(
+            LinkSessionInfo {
+                link_id: "test-link".into(),
+                cluster_id: "test-cluster".into(),
+                node_id: "test-node".into(),
+                software_version: "0.0.0-test".into(),
+                since: std::time::Instant::now(),
+            },
+            sender,
+        );
+        let signer = HmacEdgeSigner::from_config(
+            Zeroizing::new(b"a-32-char-or-longer-edge-hmac-key!!".to_vec()),
+            "test-node".into(),
+            &[],
+        );
+        let state = ProxyState::new(registry, Arc::new(signer));
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/api/big")
+            .header("host", "public.example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        // `proxy` maps UpstreamTooLarge → 507. But because the
+        // handler in tests calls `proxy(...)` directly (not
+        // proxy_handler), we receive the raw error.
+        let err = proxy(state, req).await.expect_err("expected error");
+        assert!(
+            matches!(err, ProxyError::UpstreamTooLarge),
+            "unexpected error variant: {err:?}"
+        );
+        // Sanity: IntoResponse maps it to 507.
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+
+        let _ = server_task.await;
+        let _ = conn_task.await;
     }
 }

@@ -155,6 +155,31 @@ pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<Str
     None
 }
 
+/// Cheap, dependency-free signature check for a local HS256 JWT. Used to
+/// decide whether a bearer header should grant a CSRF / WS-Origin exemption.
+/// We deliberately do NOT validate `exp` or audience here — that's
+/// `require_auth`'s job. Returns false for OIDC tokens (different signer),
+/// for malformed tokens, and when `JWT_SECRET` is uninitialised.
+fn bearer_signature_valid(token: &str) -> bool {
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+    let secret = match crate::config::JWT_SECRET.get() {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => return false,
+    };
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_issuer(&["strata-local"]);
+    // Don't require any spec claims — we're only proving the caller
+    // possesses a token the server signed. Lifetime checks live in
+    // `require_auth`.
+    validation.validate_exp = false;
+    validation.required_spec_claims.clear();
+
+    #[derive(serde::Deserialize)]
+    struct AnyClaims {}
+
+    decode::<AnyClaims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation).is_ok()
+}
+
 /// Validate the `Origin` header on a WebSocket upgrade request to prevent
 /// cross-site WebSocket hijacking (CSWSH). Browsers ignore CORS on WS
 /// upgrades, so the only defence against a malicious page riding the user's
@@ -165,10 +190,11 @@ pub fn extract_cookie_value(headers: &http::HeaderMap, name: &str) -> Option<Str
 /// must authenticate via `Authorization: Bearer …` (also accepted); for
 /// cookie-authenticated WS upgrades the header is mandatory.
 pub fn check_ws_origin(headers: &http::HeaderMap) -> Result<(), &'static str> {
-    let has_bearer = headers
+    let has_valid_bearer = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.starts_with("Bearer "))
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(bearer_signature_valid)
         .unwrap_or(false);
 
     let origin = headers
@@ -178,8 +204,10 @@ pub fn check_ws_origin(headers: &http::HeaderMap) -> Result<(), &'static str> {
 
     let Some(origin) = origin else {
         // No Origin: only allow when the caller authenticates with a
-        // bearer token (CLI / programmatic clients, not browsers).
-        if has_bearer {
+        // signature-verified bearer token (CLI / programmatic clients).
+        // Without the signature check, an attacker could send an empty
+        // `Bearer x` from a malicious page to bypass the Origin gate.
+        if has_valid_bearer {
             return Ok(());
         }
         return Err("missing Origin on cookie-authenticated WebSocket upgrade");
@@ -258,16 +286,25 @@ pub async fn require_csrf(req: Request, next: Next) -> Result<Response, AppError
         return Ok(next.run(req).await);
     }
 
-    // Bearer-authenticated requests are CSRF-exempt: bearer tokens are not
-    // automatically attached by browsers, so a third-party site cannot make
-    // an authenticated request on the user's behalf.
-    let has_bearer = req
+    // Bearer-authenticated requests are CSRF-exempt **only** when the bearer
+    // is a structurally valid, signature-verified local JWT. Without the
+    // signature check, an attacker could send `Authorization: Bearer x` from
+    // a malicious origin (browsers DO send Authorization on cross-origin
+    // fetch when the page sets it) and bypass CSRF entirely. Verifying the
+    // signature requires the JWT secret, which the attacker cannot forge.
+    //
+    // Note: we do NOT validate `exp` or audience here — that's `require_auth`'s
+    // job. We only need cryptographic proof that the caller possesses a token
+    // we issued, which is sufficient to rule out classic CSRF (the third-party
+    // site can't mint a signed token on the victim's behalf).
+    let has_valid_bearer = req
         .headers()
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.starts_with("Bearer "))
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|tok| bearer_signature_valid(tok))
         .unwrap_or(false);
-    if has_bearer {
+    if has_valid_bearer {
         return Ok(next.run(req).await);
     }
 

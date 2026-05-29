@@ -196,13 +196,29 @@ impl EdgeSigner for HmacEdgeSigner {
         _method: &http::Method,
         _uri: &http::Uri,
     ) {
-        // Step 1: strip any pre-existing edge headers a malicious
-        // client might have injected. We drop the entire `x-strata-edge-*`
-        // namespace, not just the canonical names, so future header
-        // additions are also defended retroactively.
+        // Step 1: strip any pre-existing edge / proxy / admin headers a
+        // malicious client might have injected. We drop the entire
+        // `x-strata-edge-*` and `x-strata-admin*` namespaces (so future
+        // header additions are also defended retroactively), plus the
+        // common reverse-proxy address headers — those are exclusively
+        // populated by *us* downstream of the edge, and anything the
+        // client supplied would otherwise impersonate a trusted hop.
+        const STRIPPED_EXACT: &[&str] = &[
+            "x-real-ip",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+            "x-forwarded-port",
+            "forwarded",
+        ];
         let to_remove: Vec<HeaderName> = headers
             .keys()
-            .filter(|n| n.as_str().starts_with("x-strata-edge-"))
+            .filter(|n| {
+                let s = n.as_str();
+                s.starts_with("x-strata-edge-")
+                    || s.starts_with("x-strata-admin")
+                    || STRIPPED_EXACT.contains(&s)
+            })
             .cloned()
             .collect();
         for n in to_remove {
@@ -216,7 +232,13 @@ impl EdgeSigner for HmacEdgeSigner {
             .and_then(|v| v.to_str().ok())
             .map(|s| {
                 if s.len() > MAX_UA_LEN {
-                    s[..MAX_UA_LEN].to_string()
+                    // Truncate at a char boundary to avoid panicking on
+                    // multi-byte UTF-8 sequences that straddle MAX_UA_LEN.
+                    let mut cut = MAX_UA_LEN;
+                    while cut > 0 && !s.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    s[..cut].to_string()
                 } else {
                     s.to_string()
                 }

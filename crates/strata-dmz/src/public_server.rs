@@ -76,7 +76,21 @@ pub async fn serve_public(
                 let shutdown = shutdown.clone();
 
                 tokio::spawn(async move {
-                    let builder = AutoBuilder::new(TokioExecutor::new());
+                    // Hyper auto-builder with conservative HTTP/2 SETTINGS to
+                    // limit the damage from h2 abuse classes such as
+                    // CVE-2023-44487 ("Rapid Reset"). These caps are deliberately
+                    // generous enough for normal browser traffic but tight
+                    // enough that a single client cannot exhaust the server
+                    // by spamming streams or oversized frames/headers.
+                    let mut builder = AutoBuilder::new(TokioExecutor::new());
+                    builder
+                        .http2()
+                        .max_concurrent_streams(128)
+                        .max_frame_size(64 * 1024)
+                        .max_header_list_size(16 * 1024)
+                        .max_send_buf_size(1024 * 1024)
+                        .keep_alive_interval(std::time::Duration::from_secs(20))
+                        .keep_alive_timeout(std::time::Duration::from_secs(20));
 
                     if let Some(acceptor) = tls {
                         let stream = match acceptor.accept(tcp).await {

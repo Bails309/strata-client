@@ -34,7 +34,15 @@ pub fn build_public_acceptor(
     let server_key: PrivateKeyDer<'static> =
         PrivateKeyDer::from_pem_slice(server_key_pem).context("parse DMZ public TLS key PEM")?;
 
-    let mut cfg = ServerConfig::builder()
+    // Pin TLS 1.3 only on the public surface. TLS 1.2 has known weaknesses
+    // (e.g. legacy cipher suites, no 0-RTT differentiation) that are hard to
+    // audit at the rustls config layer; TLS 1.3 is universally supported by
+    // modern browsers and HTTP clients (2018+). If you need to support a
+    // very old corporate client, switch to `ALL_VERSIONS` and pick a
+    // restricted cipher list — but document why in the commit message.
+    let cfg_builder = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
+
+    let mut cfg = cfg_builder
         .with_no_client_auth()
         .with_single_cert(server_chain, server_key)
         .context("install DMZ public TLS cert + key")?;

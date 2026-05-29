@@ -1689,7 +1689,7 @@ pub async fn create_user(
 
         use argon2::{password_hash::SaltString, PasswordHasher};
         let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-        let hash = argon2::Argon2::default()
+        let hash = crate::services::password::pinned_argon2()
             .hash_password(plain.as_bytes(), &salt)
             .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
             .to_string();
@@ -1797,7 +1797,7 @@ pub async fn reset_user_password(
 
     use argon2::{password_hash::SaltString, PasswordHasher};
     let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let hash = argon2::Argon2::default()
+    let hash = crate::services::password::pinned_argon2()
         .hash_password(plain.as_bytes(), &salt)
         .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
         .to_string();

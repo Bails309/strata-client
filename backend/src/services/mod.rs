@@ -25,6 +25,7 @@ pub mod kerberos_realms;
 pub mod kubernetes;
 pub mod middleware;
 pub mod notifications;
+pub mod password;
 pub mod recordings;
 pub mod request_id;
 pub mod retry;

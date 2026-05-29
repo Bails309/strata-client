@@ -2,6 +2,23 @@ import { useEffect, useState } from "react";
 import { useSettings } from "../../contexts/SettingsContext";
 import { MetricsSummary, SessionStats, getMetrics, getSessionStats } from "../../api";
 
+/**
+ * Escape a string before interpolating into an SVG fragment that will be
+ * passed to `dangerouslySetInnerHTML`. We use SVG-string assembly (not JSX)
+ * for the chart because `<g>` with many computed children renders faster
+ * via `innerHTML`. Today every interpolated value is a server-generated
+ * `YYYY-MM-DD` string, but escaping defends against an API contract change
+ * silently turning the chart into an XSS sink.
+ */
+function escapeSvgText(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function GuacdCapacityGauge({ metrics }: { metrics: MetricsSummary }) {
   const poolSize = metrics.guacd_pool_size || 1;
   const activeSessions = metrics.active_sessions;
@@ -609,7 +626,7 @@ export default function SessionsTab() {
                     const y = padT + plotH - barH;
                     return (
                       `<rect x="${x}" y="${y}" width="${w}" height="${barH}" rx="2" fill="var(--color-accent)" opacity="0.7">` +
-                      `<title>${d.date}\n${d.sessions} session${d.sessions !== 1 ? "s" : ""} · ${d.hours.toFixed(1)} hrs</title></rect>`
+                      `<title>${escapeSvgText(d.date)}\n${d.sessions} session${d.sessions !== 1 ? "s" : ""} · ${d.hours.toFixed(1)} hrs</title></rect>`
                     );
                   })
                   .join("");
@@ -625,7 +642,7 @@ export default function SessionsTab() {
                   .map(
                     (c) =>
                       `<circle cx="${c.x}" cy="${c.y}" r="2.5" fill="#f59e0b" stroke="var(--color-surface-secondary)" stroke-width="1">` +
-                      `<title>${c.d.date}\n${c.d.hours.toFixed(1)} hrs</title></circle>`
+                      `<title>${escapeSvgText(c.d.date)}\n${c.d.hours.toFixed(1)} hrs</title></circle>`
                   )
                   .join("");
 
@@ -644,7 +661,7 @@ export default function SessionsTab() {
                   .map((i) => {
                     const x = offsetX + i * barW + barW / 2;
                     const label = trend[i].date.slice(5); // "MM-DD"
-                    return `<text x="${x}" y="${vbH - 4}" text-anchor="middle" fill="var(--color-txt-tertiary)" font-size="7" font-family="inherit">${label}</text>`;
+                    return `<text x="${x}" y="${vbH - 4}" text-anchor="middle" fill="var(--color-txt-tertiary)" font-size="7" font-family="inherit">${escapeSvgText(label)}</text>`;
                   })
                   .join("");
 

@@ -162,10 +162,9 @@ pub(crate) fn extract_client_ip(headers: &HeaderMap) -> String {
     try_extract_client_ip(headers).unwrap_or_else(|| "unknown".into())
 }
 
-/// Extract the client IP from X-Forwarded-For (rightmost non-empty entry).
-/// Returns `None` when no valid header is present — callers should fall back
-/// to `ConnectInfo` or "unknown".
-pub(crate) fn try_extract_client_ip(headers: &HeaderMap) -> Option<String> {
+/// Parse XFF without consulting the trust env var. Kept as a pure helper so
+/// unit tests can exercise the parsing logic without racing on env state.
+fn parse_xff_rightmost(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -175,6 +174,23 @@ pub(crate) fn try_extract_client_ip(headers: &HeaderMap) -> Option<String> {
                 .find(|s| !s.is_empty())
                 .map(|s| s.to_string())
         })
+}
+
+/// Extract the client IP from X-Forwarded-For (rightmost non-empty entry).
+/// Returns `None` when no valid header is present — callers should fall back
+/// to `ConnectInfo` or "unknown".
+///
+/// **Security note**: XFF is only honoured when `STRATA_TRUST_XFF=1` is set.
+/// Without it, any client could spoof the header to evade per-IP rate limits
+/// or forge audit-log source IPs. Operators terminating TLS at a reverse
+/// proxy / load balancer should set `STRATA_TRUST_XFF=1` *and* populate
+/// `STRATA_TRUSTED_PROXIES` (a future-strict mode will additionally verify
+/// the socket peer is in that list).
+pub(crate) fn try_extract_client_ip(headers: &HeaderMap) -> Option<String> {
+    if std::env::var("STRATA_TRUST_XFF").as_deref() != Ok("1") {
+        return None;
+    }
+    parse_xff_rightmost(headers)
 }
 
 /// Helper to get the base URL for redirect URIs.
@@ -594,9 +610,14 @@ pub async fn logout(
         .map(|s| s.to_string())
         .or_else(|| extract_cookie(&headers, "access_token").map(|s| s.to_string()));
 
-    // Try to decode as a local JWT to extract the real exp claim.
-    // If decode fails (e.g. OIDC token), use a default 24h TTL so
-    // the token is still tracked in the revocation list.
+    // Decode as a local JWT to extract the real `exp`. **Only locally-signed
+    // tokens are revoked**: this prevents an unauthenticated attacker from
+    // spamming `POST /api/auth/logout` with junk strings to bloat the
+    // in-memory + DB revocation list (DoS via revocation-table growth).
+    //
+    // OIDC tokens are not revoked here — they should be ended at the IdP via
+    // the configured end-session endpoint. The cookie clear below is still
+    // best-effort for the browser side.
     use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
     #[derive(serde::Deserialize, Clone)]
@@ -609,49 +630,51 @@ pub async fn logout(
     validation.set_issuer(&["strata-local"]);
     validation.set_required_spec_claims(&["exp"]);
 
-    let exp = if let Some(ref tok) = token {
-        if let Ok(data) = decode::<ExpClaims>(
+    let verified_token_and_exp: Option<(String, u64)> = token.as_ref().and_then(|tok| {
+        decode::<ExpClaims>(
             tok,
             &DecodingKey::from_secret(secret.as_bytes()),
             &validation,
-        ) {
-            data.claims.exp
-        } else {
-            // Non-local token (OIDC) — use 24h from now as a conservative TTL
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            now + 86400
-        }
-    } else {
-        0
-    };
+        )
+        .ok()
+        .map(|data| (tok.clone(), data.claims.exp))
+    });
 
-    if let Some(ref tok) = token {
+    if let Some((ref tok, exp)) = verified_token_and_exp {
         crate::services::token_revocation::revoke(tok, exp);
     }
 
-    // Persist to DB (best-effort) so revocations survive restarts
+    // Persist to DB (best-effort) so revocations survive restarts. Only
+    // verified local JWTs are persisted; see DoS rationale above.
     let db_pool = {
         let s = state.read().await;
         s.db.as_ref().map(|d| d.pool.clone())
     };
-    if let (Some(pool), Some(tok)) = (&db_pool, token.as_ref()) {
-        crate::services::token_revocation::persist_revocation(pool, tok, exp).await;
+    if let (Some(pool), Some((tok, exp))) = (&db_pool, verified_token_and_exp.as_ref()) {
+        crate::services::token_revocation::persist_revocation(pool, tok, *exp).await;
     }
 
-    // Also revoke the refresh token if present in cookies
+    // Also revoke the refresh token if present in cookies AND it decodes as
+    // one of ours. Unknown refresh-token strings are ignored to keep the
+    // revocation list from being used as a write amplifier by attackers.
     if let Some(refresh_token) = extract_cookie(&headers, "refresh_token") {
-        let refresh_exp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            + REFRESH_TOKEN_TTL as u64;
-        crate::services::token_revocation::revoke(refresh_token, refresh_exp);
-        if let Some(pool) = &db_pool {
-            crate::services::token_revocation::persist_revocation(pool, refresh_token, refresh_exp)
+        let decoded = decode::<ExpClaims>(
+            refresh_token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &validation,
+        )
+        .ok();
+        if let Some(data) = decoded {
+            let refresh_exp = data.claims.exp;
+            crate::services::token_revocation::revoke(refresh_token, refresh_exp);
+            if let Some(pool) = &db_pool {
+                crate::services::token_revocation::persist_revocation(
+                    pool,
+                    refresh_token,
+                    refresh_exp,
+                )
                 .await;
+            }
         }
     }
 
@@ -748,7 +771,7 @@ pub async fn change_password(
     use argon2::password_hash::SaltString;
     use argon2::PasswordHasher;
     let salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
-    let new_hash = Argon2::default()
+    let new_hash = crate::services::password::pinned_argon2()
         .hash_password(body.new_password.as_bytes(), &salt)
         .map_err(|e| AppError::Internal(format!("Argon2 error: {e}")))?
         .to_string();
@@ -760,19 +783,32 @@ pub async fn change_password(
             other => other,
         })?;
 
-    // Revoke the current token so the user must re-authenticate
-    let token = headers
+    // Revoke every token bound to this session so the user must re-authenticate:
+    //  - access token from `Authorization: Bearer …` (CLI / programmatic clients)
+    //  - access token from the `access_token` cookie (SPA browser flow)
+    //  - refresh token from the `refresh_token` cookie
+    let bearer_access = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    if let Some(token) = token {
-        let exp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            + 86400;
-        crate::services::token_revocation::revoke(token, exp);
-        crate::services::token_revocation::persist_revocation(&db.pool, token, exp).await;
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+    let cookie_access = extract_cookie(&headers, "access_token").map(|s| s.to_string());
+    let cookie_refresh = extract_cookie(&headers, "refresh_token").map(|s| s.to_string());
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let access_exp = now + 86400;
+    let refresh_exp = now + REFRESH_TOKEN_TTL as u64;
+
+    for token in [bearer_access, cookie_access].into_iter().flatten() {
+        crate::services::token_revocation::revoke(&token, access_exp);
+        crate::services::token_revocation::persist_revocation(&db.pool, &token, access_exp).await;
+    }
+    if let Some(token) = cookie_refresh {
+        crate::services::token_revocation::revoke(&token, refresh_exp);
+        crate::services::token_revocation::persist_revocation(&db.pool, &token, refresh_exp).await;
     }
     let _ = crate::services::active_sessions::delete_for_user(&db.pool, user.id).await;
 
@@ -902,17 +938,8 @@ pub async fn check_auth(
         None => return not_auth(),
     };
 
-    // Derive client_ip from X-Forwarded-For (rightmost entry from trusted proxy)
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.rsplit(',')
-                .map(|s| s.trim())
-                .find(|s| !s.is_empty())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_default();
+    // Derive client_ip from X-Forwarded-For (gated on STRATA_TRUST_XFF).
+    let client_ip = try_extract_client_ip(&headers).unwrap_or_default();
 
     // Watermark setting
     let watermark_enabled = settings::get(&db.pool, "watermark_enabled")
@@ -1487,18 +1514,20 @@ mod tests {
     use axum::http::header::HeaderMap;
 
     #[test]
-    fn extract_client_ip_from_xff() {
+    fn parse_xff_rightmost_picks_closest_proxy() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "203.0.113.50, 10.0.0.1".parse().unwrap());
-        // Rightmost entry (closest to our proxy)
-        assert_eq!(extract_client_ip(&headers), "10.0.0.1");
+        assert_eq!(parse_xff_rightmost(&headers).as_deref(), Some("10.0.0.1"));
     }
 
     #[test]
-    fn extract_client_ip_single() {
+    fn parse_xff_rightmost_single_entry() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "198.51.100.42".parse().unwrap());
-        assert_eq!(extract_client_ip(&headers), "198.51.100.42");
+        assert_eq!(
+            parse_xff_rightmost(&headers).as_deref(),
+            Some("198.51.100.42")
+        );
     }
 
     #[test]
@@ -1508,13 +1537,16 @@ mod tests {
     }
 
     #[test]
-    fn extract_client_ip_trims_whitespace() {
+    fn parse_xff_rightmost_trims_whitespace() {
         let mut headers = HeaderMap::new();
         headers.insert(
             "x-forwarded-for",
             " 10.0.0.1 , 192.168.1.1 ".parse().unwrap(),
         );
-        assert_eq!(extract_client_ip(&headers), "192.168.1.1");
+        assert_eq!(
+            parse_xff_rightmost(&headers).as_deref(),
+            Some("192.168.1.1")
+        );
     }
 
     #[test]

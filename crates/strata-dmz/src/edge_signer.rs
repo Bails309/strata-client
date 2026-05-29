@@ -41,20 +41,120 @@ const MAX_UA_LEN: usize = 1024;
 /// Cap on a forwarded request id.
 const MAX_REQUEST_ID_LEN: usize = 128;
 
+/// A trusted-proxy entry: either a single IP (host route) or a CIDR
+/// network. The `contains` method does prefix-length matching so that
+/// upstream load balancers behind a SNAT pool can be expressed as a
+/// single `10.0.0.0/24` entry rather than 256 individual addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustedNet {
+    network: IpAddr,
+    /// Prefix length in bits. For a bare IPv4 host route this is 32,
+    /// for an IPv6 host route it is 128.
+    prefix: u8,
+}
+
+impl TrustedNet {
+    /// Build from an `IpAddr`/prefix pair. Returns `None` if the
+    /// prefix exceeds the address family width.
+    pub fn new(network: IpAddr, prefix: u8) -> Option<Self> {
+        let max = match network {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        if prefix > max {
+            return None;
+        }
+        Some(Self {
+            network: mask_addr(network, prefix),
+            prefix,
+        })
+    }
+
+    /// Parse `1.2.3.0/24`, `2001:db8::/32`, or a bare `1.2.3.4` (treated
+    /// as a `/32` or `/128` host route).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.split_once('/') {
+            None => {
+                let ip: IpAddr = s.parse().ok()?;
+                let prefix = if ip.is_ipv4() { 32 } else { 128 };
+                Self::new(ip, prefix)
+            }
+            Some((ip_part, prefix_part)) => {
+                let ip: IpAddr = ip_part.parse().ok()?;
+                let prefix: u8 = prefix_part.parse().ok()?;
+                Self::new(ip, prefix)
+            }
+        }
+    }
+
+    /// True if `addr` falls inside this network. Address-family
+    /// mismatch always returns false.
+    pub fn contains(&self, addr: &IpAddr) -> bool {
+        match (self.network, addr) {
+            (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_)) => {
+                mask_addr(*addr, self.prefix) == self.network
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Apply the high-order `prefix` bits of `addr` and zero the rest.
+fn mask_addr(addr: IpAddr, prefix: u8) -> IpAddr {
+    match addr {
+        IpAddr::V4(v4) => {
+            let bits = u32::from(v4);
+            let mask = if prefix == 0 {
+                0u32
+            } else {
+                u32::MAX.checked_shl(32 - prefix as u32).unwrap_or(0)
+            };
+            IpAddr::V4(std::net::Ipv4Addr::from(bits & mask))
+        }
+        IpAddr::V6(v6) => {
+            let bits = u128::from(v6);
+            let mask = if prefix == 0 {
+                0u128
+            } else {
+                u128::MAX.checked_shl(128 - prefix as u32).unwrap_or(0)
+            };
+            IpAddr::V6(std::net::Ipv6Addr::from(bits & mask))
+        }
+    }
+}
+
 /// HMAC signer. Holds the secret in [`Zeroizing`] so a heap dump
 /// after process exit can't recover it.
 pub struct HmacEdgeSigner {
     key: Zeroizing<Vec<u8>>,
     link_id: String,
-    /// Set of upstream load-balancer IPs whose `X-Forwarded-For`
+    /// Set of upstream load-balancer networks whose `X-Forwarded-For`
     /// header is trusted. Anything outside this set causes XFF to
     /// be ignored and the socket peer to be used instead.
-    trusted_proxies: Vec<IpAddr>,
+    trusted_proxies: Vec<TrustedNet>,
 }
 
 impl HmacEdgeSigner {
-    /// Construct from raw key bytes + link id + a trusted-proxy list.
+    /// Construct from raw key bytes + link id + a trusted-proxy list
+    /// of bare `IpAddr`s. Each entry is treated as a host route
+    /// (`/32` for IPv4, `/128` for IPv6).
     pub fn new(key: Zeroizing<Vec<u8>>, link_id: String, trusted_proxies: Vec<IpAddr>) -> Self {
+        let nets = trusted_proxies
+            .into_iter()
+            .filter_map(|ip| {
+                let prefix = if ip.is_ipv4() { 32 } else { 128 };
+                TrustedNet::new(ip, prefix)
+            })
+            .collect();
+        Self::with_networks(key, link_id, nets)
+    }
+
+    /// Construct from pre-parsed CIDR networks.
+    pub fn with_networks(
+        key: Zeroizing<Vec<u8>>,
+        link_id: String,
+        trusted_proxies: Vec<TrustedNet>,
+    ) -> Self {
         Self {
             key,
             link_id,
@@ -63,8 +163,9 @@ impl HmacEdgeSigner {
     }
 
     /// Convenience constructor that parses the trusted-proxy list
-    /// from `DmzConfig::trust_forwarded_from`. Entries that don't
-    /// parse as an IP are dropped with a warning.
+    /// from `DmzConfig::trust_forwarded_from`. Entries may be either
+    /// bare IPs (`10.0.0.1`) or CIDR networks (`10.0.0.0/24`).
+    /// Entries that don't parse are dropped with a warning.
     pub fn from_config(
         key: Zeroizing<Vec<u8>>,
         link_id: String,
@@ -72,18 +173,18 @@ impl HmacEdgeSigner {
     ) -> Self {
         let trusted_proxies = trust_forwarded_from
             .iter()
-            .filter_map(|s| match s.parse::<IpAddr>() {
-                Ok(ip) => Some(ip),
-                Err(_) => {
+            .filter_map(|s| match TrustedNet::parse(s) {
+                Some(n) => Some(n),
+                None => {
                     tracing::warn!(
                         entry = %s,
-                        "STRATA_DMZ_TRUST_FORWARDED_FROM entry is not a valid IP; ignoring (CIDR support pending)"
+                        "STRATA_DMZ_TRUST_FORWARDED_FROM entry is not a valid IP or CIDR; ignoring"
                     );
                     None
                 }
             })
             .collect();
-        Self::new(key, link_id, trusted_proxies)
+        Self::with_networks(key, link_id, trusted_proxies)
     }
 }
 
@@ -205,13 +306,13 @@ impl EdgeSigner for HmacEdgeSigner {
 fn resolve_client_ip(
     headers: &HeaderMap,
     peer: Option<SocketAddr>,
-    trusted_proxies: &[IpAddr],
+    trusted_proxies: &[TrustedNet],
 ) -> String {
     let peer_ip = peer.map(|sa| sa.ip());
 
     // Only consult XFF if the immediate peer is in the trusted set.
     if let Some(pip) = peer_ip {
-        if trusted_proxies.contains(&pip) {
+        if trusted_proxies.iter().any(|n| n.contains(&pip)) {
             if let Some(xff) = headers
                 .get(http::header::FORWARDED)
                 .or_else(|| headers.get("x-forwarded-for"))
@@ -229,7 +330,7 @@ fn resolve_client_ip(
                     // before parsing; `IpAddr::from_str` rejects them.
                     let hop_no_zone = hop.split('%').next().unwrap_or(hop);
                     match hop_no_zone.parse::<IpAddr>() {
-                        Ok(ip) if trusted_proxies.contains(&ip) => continue,
+                        Ok(ip) if trusted_proxies.iter().any(|n| n.contains(&ip)) => continue,
                         Ok(ip) => return ip.to_string(),
                         Err(_) => continue,
                     }

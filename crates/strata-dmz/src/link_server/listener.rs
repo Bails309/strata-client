@@ -129,9 +129,14 @@ async fn handle_connection(
     registry: LinkSessionRegistry,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    let tls = acceptor
-        .accept(tcp)
+    // Bound the TLS handshake. A misbehaving / hostile peer can keep
+    // a socket open mid-handshake indefinitely, parking a tokio task
+    // and a `TlsAcceptor` slot. 10 s is well above the worst-case for
+    // a healthy mTLS round-trip across the WAN.
+    const TLS_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+    let tls = tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
         .await
+        .with_context(|| format!("TLS handshake from {peer} timed out after {TLS_HANDSHAKE_TIMEOUT:?}"))?
         .context("TLS handshake with internal node")?;
     tracing::debug!(%peer, "DMZ link TLS handshake complete");
 

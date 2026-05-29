@@ -42,15 +42,13 @@ pub fn spawn_sso_state_pruner() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         tokio::spawn(async {
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             // Skip the immediate first tick — there's nothing to prune yet
             // and we don't want to race the boot phase.
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let cutoff =
-                    Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
+                let cutoff = Instant::now() - std::time::Duration::from_secs(SSO_STATE_TTL_SECS);
                 let mut store = SSO_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
                 let before = store.len();
                 store.retain(|_, (_, ts)| *ts >= cutoff);

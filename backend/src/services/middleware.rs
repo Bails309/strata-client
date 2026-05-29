@@ -177,7 +177,12 @@ fn bearer_signature_valid(token: &str) -> bool {
     #[derive(serde::Deserialize)]
     struct AnyClaims {}
 
-    decode::<AnyClaims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation).is_ok()
+    decode::<AnyClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .is_ok()
 }
 
 /// Validate the `Origin` header on a WebSocket upgrade request to prevent
@@ -236,7 +241,11 @@ pub fn check_ws_origin(headers: &http::HeaderMap) -> Result<(), &'static str> {
     // (scheme + host[:port]) and must match `Origin` byte-for-byte
     // after trimming.
     if let Ok(allowed) = std::env::var("STRATA_ALLOWED_WS_ORIGINS") {
-        for entry in allowed.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        for entry in allowed
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             if entry.eq_ignore_ascii_case(&origin) {
                 return Ok(());
             }

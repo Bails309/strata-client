@@ -84,9 +84,7 @@ fn parse_opcode(inst: &str) -> Option<&str> {
     let (len_str, rest) = inst.split_once('.')?;
     let declared_len: usize = len_str.parse().ok()?;
     // Opcode runs up to the first ',' or ';'
-    let end = rest
-        .find(|c| c == ',' || c == ';')
-        .unwrap_or(rest.len());
+    let end = rest.find(|c| c == ',' || c == ';').unwrap_or(rest.len());
     let opcode = &rest[..end];
     if opcode.len() != declared_len {
         return None;

@@ -1099,7 +1099,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn request_body_streams_intact_to_upstream() {
         // A moderate (1 MiB) request body without a Content-Length
         // hint, delivered as many small chunks, must arrive at the
@@ -1214,7 +1214,7 @@ mod tests {
         conn_task.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn request_body_oversize_without_cl_is_capped_and_request_fails() {
         // A request body that is over-cap and has no Content-Length
         // (so the pre-flight 413 path cannot fire) must be stopped
@@ -1323,9 +1323,11 @@ mod tests {
     async fn upstream_response_oversize_content_length_returns_507() {
         // Upstream advertises an over-cap Content-Length on the
         // response. The proxy must refuse with 507 before forwarding
-        // any body bytes to the public client. The CL on the wire is
-        // a lie (we send EOS immediately) but that's fine — the
-        // check is on the header only.
+        // any body bytes to the public client. The server intentionally
+        // never sends a body matching the declared CL — it just sends
+        // the response head and leaves the stream open. The proxy's
+        // preflight check on CL fires before any body bytes are read,
+        // so the lying CL is sufficient to trigger the 507 path.
         let (server_io, client_io) = duplex(64 * 1024);
 
         let too_big = (MAX_PROXY_BODY_BYTES as u64) + 1;
@@ -1347,9 +1349,13 @@ mod tests {
                     .header("content-length", too_big.to_string())
                     .body(())
                     .unwrap();
-                // EOS on headers — no body frames. The lying CL is
-                // what we want the proxy to react to.
-                let _ = respond.send_response(resp, true);
+                // Send response WITHOUT END_STREAM. h2 rejects a
+                // CL+EOS-on-headers mismatch as a malformed message,
+                // so we leave the stream open. The proxy's preflight
+                // sees the over-cap CL and aborts — we never need to
+                // actually transmit the body. The cleanup abort()
+                // below tears down the dangling stream.
+                let _ = respond.send_response(resp, false);
             }
             while conn.accept().await.is_some() {}
         });

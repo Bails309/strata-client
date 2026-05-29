@@ -5,6 +5,235 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.4] — 2026-05-29
+
+### Patch Release — Security & DMZ hardening: CSRF/CSWSH bypass closure, DMZ body streaming, secret-redacting logs, and config-warning startup banners
+
+v1.10.4 is a **security- and reliability-focused patch** with no
+user-facing feature changes. It lands the full implementation of the
+v1.10.3 internal code review (CRITICAL + HIGH + MED findings) plus
+a streaming-mode refactor of the DMZ reverse-proxy that drops
+per-request memory ceiling from ~16 MiB to roughly one h2 flow-control
+window (~64 KiB). The DMZ public listener is now pinned to TLS 1.3
+and configured with conservative HTTP/2 SETTINGS that mitigate
+CVE-2023-44487 ("Rapid Reset") class abuse. A new startup banner
+emits `error!`-level warnings when the backend is started against
+the docker-compose default credentials, an `http://` Vault address,
+or a JWT secret shorter than 32 bytes. Default behaviour is unchanged
+for correctly-configured production deployments; nothing here is a
+breaking change.
+
+### Security
+
+- **CSRF bearer-exemption now requires JWT signature verification.**
+  Previously the CSRF middleware short-circuited whenever an
+  `Authorization: Bearer …` header was present, on the theory that a
+  third-party site couldn't read the victim's bearer token from
+  `localStorage`. A malicious origin could still send
+  `Authorization: Bearer anything-at-all` to bypass the check
+  outright. The middleware now decodes the token with the local
+  JWT secret (signature only — exp/aud still checked by
+  `require_auth`); only signature-valid bearers are exempted. Fake
+  bearers fall through to the standard cookie + `X-CSRF-Token`
+  check and are rejected. The same JWT-signature gate is applied to
+  the WebSocket-upgrade no-Origin bearer fallback to close the
+  equivalent CSWSH path.
+- **AdSyncConfig no longer leaks bind passwords via `Debug`.** The
+  derived `Debug` impl on `AdSyncConfig` printed `bind_password` /
+  `pm_bind_password` in plaintext after Vault unsealed them. The
+  derive is replaced with a manual `impl Debug` that emits
+  `<unset>`, `<vault-encrypted>`, or `<redacted>` for the two
+  password fields while keeping every other field readable.
+- **`X-Forwarded-For` is now ignored unless explicitly trusted.**
+  The backend (not just the DMZ relay) now honours `X-Forwarded-For`
+  for audit-log attribution and per-IP rate limiting **only** when
+  `STRATA_TRUST_XFF=1` is set. Without it, every request appears to
+  come from the socket peer — the same fail-safe default the DMZ
+  side already uses. Production deployments behind a reverse proxy
+  must set this env var (and ideally restrict the trust scope via
+  `STRATA_TRUSTED_PROXIES`); a startup banner reminds operators
+  when the var is missing. `try_extract_client_ip` was refactored
+  to extract a pure `parse_xff_rightmost` helper for race-free unit
+  testing.
+- **Logout only persists revocations for cryptographically-verified
+  JWTs.** Previously, `POST /api/auth/logout` would unconditionally
+  add the bearer string to the in-memory + DB revocation table.
+  Unauthenticated callers could spam junk strings to bloat the
+  table (a slow DoS). The handler now only revokes tokens that
+  decode as valid local JWTs; cookie clearing remains best-effort
+  for browser sessions. OIDC tokens still need to end at the IdP
+  via its `end_session_endpoint`.
+- **`change_password` now revokes every active token surface.** The
+  handler previously revoked only the `Authorization: Bearer` token
+  on the change_password request, leaving valid `access_token` and
+  `refresh_token` cookies behind. It now iterates all three sources
+  and revokes each one that decodes as a valid local JWT, forcing
+  full re-authentication on the next request as expected.
+- **`persist_revocation` failures are now logged at `error!`.** The
+  Postgres write inside `token_revocation::persist_revocation` used
+  to silently swallow errors. It now logs at `error!` level and
+  increments a counter, so operators are alerted when token
+  revocation is degraded (e.g. DB partition full).
+- **HTTP/2 SETTINGS hardening on the DMZ public listener
+  (CVE-2023-44487 mitigation).** The `hyper-util` auto-builder for
+  the public-facing h2 connection is now configured with
+  `max_concurrent_streams=128`, `max_frame_size=64 KiB`,
+  `max_header_list_size=16 KiB`, `max_send_buf_size=1 MiB`, and a
+  20-second keep-alive. Defends against Rapid Reset-class abuse
+  where a single client opens and immediately cancels streams to
+  exhaust the server.
+- **TLS 1.3 pin on the DMZ public listener.** Replaces the previous
+  `ServerConfig::builder()` with `builder_with_protocol_versions(&[
+  &rustls::version::TLS13])`, dropping TLS 1.2 from the internet-
+  facing surface. Internal-link mTLS (which is consumed by both
+  halves of the deployment, not the public) is unchanged.
+- **Edge-header strip widened.** `edge_signer` now strips
+  `x-real-ip`, every `x-forwarded-*` variant, and every
+  `x-strata-admin-*` header from the public request before signing
+  the canonical bundle, in addition to the existing
+  `x-strata-edge-*` strip. Closes a smuggling vector where a
+  cooperative public client could pre-stamp a header to confuse
+  internal trust logic that reads non-edge headers.
+- **Edge-signer UA truncation is char-boundary-safe.** The previous
+  byte-slice truncation could panic on a multi-byte UTF-8 boundary
+  if the public client sent a sufficiently exotic User-Agent;
+  truncation now respects `char_indices`.
+- **Argon2 parameters pinned to OWASP minimum.** A new
+  `services::password::pinned_argon2()` returns an `Argon2`
+  configured with `Params::new(64 MiB, t=3, p=4)` and Argon2id
+  `Version::V0x13`. All **write-side** password-hashing call sites
+  (default-admin bootstrap, admin user create/reset) now use the
+  pinned helper. Verification continues to use the parameters
+  embedded in the stored PHC string, so existing hashes
+  (including any with weaker parameters) remain verifiable. There
+  is no migration step — newly-set passwords get the stronger
+  params; existing hashes will be rehashed lazily when users
+  next change their password.
+- **Docker-compose default-credential startup banner.** A new
+  `log_security_config_warnings()` runs at boot and emits
+  `error!`-level entries when:
+    - `DATABASE_URL` contains the well-known dev password
+      `strata_default`,
+    - `VAULT_TOKEN=root`,
+    - `VAULT_ADDR` starts with `http://`,
+    - `JWT_SECRET` is unset, shorter than 32 bytes, or matches a
+      known placeholder,
+    - `STRATA_TRUST_XFF=1` is set without `STRATA_TRUSTED_PROXIES`.
+  Dev/compose flows continue to work; production deployments now
+  get a loud reminder if any of the above are still in place.
+- **Frontend `api.ts` no longer logs CSRF cookie presence.** Two
+  `console.log` statements in the refresh path that leaked the
+  presence of the CSRF cookie to devtools have been removed. The
+  single-flight refresh implementation (`isRefreshing` +
+  `refreshPromise`) was already correct and is unchanged.
+- **Defensive SVG-text escaping on SessionsTab chart.** The session-
+  activity SVG chart interpolated `d.date` (currently a
+  server-controlled `YYYY-MM-DD`) directly into a string assembled
+  for `dangerouslySetInnerHTML`. A new `escapeSvgText()` helper
+  now wraps every interpolated value so the rendering is safe
+  against future API-contract drift even if the date format ever
+  changes to include user-supplied text.
+
+### Performance
+
+- **DMZ reverse-proxy streams request and response bodies (M5).**
+  The DMZ proxy used to fully buffer each direction into a
+  `BytesMut` up to 8 MiB before forwarding. Under N concurrent
+  requests the resident set could grow by `2 × 8 × N` MiB and the
+  proxy was a built-in DoS amplifier for upload/download bombs.
+  Both directions are now streamed:
+    - **Request body.** A spawned `pump_request_body_upstream` task
+      reads chunks from the axum `Body` and writes them to the h2
+      `SendStream` honouring flow control via `reserve_capacity` /
+      `poll_capacity`. The total-byte cap is enforced byte-by-byte;
+      mid-stream overshoot triggers `send_reset(h2::Reason::CANCEL)`.
+      A pre-flight `Content-Length` check still rejects honest
+      oversized requests with `413` before any link is touched.
+    - **Response body.** A new `RecvStreamBody` adapter implements
+      `futures::Stream` over `h2::RecvStream`, releases the
+      flow-control window per chunk, and enforces the cap as data
+      flows. `axum::body::Body::from_stream` wires it into the
+      public response. A pre-flight `Content-Length` check returns
+      `507` before any byte reaches the public client; mid-stream
+      overshoot truncates the response and closes the public
+      connection by returning an error from the stream.
+  Per-request memory dropped from up to ~16 MiB to roughly one h2
+  flow-control window (~64 KiB). The retry-after-pick semantics
+  narrowed: the two-attempt retry now happens at
+  `SendRequest::ready()` time **before** the body is consumed.
+  After `send_request` is called the body cannot be replayed, so
+  any subsequent failure is fatal to that request and the public
+  client must retry (idempotent methods in browsers do this
+  automatically). The trade is acceptable because (a) the failure
+  window is small, (b) the new memory ceiling is the real win, and
+  (c) the prior "retry after buffering 8 MiB twice" path was itself
+  an amplifier.
+
+### Removed
+
+- Dead code: `proxy::read_body_capped`, `proxy::BodyReadError`,
+  and `proxy::ProxyError::BodyReadFailed` — all subsumed by the
+  streaming pump.
+
+### Configuration
+
+- **New env var `STRATA_TRUST_XFF`** (`backend`). Set to `1` to opt
+  into honouring `X-Forwarded-For` for audit-log attribution and
+  rate-limiting key extraction. Required in any deployment behind a
+  reverse proxy or load balancer; otherwise rate limits collapse to
+  per-LB-IP buckets and audit logs lose source-IP fidelity. Pair
+  with `STRATA_TRUSTED_PROXIES` (comma-separated CIDRs) to scope
+  trust. Defaults to disabled (`0`).
+- **`.env.example` reorganised.** A new top-of-file warning block
+  enumerates the five must-set production variables that the
+  startup banner now warns about (`POSTGRES_PASSWORD`,
+  `VAULT_TOKEN`, `VAULT_ADDR`, `JWT_SECRET`, `STRATA_TRUST_XFF`),
+  with the appropriate `STRATA_TRUST_XFF` / `STRATA_TRUSTED_PROXIES`
+  block added alongside the existing variables.
+
+### Tests
+
+- **Four new streaming-mode tests** in
+  `crates/strata-dmz/src/proxy.rs::tests`:
+    - `request_oversized_content_length_returns_413_before_pick` —
+      empty registry + over-cap CL header returns `413`, never
+      reaches `NoLinkUp`.
+    - `request_body_streams_intact_to_upstream` — 1 MiB body
+      delivered as 1024 × 1 KiB chunks (no `Content-Length`)
+      arrives at the upstream byte-for-byte, including chunk-index
+      marker bytes.
+    - `request_body_oversize_without_cl_is_capped_and_request_fails`
+      — 9 MiB body in 9 × 1 MiB chunks (no `Content-Length`) is
+      reset mid-stream by the pump; public response is not `200`.
+    - `upstream_response_oversize_content_length_returns_507` —
+      upstream advertises an over-cap `Content-Length` on the
+      response headers; proxy returns `UpstreamTooLarge` (→ `507`)
+      before forwarding any body bytes.
+- `parse_xff_rightmost` helper extracted from
+  `try_extract_client_ip` so its parsing is unit-testable without
+  having to spin up an HTTP request context.
+
+### Notes for operators
+
+- **Existing deployments**: no migration required. Bump container
+  versions and rolling-restart. Watch for the new startup-banner
+  `error!` lines on first boot — if you see them, your `.env` or
+  compose overrides are still on dev defaults and must be tightened
+  before going production.
+- **Deployments behind a reverse proxy**: set `STRATA_TRUST_XFF=1`
+  on the backend container, otherwise rate limits and audit logs
+  will see every request as originating from the load-balancer IP
+  starting with this release.
+- **OIDC sessions**: logout for OIDC tokens is now a no-op on the
+  server side (the previous behaviour was incorrect — opaque OIDC
+  tokens are not local JWTs and cannot be revoked here). If you
+  rely on Strata logout to end the IdP session, configure the IdP's
+  `end_session_endpoint` and trigger it from the SPA on logout.
+- **External API clients using opaque bearer tokens** (non-local-JWT
+  bearers) will now receive `403 CSRF` on state-changing requests
+  unless they also send the cookie + `X-CSRF-Token` pair. Migrate
+  such clients to local JWTs or switch to cookie auth.
+
 ## [1.10.3] — 2026-05-27
 
 ### Minor Release — Multiplayer co-pilot: owner participation, force-grant, and WebRTC audio

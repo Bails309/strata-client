@@ -1515,6 +1515,187 @@ to hold:
 
 ---
 
+## v1.10.4 security hardening batch
+
+v1.10.4 is a security- and reliability-focused patch that lands the
+full implementation of the v1.10.3 internal code review (CRITICAL +
+HIGH + MED findings) plus a streaming-mode refactor of the DMZ
+reverse-proxy. There are no user-facing feature changes; nothing
+here is a breaking change for correctly-configured production
+deployments.
+
+### CSRF + CSWSH bearer-bypass closure
+
+The CSRF middleware previously exempted any request bearing an
+`Authorization: Bearer …` header outright, on the theory that a
+third-party origin cannot read a victim's bearer token out of
+`localStorage`. A malicious origin could nonetheless send
+`Authorization: Bearer anything-at-all` to bypass the check. The
+middleware now decodes the bearer with the local JWT secret
+(`services::middleware::bearer_signature_valid`) — signature only,
+since `exp` and `aud` are still enforced by `require_auth` — and
+only exempts signature-valid bearers. Fake bearers fall through to
+the standard cookie + `X-CSRF-Token` check and are rejected. The
+same JWT-signature gate is applied to the WebSocket-upgrade
+no-Origin bearer fallback (`check_ws_origin`), closing the
+equivalent Cross-Site WebSocket Hijacking (CSWSH) vector.
+
+**Operator impact**: external API clients using opaque
+(non-local-JWT) bearer tokens must now also send the cookie +
+`X-CSRF-Token` pair on state-changing requests, or migrate to local
+JWTs.
+
+### `X-Forwarded-For` is now opt-in on the backend
+
+The backend (not just the DMZ relay) now honours `X-Forwarded-For`
+for audit-log attribution and per-IP rate-limit bucketing **only**
+when `STRATA_TRUST_XFF=1` is set. Without it, every request appears
+to come from the socket peer — the same fail-safe default the DMZ
+side already uses. Pair the variable with `STRATA_TRUSTED_PROXIES`
+(comma-separated CIDRs) to scope which peers' XFF headers are
+trusted. `try_extract_client_ip` was refactored to extract a pure
+`parse_xff_rightmost` helper for race-free unit testing.
+
+**Operator impact**: deployments behind a reverse proxy must set
+`STRATA_TRUST_XFF=1` on the backend container on upgrade, otherwise
+rate limits collapse to per-LB-IP buckets and audit logs lose
+source-IP fidelity. The new startup banner (below) warns when the
+variable is missing.
+
+### DMZ public listener: TLS 1.3 only + HTTP/2 Rapid Reset mitigation
+
+`public_tls.rs` now constructs the public-facing rustls
+`ServerConfig` via `builder_with_protocol_versions(&[
+&rustls::version::TLS13])`, dropping TLS 1.2 from the internet-
+facing surface. Internal mTLS (consumed only by the two halves of
+the deployment) is unchanged.
+
+`public_server.rs` configures the `hyper-util` auto-builder for the
+public h2 connection with:
+
+- `max_concurrent_streams = 128`
+- `max_frame_size = 64 KiB`
+- `max_header_list_size = 16 KiB`
+- `max_send_buf_size = 1 MiB`
+- 20-second keep-alive interval
+
+These settings mitigate CVE-2023-44487 ("HTTP/2 Rapid Reset") where
+a single client opens and immediately cancels streams to exhaust
+server resources.
+
+### DMZ reverse-proxy: streaming bodies (memory amplification fix)
+
+The DMZ reverse-proxy used to buffer each request and response body
+into a `BytesMut` up to 8 MiB before forwarding. Under N concurrent
+in-flight requests the resident set could grow by `2 × 8 × N` MiB
+and the proxy itself was a built-in DoS amplifier. Both directions
+are now streamed end-to-end:
+
+- **Request body** flows through a spawned
+  `pump_request_body_upstream` task that writes chunks into the
+  upstream h2 `SendStream` honouring flow control via
+  `reserve_capacity` / `poll_capacity`. Mid-stream overshoot
+  triggers `send_reset(h2::Reason::CANCEL)`. A pre-flight
+  `Content-Length` check still rejects honest oversized requests
+  with `413` before any link is touched.
+- **Response body** flows through a new `RecvStreamBody` adapter
+  implementing `futures::Stream` over `h2::RecvStream`. It releases
+  the flow-control window per chunk and enforces the cap as data
+  flows. Mid-stream overshoot truncates the response and closes
+  the public connection. A pre-flight `Content-Length` check
+  returns `507` before any byte reaches the public client.
+
+Per-request memory dropped from up to ~16 MiB to roughly one h2
+flow-control window (~64 KiB) — about a 250× reduction. The retry
+semantics narrowed: the two-attempt retry now happens at
+`SendRequest::ready()` time, **before** the body is consumed. After
+`send_request` is called the body cannot be replayed, so any
+subsequent failure is fatal to that request and the public client
+must retry (idempotent methods in browsers do this automatically).
+Four new streaming-mode tests in `proxy::tests` guard the
+behaviour.
+
+### Token-revocation correctness
+
+- `POST /api/auth/logout` only persists revocations for
+  cryptographically-verified local JWTs. Previously, any
+  caller-supplied bearer string would be written into the in-memory
+  and DB revocation table, allowing unauthenticated callers to
+  bloat the table (a slow DoS). Cookie clearing remains
+  best-effort for browser sessions. OIDC tokens still need to end
+  at the IdP via its `end_session_endpoint`.
+- `change_password` now revokes all three token surfaces
+  (`Authorization` bearer, `access_token` cookie, `refresh_token`
+  cookie) instead of only the bearer, forcing full
+  re-authentication on the next request.
+- `token_revocation::persist_revocation` now logs Postgres write
+  failures at `error!` level instead of silently swallowing them.
+
+### Argon2 parameters pinned to OWASP minimum
+
+A new `services::password::pinned_argon2()` returns an `Argon2`
+configured with `Params::new(64 MiB, t=3, p=4)` and Argon2id
+`Version::V0x13`. All **write-side** password-hashing call sites
+(default-admin bootstrap, admin user create/reset) now use the
+pinned helper. Verification continues to use the parameters
+embedded in the stored PHC string, so existing hashes (including
+any with weaker parameters) remain verifiable. There is no
+migration step: newly-set passwords get the stronger parameters;
+existing hashes are rehashed lazily when users next change their
+password.
+
+### Secret-leak hardening
+
+- `AdSyncConfig` no longer prints bind passwords via `Debug`. The
+  derived `Debug` impl printed `bind_password` and
+  `pm_bind_password` in plaintext after Vault unsealed them. A
+  manual impl now emits `<unset>`, `<vault-encrypted>`, or
+  `<redacted>` for the two password fields while keeping every
+  other field readable.
+- Frontend `api.ts` no longer logs CSRF cookie presence to
+  devtools. Two `console.log` calls in the refresh path that
+  exposed the cookie state have been removed; the single-flight
+  refresh implementation is unchanged.
+- A new `escapeSvgText()` helper wraps every interpolated value
+  in the SessionsTab session-activity SVG chart so the rendering
+  is safe against future API-contract drift that could introduce
+  user-supplied text into currently-server-controlled date fields.
+
+### Edge-signer hardening
+
+- The edge_signer header strip is widened to include `x-real-ip`,
+  every `x-forwarded-*` variant, and every `x-strata-admin-*`
+  header in addition to the existing `x-strata-edge-*` strip.
+  Closes a smuggling vector where a cooperative public client
+  could pre-stamp a header to confuse internal trust logic that
+  reads non-edge headers.
+- UA truncation is now char-boundary-safe via `char_indices`. A
+  sufficiently exotic public User-Agent could previously panic
+  the signer on a multi-byte UTF-8 boundary.
+
+### Startup banner for production-default credentials
+
+A new `log_security_config_warnings()` runs at backend boot and
+emits `error!`-level entries when it detects any of:
+
+- `DATABASE_URL` containing the well-known dev password
+  `strata_default`
+- `VAULT_TOKEN=root`
+- `VAULT_ADDR` beginning with `http://`
+- `JWT_SECRET` unset, shorter than 32 bytes, or matching a known
+  placeholder
+- `STRATA_TRUST_XFF=1` set without a paired
+  `STRATA_TRUSTED_PROXIES`
+
+Dev and compose flows still work — the warnings do not block
+startup — but production deployments now get a loud,
+log-aggregator-friendly reminder if any default is still in
+place. `.env.example` has been reorganised with a top-of-file
+warning block enumerating these five must-set production
+variables.
+
+---
+
 ## Recommendations for Production
 
 1. **TLS everywhere** — supply certificates to the frontend nginx gateway via `./certs/`, or terminate TLS at an external reverse proxy / load balancer

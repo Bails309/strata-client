@@ -1178,7 +1178,15 @@ mod tests {
             .body(body)
             .unwrap();
 
-        let resp = proxy(state, req).await.expect("proxy ok");
+        // Hard timeout: if the pump/h2 plumbing wedges, fail fast
+        // with a panic that names this test rather than hanging CI.
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            proxy(state, req),
+        )
+        .await
+        .expect("proxy call timed out")
+        .expect("proxy ok");
         assert_eq!(resp.status(), StatusCode::OK);
         // Drain the (empty) response body to let upstream finish.
         let _ = axum::body::to_bytes(resp.into_body(), MAX_PROXY_BODY_BYTES).await;
@@ -1282,7 +1290,13 @@ mod tests {
         // status — both are valid "request was killed mid-stream"
         // outcomes. The key property is that no 200 OK reaches the
         // public client because the upstream never produced one.
-        match proxy(state, req).await {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            proxy(state, req),
+        )
+        .await
+        .expect("proxy call timed out");
+        match result {
             Err(e) => {
                 assert!(
                     matches!(

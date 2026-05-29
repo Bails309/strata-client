@@ -467,7 +467,6 @@ enum PumpFail {
     BodyReadError,
     CapExceeded,
     UpstreamGone,
-    Aborted,
 }
 
 /// Pump the public-client request body upstream over an h2
@@ -968,8 +967,13 @@ mod tests {
             .expect("mac present");
         assert_ne!(mac.as_bytes(), b"AAAA");
 
-        let _ = server_task.await;
-        let _ = conn_task.await;
+        // Cleanup: the response body still holds an h2 RecvStream
+        // that keeps the link connection alive. Awaiting server_task
+        // here would hang waiting for the connection to close. Just
+        // abort the cleanup tasks — all assertions are already done.
+        drop(resp);
+        server_task.abort();
+        conn_task.abort();
     }
 
     #[tokio::test]
@@ -1002,8 +1006,9 @@ mod tests {
             Some(b"0.0.0.0".as_ref()),
         );
 
-        let _ = server_task.await;
-        let _ = conn_task.await;
+        drop(resp);
+        server_task.abort();
+        conn_task.abort();
     }
 
     #[tokio::test]
@@ -1197,8 +1202,8 @@ mod tests {
             );
         }
 
-        let _ = server_task.await;
-        let _ = conn_task.await;
+        server_task.abort();
+        conn_task.abort();
     }
 
     #[tokio::test]
@@ -1296,8 +1301,8 @@ mod tests {
             }
         }
 
-        let _ = server_task.await;
-        let _ = conn_task.await;
+        server_task.abort();
+        conn_task.abort();
     }
 
     #[tokio::test]
@@ -1383,7 +1388,7 @@ mod tests {
             StatusCode::INSUFFICIENT_STORAGE
         );
 
-        let _ = server_task.await;
-        let _ = conn_task.await;
+        server_task.abort();
+        conn_task.abort();
     }
 }

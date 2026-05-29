@@ -351,8 +351,8 @@ async fn forward_streaming(
     // initial HEADERS avoids the issue and saves a frame.
     use http_body::Body as _;
     if body.is_end_stream() {
-        let resp_fut = match sender.send_request(up_req, true) {
-            Ok((fut, _send_stream)) => fut,
+        let (resp_fut, _send_stream) = match sender.send_request(up_req, true) {
+            Ok(pair) => pair,
             Err(e) => {
                 tracing::debug!(error = %e, "send_request failed");
                 return Err(ProxyError::LinkSendUnavailable);
@@ -365,12 +365,16 @@ async fn forward_streaming(
                 return Err(ProxyError::UpstreamHandshake);
             }
         };
+        // Keep _send_stream alive until after the response head has
+        // been received — dropping it earlier can cause h2 to mark
+        // the stream as cancelled on some implementations.
+        drop(_send_stream);
         return build_public_response(resp);
     }
 
     // Body may have data — send with end_of_stream=false and let the
     // pump task close the stream after streaming any body bytes.
-    let (mut resp_fut, send_stream) = sender.send_request(up_req, false).map_err(|e| {
+    let (resp_fut, send_stream) = sender.send_request(up_req, false).map_err(|e| {
         tracing::debug!(error = %e, "send_request failed");
         ProxyError::LinkSendUnavailable
     })?;
@@ -378,40 +382,19 @@ async fn forward_streaming(
     // Pump request body upstream concurrently with awaiting the
     // response head. Spawned so an upstream server that responds
     // before reading the full body (e.g. early 4xx) is not blocked.
-    // Lifetime is bounded by: body stream EOF, peer reset (causes
-    // send_data to error), or cap exceeded (we send_reset).
-    let mut pump = tokio::spawn(pump_request_body_upstream(body, send_stream));
+    // On pump failure (cap-exceeded, body read error) the pump issues
+    // send_reset on the upstream stream and exits; the upstream
+    // server then sees a body read error and (in the test fakes)
+    // drops the connection, which propagates through the h2
+    // connection task to make resp_fut error out.
+    let pump = tokio::spawn(pump_request_body_upstream(body, send_stream));
 
-    // Receive the response head, but also bail out if the pump
-    // task aborts the upstream stream before any response arrives
-    // (cap-exceeded mid-stream, body read error). Without this race,
-    // an upstream that responds only after seeing EOS would hang
-    // forever once we reset the stream.
-    let resp = tokio::select! {
-        biased;
-        r = &mut pump => {
-            let pump_result = r.unwrap_or(Err(PumpFail::Aborted));
-            if let Err(fail) = pump_result {
-                tracing::debug!(?fail, "request body pump aborted before response");
-                return Err(ProxyError::UpstreamProtocol);
-            }
-            // Pump succeeded with EOS sent — keep waiting for the
-            // response head (peer should respond imminently).
-            match resp_fut.await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::debug!(error = %e, "upstream h2 response future errored");
-                    return Err(ProxyError::UpstreamHandshake);
-                }
-            }
-        }
-        r = &mut resp_fut => match r {
-            Ok(r) => r,
-            Err(e) => {
-                pump.abort();
-                tracing::debug!(error = %e, "upstream h2 response future errored");
-                return Err(ProxyError::UpstreamHandshake);
-            }
+    let resp = match resp_fut.await {
+        Ok(r) => r,
+        Err(e) => {
+            pump.abort();
+            tracing::debug!(error = %e, "upstream h2 response future errored");
+            return Err(ProxyError::UpstreamHandshake);
         }
     };
 

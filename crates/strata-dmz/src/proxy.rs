@@ -342,11 +342,34 @@ async fn forward_streaming(
         ProxyError::UpstreamProtocol
     })?;
 
-    // Always send with end_of_stream=false and let the pump task
-    // close the stream after streaming any body bytes. For methods
-    // without a body (GET/HEAD/...) the pump sees an immediate
-    // end-of-stream from axum and sends an empty DATA frame with
-    // EOS, which is well-formed h2.
+    // Fast-path bodyless methods (GET/HEAD/DELETE/...) and any body
+    // that is already at end-of-stream: set END_STREAM on the HEADERS
+    // frame and skip the pump entirely. Empirically, asking h2 to
+    // send a trailing empty DATA+END_STREAM frame on a stream that
+    // has had no prior DATA can stall — upstream waits indefinitely
+    // for body data that never arrives. Closing the stream on the
+    // initial HEADERS avoids the issue and saves a frame.
+    use http_body::Body as _;
+    if body.is_end_stream() {
+        let resp_fut = match sender.send_request(up_req, true) {
+            Ok((fut, _send_stream)) => fut,
+            Err(e) => {
+                tracing::debug!(error = %e, "send_request failed");
+                return Err(ProxyError::LinkSendUnavailable);
+            }
+        };
+        let resp = match resp_fut.await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(error = %e, "upstream h2 response future errored");
+                return Err(ProxyError::UpstreamHandshake);
+            }
+        };
+        return build_public_response(resp);
+    }
+
+    // Body may have data — send with end_of_stream=false and let the
+    // pump task close the stream after streaming any body bytes.
     let (resp_fut, send_stream) = sender.send_request(up_req, false).map_err(|e| {
         tracing::debug!(error = %e, "send_request failed");
         ProxyError::LinkSendUnavailable
@@ -357,19 +380,54 @@ async fn forward_streaming(
     // before reading the full body (e.g. early 4xx) is not blocked.
     // Lifetime is bounded by: body stream EOF, peer reset (causes
     // send_data to error), or cap exceeded (we send_reset).
-    let pump = tokio::spawn(pump_request_body_upstream(body, send_stream));
+    let mut pump = tokio::spawn(pump_request_body_upstream(body, send_stream));
 
-    // Receive the response head.
-    let resp = match resp_fut.await {
-        Ok(r) => r,
-        Err(e) => {
-            // Cancel the pump if it's still running — peer is gone.
-            pump.abort();
-            tracing::debug!(error = %e, "upstream h2 response future errored");
-            return Err(ProxyError::UpstreamHandshake);
+    // Receive the response head, but also bail out if the pump
+    // task aborts the upstream stream before any response arrives
+    // (cap-exceeded mid-stream, body read error). Without this race,
+    // an upstream that responds only after seeing EOS would hang
+    // forever once we reset the stream.
+    let resp = tokio::select! {
+        biased;
+        r = &mut pump => {
+            let pump_result = r.unwrap_or(Err(PumpFail::Aborted));
+            if let Err(fail) = pump_result {
+                tracing::debug!(?fail, "request body pump aborted before response");
+                return Err(ProxyError::UpstreamProtocol);
+            }
+            // Pump succeeded with EOS sent — keep waiting for the
+            // response head (peer should respond imminently).
+            match resp_fut.await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(error = %e, "upstream h2 response future errored");
+                    return Err(ProxyError::UpstreamHandshake);
+                }
+            }
+        }
+        r = &mut resp_fut => match r {
+            Ok(r) => r,
+            Err(e) => {
+                pump.abort();
+                tracing::debug!(error = %e, "upstream h2 response future errored");
+                return Err(ProxyError::UpstreamHandshake);
+            }
         }
     };
 
+    build_public_response_with_pump(resp, Some(pump))
+}
+
+/// Build the axum public response from the upstream h2 response head
+/// and stream. Used by the bodyless fast-path.
+fn build_public_response(resp: http::Response<RecvStream>) -> Result<Response, ProxyError> {
+    build_public_response_with_pump(resp, None)
+}
+
+fn build_public_response_with_pump(
+    resp: http::Response<RecvStream>,
+    pump: Option<tokio::task::JoinHandle<Result<(), PumpFail>>>,
+) -> Result<Response, ProxyError> {
     let (head, recv) = resp.into_parts();
 
     // Pre-flight: if upstream advertised an over-cap Content-Length,
@@ -382,12 +440,16 @@ async fn forward_streaming(
         .and_then(|s| s.parse::<u64>().ok())
     {
         if declared > MAX_PROXY_BODY_BYTES as u64 {
-            pump.abort();
+            if let Some(pump) = pump {
+                pump.abort();
+            }
             // Dropping `recv` will close the response stream.
             drop(recv);
             return Err(ProxyError::UpstreamTooLarge);
         }
     }
+    // Pump (if any) owns its own lifetime past this point.
+    drop(pump);
 
     // Build the public response with the upstream status + headers,
     // minus hop-by-hop fields. The body is a streaming adapter over
@@ -414,13 +476,27 @@ async fn forward_streaming(
         })
 }
 
+/// Pump failure modes reported back to the request task so it can
+/// distinguish a self-inflicted abort (cap exceeded, body read
+/// failure, upstream stream gone) from a clean EOS.
+#[derive(Debug)]
+enum PumpFail {
+    BodyReadError,
+    CapExceeded,
+    UpstreamGone,
+    Aborted,
+}
+
 /// Pump the public-client request body upstream over an h2
 /// [`SendStream`], honoring flow control and enforcing the proxy
 /// body cap byte-by-byte. On error (cap exceeded, body read failure,
 /// or upstream stream gone) the upstream stream is reset and the
-/// task exits. Always terminates the stream with an EOS frame on
-/// success.
-async fn pump_request_body_upstream(body: Body, mut send: SendStream<Bytes>) {
+/// task exits with `Err(PumpFail)`. Returns `Ok(())` after a
+/// successful EOS send.
+async fn pump_request_body_upstream(
+    body: Body,
+    mut send: SendStream<Bytes>,
+) -> Result<(), PumpFail> {
     use http_body_util::BodyDataStream;
     let mut stream = BodyDataStream::new(body);
     let mut total: usize = 0;
@@ -430,7 +506,7 @@ async fn pump_request_body_upstream(body: Body, mut send: SendStream<Bytes>) {
             Err(e) => {
                 tracing::debug!(error = %e, "request body read errored mid-stream");
                 send.send_reset(h2::Reason::INTERNAL_ERROR);
-                return;
+                return Err(PumpFail::BodyReadError);
             }
         };
         if total.saturating_add(chunk.len()) > MAX_PROXY_BODY_BYTES {
@@ -441,7 +517,7 @@ async fn pump_request_body_upstream(body: Body, mut send: SendStream<Bytes>) {
                 "request body exceeded cap mid-stream"
             );
             send.send_reset(h2::Reason::CANCEL);
-            return;
+            return Err(PumpFail::CapExceeded);
         }
         // Reserve flow-control window for the full chunk; the peer
         // may grant it in smaller increments, so loop on poll_capacity
@@ -453,18 +529,18 @@ async fn pump_request_body_upstream(body: Body, mut send: SendStream<Bytes>) {
                 Some(Ok(n)) => n,
                 Some(Err(e)) => {
                     tracing::debug!(error = %e, "poll_capacity errored");
-                    return;
+                    return Err(PumpFail::UpstreamGone);
                 }
                 None => {
                     // Stream closed by peer.
-                    return;
+                    return Err(PumpFail::UpstreamGone);
                 }
             };
             let take = granted.min(remaining.len());
             let to_send = remaining.split_to(take);
             if let Err(e) = send.send_data(to_send, false) {
                 tracing::debug!(error = %e, "send_data errored");
-                return;
+                return Err(PumpFail::UpstreamGone);
             }
             total = total.saturating_add(take);
         }
@@ -472,7 +548,9 @@ async fn pump_request_body_upstream(body: Body, mut send: SendStream<Bytes>) {
     // End of stream — empty DATA with EOS flag.
     if let Err(e) = send.send_data(Bytes::new(), true) {
         tracing::debug!(error = %e, "send_data EOS errored");
+        return Err(PumpFail::UpstreamGone);
     }
+    Ok(())
 }
 
 /// Axum response body adapter over an h2 [`RecvStream`]. Releases

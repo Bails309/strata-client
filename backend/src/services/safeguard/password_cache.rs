@@ -103,10 +103,20 @@ pub async fn load(
     user_id: Uuid,
     profile_id: Uuid,
 ) -> Result<Option<CachedPassword>, AppError> {
+    // Atomic load-then-evict-if-expired. Using a single CTE means a
+    // concurrent expiry sweep can never race with this lookup and end
+    // up returning a row that was simultaneously deleted, and the
+    // (previous) separate SELECT + DELETE could leave a brief window
+    // where two callers both saw the row.
     let row: Option<CachedRow> = sqlx::query_as(
-        "SELECT ciphertext, encrypted_dek, nonce, username, request_id, expires_at
+        "WITH expired AS (
+            DELETE FROM safeguard_cached_passwords
+             WHERE user_id = $1 AND profile_id = $2 AND expires_at <= now()
+             RETURNING 1
+         )
+         SELECT ciphertext, encrypted_dek, nonce, username, request_id, expires_at
            FROM safeguard_cached_passwords
-          WHERE user_id = $1 AND profile_id = $2",
+          WHERE user_id = $1 AND profile_id = $2 AND expires_at > now()",
     )
     .bind(user_id)
     .bind(profile_id)
@@ -116,11 +126,6 @@ pub async fn load(
     let Some((ciphertext, encrypted_dek, nonce, username, request_id, expires_at)) = row else {
         return Ok(None);
     };
-
-    if expires_at <= Utc::now() {
-        let _ = clear(pool, user_id, profile_id).await;
-        return Ok(None);
-    }
 
     let plaintext = unseal(vault, &encrypted_dek, &ciphertext, &nonce).await?;
     let password = String::from_utf8(plaintext)

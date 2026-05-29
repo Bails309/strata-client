@@ -51,9 +51,11 @@ struct BufferedFrame {
 /// Instructions like `connect` and `args` carry authentication data and
 /// must not be stored in the NVR ring buffer.
 fn filter_sensitive_instructions(data: &str) -> String {
-    // Sensitive instruction opcodes that may carry credentials.
-    // We check for the exact opcode using the protocol format "<len>.<opcode>".
-    const SENSITIVE_MATCHERS: &[&str] = &["7.connect", "4.args"];
+    // Sensitive opcodes (length-prefixed names) that may carry
+    // credentials. We compare on the parsed opcode so a malicious
+    // payload containing a numeric body starting with these strings
+    // (e.g. `4.7777,...`) can't slip through the filter.
+    const SENSITIVE_OPCODES: &[&str] = &["connect", "args"];
 
     let mut filtered = String::with_capacity(data.len());
     for inst in data.split_inclusive(';') {
@@ -61,12 +63,35 @@ fn filter_sensitive_instructions(data: &str) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        let is_sensitive = SENSITIVE_MATCHERS.iter().any(|&m| trimmed.starts_with(m));
+        // Guacamole instruction syntax: `<len>.<opcode>,<arg1>,...;` where
+        // `<len>` is the byte length of `<opcode>`. Parse the prefix so
+        // we match on the opcode itself, not a substring of the wire
+        // payload.
+        let is_sensitive = parse_opcode(trimmed)
+            .map(|op| SENSITIVE_OPCODES.iter().any(|s| *s == op))
+            .unwrap_or(false);
         if !is_sensitive {
             filtered.push_str(inst);
         }
     }
     filtered
+}
+
+/// Extract the opcode from a single Guacamole instruction prefix of the
+/// form `<len>.<opcode>,...`. Returns `None` if the prefix doesn't parse
+/// or the declared length doesn't match the opcode body.
+fn parse_opcode(inst: &str) -> Option<&str> {
+    let (len_str, rest) = inst.split_once('.')?;
+    let declared_len: usize = len_str.parse().ok()?;
+    // Opcode runs up to the first ',' or ';'
+    let end = rest
+        .find(|c| c == ',' || c == ';')
+        .unwrap_or(rest.len());
+    let opcode = &rest[..end];
+    if opcode.len() != declared_len {
+        return None;
+    }
+    Some(opcode)
 }
 
 // ── Per-session ring buffer ────────────────────────────────────────

@@ -60,9 +60,9 @@ impl Database {
         // Coding Standards §15.4 — bounded pool lifetimes and per-connection
         // statement_timeout. The defaults below are:
         //   acquire_timeout    30s   (fail fast if the pool is exhausted)
-        //   idle_timeout      300s   (recycle idle conns so middleboxes do not silently drop them)
+        //   idle_timeout       60s   (recycle before middleboxes silently drop idle conns)
         //   max_lifetime     3600s   (force periodic reconnect; prevents indefinitely-stale TCP state)
-        //   statement_timeout 30s   (kill runaway queries at the Postgres side)
+        //   statement_timeout 90s   (kill runaway queries; large AD-sync upserts need more than 30s)
         // All four are configurable via environment variables. The per-connection
         // statement_timeout is applied in an `after_connect` hook so that any
         // future batch/analytics session (e.g. a tarpaulin run or a long report
@@ -74,7 +74,7 @@ impl Database {
         let idle_timeout_secs: u64 = std::env::var("DATABASE_IDLE_TIMEOUT_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(300);
+            .unwrap_or(60);
         let max_lifetime_secs: u64 = std::env::var("DATABASE_MAX_LIFETIME_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -82,7 +82,7 @@ impl Database {
         let statement_timeout_ms: u64 = std::env::var("DATABASE_STATEMENT_TIMEOUT_MS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(30_000);
+            .unwrap_or(90_000);
 
         let pool = PgPoolOptions::new()
             .max_connections(max_conns)

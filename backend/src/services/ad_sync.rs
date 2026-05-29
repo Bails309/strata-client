@@ -286,6 +286,19 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         serde_json::json!({})
     };
 
+    // Wrap phases 3 (upsert), 4 (soft-delete) and 5 (hard-delete) in a
+    // single transaction so a crash partway through cannot leave the
+    // discovered inventory partially applied (e.g. upserts committed
+    // while the matching soft-delete sweep never ran, causing the next
+    // run's "would soft-delete > 50%" guard to trip and abort).
+    let mut tx = pool.begin().await?;
+    // Large AD inventories can blow past the default 90 s statement
+    // timeout once the cluster grows past ~25 k computers. Pin a 5 min
+    // budget *inside* this transaction only.
+    sqlx::query("SET LOCAL statement_timeout = '300s'")
+        .execute(&mut *tx)
+        .await?;
+
     // High performance bulk upsert using UNNEST and ON CONFLICT.
     // The `is_insert` check (xmax = 0) correctly distinguishes NEW entries from UPDATED ones.
     let stats: (i64, i64) = sqlx::query_as(
@@ -335,7 +348,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     .bind(config.folder_id)
     .bind(config.id)
     .bind(&defaults)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let created = stats.0 as i32;
@@ -355,7 +368,7 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
     )
     .bind(config.id)
     .bind(&dns)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     let soft_deleted = soft_deleted_res.rows_affected() as i32;
 
@@ -364,9 +377,11 @@ async fn do_sync(pool: &Pool<Postgres>, config: &AdSyncConfig, run_id: Uuid) -> 
         "DELETE FROM connections WHERE ad_source_id = $1 AND soft_deleted_at IS NOT NULL AND soft_deleted_at < now() - INTERVAL '7 days'",
     )
     .bind(config.id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     let hard_deleted = hard_result.rows_affected() as i32;
+
+    tx.commit().await?;
 
     // Update run stats
     sqlx::query(

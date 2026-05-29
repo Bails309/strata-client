@@ -193,14 +193,8 @@ pub async fn toggle_favorite(
     Json(body): Json<FavoriteRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-
-    if favorites::is_favorite(&db.pool, user.id, body.connection_id).await? {
-        favorites::remove(&db.pool, user.id, body.connection_id).await?;
-        Ok(Json(json!({ "favorited": false })))
-    } else {
-        favorites::add(&db.pool, user.id, body.connection_id).await?;
-        Ok(Json(json!({ "favorited": true })))
-    }
+    let favorited = favorites::toggle(&db.pool, user.id, body.connection_id).await?;
+    Ok(Json(json!({ "favorited": favorited })))
 }
 
 // ── User Tags ─────────────────────────────────────────────────────────
@@ -317,6 +311,21 @@ pub async fn set_connection_tags(
     Json(body): Json<SetConnectionTagsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
+    // Authorisation: a user must have role-based access (direct or via
+    // folder) to the connection before they can mutate its tag set.
+    // Operators with `can_manage_system` / `can_manage_connections`
+    // bypass the check. Without this, any logged-in user could mutate
+    // tags on any connection by guessing the UUID (IDOR).
+    if !user.can_access_all_connections()
+        && !crate::services::connections::user_has_role_access(
+            &db.pool,
+            user.id,
+            body.connection_id,
+        )
+        .await?
+    {
+        return Err(AppError::Forbidden);
+    }
     tags_svc::set_connection_tags(&db.pool, user.id, body.connection_id, &body.tag_ids).await?;
     Ok(Json(json!({ "ok": true })))
 }

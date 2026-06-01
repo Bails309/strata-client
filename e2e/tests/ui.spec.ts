@@ -89,9 +89,24 @@ test.describe('Security headers', () => {
     expect(response?.headers()['strict-transport-security']).toContain('max-age=');
   });
 
-  test('X-Frame-Options is DENY', async ({ page }) => {
+  test('X-Frame-Options is not returned (replaced by CSP frame-ancestors)', async ({ page }) => {
     const response = await page.goto('/login');
-    expect(response?.headers()['x-frame-options']).toBe('DENY');
+    expect(response?.headers()['x-frame-options']).toBeUndefined();
+    const csp = response?.headers()['content-security-policy'] || '';
+    expect(csp).toContain("frame-ancestors 'none'");
+  });
+
+  test('CSP includes object-src none', async ({ page }) => {
+    const response = await page.goto('/login');
+    const csp = response?.headers()['content-security-policy'] || '';
+    expect(csp).toContain("object-src 'none'");
+  });
+
+  test('CSP style-src does not allow unsafe-inline', async ({ page }) => {
+    const response = await page.goto('/login');
+    const csp = response?.headers()['content-security-policy'] || '';
+    const styleSrc = csp.match(/style-src\s+([^;]+)/)?.[1] || '';
+    expect(styleSrc).not.toContain('unsafe-inline');
   });
 
   test('no Server header exposed', async ({ page }) => {

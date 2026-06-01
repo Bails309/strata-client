@@ -1048,9 +1048,19 @@ pub async fn ws_tunnel(
     // Update per-user last_accessed timestamp
     crate::services::connections::touch_user_access(&db.pool, user_id, connection_id).await?;
 
-    // Extract client IP using the shared helper with ConnectInfo fallback
-    let client_ip = crate::routes::auth::try_extract_client_ip(&headers)
+    // Extract client IP using the shared helper with ConnectInfo fallback.
+    // Log the received forwarding headers and the peer address to help
+    // diagnose why the resolved IP may be a docker bridge address (172.18.*).
+    let resolved = crate::routes::auth::try_extract_client_ip(&headers)
         .unwrap_or_else(|| addr.ip().to_string());
+    tracing::debug!(
+        x_forwarded_for = ?headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+        x_real_ip = ?headers.get("x-real-ip").and_then(|v| v.to_str().ok()),
+        peer = %addr.ip(),
+        resolved_client_ip = %resolved,
+        "resolved client IP for tunnel"
+    );
+    let client_ip = resolved;
 
     // Build NVR context for session recording into the in-memory ring buffer
     let (session_registry, file_store) = {

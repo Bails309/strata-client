@@ -1,4 +1,3 @@
-#!/bin/sh
 # ── guacd entrypoint wrapper ───────────────────────────────────────────
 # Applies custom DNS resolv.conf from the shared config volume (written
 # by the backend when an admin configures DNS servers in the UI), then

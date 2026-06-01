@@ -126,6 +126,14 @@ services:
       - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-}
       - STRATA_ALLOWED_ORIGINS=${STRATA_ALLOWED_ORIGINS:-}
+      # Enable trusting X-Forwarded-For from the frontend reverse proxy.
+      # Set to 1 to permit parsing XFF; pair with STRATA_TRUSTED_PROXIES
+      # to restrict which immediate peers are allowed to supply XFF.
+      - STRATA_TRUST_XFF=${STRATA_TRUST_XFF:-1}
+      # Comma-separated CIDRs or IPs for upstream proxies to trust.
+      # In most local docker-compose setups the bridge network uses
+      # 172.18.0.0/16; adjust to your environment's subnet as needed.
+      - STRATA_TRUSTED_PROXIES=${STRATA_TRUSTED_PROXIES:-172.18.0.0/16}
       # Public base URL for SSO redirect_uri construction when the
       # backend sits behind a reverse proxy / DMZ relay that doesn't
       # forward Host/X-Forwarded-* headers. Optional — when unset,

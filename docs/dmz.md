@@ -119,9 +119,9 @@ flow-control windows are honoured in both directions so back-pressure
 from a slow public client transparently slows the upstream guacd
 traffic.
 
-### Body streaming and HTTP/2 hardening (v1.10.4+)
+### Body streaming and HTTP/2 hardening (v1.10.5+)
 
-As of v1.10.4 the DMZ reverse-proxy streams request and response
+As of v1.10.5 the DMZ reverse-proxy streams request and response
 bodies end-to-end through the h2 link instead of buffering each
 direction into a `BytesMut` up to 8 MiB before forwarding. Both
 directions honour h2 flow control:
@@ -141,7 +141,7 @@ Per-request memory dropped from up to ~16 MiB to roughly one h2
 flow-control window (~64 KiB).
 
 The DMZ public TLS listener is also pinned to **TLS 1.3 only** as of
-v1.10.4, and the `hyper-util` auto-builder for the public h2
+v1.10.5, and the `hyper-util` auto-builder for the public h2
 connection is configured with `max_concurrent_streams=128`,
 `max_frame_size=64 KiB`, `max_header_list_size=16 KiB`,
 `max_send_buf_size=1 MiB`, and a 20-second keep-alive interval to

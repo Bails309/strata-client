@@ -1515,9 +1515,9 @@ to hold:
 
 ---
 
-## v1.10.4 security hardening batch
+## v1.10.5 security hardening batch
 
-v1.10.4 is a security- and reliability-focused patch that lands the
+v1.10.5 is a security- and reliability-focused patch that lands the
 full implementation of the v1.10.3 internal code review (CRITICAL +
 HIGH + MED findings) plus a streaming-mode refactor of the DMZ
 reverse-proxy. There are no user-facing feature changes; nothing
@@ -1561,6 +1561,29 @@ trusted. `try_extract_client_ip` was refactored to extract a pure
 rate limits collapse to per-LB-IP buckets and audit logs lose
 source-IP fidelity. The new startup banner (below) warns when the
 variable is missing.
+
+### guacd runtime ownership and minimal capabilities
+
+v1.10.5 adjusts the `guacd` container startup to ensure the process can
+create session recordings on shared volumes. The entrypoint performs a
+root-owned `chown` of the recordings and drive paths to the `guacd` UID/GID
+before dropping privileges. To effect this change the `docker-compose.yml`
+may add narrowly-scoped capabilities to the `guacd` service (`CHOWN`,
+`FOWNER`, `DAC_OVERRIDE`, `SETUID`, `SETGID`). These are applied only to the
+container at start so the long-running `guacd` process runs unprivileged as
+the `guacd` user.
+
+Operator guidance:
+
+- Rebuild and recreate the `guacd` container after upgrade: `docker compose up -d --force-recreate guacd`.
+- Confirm `guacd` writes to the recordings volume (e.g. `docker compose exec guacd ls -la /var/lib/guacamole/recordings`).
+- The entrypoint chown runs as root and then drops to the `guacd` user; no
+  host-level filesystem ACLs are changed beyond the volume mount ownership.
+
+Security rationale: Without the startup chown, `guacd` could fail to create
+`.guac` files on shared mounts where the container-local `guacd` UID differs
+from the host/GID mapping. The capability set is intentionally minimal and
+applies only during container start; the runtime process runs unprivileged.
 
 ### DMZ public listener: TLS 1.3 only + HTTP/2 Rapid Reset mitigation
 

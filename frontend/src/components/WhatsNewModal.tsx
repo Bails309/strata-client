@@ -31,6 +31,33 @@ export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.10.5",
     subtitle:
+      "Patch release — Recordings reliability & Azure offload: ensure guacd can create local .guac files and backend uploads recordings to configured Azure Blob Storage.",
+    sections: [
+      {
+        title: "guacd recording write fix",
+        description:
+          "Fixes startup behaviour so the guacd entrypoint chowns the recordings path to the guacd UID before dropping privileges, preventing EACCES failures that prevented .guac files from being created on shared mounts.",
+      },
+      {
+        title: "Azure Blob offload",
+        description:
+          "The background sync worker reliably uploads completed recordings to configured Azure Blob Storage, flips the DB row to indicate remote storage, and deletes local copies after successful upload.",
+      },
+      {
+        title: "Retention and cleanup",
+        description:
+          "Retention purge now includes Azure-backed recordings and deletes remote blobs for rows older than the configured retention window, keeping storage costs bounded.",
+      },
+      {
+        title: "Operator guidance",
+        description:
+          "Recreate the guacd container after upgrade: `docker compose up -d --force-recreate guacd`. Confirm recordings appear in /var/lib/guacamole/recordings and that the backend logs successful Azure uploads.",
+      },
+    ],
+  },
+  {
+    version: "1.10.4",
+    subtitle:
       "Patch release — Security & DMZ hardening: CSRF/CSWSH bypass closure, DMZ proxy body streaming (~250× lower per-request memory), TLS 1.3 pin + HTTP/2 Rapid Reset mitigation, secret-redacting logs, and startup banners for production-default credentials.",
     sections: [
       {

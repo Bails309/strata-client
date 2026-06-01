@@ -1,3 +1,13 @@
+# What's New in v1.10.5
+
+> **Patch release: Recordings reliability & Azure offload.** v1.10.5
+> fixes several issues that could prevent guacd from creating local
+> recording files and ensures completed recordings are uploaded to
+> configured Azure Blob Storage and removed from the local recordings
+> volume. Retention purge now includes Azure-backed recordings.
+
+---
+
 # What's New in v1.10.4
 
 > **Patch release: Security & DMZ hardening — CSRF/CSWSH bypass closure, DMZ body streaming, secret-redacting logs, and config-warning startup banners.** v1.10.4 has no new user-facing features. It lands the full implementation of the v1.10.3 internal code review (CRITICAL + HIGH + MED findings) plus a streaming-mode refactor of the DMZ reverse-proxy that drops per-request memory ceiling from roughly 16 MiB to roughly one HTTP/2 flow-control window (~64 KiB). The DMZ public TLS listener is now pinned to TLS 1.3 with conservative HTTP/2 SETTINGS that mitigate the Rapid Reset class of attacks (CVE-2023-44487). A new startup banner emits loud warnings when the backend is launched against the docker-compose default credentials, an unencrypted Vault address, or a weak JWT secret. Existing correctly-configured deployments are unaffected; nothing in this release is a breaking change.

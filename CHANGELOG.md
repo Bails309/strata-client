@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.5] — 2026-06-01
+
+### Patch Release — Recordings reliability and Azure offload
+
+v1.10.5 is a small reliability patch that addresses session-recording delivery
+and retention in Azure-backed deployments. Key fixes:
+
+- Ensure guacd can create recording files on the shared recordings volume
+  (fixes failures where `Creation of recording failed: Exhausted all possible
+  unique suffixes` was logged) by correcting runtime ownership and entrypoint
+  behaviour so the recorder runs with appropriate write access.
+- Background sync worker now reliably uploads completed recordings to Azure
+  Blob Storage and flips the database `storage_type` to `azure` so the UI
+  reflects remote storage. Local copies are deleted after successful upload.
+- Retention purge includes Azure-backed recordings and deletes remote blobs
+  for rows older than the configured `recordings_retention_days`.
+
+Operators upgrading to v1.10.5 who previously saw `LOCAL` storage in the
+Sessions UI should now observe successful offload to the configured Azure
+container once the guacd container is rebuilt and recreated.
+
 ## [1.10.4] — 2026-05-29
 
 ### Patch Release — Security & DMZ hardening: CSRF/CSWSH bypass closure, DMZ body streaming, secret-redacting logs, and config-warning startup banners

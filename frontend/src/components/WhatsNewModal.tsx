@@ -29,7 +29,7 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
-    version: "1.10.4",
+    version: "1.10.5",
     subtitle:
       "Patch release — Security & DMZ hardening: CSRF/CSWSH bypass closure, DMZ proxy body streaming (~250× lower per-request memory), TLS 1.3 pin + HTTP/2 Rapid Reset mitigation, secret-redacting logs, and startup banners for production-default credentials.",
     sections: [

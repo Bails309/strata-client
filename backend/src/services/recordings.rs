@@ -78,12 +78,35 @@ pub async fn get_azure_config(
     let container_name =
         crate::services::settings::get(pool, "recordings_azure_container_name").await?;
 
+    // DIAG: surface which settings are present (never log key material).
+    let raw_kind = match access_key_raw.as_deref() {
+        None => "missing",
+        Some("") => "empty",
+        Some(s) if s.starts_with("vault:") => "vault-sealed",
+        Some(_) => "plaintext",
+    };
+    tracing::info!(
+        target: "recordings.diag",
+        account_name_present = account_name.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
+        account_name = account_name.as_deref().unwrap_or(""),
+        container_name = container_name.as_deref().unwrap_or(""),
+        access_key_kind = raw_kind,
+        vault_configured = vault.is_some(),
+        "recordings: loaded Azure settings from DB"
+    );
+
     // Decrypt access key if vault-encrypted
     let access_key = match access_key_raw {
         Some(ref raw) if raw.starts_with("vault:") => {
             if let Some(vc) = vault {
                 match crate::services::vault::unseal_setting(vc, raw).await {
-                    Ok(decrypted) => Some(decrypted),
+                    Ok(decrypted) => {
+                        tracing::info!(
+                            target: "recordings.diag",
+                            "recordings: Azure access key unsealed from Vault"
+                        );
+                        Some(decrypted)
+                    }
                     Err(e) => {
                         tracing::error!("Failed to decrypt Azure access key: {e}");
                         None
@@ -105,7 +128,15 @@ pub async fn get_azure_config(
                 access_key: key,
             }))
         }
-        _ => Ok(None),
+        (name, key) => {
+            tracing::warn!(
+                target: "recordings.diag",
+                account_name_empty_or_missing = name.as_deref().map(str::is_empty).unwrap_or(true),
+                access_key_empty_or_missing = key.as_deref().map(str::is_empty).unwrap_or(true),
+                "recordings: Azure backend selected but config is incomplete; uploads disabled"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -379,6 +410,10 @@ pub fn spawn_sync_task(
 ) -> tokio::task::JoinHandle<()> {
     use crate::services::worker::{spawn_periodic, PeriodicConfig};
     let synced = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::<String>::new()));
+    tracing::info!(
+        target: "recordings.diag",
+        "recordings: spawning sync task (initial_delay=20s, interval=60s)"
+    );
     spawn_periodic(
         PeriodicConfig {
             label: "recording_sync",
@@ -415,6 +450,14 @@ async fn sync_pass(
     vault: Option<&crate::config::VaultConfig>,
 ) -> anyhow::Result<()> {
     let config = get_config(pool).await?;
+    tracing::info!(
+        target: "recordings.diag",
+        enabled = config.enabled,
+        storage_type = ?config.storage_type,
+        retention_days = config.retention_days,
+        synced_cache_size = synced.len(),
+        "recordings: sync_pass tick"
+    );
     if !config.enabled {
         return Ok(());
     }
@@ -425,41 +468,101 @@ async fn sync_pass(
     if config.storage_type == StorageType::AzureBlob {
         let azure = match get_azure_config(pool, vault).await? {
             Some(c) => c,
-            None => return Ok(()),
+            None => {
+                tracing::warn!(
+                    target: "recordings.diag",
+                    "recordings: storage_type=azure_blob but get_azure_config returned None; skipping upload pass"
+                );
+                return Ok(());
+            }
         };
+        tracing::info!(
+            target: "recordings.diag",
+            account = %azure.account_name,
+            container = %azure.container_name,
+            dir = %dir,
+            "recordings: Azure config loaded; scanning recordings directory"
+        );
 
         let mut entries = match tokio::fs::read_dir(dir).await {
             Ok(e) => e,
-            Err(_) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    target: "recordings.diag",
+                    error = %e,
+                    dir = %dir,
+                    "recordings: cannot read recordings directory"
+                );
+                return Ok(());
+            }
         };
+
+        let mut scanned: usize = 0;
+        let mut skipped_too_new: usize = 0;
+        let mut skipped_cached: usize = 0;
+        let mut uploaded: usize = 0;
+        let mut failed: usize = 0;
 
         while let Some(entry) = entries.next_entry().await? {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || synced.contains(&name) {
+            scanned += 1;
+            if name.starts_with('.') {
+                continue;
+            }
+            if synced.contains(&name) {
+                skipped_cached += 1;
                 continue;
             }
 
             // Skip files still being written (modified < 30 s ago)
             if let Ok(meta) = entry.metadata().await {
                 if let Ok(modified) = meta.modified() {
-                    if modified.elapsed().unwrap_or_default() < std::time::Duration::from_secs(30) {
+                    let age = modified.elapsed().unwrap_or_default();
+                    if age < std::time::Duration::from_secs(30) {
+                        skipped_too_new += 1;
+                        tracing::debug!(
+                            target: "recordings.diag",
+                            file = %name,
+                            age_secs = age.as_secs(),
+                            "recordings: skip — file modified <30s ago"
+                        );
                         continue;
                     }
                 }
             }
 
             let path = format!("{dir}/{name}");
+            tracing::info!(
+                target: "recordings.diag",
+                file = %name,
+                "recordings: uploading to Azure Blob"
+            );
             match upload_file_to_azure(&azure, &name, &path).await {
                 Ok(_) => {
+                    uploaded += 1;
                     synced.insert(name.clone());
 
                     // Update database metadata to reflect Azure storage
-                    let _ = sqlx::query(
+                    let res = sqlx::query(
                         "UPDATE recordings SET storage_type = 'azure' WHERE storage_path = $1",
                     )
                     .bind(&name)
                     .execute(pool)
                     .await;
+                    match res {
+                        Ok(r) => tracing::info!(
+                            target: "recordings.diag",
+                            file = %name,
+                            rows_updated = r.rows_affected(),
+                            "recordings: DB storage_type updated to 'azure'"
+                        ),
+                        Err(e) => tracing::warn!(
+                            target: "recordings.diag",
+                            file = %name,
+                            error = %e,
+                            "recordings: failed to update DB storage_type"
+                        ),
+                    }
 
                     // Delete local file after successful upload to prevent disk growth
                     if let Err(e) = tokio::fs::remove_file(&path).await {
@@ -469,9 +572,18 @@ async fn sync_pass(
                     }
                     tracing::info!("Synced recording to Azure Blob: {name}");
                 }
-                Err(e) => tracing::warn!("Azure Blob upload failed for {name}: {e}"),
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!("Azure Blob upload failed for {name}: {e}");
+                }
             }
         }
+
+        tracing::info!(
+            target: "recordings.diag",
+            scanned, skipped_too_new, skipped_cached, uploaded, failed,
+            "recordings: Azure sync pass complete"
+        );
     }
 
     // ── Retention-based cleanup for local recordings ──

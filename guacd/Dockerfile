@@ -118,7 +118,9 @@ RUN addgroup -S guacd && adduser -S guacd -G guacd \
 
 # Entrypoint wrapper — applies custom DNS then execs guacd as non-root
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Normalize line endings to LF to avoid CRLF shebang issues when built on Windows hosts
+RUN sed -i 's/\r$//' /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
 EXPOSE 4822
 

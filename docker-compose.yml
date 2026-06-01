@@ -22,6 +22,12 @@ services:
     cap_add:
       - SETGID
       - SETUID
+      # DAC_OVERRIDE: required so the in-container root process can write
+      # session recordings into /var/lib/guacamole/recordings (the shared
+      # named volume is owned by uid 996/strata from the backend image;
+      # without DAC_OVERRIDE guacd hits EACCES and logs
+      # "Creation of recording failed: Exhausted all possible unique suffixes").
+      - DAC_OVERRIDE
     deploy:
       resources:
         limits:
@@ -61,6 +67,8 @@ services:
     cap_add:
       - SETGID
       - SETUID
+      # See main `guacd` service for rationale.
+      - DAC_OVERRIDE
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 4822 || exit 1"]
       interval: 15s

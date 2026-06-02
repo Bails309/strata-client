@@ -1211,8 +1211,27 @@ export interface AuditLog {
   connection_name?: string;
 }
 
-export const getAuditLogs = (page = 1, per_page = 50) =>
-  request<AuditLog[]>(`/admin/audit-logs?page=${page}&per_page=${per_page}`);
+export interface AuditLogFilters {
+  action_type?: string;
+  action_prefix?: string;
+  username?: string;
+  from?: string; // RFC3339
+  to?: string; // RFC3339
+  search?: string;
+}
+
+export const getAuditLogs = (page = 1, per_page = 50, filters: AuditLogFilters = {}) => {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(per_page),
+  });
+  for (const [k, v] of Object.entries(filters)) {
+    if (v && String(v).trim() !== "") {
+      params.set(k, String(v));
+    }
+  }
+  return request<AuditLog[]>(`/admin/audit-logs?${params.toString()}`);
+};
 
 // ── Tunnel Tickets ──────────────────────────────────────────────────
 

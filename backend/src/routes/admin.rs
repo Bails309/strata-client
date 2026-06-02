@@ -1839,12 +1839,25 @@ pub async fn reset_user_password(
 
 // ── Audit Logs ─────────────────────────────────────────────────────────
 
-use crate::services::audit::AuditLogRow;
+use crate::services::audit::{AuditFilters, AuditLogRow};
 
 #[derive(Deserialize)]
 pub struct AuditLogQuery {
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+    /// Exact `action_type` (e.g. `tunnel.connected`).
+    pub action_type: Option<String>,
+    /// Dotted prefix on `action_type` (e.g. `tunnel` matches every
+    /// `tunnel.*` event).
+    pub action_prefix: Option<String>,
+    /// Substring match on the author's username.
+    pub username: Option<String>,
+    /// Inclusive lower / upper bounds on `created_at` (RFC3339).
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    /// Free-text substring across action_type / details JSON /
+    /// connection name.
+    pub search: Option<String>,
 }
 
 pub async fn list_audit_logs(
@@ -1856,7 +1869,30 @@ pub async fn list_audit_logs(
     let db = require_running(&state).await?;
     let (per_page, offset) = paginate(query.page, query.per_page, 200);
 
-    let rows = crate::services::audit::list_paginated(&db.pool, per_page, offset).await?;
+    // Normalise empty strings to `None` so callers can send an unset
+    // filter as `?username=` without the WHERE clause matching every
+    // user with an empty string in their name (i.e. nobody).
+    fn norm(s: Option<String>) -> Option<String> {
+        s.and_then(|v| {
+            let t = v.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        })
+    }
+
+    let filters = AuditFilters {
+        action_type: norm(query.action_type),
+        action_prefix: norm(query.action_prefix),
+        username: norm(query.username),
+        from: query.from,
+        to: query.to,
+        search: norm(query.search),
+    };
+
+    let rows = crate::services::audit::list_paginated(&db.pool, per_page, offset, &filters).await?;
     Ok(Json(rows))
 }
 

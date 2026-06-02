@@ -1,6 +1,30 @@
-import { useEffect, useState } from "react";
-import { getAuditLogs, AuditLog } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { getAuditLogs, AuditLog, AuditLogFilters } from "../api";
 import { useSettings } from "../contexts/SettingsContext";
+
+/* Action-prefix presets exposed in the filter dropdown. Mirrors the
+   colour-grouping in `badgeClass` below so the operator's mental model
+   stays consistent between the filter menu and the badges. */
+const ACTION_PREFIXES: { value: string; label: string }[] = [
+  { value: "", label: "All actions" },
+  { value: "tunnel", label: "Tunnel (sessions)" },
+  { value: "sessions", label: "Sessions (kill / admin)" },
+  { value: "auth", label: "Authentication" },
+  { value: "user", label: "Users" },
+  { value: "connection", label: "Connections" },
+  { value: "connection_folder", label: "Connection folders" },
+  { value: "role", label: "Roles" },
+  { value: "credential", label: "Credentials" },
+  { value: "credential_profile", label: "Credential profiles" },
+  { value: "ad_sync", label: "AD sync" },
+  { value: "settings", label: "Settings" },
+  { value: "sso", label: "SSO" },
+  { value: "vault", label: "Vault" },
+  { value: "kerberos", label: "Kerberos" },
+  { value: "recordings", label: "Recordings" },
+  { value: "safeguard", label: "Safeguard" },
+  { value: "password_checkout", label: "Password checkouts" },
+];
 
 /* Map action_type prefixes to badge colours */
 function badgeClass(action: string): string {
@@ -244,17 +268,134 @@ export default function AuditLogs() {
   const [page, setPage] = useState(1);
   const { formatDateTime } = useSettings();
 
+  // Filter inputs. Free-text fields are debounced via a 300ms effect
+  // below so the operator can type without spamming the backend.
+  const [actionPrefix, setActionPrefix] = useState("");
+  const [username, setUsername] = useState("");
+  const [search, setSearch] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+
+  // Debounced copies that actually drive the request.
+  const [debouncedUsername, setDebouncedUsername] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
-    getAuditLogs(page)
+    const t = setTimeout(() => setDebouncedUsername(username), 300);
+    return () => clearTimeout(t);
+  }, [username]);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const filters = useMemo<AuditLogFilters>(
+    () => ({
+      action_prefix: actionPrefix || undefined,
+      username: debouncedUsername || undefined,
+      search: debouncedSearch || undefined,
+      // <input type="datetime-local"> emits values without a timezone
+      // suffix; treat them as the operator's local time and let the
+      // browser convert to a UTC ISO string for the backend.
+      from: from ? new Date(from).toISOString() : undefined,
+      to: to ? new Date(to).toISOString() : undefined,
+    }),
+    [actionPrefix, debouncedUsername, debouncedSearch, from, to]
+  );
+
+  // Reset to page 1 whenever filters change, otherwise a deep page
+  // number from a previous search may render an empty table.
+  useEffect(() => {
+    setPage(1);
+  }, [filters]);
+
+  useEffect(() => {
+    getAuditLogs(page, 50, filters)
       .then(setLogs)
       .catch(() => {});
-  }, [page]);
+  }, [page, filters]);
+
+  const filtersActive = !!actionPrefix || !!username || !!search || !!from || !!to;
+  const resetFilters = () => {
+    setActionPrefix("");
+    setUsername("");
+    setSearch("");
+    setFrom("");
+    setTo("");
+  };
 
   return (
     <div>
       <h1>Audit Logs</h1>
 
       <div className="card">
+        {/* ── Filter bar ─────────────────────────────── */}
+        <div className="flex flex-wrap items-end gap-3 mb-4">
+          <label className="flex flex-col text-xs text-txt-secondary">
+            <span className="mb-1">Category</span>
+            <select
+              className="input"
+              value={actionPrefix}
+              onChange={(e) => setActionPrefix(e.target.value)}
+            >
+              {ACTION_PREFIXES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col text-xs text-txt-secondary">
+            <span className="mb-1">Username</span>
+            <input
+              type="text"
+              className="input"
+              placeholder="username contains…"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col text-xs text-txt-secondary">
+            <span className="mb-1">Search</span>
+            <input
+              type="text"
+              className="input"
+              placeholder="action, details, connection…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col text-xs text-txt-secondary">
+            <span className="mb-1">From</span>
+            <input
+              type="datetime-local"
+              className="input"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col text-xs text-txt-secondary">
+            <span className="mb-1">To</span>
+            <input
+              type="datetime-local"
+              className="input"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </label>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={resetFilters}
+            disabled={!filtersActive}
+          >
+            Reset
+          </button>
+        </div>
         <div className="table-responsive">
           <table className="admin-table">
             <thead>
@@ -268,24 +409,34 @@ export default function AuditLogs() {
               </tr>
             </thead>
             <tbody>
-              {logs.map((log) => (
-                <tr key={log.id}>
-                  <td>{log.id}</td>
-                  <td className="text-[0.8rem] whitespace-nowrap font-mono">
-                    {formatDateTime(log.created_at)}
-                  </td>
-                  <td>
-                    <span className={badgeClass(log.action_type)}>{log.action_type}</span>
-                  </td>
-                  <td className="text-sm">
-                    {log.username || (log.user_id ? log.user_id.slice(0, 8) : "—")}
-                  </td>
-                  <td className="text-[0.8rem] max-w-[400px]">{formatDetails(log)}</td>
-                  <td className="font-mono text-[0.7rem] text-txt-secondary">
-                    {log.current_hash.slice(0, 12)}…
+              {logs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="text-center text-txt-secondary py-6">
+                    {filtersActive
+                      ? "No audit log entries match the current filters."
+                      : "No audit log entries."}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                logs.map((log) => (
+                  <tr key={log.id}>
+                    <td>{log.id}</td>
+                    <td className="text-[0.8rem] whitespace-nowrap font-mono">
+                      {formatDateTime(log.created_at)}
+                    </td>
+                    <td>
+                      <span className={badgeClass(log.action_type)}>{log.action_type}</span>
+                    </td>
+                    <td className="text-sm">
+                      {log.username || (log.user_id ? log.user_id.slice(0, 8) : "—")}
+                    </td>
+                    <td className="text-[0.8rem] max-w-[400px]">{formatDetails(log)}</td>
+                    <td className="font-mono text-[0.7rem] text-txt-secondary">
+                      {log.current_hash.slice(0, 12)}…
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

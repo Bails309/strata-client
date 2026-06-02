@@ -17,12 +17,39 @@ pub struct AuditLogRow {
     pub connection_name: Option<String>,
 }
 
+/// Optional filter set for [`list_paginated`]. Every field is an
+/// `Option`; `None` means "do not filter on this column". Passing
+/// `AuditFilters::default()` reproduces the previous unfiltered
+/// behaviour.
+#[derive(Default, Debug, Clone)]
+pub struct AuditFilters {
+    /// Exact match on `audit_logs.action_type`.
+    pub action_type: Option<String>,
+    /// Prefix match — matches `action_type` equal to the prefix or
+    /// beginning with `<prefix>.` (so `tunnel` matches `tunnel.connected`
+    /// and `tunnel.failed` but not `tunnels.x`).
+    pub action_prefix: Option<String>,
+    /// Case-insensitive substring match on `users.username`.
+    pub username: Option<String>,
+    /// Inclusive lower bound on `created_at`.
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Inclusive upper bound on `created_at`.
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+    /// Free-text substring search across `action_type`, the rendered
+    /// `details` JSON, and the joined `connection_name`.
+    pub search: Option<String>,
+}
+
 /// Fetch audit rows in reverse-chronological order (newest first), joined
 /// with `users` and `connections` for display.
+///
+/// The SQL is static — optional filters are gated by `$N IS NULL OR …`
+/// predicates so the same prepared statement serves every call shape.
 pub async fn list_paginated(
     pool: &Pool<Postgres>,
     limit: i64,
     offset: i64,
+    filters: &AuditFilters,
 ) -> Result<Vec<AuditLogRow>, AppError> {
     let rows = sqlx::query_as(
         "SELECT a.id, a.created_at, a.user_id, u.username, a.action_type, a.details, a.current_hash,
@@ -30,10 +57,24 @@ pub async fn list_paginated(
          FROM audit_logs a
          LEFT JOIN users u ON u.id = a.user_id
          LEFT JOIN connections c ON c.id = (a.details->>'connection_id')::uuid
+         WHERE ($3::text        IS NULL OR a.action_type = $3)
+           AND ($4::text        IS NULL OR a.action_type = $4 OR a.action_type LIKE $4 || '.%')
+           AND ($5::text        IS NULL OR u.username ILIKE '%' || $5 || '%')
+           AND ($6::timestamptz IS NULL OR a.created_at >= $6)
+           AND ($7::timestamptz IS NULL OR a.created_at <= $7)
+           AND ($8::text        IS NULL OR a.action_type ILIKE '%' || $8 || '%'
+                                       OR a.details::text ILIKE '%' || $8 || '%'
+                                       OR c.name ILIKE '%' || $8 || '%')
          ORDER BY a.id DESC LIMIT $1 OFFSET $2",
     )
     .bind(limit)
     .bind(offset)
+    .bind(filters.action_type.as_deref())
+    .bind(filters.action_prefix.as_deref())
+    .bind(filters.username.as_deref())
+    .bind(filters.from)
+    .bind(filters.to)
+    .bind(filters.search.as_deref())
     .fetch_all(pool)
     .await?;
     Ok(rows)

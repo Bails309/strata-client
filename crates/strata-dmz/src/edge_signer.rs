@@ -138,6 +138,7 @@ impl HmacEdgeSigner {
     /// Construct from raw key bytes + link id + a trusted-proxy list
     /// of bare `IpAddr`s. Each entry is treated as a host route
     /// (`/32` for IPv4, `/128` for IPv6).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(key: Zeroizing<Vec<u8>>, link_id: String, trusted_proxies: Vec<IpAddr>) -> Self {
         let nets = trusted_proxies
             .into_iter()

@@ -29,6 +29,23 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.6",
+    subtitle:
+      "Patch release — Safeguard token sanitization & improved Safeguard client diagnostics: reject control bytes on token storage and surface reqwest error chains in logs.",
+    sections: [
+      {
+        title: "Safeguard token sanitization",
+        description:
+          "Stored Safeguard bearer tokens are trimmed and rejected if they contain control bytes (e.g. stray newlines). This prevents opaque reqwest 'builder error' failures caused by invalid header values.",
+      },
+      {
+        title: "Improved error diagnostics",
+        description:
+          "Reqwest errors now surface their source chain in backend logs so root causes (invalid header values, TLS, or network errors) are visible to operators and developers.",
+      },
+    ],
+  },
+  {
     version: "1.10.5",
     subtitle:
       "Patch release — Recordings reliability & Azure offload: ensure guacd can create local .guac files and backend uploads recordings to configured Azure Blob Storage.",

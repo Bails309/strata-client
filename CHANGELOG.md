@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.5] — 2026-06-01
 
+## [1.10.6] — 2026-06-02
+
+### Patch Release — Safeguard token sanitization & improved diagnostics
+
+v1.10.6 is a small reliability patch that hardens Safeguard token handling
+and improves backend diagnostics for opaque `reqwest` errors. Key fixes:
+
+- Trim decrypted bearer tokens on load and reject tokens that contain
+  control bytes (e.g. trailing newlines) at store time to prevent invalid
+  `Authorization` header values being sent to upstream Safeguard APIs.
+- Walk and log the `reqwest::Error` source chain so the real underlying
+  cause (invalid header value, TLS/network errors, etc.) appears in the
+  backend logs instead of the opaque `builder error` message.
+
+Operators: recreate the backend container with the rebuilt image and
+attempt the failing Safeguard checkout — the new logs will surface the
+true cause if any further action is required.
+
+
 ### Patch Release — Recordings reliability and Azure offload
 
 v1.10.5 is a small reliability patch that addresses session-recording delivery

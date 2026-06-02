@@ -35,6 +35,27 @@ use crate::error::AppError;
 
 use super::config::{ResolvedSecrets, SafeguardConfig};
 
+/// Render a `reqwest::Error` with its full source chain.
+///
+/// `reqwest::Error`'s `Display` impl is famously terse — most kinds
+/// (`Kind::Builder`, `Kind::Request`, …) render as just "builder error"
+/// or "error sending request" with the real cause hidden behind
+/// `source()`. Logging that bare string makes intermittent issues
+/// (bad URL, invalid header byte in a bearer token, TLS handshake
+/// failure) impossible to diagnose from production traces, so we walk
+/// the chain ourselves.
+fn rq_err(e: reqwest::Error) -> String {
+    use std::error::Error;
+    let mut out = e.to_string();
+    let mut src: Option<&(dyn Error + 'static)> = e.source();
+    while let Some(cause) = src {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        src = cause.source();
+    }
+    out
+}
+
 /// Overall HTTP timeout for Safeguard calls. Safeguard's REST surface
 /// is typically <500 ms but we allow up to 15 s to absorb appliance
 /// patch / boot windows during ops events.
@@ -145,7 +166,7 @@ pub async fn probe_me(client: &Client, base: &str, bearer: &str) -> Result<MeRes
         .bearer_auth(bearer)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard /Me: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard /Me: {}", rq_err(e))))?;
     if !resp.status().is_success() {
         return Err(AppError::Internal(format!(
             "Safeguard /Me returned HTTP {}",
@@ -177,7 +198,7 @@ pub async fn a2a_login(client: &Client, base: &str, api_key: &str) -> Result<Str
         .json(&serde_json::json!({ "StsAccessToken": "" }))
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard A2A login: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard A2A login: {}", rq_err(e))))?;
     if !resp.status().is_success() {
         return Err(AppError::Internal(format!(
             "Safeguard A2A login returned HTTP {}",
@@ -292,7 +313,7 @@ pub async fn create_access_request(
         .json(&serde_json::Value::Object(body))
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard create AR: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard create AR: {}", rq_err(e))))?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -388,7 +409,7 @@ pub async fn checkout_password(
         .header("Content-Length", "0")
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard checkout: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard checkout: {}", rq_err(e))))?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -429,7 +450,7 @@ pub async fn get_access_request_state(
         .bearer_auth(bearer)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard get AR: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard get AR: {}", rq_err(e))))?;
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
@@ -511,7 +532,7 @@ pub async fn list_my_active_requests_for(
         .bearer_auth(bearer)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard list Me/Requests: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard list Me/Requests: {}", rq_err(e))))?;
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         tracing::info!(
@@ -525,7 +546,7 @@ pub async fn list_my_active_requests_for(
             .send()
             .await
             .map_err(|e| {
-                AppError::Internal(format!("safeguard list Me/ActionableRequests: {e}"))
+                AppError::Internal(format!("safeguard list Me/ActionableRequests: {}", rq_err(e)))
             })?;
         let status2 = resp2.status();
         if status2 == reqwest::StatusCode::NOT_FOUND {
@@ -700,7 +721,7 @@ pub async fn checkin(
         .body("\"strata preflight\"")
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard checkin: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard checkin: {}", rq_err(e))))?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -730,7 +751,7 @@ pub async fn cancel(
         .body("\"strata preflight\"")
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard cancel: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard cancel: {}", rq_err(e))))?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -840,7 +861,7 @@ pub async fn list_password_entitlements(
         .bearer_auth(bearer)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("safeguard list entitlements: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("safeguard list entitlements: {}", rq_err(e))))?;
     let status = resp.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         tracing::info!(

@@ -39,9 +39,20 @@ pub async fn store(
     api_token: &str,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    if api_token.trim().is_empty() {
+    // Trim surrounding whitespace — a stray trailing newline from
+    // copy-paste is the canonical cause of reqwest's opaque
+    // "builder error": `bearer_auth()` then produces an
+    // `Authorization` header containing a control byte, which fails
+    // `HeaderValue` validation at `send()` time.
+    let api_token = api_token.trim();
+    if api_token.is_empty() {
         return Err(AppError::Validation(
             "Safeguard API token cannot be empty".into(),
+        ));
+    }
+    if api_token.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(AppError::Validation(
+            "Safeguard API token contains control characters".into(),
         ));
     }
     let sealed = seal(vault, api_token.as_bytes()).await?;
@@ -101,6 +112,13 @@ pub async fn load(
 
     let token = String::from_utf8(plaintext)
         .map_err(|_| AppError::Internal("stored Safeguard token is not valid UTF-8".into()))?;
+
+    // Defence in depth: even though `store` trims and rejects
+    // control bytes, older rows written before that hardening may
+    // still contain a trailing newline. Strip it transparently so
+    // `bearer_auth(token)` doesn't trip reqwest's opaque
+    // "builder error" at request-send time.
+    let token = token.trim().to_string();
 
     Ok(Some(token))
 }

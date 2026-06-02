@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getAuditLogs, AuditLog, AuditLogFilters } from "../api";
 import { useSettings } from "../contexts/SettingsContext";
+import Select from "../components/Select";
 
 /* Action-prefix presets exposed in the filter dropdown. Mirrors the
    colour-grouping in `badgeClass` below so the operator's mental model
@@ -332,17 +333,12 @@ export default function AuditLogs() {
         <div className="flex flex-wrap items-end gap-3 mb-4">
           <label className="flex flex-col text-xs text-txt-secondary">
             <span className="mb-1">Category</span>
-            <select
-              className="input"
+            <Select
               value={actionPrefix}
-              onChange={(e) => setActionPrefix(e.target.value)}
-            >
-              {ACTION_PREFIXES.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
+              onChange={setActionPrefix}
+              options={ACTION_PREFIXES}
+              searchable
+            />
           </label>
 
           <label className="flex flex-col text-xs text-txt-secondary">

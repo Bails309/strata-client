@@ -1730,7 +1730,8 @@ pub async fn create_credential_profile(
         }
         if !crate::services::users::safeguard_jit_enabled(&db.pool, user.id).await {
             return Err(AppError::Validation(
-                "Safeguard JIT is not enabled for your account. Ask an administrator to enable it.".into(),
+                "Safeguard JIT is not enabled for your account. Ask an administrator to enable it."
+                    .into(),
             ));
         }
 

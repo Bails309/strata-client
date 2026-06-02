@@ -1639,9 +1639,7 @@ pub async fn update_user(
     let db = require_running(&state).await?;
 
     if body.role_id.is_none() && body.safeguard_jit_enabled.is_none() {
-        return Err(AppError::Validation(
-            "No updatable fields supplied".into(),
-        ));
+        return Err(AppError::Validation("No updatable fields supplied".into()));
     }
 
     if let Some(role_id) = body.role_id {
@@ -4317,6 +4315,7 @@ mod tests {
             role_name: "admin".into(),
             deleted_at: None,
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "admin");
@@ -4338,6 +4337,7 @@ mod tests {
             role_name: "user".into(),
             deleted_at: Some(deleted_at),
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "deleted-user");
@@ -4900,6 +4900,7 @@ mod tests {
             role_name: "user".into(),
             deleted_at: None,
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["sub"], "auth0|12345");

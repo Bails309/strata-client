@@ -1048,14 +1048,25 @@ pub async fn ws_tunnel(
     // Update per-user last_accessed timestamp
     crate::services::connections::touch_user_access(&db.pool, user_id, connection_id).await?;
 
-    // Extract client IP using the shared helper with ConnectInfo fallback.
-    // Log the received forwarding headers and the peer address to help
-    // diagnose why the resolved IP may be a docker bridge address (172.18.*).
-    let resolved = crate::routes::auth::try_extract_client_ip(&headers)
+    // Resolve the originating client IP. Preference order:
+    //   1. Trusted-edge-signed `x-strata-edge-client-ip` (DMZ deployments).
+    //      Verified via HMAC by the edge_header middleware and surfaced
+    //      through a task-local; this is the only attribution we can
+    //      trust end-to-end when a DMZ node fronts the backend.
+    //   2. Shared XFF / X-Real-IP helper (`try_extract_client_ip`),
+    //      gated by `STRATA_TRUST_XFF` + `STRATA_TRUSTED_PROXIES`.
+    //   3. ConnectInfo peer address — which for DMZ-originated traffic
+    //      is the docker bridge / loopback (127.0.0.1) and is therefore
+    //      the wrong value to surface to admins.
+    let edge_ip = crate::services::edge_header::current_edge_context().map(|c| c.client_ip);
+    let resolved = edge_ip
+        .clone()
+        .or_else(|| crate::routes::auth::try_extract_client_ip(&headers))
         .unwrap_or_else(|| addr.ip().to_string());
     tracing::debug!(
         x_forwarded_for = ?headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
         x_real_ip = ?headers.get("x-real-ip").and_then(|v| v.to_str().ok()),
+        edge_client_ip = ?edge_ip,
         peer = %addr.ip(),
         resolved_client_ip = %resolved,
         "resolved client IP for tunnel"

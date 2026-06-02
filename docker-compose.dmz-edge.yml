@@ -104,6 +104,14 @@ services:
       - STRATA_DMZ_EDGE_HMAC_KEY=${STRATA_DMZ_EDGE_HMAC_KEY:?required (base64)}
       - STRATA_DMZ_NODE_ID=${STRATA_DMZ_NODE_ID:-dmz-1}
       - STRATA_DMZ_CLUSTER_ID=${STRATA_DMZ_CLUSTER_ID:-strata-cluster-prod}
+      # In the edge topology the only client that ever connects to
+      # strata-dmz's "public" listener is the frontend nginx sitting
+      # on the `dmz-edge` bridge below. Trust the X-Forwarded-For /
+      # X-Real-IP headers it stamps so the signed `x-strata-edge-
+      # client-ip` reflects the real public client instead of the
+      # frontend container's docker bridge IP — which is what then
+      # surfaces in the admin Sessions list and audit log.
+      - STRATA_DMZ_TRUST_FORWARDED_FROM=${STRATA_DMZ_TRUST_FORWARDED_FROM:-172.30.0.0/24}
     healthcheck:
       test: ["CMD", "/usr/local/bin/strata-dmz", "--healthcheck"]
       interval: 15s
@@ -176,5 +184,16 @@ networks:
   # Private bridge between the public frontend and the DMZ relay.
   # Nothing else lives on it; the frontend never reaches the backend
   # directly because the backend isn't on this host.
+  #
+  # The subnet is pinned so that `STRATA_DMZ_TRUST_FORWARDED_FROM`
+  # above can list a deterministic CIDR — without this docker would
+  # auto-assign a random RFC1918 range on first `compose up` and the
+  # XFF chain coming from the frontend nginx would not be trusted,
+  # causing every signed `x-strata-edge-client-ip` to point at the
+  # frontend container's bridge address instead of the real public
+  # client.
   dmz-edge:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

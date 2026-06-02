@@ -151,6 +151,16 @@ export default function AccessTab({
   const connPerPage = 20;
   const connFormRef = useRef<HTMLDivElement>(null);
 
+  // Users list — client-side filter + pagination
+  const [userSearch, setUserSearch] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const userPerPage = 20;
+
+  // Folders list — client-side filter + pagination
+  const [folderSearch, setFolderSearch] = useState("");
+  const [folderPage, setFolderPage] = useState(1);
+  const folderPerPage = 20;
+
   // User Management
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [userForm, setUserForm] = useState<{
@@ -190,6 +200,47 @@ export default function AccessTab({
   const pagedConnections = filteredConnections.slice(
     (safeConnPage - 1) * connPerPage,
     safeConnPage * connPerPage
+  );
+
+  // ── Users: search + pagination over the currently visible list
+  //    (active users by default, or deleted users when the toggle is on). ──
+  const visibleUsersSource = showDeletedUsers ? deletedUsers : users;
+  const filteredUsers = visibleUsersSource.filter((u) => {
+    if (!userSearch) return true;
+    const q = userSearch.toLowerCase();
+    return (
+      u.username.toLowerCase().includes(q) ||
+      (u.email || "").toLowerCase().includes(q) ||
+      (u.full_name || "").toLowerCase().includes(q) ||
+      (u.role_name || "").toLowerCase().includes(q) ||
+      (u.sub || "").toLowerCase().includes(q)
+    );
+  });
+  const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / userPerPage));
+  const safeUserPage = Math.min(userPage, userTotalPages);
+  const pagedUsers = filteredUsers.slice(
+    (safeUserPage - 1) * userPerPage,
+    safeUserPage * userPerPage
+  );
+
+  // ── Folders: search + pagination. Hierarchy ordering is preserved
+  //    by filtering after `orderFoldersByHierarchy`. ──
+  const orderedFolders = orderFoldersByHierarchy(folders);
+  const filteredFolders = orderedFolders.filter(({ folder: f }) => {
+    if (!folderSearch) return true;
+    const q = folderSearch.toLowerCase();
+    return (
+      f.name.toLowerCase().includes(q) ||
+      (f.parent_id
+        ? (folders.find((p) => p.id === f.parent_id)?.name || "").toLowerCase().includes(q)
+        : "root".includes(q))
+    );
+  });
+  const folderTotalPages = Math.max(1, Math.ceil(filteredFolders.length / folderPerPage));
+  const safeFolderPage = Math.min(folderPage, folderTotalPages);
+  const pagedFolders = filteredFolders.slice(
+    (safeFolderPage - 1) * folderPerPage,
+    safeFolderPage * folderPerPage
   );
 
   function openAdd() {
@@ -1088,6 +1139,29 @@ export default function AccessTab({
             <p className="text-txt-tertiary text-xs">Organize connections into hierarchy</p>
           </div>
 
+          {folders.length > 0 && (
+            <div className="mb-3">
+              <input
+                value={folderSearch}
+                onChange={(e) => {
+                  setFolderSearch(e.target.value);
+                  setFolderPage(1);
+                }}
+                placeholder="Search folders by name or parent..."
+                className="input w-full"
+              />
+            </div>
+          )}
+          {folders.length > 0 && (
+            <p className="text-sm text-txt-secondary mb-2">
+              Showing{" "}
+              {filteredFolders.length === folders.length
+                ? folders.length
+                : `${filteredFolders.length} of ${folders.length}`}{" "}
+              folder{folders.length !== 1 ? "s" : ""}
+            </p>
+          )}
+
           {folders.length > 0 ? (
             <table className="mb-4">
               <thead>
@@ -1098,7 +1172,7 @@ export default function AccessTab({
                 </tr>
               </thead>
               <tbody>
-                {orderFoldersByHierarchy(folders).map(({ folder: f, depth }) => (
+                {pagedFolders.map(({ folder: f, depth }) => (
                   <tr key={f.id}>
                     <td>
                       <span
@@ -1149,6 +1223,30 @@ export default function AccessTab({
           ) : (
             <div className="text-center py-6 bg-surface-secondary/30 rounded-lg border border-dashed border-border mb-4">
               <p className="text-txt-secondary text-sm">No folders created yet.</p>
+            </div>
+          )}
+
+          {folderTotalPages > 1 && (
+            <div className="flex items-center justify-between mb-4 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
+              <div className="text-sm text-txt-tertiary">
+                Page {safeFolderPage} of {folderTotalPages}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn-ghost text-xs px-2 py-1"
+                  disabled={safeFolderPage === 1}
+                  onClick={() => setFolderPage((p) => Math.max(1, p - 1))}
+                >
+                  ← Prev
+                </button>
+                <button
+                  className="btn-ghost text-xs px-2 py-1"
+                  disabled={safeFolderPage === folderTotalPages}
+                  onClick={() => setFolderPage((p) => Math.min(folderTotalPages, p + 1))}
+                >
+                  Next →
+                </button>
+              </div>
             </div>
           )}
 
@@ -1207,7 +1305,10 @@ export default function AccessTab({
                   type="checkbox"
                   className="checkbox checkbox-sm"
                   checked={showDeletedUsers}
-                  onChange={(e) => setShowDeletedUsers(e.target.checked)}
+                  onChange={(e) => {
+                    setShowDeletedUsers(e.target.checked);
+                    setUserPage(1);
+                  }}
                 />
                 Show Deleted Users
               </label>
@@ -1231,6 +1332,25 @@ export default function AccessTab({
             </div>
           </div>
 
+          <div className="mb-3">
+            <input
+              value={userSearch}
+              onChange={(e) => {
+                setUserSearch(e.target.value);
+                setUserPage(1);
+              }}
+              placeholder="Search users by name, username, email, role, or OIDC sub..."
+              className="input w-full"
+            />
+          </div>
+          <p className="text-sm text-txt-secondary mb-2">
+            Showing{" "}
+            {filteredUsers.length === visibleUsersSource.length
+              ? visibleUsersSource.length
+              : `${filteredUsers.length} of ${visibleUsersSource.length}`}{" "}
+            user{visibleUsersSource.length !== 1 ? "s" : ""}
+          </p>
+
           <div className="table-responsive">
             <table className="admin-table">
               <thead>
@@ -1239,13 +1359,14 @@ export default function AccessTab({
                   <th>Email</th>
                   <th>Auth Type</th>
                   <th>Role</th>
+                  <th>Safeguard JIT</th>
                   <th>OIDC Sub</th>
                   <th>Last Login</th>
                   <th className="w-[100px]">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {(showDeletedUsers ? deletedUsers : users).map((u) => (
+                {pagedUsers.map((u) => (
                   <tr key={u.id}>
                     <td>
                       <div className="font-medium text-txt-primary">{u.username}</div>
@@ -1279,6 +1400,36 @@ export default function AccessTab({
                           }
                         }}
                       />
+                    </td>
+                    <td>
+                      <label
+                        className="inline-flex items-center gap-2 cursor-pointer"
+                        title="Per-user opt-in for Safeguard JIT. The global master switch on the Safeguard tab must also be enabled."
+                      >
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm"
+                          checked={!!u.safeguard_jit_enabled}
+                          disabled={!!u.deleted_at}
+                          onChange={async (e) => {
+                            const enabled = e.target.checked;
+                            try {
+                              await updateUser(u.id, { safeguard_jit_enabled: enabled });
+                              const refreshed = await getUsers();
+                              onUsersChanged(refreshed);
+                            } catch (err) {
+                              alert(
+                                err instanceof Error
+                                  ? err.message
+                                  : "Failed to toggle Safeguard JIT"
+                              );
+                            }
+                          }}
+                        />
+                        <span className="text-[10px] uppercase tracking-wider text-txt-tertiary">
+                          {u.safeguard_jit_enabled ? "Enabled" : "Disabled"}
+                        </span>
+                      </label>
                     </td>
                     <td className="font-mono text-[0.7rem] text-txt-tertiary">
                       {u.sub || <span className="opacity-30">—</span>}
@@ -1343,6 +1494,29 @@ export default function AccessTab({
               </tbody>
             </table>
           </div>
+          {userTotalPages > 1 && (
+            <div className="flex items-center justify-between mt-4 bg-surface-secondary/30 p-2 rounded-lg border border-border/50">
+              <div className="text-sm text-txt-tertiary">
+                Page {safeUserPage} of {userTotalPages}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn-ghost text-xs px-2 py-1"
+                  disabled={safeUserPage === 1}
+                  onClick={() => setUserPage((p) => Math.max(1, p - 1))}
+                >
+                  ← Prev
+                </button>
+                <button
+                  className="btn-ghost text-xs px-2 py-1"
+                  disabled={safeUserPage === userTotalPages}
+                  onClick={() => setUserPage((p) => Math.min(userTotalPages, p + 1))}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

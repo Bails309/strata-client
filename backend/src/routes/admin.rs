@@ -1638,21 +1638,43 @@ pub async fn update_user(
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
 
-    if !users_svc::role_exists(&db.pool, body.role_id).await? {
-        return Err(AppError::NotFound("Role not found".into()));
+    if body.role_id.is_none() && body.safeguard_jit_enabled.is_none() {
+        return Err(AppError::Validation(
+            "No updatable fields supplied".into(),
+        ));
     }
 
-    if !users_svc::set_role(&db.pool, id, body.role_id).await? {
-        return Err(AppError::NotFound("User not found".into()));
+    if let Some(role_id) = body.role_id {
+        if !users_svc::role_exists(&db.pool, role_id).await? {
+            return Err(AppError::NotFound("Role not found".into()));
+        }
+
+        if !users_svc::set_role(&db.pool, id, role_id).await? {
+            return Err(AppError::NotFound("User not found".into()));
+        }
+
+        audit::log(
+            &db.pool,
+            Some(user.id),
+            "user.role_changed",
+            &json!({ "user_id": id.to_string(), "role_id": role_id.to_string() }),
+        )
+        .await?;
     }
 
-    audit::log(
-        &db.pool,
-        Some(user.id),
-        "user.role_changed",
-        &json!({ "user_id": id.to_string(), "role_id": body.role_id.to_string() }),
-    )
-    .await?;
+    if let Some(enabled) = body.safeguard_jit_enabled {
+        if !users_svc::set_safeguard_jit_enabled(&db.pool, id, enabled).await? {
+            return Err(AppError::NotFound("User not found".into()));
+        }
+
+        audit::log(
+            &db.pool,
+            Some(user.id),
+            "user.safeguard_jit_toggled",
+            &json!({ "user_id": id.to_string(), "enabled": enabled }),
+        )
+        .await?;
+    }
 
     Ok(Json(json!({ "status": "updated" })))
 }

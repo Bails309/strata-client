@@ -1030,6 +1030,9 @@ export interface User {
   role_name: string;
   deleted_at?: string;
   last_login_at?: string;
+  /** Per-user opt-in for Safeguard JIT. The global master switch on the
+   *  Safeguard admin tab still applies; both must be true. */
+  safeguard_jit_enabled: boolean;
 }
 
 export interface CreateUserRequest {
@@ -1055,7 +1058,10 @@ export const createUser = (data: CreateUserRequest) =>
 export const deleteUser = (id: string) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: "DELETE" });
 
-export const updateUser = (id: string, data: { role_id: string }) =>
+export const updateUser = (
+  id: string,
+  data: { role_id?: string; safeguard_jit_enabled?: boolean }
+) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(data) });
 
 export const restoreUser = (id: string) =>

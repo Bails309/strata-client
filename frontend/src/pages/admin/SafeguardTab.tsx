@@ -138,7 +138,9 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
           <div className="font-semibold text-sm">Enable Safeguard JIT</div>
           <div className="text-xs text-txt-secondary mt-1">
             When off, the &quot;Safeguard JIT&quot; credential kind is hidden across the UI and any
-            existing safeguard-backed profiles behave like an expired managed credential.
+            existing safeguard-backed profiles behave like an expired managed credential. When on,
+            access is still gated <em>per user</em> by the &quot;Safeguard JIT&quot; checkbox on the
+            Access tab — onboard users one at a time.
           </div>
         </div>
         <input

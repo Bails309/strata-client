@@ -590,7 +590,10 @@ pub async fn list_my_active_requests_for(
             .send()
             .await
             .map_err(|e| {
-                AppError::Internal(format!("safeguard list Me/ActionableRequests: {}", rq_err(e)))
+                AppError::Internal(format!(
+                    "safeguard list Me/ActionableRequests: {}",
+                    rq_err(e)
+                ))
             })?;
         let status2 = resp2.status();
         if status2 == reqwest::StatusCode::NOT_FOUND {

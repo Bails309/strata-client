@@ -223,8 +223,8 @@ export default function SafeguardSigninCard({
             Safeguard JIT credentials check out as <strong>you</strong> against{" "}
             <code className="text-[11px]">{status.appliance_fqdn}</code>. Sign in with the
             PowerShell helper to mint an API token (lifetime is set by the Safeguard appliance);
-            Strata stores it Vault-sealed and uses it for every JIT checkout you trigger during
-            your session.
+            Strata stores it Vault-sealed and uses it for every JIT checkout you trigger during your
+            session.
             {status.signed_in && status.expires_at && (
               <>
                 {" "}

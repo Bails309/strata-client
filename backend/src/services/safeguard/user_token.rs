@@ -17,9 +17,32 @@
 use crate::config::VaultConfig;
 use crate::error::AppError;
 use crate::services::vault::{seal, unseal};
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// Best-effort decode of the `exp` claim from a Safeguard JWT bearer.
+///
+/// Safeguard issues standard JWTs; the second `.`-separated segment
+/// is the base64url (no-padding) JSON payload. We do NOT verify the
+/// signature here — the appliance is the trust anchor, and the only
+/// thing we want this value for is to derive a realistic
+/// `expires_at` for the cached row so the UI doesn't show
+/// "signed in" past the token's true lifetime. Returns `None` for
+/// any decode failure (opaque token, malformed claim, etc.) so the
+/// caller can fall back to its own TTL default.
+pub fn jwt_exp(token: &str) -> Option<DateTime<Utc>> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let exp = v.get("exp")?.as_i64()?;
+    DateTime::<Utc>::from_timestamp(exp, 0)
+}
 
 /// Outcome of a `status` query: whether the user has a live token and
 /// when it expires.

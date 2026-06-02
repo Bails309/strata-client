@@ -178,6 +178,50 @@ pub async fn probe_me(client: &Client, base: &str, bearer: &str) -> Result<MeRes
         .map_err(|e| AppError::Internal(format!("safeguard /Me decode: {e}")))
 }
 
+/// Outcome of a token-validity probe against `/service/core/v4/Me`.
+#[derive(Debug)]
+pub enum TokenProbe {
+    /// 2xx — the appliance accepted the bearer.
+    Valid,
+    /// 401 or 403 — the appliance explicitly rejected the bearer
+    /// (expired, revoked, or never valid). Caller should treat the
+    /// token as gone and prompt the user to sign in again.
+    Invalid { status: u16 },
+    /// Any other failure (network, TLS, 5xx, decode). The token's
+    /// validity is unknown; callers should NOT delete the cached
+    /// token on this outcome to avoid signing the user out on an
+    /// appliance blip.
+    Transient { error: String },
+}
+
+/// Probe `/service/core/v4/Me` with `bearer` and classify the
+/// outcome. Unlike [`probe_me`], this never returns `AppError`
+/// for network / 5xx conditions — it surfaces them as
+/// [`TokenProbe::Transient`] so the caller can decide whether to
+/// preserve the cached token.
+pub async fn verify_token(client: &Client, base: &str, bearer: &str) -> TokenProbe {
+    let url = format!("{base}/service/core/v4/Me");
+    match client.get(&url).bearer_auth(bearer).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                TokenProbe::Valid
+            } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                TokenProbe::Invalid {
+                    status: status.as_u16(),
+                }
+            } else {
+                TokenProbe::Transient {
+                    error: format!("Safeguard /Me returned HTTP {status}"),
+                }
+            }
+        }
+        Err(e) => TokenProbe::Transient {
+            error: format!("safeguard /Me: {}", rq_err(e)),
+        },
+    }
+}
+
 /// A2A token exchange.
 ///
 /// Safeguard's A2A login requires the client cert + key (already

@@ -4315,6 +4315,7 @@ mod tests {
             role_name: "admin".into(),
             deleted_at: None,
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "admin");
@@ -4336,6 +4337,7 @@ mod tests {
             role_name: "user".into(),
             deleted_at: Some(deleted_at),
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "deleted-user");
@@ -4898,6 +4900,7 @@ mod tests {
             role_name: "user".into(),
             deleted_at: None,
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["sub"], "auth0|12345");

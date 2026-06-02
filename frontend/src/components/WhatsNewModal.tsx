@@ -29,6 +29,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.7",
+    subtitle:
+      "Minor release — Admin UX: Access tab pagination & search; per-user Safeguard JIT opt-in.",
+    sections: [
+      {
+        title: "Access tab pagination & search",
+        description:
+          "The Admin → Access tab (Users and Folders) now supports client-side pagination and a quick search filter to reduce long scrolling and speed up user/folder discovery.",
+      },
+      {
+        title: "Per-user Safeguard JIT opt-in",
+        description:
+          "Administrators can now enable Safeguard JIT on a per-user basis from the Access tab. A new boolean column tracks per-user opt-in for the Safeguard JIT flow, defaulting to false to minimise the attack surface.",
+      },
+      {
+        title: "Safeguard admin master switch",
+        description:
+          "The Safeguard JIT admin tab retains a global master switch; per-user opt-in allows granular exceptions while the global switch controls the overall feature availability.",
+      },
+    ],
+  },
+  {
     version: "1.10.6",
     subtitle:
       "Patch release — Safeguard token sanitization, live validation & improved Safeguard client diagnostics: reject control bytes on token storage, validate tokens against the appliance before storing, and surface reqwest error chains in logs.",

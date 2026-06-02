@@ -5,6 +5,13 @@
 
 ---
 
+# What's New in v1.10.7
+
+> **Minor release: Admin UX improvements — Access tab pagination/search and per-user Safeguard JIT opt-in.** v1.10.7
+> The Access view in Admin (Users and Folders) now supports client-side pagination and a quick search filter to ease navigation of large lists. Administrators can also toggle Safeguard JIT on a per-user basis from the Access tab; the Safeguard admin tab still exposes the global master switch while per-user opt-in allows granular exceptions. Per-user opt-in defaults to OFF to minimise the security surface.
+
+---
+
 # What's New in v1.10.5
 
 > **Patch release: Recordings reliability & Azure offload.** v1.10.5

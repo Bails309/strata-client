@@ -1,6 +1,6 @@
 {
   "name": "strata-client-root",
-  "version": "1.10.6",
+  "version": "1.10.7",
   "private": true,
   "scripts": {
     "prepare": "husky install",

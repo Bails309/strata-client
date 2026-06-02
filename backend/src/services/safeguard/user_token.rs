@@ -17,9 +17,32 @@
 use crate::config::VaultConfig;
 use crate::error::AppError;
 use crate::services::vault::{seal, unseal};
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// Best-effort decode of the `exp` claim from a Safeguard JWT bearer.
+///
+/// Safeguard issues standard JWTs; the second `.`-separated segment
+/// is the base64url (no-padding) JSON payload. We do NOT verify the
+/// signature here — the appliance is the trust anchor, and the only
+/// thing we want this value for is to derive a realistic
+/// `expires_at` for the cached row so the UI doesn't show
+/// "signed in" past the token's true lifetime. Returns `None` for
+/// any decode failure (opaque token, malformed claim, etc.) so the
+/// caller can fall back to its own TTL default.
+pub fn jwt_exp(token: &str) -> Option<DateTime<Utc>> {
+    let mut parts = token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let exp = v.get("exp")?.as_i64()?;
+    DateTime::<Utc>::from_timestamp(exp, 0)
+}
 
 /// Outcome of a `status` query: whether the user has a live token and
 /// when it expires.
@@ -39,9 +62,20 @@ pub async fn store(
     api_token: &str,
     expires_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    if api_token.trim().is_empty() {
+    // Trim surrounding whitespace — a stray trailing newline from
+    // copy-paste is the canonical cause of reqwest's opaque
+    // "builder error": `bearer_auth()` then produces an
+    // `Authorization` header containing a control byte, which fails
+    // `HeaderValue` validation at `send()` time.
+    let api_token = api_token.trim();
+    if api_token.is_empty() {
         return Err(AppError::Validation(
             "Safeguard API token cannot be empty".into(),
+        ));
+    }
+    if api_token.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(AppError::Validation(
+            "Safeguard API token contains control characters".into(),
         ));
     }
     let sealed = seal(vault, api_token.as_bytes()).await?;
@@ -101,6 +135,13 @@ pub async fn load(
 
     let token = String::from_utf8(plaintext)
         .map_err(|_| AppError::Internal("stored Safeguard token is not valid UTF-8".into()))?;
+
+    // Defence in depth: even though `store` trims and rejects
+    // control bytes, older rows written before that hardening may
+    // still contain a trailing newline. Strip it transparently so
+    // `bearer_auth(token)` doesn't trip reqwest's opaque
+    // "builder error" at request-send time.
+    let token = token.trim().to_string();
 
     Ok(Some(token))
 }

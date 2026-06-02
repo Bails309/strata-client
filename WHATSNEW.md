@@ -1,3 +1,10 @@
+# What's New in v1.10.6
+
+> **Patch release: Safeguard token sanitization, validation & improved client diagnostics.** v1.10.6
+> fixes an issue where pasted Safeguard bearer tokens containing trailing newlines or other control bytes could cause opaque `reqwest` `builder error` failures. Tokens are now trimmed on load, and storage rejects control bytes at store time; backend logs now surface reqwest error source chains to reveal underlying causes. The backend additionally validates user-supplied Safeguard tokens against the appliance (`/service/core/v4/Me`) before storing them and uses the JWT `exp` claim for the cached expiry. The token-status endpoint live-probes the cached token so a revoked or expired token no longer appears as "signed in" in the credential editor.
+
+---
+
 # What's New in v1.10.5
 
 > **Patch release: Recordings reliability & Azure offload.** v1.10.5
@@ -5,8 +12,6 @@
 > recording files and ensures completed recordings are uploaded to
 > configured Azure Blob Storage and removed from the local recordings
 > volume. Retention purge now includes Azure-backed recordings.
-
----
 
 # What's New in v1.10.4
 

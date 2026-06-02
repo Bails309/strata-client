@@ -29,6 +29,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.6",
+    subtitle:
+      "Patch release — Safeguard token sanitization, live validation & improved Safeguard client diagnostics: reject control bytes on token storage, validate tokens against the appliance before storing, and surface reqwest error chains in logs.",
+    sections: [
+      {
+        title: "Safeguard token sanitization",
+        description:
+          "Stored Safeguard bearer tokens are trimmed and rejected if they contain control bytes (e.g. stray newlines). This prevents opaque reqwest 'builder error' failures caused by invalid header values.",
+      },
+      {
+        title: "Live token validation on sign-in",
+        description:
+          "POST /api/user/safeguard/token and POST /api/safeguard/enrol now probe /service/core/v4/Me with the pasted token and reject it cleanly when Safeguard returns 401/403 — so an already-expired or revoked token never shows up as 'signed in' in the credential editor.",
+      },
+      {
+        title: "Real expiry from JWT exp claim",
+        description:
+          "The cached token's expires_at is now derived from the JWT's own exp claim when present, instead of trusting the client's expires_in_seconds hint, so the UI reflects the appliance's real token lifetime.",
+      },
+      {
+        title: "Live status probe",
+        description:
+          "GET /api/user/safeguard/status now live-probes the cached token. Definitive rejections (401/403) clear the row and report signed_in=false; transient errors leave the cached token in place so a brief appliance blip doesn't sign the user out.",
+      },
+      {
+        title: "Improved error diagnostics",
+        description:
+          "Reqwest errors now surface their source chain in backend logs so root causes (invalid header values, TLS, or network errors) are visible to operators and developers.",
+      },
+    ],
+  },
+  {
     version: "1.10.5",
     subtitle:
       "Patch release — Recordings reliability & Azure offload: ensure guacd can create local .guac files and backend uploads recordings to configured Azure Blob Storage.",

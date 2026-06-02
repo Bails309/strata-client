@@ -1515,9 +1515,9 @@ to hold:
 
 ---
 
-## v1.10.5 security hardening batch
+## v1.10.6 security hardening batch
 
-v1.10.5 is a security- and reliability-focused patch that lands the
+v1.10.6 is a security- and reliability-focused patch that lands the
 full implementation of the v1.10.3 internal code review (CRITICAL +
 HIGH + MED findings) plus a streaming-mode refactor of the DMZ
 reverse-proxy. There are no user-facing feature changes; nothing

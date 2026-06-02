@@ -119,7 +119,7 @@ flow-control windows are honoured in both directions so back-pressure
 from a slow public client transparently slows the upstream guacd
 traffic.
 
-### Body streaming and HTTP/2 hardening (v1.10.5+)
+### Body streaming and HTTP/2 hardening (v1.10.6+)
 
 As of v1.10.5 the DMZ reverse-proxy streams request and response
 bodies end-to-end through the h2 link instead of buffering each

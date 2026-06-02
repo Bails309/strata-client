@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.5] — 2026-06-01
 
+## [1.10.6] — 2026-06-02
+
+### Patch Release — Safeguard token sanitization, validation & improved diagnostics
+
+v1.10.6 is a small reliability patch that hardens Safeguard token handling,
+adds live token validation, and improves backend diagnostics for opaque
+`reqwest` errors. Key fixes:
+
+- Trim decrypted bearer tokens on load and reject tokens that contain
+  control bytes (e.g. trailing newlines) at store time to prevent invalid
+  `Authorization` header values being sent to upstream Safeguard APIs.
+- Walk and log the `reqwest::Error` source chain so the real underlying
+  cause (invalid header value, TLS/network errors, etc.) appears in the
+  backend logs instead of the opaque `builder error` message.
+- **Validate user-supplied Safeguard tokens against the appliance
+  before storing them.** `POST /api/user/safeguard/token` and
+  `POST /api/safeguard/enrol` now probe `/service/core/v4/Me` with the
+  pasted token and reject it cleanly when Safeguard returns 401/403,
+  so an already-expired or revoked token never shows up as "signed in".
+- **Derive cached token expiry from the JWT `exp` claim** when present,
+  instead of trusting the client's `expires_in_seconds` hint, so the
+  UI reflects the appliance's real token lifetime.
+- **`GET /api/user/safeguard/status` now live-probes the cached
+  token** with the appliance. Definitive rejections (401/403) clear
+  the row and report `signed_in = false`; transient errors leave the
+  cached token in place so a brief appliance blip doesn't sign the
+  user out.
+
+Operators: recreate the backend container with the rebuilt image and
+attempt the failing Safeguard checkout — the new logs will surface the
+true cause if any further action is required. Users with a stale or
+revoked token will be prompted to sign in again the next time the
+credential editor loads.
+
+
 ### Patch Release — Recordings reliability and Azure offload
 
 v1.10.5 is a small reliability patch that addresses session-recording delivery

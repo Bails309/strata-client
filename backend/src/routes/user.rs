@@ -634,16 +634,67 @@ pub async fn safeguard_enabled(
 /// `GET /api/user/safeguard/status` — does the current user have a
 /// live Safeguard API token on file? Used by the credential editor to
 /// show a "Sign in to Safeguard" prompt when needed.
+///
+/// In addition to the cheap DB-only check, this endpoint will probe
+/// the appliance with the cached token to verify it is still
+/// accepted. If Safeguard returns 401/403 we proactively clear the
+/// row and report `signed_in = false`, so users that had their
+/// Safeguard token revoked (or whose `expires_at` we recorded
+/// optimistically) don't keep appearing as signed in.
 pub async fn safeguard_token_status(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let status = crate::services::safeguard::user_token::status(&db.pool, user.id).await?;
-    // Also report the appliance hint (FQDN + idp_alias) so the
-    // frontend can render the correct PowerShell helper snippet
-    // without an extra round-trip.
+    let mut status = crate::services::safeguard::user_token::status(&db.pool, user.id).await?;
     let cfg = crate::services::safeguard::config::load(&db.pool).await?;
+
+    // When the DB row claims we are signed in, verify with the
+    // appliance. A definitive Invalid response retires the row;
+    // a Transient error is ignored so an appliance blip doesn't
+    // sign the user out.
+    if status.signed_in && cfg.enabled {
+        let vault_cfg = {
+            let s = state.read().await;
+            s.config.as_ref().and_then(|c| c.vault.clone())
+        };
+        if let Some(vault_cfg) = vault_cfg {
+            if let Some(token) =
+                crate::services::safeguard::user_token::load(&db.pool, &vault_cfg, user.id).await?
+            {
+                use crate::services::safeguard::client;
+                let secrets =
+                    crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
+                let identity = client::a2a_identity(&secrets)?;
+                let http = client::build_client(&cfg, identity)?;
+                let base = client::base_url(&cfg);
+                match client::verify_token(&http, &base, &token).await {
+                    client::TokenProbe::Valid => { /* keep status */ }
+                    client::TokenProbe::Invalid { status: code } => {
+                        tracing::info!(
+                            user_id = %user.id,
+                            http_status = code,
+                            "Safeguard rejected cached user token — clearing"
+                        );
+                        let _ =
+                            crate::services::safeguard::user_token::clear(&db.pool, user.id).await;
+                        status = crate::services::safeguard::user_token::TokenStatus {
+                            signed_in: false,
+                            expires_at: None,
+                        };
+                    }
+                    client::TokenProbe::Transient { error } => {
+                        tracing::warn!(
+                            user_id = %user.id,
+                            %error,
+                            "Safeguard /Me probe failed transiently — keeping cached token"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "signed_in": status.signed_in,
         "expires_at": status.expires_at,
@@ -671,6 +722,12 @@ pub struct SubmitSafeguardTokenBody {
 /// `POST /api/user/safeguard/token` — accept the API token a user
 /// obtained from `Connect-Safeguard -Browser` and Vault-seal it for
 /// future JIT checkouts.
+///
+/// Before storing the token we probe `/service/core/v4/Me` with it.
+/// An already-expired or revoked token is rejected up-front so the
+/// UI never reports a phantom "signed in" state. The cached
+/// `expires_at` prefers the JWT `exp` claim over the
+/// `expires_in_seconds` hint so the UI shows the real lifetime.
 pub async fn submit_safeguard_token(
     State(state): State<SharedState>,
     Extension(user): Extension<AuthUser>,
@@ -689,12 +746,53 @@ pub async fn submit_safeguard_token(
     if token.is_empty() {
         return Err(AppError::Validation("api_token is required".into()));
     }
-    // 15 min default matches the appliance; 24h cap is a sanity guard.
-    let ttl_secs = body
+
+    // Live-probe the supplied token against the appliance so we
+    // never store something that is already invalid. Any decisive
+    // rejection (401/403) returns a clean validation error; transient
+    // failures (network, 5xx) are also surfaced rather than silently
+    // accepted, since the user pasted this token specifically to use
+    // it and would be misled by a green "signed in" badge.
+    let cfg = crate::services::safeguard::config::load(&db.pool).await?;
+    {
+        use crate::services::safeguard::client;
+        let secrets =
+            crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
+        let identity = client::a2a_identity(&secrets)?;
+        let http = client::build_client(&cfg, identity)?;
+        let base = client::base_url(&cfg);
+        match client::verify_token(&http, &base, &token).await {
+            client::TokenProbe::Valid => {}
+            client::TokenProbe::Invalid { status } => {
+                return Err(AppError::Validation(format!(
+                    "Safeguard rejected the supplied token (HTTP {status}). It is expired, revoked, or was issued for a different appliance — please obtain a fresh token via Connect-Safeguard."
+                )));
+            }
+            client::TokenProbe::Transient { error } => {
+                return Err(AppError::Internal(format!(
+                    "Could not verify the Safeguard token: {error}"
+                )));
+            }
+        }
+    }
+
+    // 15 min default matches the appliance; 24h cap is a sanity
+    // guard. Prefer the JWT's own `exp` claim when present so the
+    // cache row reflects the appliance's real lifetime, not the
+    // caller's hint.
+    let ttl_hint = body
         .expires_in_seconds
         .unwrap_or(15 * 60)
         .clamp(60, 24 * 60 * 60);
-    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
+    let fallback = chrono::Utc::now() + chrono::Duration::seconds(ttl_hint);
+    let expires_at = match crate::services::safeguard::user_token::jwt_exp(&token) {
+        Some(exp) => {
+            let max = chrono::Utc::now() + chrono::Duration::hours(24);
+            let min = chrono::Utc::now() + chrono::Duration::seconds(60);
+            exp.min(max).max(min)
+        }
+        None => fallback,
+    };
 
     crate::services::safeguard::user_token::store(
         &db.pool, &vault_cfg, user.id, &token, expires_at,
@@ -820,11 +918,60 @@ pub async fn enrol_safeguard_token(
         }
     };
 
-    let ttl_secs = body
+    let ttl_hint = body
         .expires_in_seconds
         .unwrap_or(15 * 60)
         .clamp(60, 24 * 60 * 60);
-    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs);
+    let fallback = chrono::Utc::now() + chrono::Duration::seconds(ttl_hint);
+    let expires_at = match crate::services::safeguard::user_token::jwt_exp(&token) {
+        Some(exp) => {
+            let max = chrono::Utc::now() + chrono::Duration::hours(24);
+            let min = chrono::Utc::now() + chrono::Duration::seconds(60);
+            exp.min(max).max(min)
+        }
+        None => fallback,
+    };
+
+    // Live-probe the token before storing so the consumed enrolment
+    // code isn't burned on a token Safeguard has already invalidated.
+    let cfg = crate::services::safeguard::config::load(&db.pool).await?;
+    {
+        use crate::services::safeguard::client;
+        let secrets =
+            crate::services::safeguard::config::load_secrets(&db.pool, &vault_cfg).await?;
+        let identity = client::a2a_identity(&secrets)?;
+        let http = client::build_client(&cfg, identity)?;
+        let base = client::base_url(&cfg);
+        match client::verify_token(&http, &base, &token).await {
+            client::TokenProbe::Valid => {}
+            client::TokenProbe::Invalid { status } => {
+                crate::services::audit::log(
+                    &db.pool,
+                    Some(user_id),
+                    "safeguard.enrolment.token_rejected",
+                    &json!({ "http_status": status, "ip": client_ip }),
+                )
+                .await
+                .ok();
+                return Err(AppError::Validation(format!(
+                    "Safeguard rejected the supplied token (HTTP {status}). It is expired, revoked, or was issued for a different appliance — please obtain a fresh token via Connect-Safeguard."
+                )));
+            }
+            client::TokenProbe::Transient { error } => {
+                crate::services::audit::log(
+                    &db.pool,
+                    Some(user_id),
+                    "safeguard.enrolment.token_probe_failed",
+                    &json!({ "error": error, "ip": client_ip }),
+                )
+                .await
+                .ok();
+                return Err(AppError::Internal(format!(
+                    "Could not verify the Safeguard token: {error}"
+                )));
+            }
+        }
+    }
 
     crate::services::safeguard::user_token::store(
         &db.pool, &vault_cfg, user_id, &token, expires_at,

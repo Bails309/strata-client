@@ -80,7 +80,8 @@ export default function SafeguardSigninCard({
     refresh();
     // Re-check status every minute so the "expires in N min" pill stays
     // honest and we drop the user back to signed-out as soon as the
-    // 15-minute appliance token lapses.
+    // appliance-issued token lapses (lifetime is set by the Safeguard
+    // appliance and is typically hours, not minutes).
     const t = setInterval(refresh, 60_000);
     return () => clearInterval(t);
   }, []);
@@ -221,8 +222,9 @@ export default function SafeguardSigninCard({
           <p className="text-xs text-txt-secondary !mb-0">
             Safeguard JIT credentials check out as <strong>you</strong> against{" "}
             <code className="text-[11px]">{status.appliance_fqdn}</code>. Sign in with the
-            PowerShell helper to mint a 15-minute API token; Strata stores it Vault-sealed and uses
-            it for every JIT checkout you trigger during your session.
+            PowerShell helper to mint an API token (lifetime is set by the Safeguard appliance);
+            Strata stores it Vault-sealed and uses it for every JIT checkout you trigger during
+            your session.
             {status.signed_in && status.expires_at && (
               <>
                 {" "}

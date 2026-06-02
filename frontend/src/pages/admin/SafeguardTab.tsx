@@ -339,9 +339,9 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
             <div className="text-sm font-medium">Cache checked-out passwords</div>
             <div className="text-xs text-txt-secondary mt-1">
               Vault-seal the password for the duration above and reuse it for every tunnel until it
-              expires. Users won&apos;t need to re-submit a fresh 15-minute Safeguard token between
-              sessions. <strong>Auto check-in is suppressed</strong> while this is on, so the
-              appliance keeps the access request open until its own rotation policy fires.
+              expires. Users won&apos;t need to re-submit a fresh Safeguard token between sessions.
+              <strong> Auto check-in is suppressed</strong> while this is on, so the appliance
+              keeps the access request open until its own rotation policy fires.
             </div>
           </div>
           <input

@@ -624,10 +624,12 @@ pub async fn list_credential_profiles(
 /// granting non-admin users read access to the full appliance config.
 pub async fn safeguard_enabled(
     State(state): State<SharedState>,
-    Extension(_user): Extension<AuthUser>,
+    Extension(user): Extension<AuthUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = require_running(&state).await?;
-    let enabled = crate::services::safeguard::kill_switch_enabled(&db.pool).await;
+    // AND the global kill switch with the per-user opt-in so the
+    // credential editor only offers Safeguard JIT to onboarded users.
+    let enabled = crate::services::safeguard::user_jit_enabled(&db.pool, user.id).await;
     Ok(Json(serde_json::json!({ "enabled": enabled })))
 }
 
@@ -1083,6 +1085,11 @@ pub async fn bulk_safeguard_checkout(
     if !sg_cfg.enabled {
         return Err(AppError::Validation("Safeguard JIT is not enabled".into()));
     }
+    if !crate::services::users::safeguard_jit_enabled(&db.pool, user.id).await {
+        return Err(AppError::Validation(
+            "Safeguard JIT is not enabled for this user".into(),
+        ));
+    }
     if !sg_cfg.password_cache_enabled {
         return Err(AppError::Validation(
             "Bulk checkout requires the admin to enable Safeguard password caching".into(),
@@ -1508,6 +1515,11 @@ pub async fn list_safeguard_accounts(
     if !sg_cfg.enabled {
         return Err(AppError::Validation("Safeguard JIT is not enabled".into()));
     }
+    if !crate::services::users::safeguard_jit_enabled(&db.pool, user.id).await {
+        return Err(AppError::Validation(
+            "Safeguard JIT is not enabled for this user".into(),
+        ));
+    }
 
     // Per-user browser token is the only auth mode that makes sense
     // here: A2A returns the appliance-wide catalog, not the user's
@@ -1714,6 +1726,11 @@ pub async fn create_credential_profile(
         if !crate::services::safeguard::kill_switch_enabled(&db.pool).await {
             return Err(AppError::Validation(
                 "Safeguard JIT is disabled in admin settings".into(),
+            ));
+        }
+        if !crate::services::users::safeguard_jit_enabled(&db.pool, user.id).await {
+            return Err(AppError::Validation(
+                "Safeguard JIT is not enabled for your account. Ask an administrator to enable it.".into(),
             ));
         }
 

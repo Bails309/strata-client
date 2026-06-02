@@ -35,11 +35,30 @@ adds live token validation, and improves backend diagnostics for opaque
   cached token in place so a brief appliance blip doesn't sign the
   user out.
 
-Operators: recreate the backend container with the rebuilt image and
-attempt the failing Safeguard checkout — the new logs will surface the
-true cause if any further action is required. Users with a stale or
-revoked token will be prompted to sign in again the next time the
-credential editor loads.
+#### Admin UX — Access tab pagination, search, and per-user Safeguard JIT
+
+v1.10.6 also lands three Access-tab improvements that were piling up as
+the Strata footprint grew past a handful of seed users:
+
+- **Search + pagination for Users and Folders**, mirroring the existing
+  Connections layout (20 rows per page, case-insensitive substring filter
+  across username/email/full-name/role/OIDC sub for users, and
+  name/parent for folders).
+- **Per-user Safeguard JIT opt-in.** A new `safeguard_jit_enabled` boolean
+  on `users` (migration `072_safeguard_jit_per_user.sql`, default
+  `FALSE`) lets admins onboard users one at a time. The global master
+  switch on the Safeguard tab still acts as the kill-switch; every
+  credential-flow endpoint (`/user/safeguard/enabled`,
+  `/user/safeguard/bulk-checkout`, `/user/safeguard/accounts`,
+  `POST /user/credential-profiles`, and the lower-level
+  `services::safeguard::jit_checkout`) now ANDs the two together so a
+  user without the flag cannot reach Safeguard even by direct API call.
+  The Access tab gains a "Safeguard JIT" checkbox per user; the
+  Safeguard admin tab description now points operators at it.
+
+Operators: run migrations on upgrade; the new column defaults to
+`FALSE` so no existing user gains Safeguard access until you tick the
+box.
 
 
 ### Patch Release — Recordings reliability and Azure offload

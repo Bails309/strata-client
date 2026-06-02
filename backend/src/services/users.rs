@@ -12,7 +12,7 @@ use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
 const SELECT_COLUMNS: &str =
-    "u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at, u.last_login_at";
+    "u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at, u.last_login_at, u.safeguard_jit_enabled";
 
 #[derive(Serialize, FromRow, Debug, Clone)]
 pub struct UserRow {
@@ -25,6 +25,10 @@ pub struct UserRow {
     pub role_name: String,
     pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Per-user opt-in for Safeguard JIT. The global master switch in
+    /// `safeguard_config.enabled` still applies; both must be true for
+    /// the user to see the credential editor's Safeguard option.
+    pub safeguard_jit_enabled: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -38,7 +42,9 @@ pub struct CreateUserRequest {
 
 #[derive(Deserialize, Debug)]
 pub struct UpdateUserRequest {
-    pub role_id: Uuid,
+    pub role_id: Option<Uuid>,
+    /// When present, toggle the per-user Safeguard JIT opt-in flag.
+    pub safeguard_jit_enabled: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -121,6 +127,37 @@ pub async fn set_role(pool: &Pool<Postgres>, id: Uuid, role_id: Uuid) -> Result<
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Toggle the per-user Safeguard JIT opt-in flag. Returns `true` when a
+/// row was updated.
+pub async fn set_safeguard_jit_enabled(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+    enabled: bool,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE users SET safeguard_jit_enabled = $1 WHERE id = $2 AND deleted_at IS NULL",
+    )
+    .bind(enabled)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Returns whether the given user has opted into Safeguard JIT. Errors
+/// and missing users map to `false` so the gate fails closed.
+pub async fn safeguard_jit_enabled(pool: &Pool<Postgres>, id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT safeguard_jit_enabled FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
 }
 
 /// Check whether any live user already has the given (lower-cased)
@@ -439,15 +476,25 @@ mod tests {
 
     #[test]
     fn update_user_request_only_role_id() {
-        // The PATCH-style update endpoint only allows changing the role.
+        // Role-only update (legacy shape) still parses.
         let body: UpdateUserRequest = serde_json::from_value(json!({
             "role_id": "11111111-1111-1111-1111-111111111111"
         }))
         .unwrap();
         assert_eq!(
             body.role_id,
-            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap()
+            Some(Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap())
         );
+        assert_eq!(body.safeguard_jit_enabled, None);
+    }
+
+    #[test]
+    fn update_user_request_safeguard_jit_only() {
+        // Toggling the per-user Safeguard JIT flag without changing role.
+        let body: UpdateUserRequest =
+            serde_json::from_value(json!({ "safeguard_jit_enabled": true })).unwrap();
+        assert_eq!(body.role_id, None);
+        assert_eq!(body.safeguard_jit_enabled, Some(true));
     }
 
     #[test]
@@ -464,6 +511,7 @@ mod tests {
             role_name: "admin".to_string(),
             deleted_at: None,
             last_login_at: None,
+            safeguard_jit_enabled: false,
         };
         let v = serde_json::to_value(&row).unwrap();
         assert!(v.get("password_hash").is_none(), "leaked password_hash");
@@ -484,6 +532,7 @@ mod tests {
             "r.name as role_name",
             "u.deleted_at",
             "u.last_login_at",
+            "u.safeguard_jit_enabled",
         ] {
             assert!(
                 SELECT_COLUMNS.contains(col),

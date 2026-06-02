@@ -34,6 +34,16 @@ pub async fn kill_switch_enabled(pool: &PgPool) -> bool {
     config::load(pool).await.map(|c| c.enabled).unwrap_or(false)
 }
 
+/// Returns `true` when both the global Safeguard kill-switch and the
+/// per-user `safeguard_jit_enabled` opt-in are set. All credential and
+/// token flows must AND these together so admins can stage rollout one
+/// user at a time without exposing JIT to everyone the moment the
+/// master switch is flipped on.
+pub async fn user_jit_enabled(pool: &PgPool, user_id: uuid::Uuid) -> bool {
+    kill_switch_enabled(pool).await
+        && crate::services::users::safeguard_jit_enabled(pool, user_id).await
+}
+
 /// Returned by the test-connection endpoint. Stable JSON shape; the
 /// admin tab depends on these field names.
 #[derive(serde::Serialize)]
@@ -202,6 +212,13 @@ pub async fn jit_checkout(
         return Err(AppError::Validation(
             "Safeguard JIT is disabled in admin settings".into(),
         ));
+    }
+    if let Some(uid) = user_id {
+        if !crate::services::users::safeguard_jit_enabled(pool, uid).await {
+            return Err(AppError::Validation(
+                "Safeguard JIT is not enabled for this user".into(),
+            ));
+        }
     }
     if account_id.trim().is_empty() || asset_id.trim().is_empty() {
         return Err(AppError::Validation(

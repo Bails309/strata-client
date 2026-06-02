@@ -1373,6 +1373,7 @@ describe("AccessTab", () => {
         auth_type: "sso",
         role_name: "admin",
         sub: "oidc-sub-123",
+        safeguard_jit_enabled: false,
       },
     ]);
     const user = userEvent.setup();
@@ -1391,6 +1392,7 @@ describe("AccessTab", () => {
         auth_type: "local",
         role_name: "user",
         sub: "",
+        safeguard_jit_enabled: false,
       },
     ]);
     const user = userEvent.setup();
@@ -1411,6 +1413,7 @@ describe("AccessTab", () => {
         auth_type: "sso",
         role_name: "admin",
         sub: "",
+        safeguard_jit_enabled: false,
       },
     ]);
     vi.mocked(updateUser).mockResolvedValue({ status: "updated" });

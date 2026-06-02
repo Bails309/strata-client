@@ -1639,9 +1639,7 @@ pub async fn update_user(
     let db = require_running(&state).await?;
 
     if body.role_id.is_none() && body.safeguard_jit_enabled.is_none() {
-        return Err(AppError::Validation(
-            "No updatable fields supplied".into(),
-        ));
+        return Err(AppError::Validation("No updatable fields supplied".into()));
     }
 
     if let Some(role_id) = body.role_id {

@@ -29,6 +29,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.8",
+    subtitle:
+      "Patch release — DMZ link liveness: TCP keepalive + HTTP/2 PING watchdog detect half-open links (DMZ restart, NAT idle timeout, firewall reload) within ~60 s instead of the OS default ~2 h. No operator action required.",
+    sections: [
+      {
+        title: "Half-open link auto-recovery",
+        description:
+          "When the DMZ peer disappeared ungracefully the backend's outbound link socket could stay 'Up' against a dead remote until the next write surfaced ECONNRESET — typically up to two hours. During that window every public login or status request returned 503 at the DMZ and the only recovery was a manual Admin → DMZ Links → Force reconnect. v1.10.8 detects and recovers from this condition automatically.",
+      },
+      {
+        title: "TCP keepalive on the link socket",
+        description:
+          "The link connector (services::dmz_link::tls) now enables TCP keepalive with 30 s idle and 10 s probe interval via socket2::SockRef::set_tcp_keepalive. The kernel surfaces a dead peer in ~60 s, the supervisor's serve loop returns, and the reconnect loop runs. Failure to set the option is non-fatal.",
+      },
+      {
+        title: "HTTP/2 PING watchdog",
+        description:
+          "After the h2 server handshake completes, serve_h2 spawns a watchdog that PINGs the peer every 30 s with a 10 s deadline. On timeout or send error the watchdog cancels the supervisor's per-cycle token, the connection is gracefully shut down, and the supervisor redials. Catches the case where intermediate firewalls strip TCP keepalive probes.",
+      },
+      {
+        title: "Two probes at different layers",
+        description:
+          "TCP keepalive is cheaper (kernel-level) and faster on firewall-clean paths; the h2 PING covers the case where stateful firewalls proxy bytes but garbage-collect connection state. The two probes have independent failure modes — a half-open connection that defeats one is almost always caught by the other within ~60 s.",
+      },
+      {
+        title: "Operator notes",
+        description:
+          "No new environment variables, no migrations, no API changes. Probe intervals are compile-time constants. Recommended deploy: rebuild and recreate the backend container only; the strata-dmz relay is unchanged. New WARN-level log lines identify the failure mode when the watchdog trips.",
+      },
+    ],
+  },
+  {
     version: "1.10.7",
     subtitle:
       "Minor release — Admin UX: Access tab pagination & search; per-user Safeguard JIT opt-in.",

@@ -5,6 +5,103 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.8] — 2026-06-03
+
+### Patch Release — DMZ link liveness: TCP keepalive + h2 PING watchdog
+
+v1.10.8 closes the only reliability gap left in the dmz-edge
+topology. When the DMZ peer disappeared ungracefully (container
+restart, NAT idle timeout, stateful firewall reload) the backend's
+outbound link socket could stay "Up" against a dead remote for the
+OS default ~2 h before the next write surfaced `ECONNRESET`. During
+that window every public request returned `503 NoLinkUp` from the
+DMZ — its side of the registry had already been torn down on the
+remote's exit — while the backend supervisor still reported the
+link as healthy because no I/O error had surfaced yet. The only
+operator recovery was a manual **Admin → DMZ Links → Force reconnect**.
+
+This release adds two complementary liveness probes that are always
+on and require no configuration:
+
+#### Fixed
+
+- **TCP keepalive on the link socket** (`backend/src/services/dmz_link/tls.rs`).
+  Immediately after `TcpStream::connect` (and before the TLS handshake)
+  the connector now applies `socket2::TcpKeepalive::new().with_time(30s).with_interval(10s)`
+  via `SockRef::set_tcp_keepalive`. The kernel begins probing 30 s
+  after the last TX, retries every 10 s, and (with the OS-default
+  retry count) surfaces a dead peer in ~60 s. Failure to set the
+  option is non-fatal — a `warn!` is logged and the link still
+  comes up; the h2 PING watchdog below covers the same condition.
+  `socket2::TcpKeepalive::with_retries` is intentionally not used:
+  it requires the crate's `all` feature and is platform-gated, and
+  the OS default count combined with the 10 s interval already meets
+  our recovery budget.
+
+- **HTTP/2 PING watchdog** (`backend/src/services/dmz_link/h2_serve.rs`).
+  Immediately after `h2::server::Builder::handshake` returns, the
+  serve loop takes `conn.ping_pong()` and spawns a
+  `ping_watchdog(PingPong, CancellationToken)` task. The watchdog
+  PINGs every 30 s (`tokio::time::interval` with
+  `MissedTickBehavior::Delay`; the first tick is burned so we
+  do not ping the peer the microsecond the handshake completes)
+  and awaits each pong with a 10 s `tokio::time::timeout`. On
+  timeout or send error it cancels the supervisor's per-cycle
+  token, which causes the main loop to issue
+  `conn.graceful_shutdown()`, drain in-flight streams, return
+  cleanly, and let the supervisor's outer loop redial. The watchdog
+  is aborted on both `serve_h2` exit paths (clean peer close and
+  protocol error) so it never outlives the connection it watches.
+
+#### Rationale for two probes at different layers
+
+TCP keepalive alone misses the case where intermediate firewalls
+proxy bytes but garbage-collect connection state on idle, so probe
+packets are dropped silently and the kernel never observes a RST.
+The h2 PING watchdog alone misses nothing in principle, but TCP
+keepalive is cheaper (kernel-level) and surfaces failures slightly
+faster when the path is firewall-clean. The two probes operate at
+different layers with independent failure modes; a half-open
+connection that defeats one is almost always caught by the other
+within ~60 s.
+
+#### Operational impact
+
+- **No new environment variables.** Both probe intervals are
+  compile-time constants (30 s idle / 10 s probe for both layers)
+  chosen to comfortably exceed any legitimate link silence while
+  still surfacing a dead peer well inside the public gateway's
+  idle timeout.
+- **No new migrations.**
+- **No API changes.** `/api/admin/dmz-links`, the `dmz-edge`
+  topology compose files, and the operator surface on the DMZ
+  (`127.0.0.1:9444`) are unchanged.
+- **Recommended deploy:** rebuild and recreate the **backend**
+  container only. The `strata-dmz` relay is unchanged.
+
+#### Observable telemetry
+
+New WARN-level log lines on the backend identify the failure mode
+when the watchdog trips:
+
+- `DMZ link: failed to enable TCP keepalive` — non-fatal,
+  identifies the endpoint and the underlying `std::io::Error`.
+- `DMZ link h2 PING failed; tearing down link` — transport error
+  on PING send (peer closed, h2 layer wedged).
+- `DMZ link h2 PING timed out; tearing down link` — peer accepted
+  the PING frame but never returned a pong inside the 10 s
+  deadline.
+
+Each is followed by the existing `DMZ link down` reason line and
+the supervisor's normal redial sequence.
+
+#### Build dependencies
+
+- Added `socket2 = "0.5"` to `backend/Cargo.toml`. The crate is a
+  light, well-audited wrapper that exposes platform socket options
+  that aren't surfaced by `tokio::net::TcpStream`. Resolved to
+  `socket2 v0.6.3` in `Cargo.lock`.
+
 ## [1.10.5] — 2026-06-01
 
 ## [1.10.6] — 2026-06-02

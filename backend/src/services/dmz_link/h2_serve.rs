@@ -248,7 +248,7 @@ async fn ping_watchdog(mut pp: h2::PingPong, shutdown: CancellationToken) {
 
         let send = pp.ping(h2::Ping::opaque());
         match tokio::time::timeout(PING_TIMEOUT, send).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(_pong)) => {}
             Ok(Err(e)) => {
                 tracing::warn!(error = %e, "DMZ link h2 PING failed; tearing down link");
                 shutdown.cancel();

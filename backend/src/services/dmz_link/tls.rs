@@ -190,10 +190,10 @@ fn apply_keepalive(tcp: &TcpStream) -> std::io::Result<()> {
     let ka = socket2::TcpKeepalive::new()
         .with_time(Duration::from_secs(30))
         .with_interval(Duration::from_secs(10));
-    // `with_retries` is supported on Linux + some BSDs; on platforms
-    // where it isn't, socket2 silently ignores it via cfg gates.
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd"))]
-    let ka = ka.with_retries(3);
+    // Note: socket2's `with_retries` requires the `all` feature and
+    // is platform-gated; we rely on the OS default probe count
+    // (typically 9 on Linux) which combined with the 10 s interval
+    // still surfaces a dead peer well within the failure budget.
     socket2::SockRef::from(tcp).set_tcp_keepalive(&ka)
 }
 

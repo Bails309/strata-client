@@ -82,6 +82,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
 futures-util = "0.3"
 bytes = "1"
+# socket2 — used by services::dmz_link::tls to enable TCP keepalive
+# on the link socket so half-open connections (DMZ restart, NAT idle
+# timeout, firewall reload) are detected by the kernel within ~1 min
+# instead of the OS default ~2 h. See `apply_keepalive` for params.
+socket2 = "0.5"
 
 # LDAP (Active Directory sync)
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }

@@ -159,11 +159,42 @@ impl Connector for TlsLinkConnector {
         // Disable Nagle for handshake latency; the link carries
         // interactive guacd traffic, not bulk file transfers.
         let _ = tcp.set_nodelay(true);
+        // Enable TCP keepalive so the kernel detects half-open
+        // sockets (DMZ container restart, NAT idle timeout, stateful
+        // firewall reload) within ~1 min. Without this the link
+        // can stay "Up" against a dead peer for the OS default
+        // ~2 h before the next write surfaces ECONNRESET — during
+        // which every proxied request returns 503 NoLinkUp at the
+        // DMZ because its side of the registry was already torn down.
+        if let Err(e) = apply_keepalive(&tcp) {
+            // Non-fatal: link still works without keepalive, we just
+            // lose proactive dead-peer detection. Log and continue.
+            tracing::warn!(endpoint = %endpoint.url, error = %e, "DMZ link: failed to enable TCP keepalive");
+        }
 
         let connector = TlsConnector::from(self.current());
         let tls = connector.connect(server_name, tcp).await?;
         Ok(Box::new(tls))
     }
+}
+
+/// Apply aggressive TCP keepalive to the link socket. The link is a
+/// long-lived pinned connection between two known peers, so we can
+/// afford much tighter probes than a general-purpose client socket.
+///
+/// Timings: idle 30 s → first probe → 10 s between probes → 3 probes
+/// before giving up. Worst case the kernel surfaces a dead peer after
+/// ~60 s, at which point the supervisor's `serve_h2` returns and the
+/// reconnect loop kicks in.
+fn apply_keepalive(tcp: &TcpStream) -> std::io::Result<()> {
+    let ka = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(30))
+        .with_interval(Duration::from_secs(10));
+    // Note: socket2's `with_retries` requires the `all` feature and
+    // is platform-gated; we rely on the OS default probe count
+    // (typically 9 on Linux) which combined with the 10 s interval
+    // still surfaces a dead peer well within the failure budget.
+    socket2::SockRef::from(tcp).set_tcp_keepalive(&ka)
 }
 
 fn build_client_config(

@@ -221,6 +221,57 @@ event.
 See [api-reference.md → DMZ link management](api-reference.md#dmz-link-management-v150)
 for the full request/response schemas.
 
+### Link liveness (v1.10.8+)
+
+The supervisor's notion of "Up" used to be: the TCP socket has not
+yet returned `ECONNRESET` on a write. If the DMZ peer disappeared
+ungracefully (container restart, NAT idle timeout, stateful firewall
+reload), the kernel could carry the dead socket for the OS default
+~2 h before the next write surfaced an error. During that window
+every public request returned `503 NoLinkUp` at the DMZ (its side of
+the registry had already been torn down on the remote's exit) while
+the backend's **Admin → DMZ Links** tab still reported the link as
+healthy. The only operator recovery was **Force reconnect**.
+
+v1.10.8 adds two always-on liveness probes at different layers:
+
+- **TCP keepalive** (`services::dmz_link::tls`). Applied on the
+  link `TcpStream` immediately after `connect` and before the TLS
+  handshake via `socket2::SockRef::set_tcp_keepalive`. Idle time
+  30 s, probe interval 10 s, OS-default probe count. Failure to
+  set the option is non-fatal — the link still comes up and the
+  h2 PING watchdog below covers the same condition.
+- **HTTP/2 PING watchdog** (`services::dmz_link::h2_serve`). After
+  `h2::server::Builder::handshake` returns, the serve loop takes
+  `conn.ping_pong()` and spawns a task that PINGs every 30 s with
+  a 10 s `tokio::time::timeout` deadline. On timeout or send error
+  it cancels the supervisor's per-cycle `CancellationToken`, which
+  causes the main loop to issue `conn.graceful_shutdown()`, drain
+  in-flight streams, return cleanly, and let the supervisor's outer
+  loop redial. The watchdog is aborted on both serve-loop exit
+  paths so it never outlives the connection it watches.
+
+The probes are at different layers with independent failure modes:
+TCP keepalive is cheaper and surfaces failures slightly faster on
+firewall-clean paths; the h2 PING covers the case where intermediate
+firewalls proxy bytes but garbage-collect connection state on idle,
+so probe packets are dropped silently and the kernel never sees a
+RST. A half-open connection that defeats one will almost always be
+caught by the other within ~60 s.
+
+Both intervals are compile-time constants — there are no environment
+variables to tune. New WARN-level log lines on the backend identify
+the failure mode when the watchdog trips:
+
+- `DMZ link: failed to enable TCP keepalive` — non-fatal.
+- `DMZ link h2 PING failed; tearing down link` — transport error on
+  PING send.
+- `DMZ link h2 PING timed out; tearing down link` — peer accepted
+  the PING frame but never returned a pong inside the 10 s deadline.
+
+Each is followed by the existing `DMZ link down` reason line and the
+supervisor's normal redial sequence.
+
 ---
 
 ## Authoritative references

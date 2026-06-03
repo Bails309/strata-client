@@ -116,6 +116,21 @@ where
 
     on_ready();
 
+    // Active liveness probe: drive an h2 PING every PING_INTERVAL with
+    // a PING_TIMEOUT deadline. If the peer fails to respond in time
+    // we cancel the supplied `shutdown` token, which both (a) makes
+    // the main loop initiate a graceful shutdown of `conn` and
+    // (b) — because the supervisor passes its per-cycle token here —
+    // causes the supervisor to redial. Without this, a half-open
+    // TCP socket (DMZ container restart, NAT rebind, firewall reload)
+    // can leave the link "Up" against a dead peer until TCP keepalive
+    // eventually surfaces it; the PING shortens that window to tens
+    // of seconds even in environments where keepalive is filtered.
+    let ping_task = conn.ping_pong().map(|pp| {
+        let tok = shutdown.clone();
+        tokio::spawn(ping_watchdog(pp, tok))
+    });
+
     let mut stream_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut shutdown_observed = false;
 
@@ -140,11 +155,17 @@ where
             Some(Err(e)) => {
                 // Reset / GOAWAY from peer is the normal "link down"
                 // path — propagate so the supervisor can reconnect.
+                if let Some(t) = ping_task {
+                    t.abort();
+                }
                 drain_tasks(stream_tasks).await;
                 return Err(anyhow::anyhow!("h2 accept error: {e}"));
             }
             None => {
                 // Peer closed cleanly.
+                if let Some(t) = ping_task {
+                    t.abort();
+                }
                 drain_tasks(stream_tasks).await;
                 return Ok(());
             }
@@ -202,6 +223,46 @@ where
 async fn drain_tasks(tasks: Vec<tokio::task::JoinHandle<()>>) {
     for t in tasks {
         let _ = t.await;
+    }
+}
+
+/// Active liveness probe for the h2 link. See `serve_h2` for the
+/// rationale. Exits as soon as `shutdown` fires or a ping fails /
+/// times out (after cancelling `shutdown` so the parent loop redials).
+async fn ping_watchdog(mut pp: h2::PingPong, shutdown: CancellationToken) {
+    const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    const PING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    let mut tick = tokio::time::interval(PING_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Burn the immediate first tick so we don't ping the peer the
+    // microsecond the handshake completes.
+    tick.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return,
+            _ = tick.tick() => {}
+        }
+
+        let send = pp.ping(h2::Ping::opaque());
+        match tokio::time::timeout(PING_TIMEOUT, send).await {
+            Ok(Ok(_pong)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "DMZ link h2 PING failed; tearing down link");
+                shutdown.cancel();
+                return;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = PING_TIMEOUT.as_secs(),
+                    "DMZ link h2 PING timed out; tearing down link"
+                );
+                shutdown.cancel();
+                return;
+            }
+        }
     }
 }
 

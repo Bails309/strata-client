@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect --
    react-hooks v7 compiler-strict suppressions: legitimate prop->state sync. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   issueOutboundShareIngestToken,
   listMyOutboundShares,
@@ -119,11 +119,76 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
     activeSession?.pendingOutboundJustification ?? ""
   );
 
+  // ── Status-transition notifications ───────────────────────────────
+  //
+  // The HTTPS-upload path mints a token and the upload happens inside
+  // the remote session shell, so the in-session interceptor's
+  // `strata:outbound-share-submitted` event never fires for this
+  // panel. Without polling the user would have no idea that their
+  // submission landed or was approved. We poll periodically (cheap:
+  // backend query is indexed on user_id) and, when a row transitions
+  // from `pending` to a terminal status, we surface a dismissible
+  // banner at the top of the panel that links straight to the
+  // download — so the user doesn't have to scroll past the upload
+  // snippet to discover their file is ready.
+  type StatusNotification = {
+    id: string;
+    filename: string;
+    status: "approved" | "denied" | "purged";
+    download_token?: string;
+  };
+  const [notifications, setNotifications] = useState<StatusNotification[]>([]);
+  // Previous status keyed by share id. A ref so updates don't trigger
+  // re-renders and so the very first refresh seeds the map without
+  // firing spurious "approved" banners for shares that were already
+  // approved before the panel opened.
+  const prevStatusRef = useRef<Map<string, string> | null>(null);
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((curr) => curr.filter((n) => n.id !== id));
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const list = await listMyOutboundShares();
       setHistory(list);
+
+      // First load → just seed the previous-status map silently.
+      if (prevStatusRef.current === null) {
+        const seed = new Map<string, string>();
+        for (const item of list) seed.set(item.id, item.status);
+        prevStatusRef.current = seed;
+      } else {
+        const prev = prevStatusRef.current;
+        const fresh: StatusNotification[] = [];
+        for (const item of list) {
+          const before = prev.get(item.id);
+          if (
+            before === "pending" &&
+            (item.status === "approved" ||
+              item.status === "denied" ||
+              item.status === "purged")
+          ) {
+            fresh.push({
+              id: item.id,
+              filename: item.filename,
+              status: item.status,
+              download_token: item.download_token ?? undefined,
+            });
+          }
+          prev.set(item.id, item.status);
+        }
+        if (fresh.length > 0) {
+          // De-dupe by id in case a notification for this share is
+          // still on-screen (e.g. user hasn't dismissed it yet).
+          setNotifications((curr) => {
+            const byId = new Map(curr.map((n) => [n.id, n] as const));
+            for (const n of fresh) byId.set(n.id, n);
+            return Array.from(byId.values());
+          });
+        }
+      }
     } catch {
       // ignore — surface via empty state
     } finally {
@@ -140,6 +205,18 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
     };
     window.addEventListener("strata:outbound-share-submitted", onSubmitted);
     return () => window.removeEventListener("strata:outbound-share-submitted", onSubmitted);
+  }, [refresh]);
+
+  // Poll while the panel is open so HTTPS-upload submissions and
+  // approver decisions surface without the user having to manually
+  // hit Refresh. 10 s is snappy enough to feel live but cheap enough
+  // not to matter — the backend list query is indexed on user_id and
+  // bounded by `LIMIT 50`.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      refresh();
+    }, 10_000);
+    return () => window.clearInterval(id);
   }, [refresh]);
 
   // Keep the textarea seeded with whatever pending justification the
@@ -277,6 +354,65 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
           </svg>
         </button>
       </div>
+
+      {/* Status-change notifications (pending → approved/denied/purged) */}
+      {notifications.length > 0 && (
+        <div className="p-3 border-b border-white/5 space-y-2">
+          {notifications.map((n) => {
+            const isApproved = n.status === "approved";
+            const tone = isApproved
+              ? "bg-success-dim border-success/30"
+              : "bg-danger/10 border-danger/30";
+            const heading = isApproved
+              ? "File approved — ready to download"
+              : n.status === "denied"
+                ? "File denied by approver"
+                : "File purged";
+            const headingColor = isApproved ? "text-success" : "text-danger";
+            return (
+              <div
+                key={n.id}
+                role="status"
+                className={`rounded border ${tone} p-2 text-xs flex items-start gap-2`}
+              >
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className={`font-semibold ${headingColor}`}>{heading}</div>
+                  <div className="truncate text-txt-primary" title={n.filename}>
+                    {n.filename}
+                  </div>
+                  {isApproved && n.download_token && (
+                    <a
+                      href={outboundShareDownloadUrl(n.download_token)}
+                      className="inline-block mt-1 px-2 py-1 rounded bg-success text-bg-primary font-semibold text-[11px]"
+                      onClick={() => dismissNotification(n.id)}
+                    >
+                      Download to this device →
+                    </a>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dismissNotification(n.id)}
+                  aria-label="Dismiss notification"
+                  className="text-txt-secondary hover:text-txt-primary"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* How-to banner */}
       <div className="p-4 border-b border-white/5 space-y-3 text-xs">

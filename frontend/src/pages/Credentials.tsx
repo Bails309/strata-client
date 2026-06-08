@@ -94,9 +94,9 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState("");
 
-  const flash = (text: string) => {
+  const flash = (text: string, durationMs: number = 4000) => {
     setMsg(text);
-    setTimeout(() => setMsg(""), 4000);
+    setTimeout(() => setMsg(""), durationMs);
   };
 
   // Checkout-to-profile linking
@@ -352,18 +352,30 @@ export default function Credentials({ vaultConfigured }: { vaultConfigured: bool
         emergency_bypass: isEmergency || undefined,
         scheduled_start_at: scheduledIso,
       });
+      const isPendingApproval = res.status === "Pending";
+      const isScheduled = res.status === "Scheduled";
       flash(
         isEmergency
           ? "Emergency bypass approved — password activated"
-          : res.status === "Scheduled"
-            ? "Checkout scheduled — password will release at the chosen time"
-            : `Checkout ${res.status === "Approved" ? "approved and activated" : "submitted for approval"}`
+          : isScheduled
+            ? "Checkout scheduled — password will release at the chosen time. Track it in My Checkouts."
+            : isPendingApproval
+              ? "Request submitted for approval — please wait for an approver to review it. You can track its status in My Checkouts."
+              : `Checkout ${res.status === "Approved" ? "approved and activated" : "submitted"}`,
+        // Approval-required and scheduled messages stay on-screen longer so the user can read them.
+        isPendingApproval || isScheduled ? 10_000 : 4000
       );
       setSelectedDn("");
       setJustification("");
       setEmergencyBypass(false);
       setScheduleEnabled(false);
       setScheduledStart("");
+      // Switch the user to the My Checkouts tab so the new Pending/Scheduled/Approved
+      // request is immediately visible. Without this the form simply resets and the
+      // user is left wondering whether anything happened.
+      if (isPendingApproval || isScheduled || res.status === "Approved" || isEmergency) {
+        setTab("my-checkouts");
+      }
       load();
     } catch (e) {
       flash(e instanceof Error ? e.message : "Request failed");

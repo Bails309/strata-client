@@ -288,6 +288,12 @@ pub struct DecideInput<'a> {
     pub approver_user_id: Uuid,
     pub approve: bool,
     pub reason: Option<&'a str>,
+    /// When `true`, skip the belt-and-braces lookup in
+    /// `outbound_share_approvers`. Super-admins (`can_manage_system`)
+    /// are implicit approvers per the route-layer policy in
+    /// `require_approver`, so a super-admin who has *not* been added
+    /// to the explicit approver list must still be allowed to decide.
+    pub caller_is_super_admin: bool,
 }
 
 /// Outcome of a successful [`decide`].
@@ -308,14 +314,20 @@ pub async fn decide(
     let mut tx = pool.begin().await?;
 
     // Belt-and-braces: re-validate approver inside the transaction.
-    let is_approver: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM outbound_share_approvers WHERE user_id = $1)",
-    )
-    .bind(input.approver_user_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !is_approver {
-        return Err(AppError::Forbidden);
+    // Super-admins are implicit approvers (see `require_approver` in
+    // the route layer) and may not be present in the explicit
+    // `outbound_share_approvers` table, so honour the caller's
+    // super-admin assertion here.
+    if !input.caller_is_super_admin {
+        let is_approver: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM outbound_share_approvers WHERE user_id = $1)",
+        )
+        .bind(input.approver_user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !is_approver {
+            return Err(AppError::Forbidden);
+        }
     }
 
     // Lock the row.

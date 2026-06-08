@@ -603,6 +603,7 @@ pub async fn decide(
             approver_user_id: user.id,
             approve: body.approve,
             reason: body.reason.as_deref(),
+            caller_is_super_admin: user.can_manage_system,
         },
     )
     .await?;

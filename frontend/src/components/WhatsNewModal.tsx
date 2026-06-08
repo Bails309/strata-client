@@ -29,6 +29,28 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.10.9",
+    subtitle:
+      "Patch release — Safeguard one-off profile routing and local-unseal guard: fixes 502/500 failures when tunnel tickets selected ad‑hoc Safeguard profiles.",
+    sections: [
+      {
+        title: "One-off Safeguard profile routing",
+        description:
+          "Tunnel tickets that selected ad‑hoc (one‑off) Safeguard credential profiles are now canonicalised and routed through the same Safeguard JIT and password cache flow as mapped profiles, preventing duplicated logic paths that could cause failures.",
+      },
+      {
+        title: "Skip local unseal for Safeguard-backed profiles",
+        description:
+          "The backend no longer attempts to call vault::unseal on empty local encrypted payloads for profiles of kind 'safeguard'. This avoids 'missing ciphertext' errors and restores reliable credential resolution for Safeguard-backed tunnels.",
+      },
+      {
+        title: "Operator impact",
+        description:
+          "No DB migrations or operator config changes. Recommended deploy: rebuild and recreate the backend container.",
+      },
+    ],
+  },
+  {
     version: "1.10.8",
     subtitle:
       "Patch release — DMZ link liveness: TCP keepalive + HTTP/2 PING watchdog detect half-open links (DMZ restart, NAT idle timeout, firewall reload) within ~60 s instead of the OS default ~2 h. No operator action required.",

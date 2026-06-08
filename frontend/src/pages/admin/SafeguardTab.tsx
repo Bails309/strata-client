@@ -53,6 +53,10 @@ export default function SafeguardTab({ onSave }: { onSave: () => void }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Fetch-loading pattern: flipping these state flags at the start of
+    // an async fetch is correct and self-bounded (no cascading renders
+    // because the dependency array is empty).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setLoadError("");
     getSafeguardConfig()

@@ -318,7 +318,6 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
           const parsed = new DOMParser().parseFromString(svg, "text/html");
           const svgEl = parsed.body.querySelector("svg");
           if (!svgEl) {
-            // eslint-disable-next-line no-console
             console.error("mermaid produced no <svg> root", svg.slice(0, 120));
             continue;
           }
@@ -329,7 +328,6 @@ export default function Documentation({ user }: { user?: MeResponse | null }) {
         } catch (err) {
           // Leave the raw code block in place if rendering fails so the
           // user can still read the diagram source.
-          // eslint-disable-next-line no-console
           console.error("mermaid render failed", err);
           // mermaid.render() injects a temporary measurement element
           // (id === the id we passed) directly under document.body and

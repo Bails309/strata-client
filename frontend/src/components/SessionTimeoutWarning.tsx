@@ -101,11 +101,11 @@ export default function SessionTimeoutWarning({ onExpired }: { onExpired?: () =>
 
   const handleExtend = useCallback(async () => {
     setExtending(true);
-    console.log("[SessionTimeoutWarning] Manual extension requested");
+    console.warn("[SessionTimeoutWarning] Manual extension requested");
     try {
       const ok = await refreshAccessToken();
       if (ok) {
-        console.log("[SessionTimeoutWarning] Extension successful");
+        console.warn("[SessionTimeoutWarning] Extension successful");
         setDismissed(true);
       } else {
         console.error("[SessionTimeoutWarning] Extension failed (refresh returned false)");

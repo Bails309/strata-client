@@ -1392,7 +1392,7 @@ export default function AccessTab({
                   <th>Role</th>
                   <th>Safeguard JIT</th>
                   <th title="By default every outbound Quick-Share submission is queued for approver review. Check this column to opt an individual user out of the approval queue (DLP scanner still gates the file).">
-                    Bypass Approval
+                    Outbound Share Bypass
                   </th>
                   <th>OIDC Sub</th>
                   <th>Last Login</th>

@@ -1047,7 +1047,7 @@ export interface User {
    *  `false` opts this user out of the approval queue (DLP-gated
    *  auto-approval applies); `true` or `null` keeps the system
    *  default of "every export held for approver review". Surfaced on
-   *  the admin Access tab as a single "Bypass approval" checkbox. */
+   *  the admin Access tab as a single "Outbound Share Bypass" checkbox. */
   outbound_share_requires_approval: boolean | null;
 }
 

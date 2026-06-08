@@ -20,6 +20,34 @@ vi.mock("../api", async () => {
   };
 });
 
+// ── Select mock ───────────────────────────────────────────────────────
+// The project Select component renders a portal-based custom dropdown.
+// Replace with a plain native <select> so tests can drive it with
+// `userEvent.selectOptions`. Mirrors the mock used in
+// QuickShareOutbound.test.tsx.
+vi.mock("../components/Select", () => ({
+  default: ({
+    value,
+    onChange,
+    options,
+    placeholder,
+  }: {
+    value: string;
+    onChange: (v: string) => void;
+    options: { value: string; label: string }[];
+    placeholder?: string;
+  }) => (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{placeholder ?? ""}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
+
 import {
   listOutboundShares,
   listPendingOutboundShares,

@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.10.8"
+version = "1.10.9"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Strata Client contributors"]

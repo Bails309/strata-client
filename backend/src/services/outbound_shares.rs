@@ -125,6 +125,15 @@ pub struct OutboundShare {
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub purged_at: Option<DateTime<Utc>>,
+    /// Username of the requester. Populated by [`list_pending`] /
+    /// [`list_all`] via a LEFT JOIN so approvers without
+    /// `can_manage_users` (i.e. non-admin compliance officers viewing
+    /// the queue from `/approvals`) still see a friendly name. Other
+    /// queries (`find`, `decide`, `consume_download_token`,
+    /// `list_for_user`) leave it `None` — `#[sqlx(default)]` allows
+    /// the column to be absent from the SELECT.
+    #[sqlx(default)]
+    pub requester_username: Option<String>,
 }
 
 /// Input for [`submit`]. Caller has already streamed the upload to disk.
@@ -535,17 +544,24 @@ pub async fn list_for_user(
 }
 
 /// All shares currently awaiting decision, oldest first (FIFO queue).
+///
+/// LEFT JOIN on `users` so the response includes the requester's
+/// username — non-admin approvers (compliance officers) viewing the
+/// queue from `/approvals` cannot call `/admin/users`, so the JOIN is
+/// the only way they get a friendly name.
 pub async fn list_pending(pool: &Pool<Postgres>) -> Result<Vec<OutboundShare>, AppError> {
     let rows: Vec<OutboundShare> = sqlx::query_as(
-        "SELECT id, requester_user_id, session_id, connection_id,
-                filename, content_type, size, sha256, storage_path,
-                sealed_dek_ciphertext, sealed_dek_nonce,
-                justification, dlp_score, dlp_reasons, status,
-                decided_by, decided_at, decision_reason,
-                download_token, downloaded_at, created_at, expires_at, purged_at
-         FROM outbound_shares
-         WHERE status = 'pending'
-         ORDER BY created_at ASC
+        "SELECT os.id, os.requester_user_id, os.session_id, os.connection_id,
+                os.filename, os.content_type, os.size, os.sha256, os.storage_path,
+                os.sealed_dek_ciphertext, os.sealed_dek_nonce,
+                os.justification, os.dlp_score, os.dlp_reasons, os.status,
+                os.decided_by, os.decided_at, os.decision_reason,
+                os.download_token, os.downloaded_at, os.created_at, os.expires_at, os.purged_at,
+                u.username AS requester_username
+         FROM outbound_shares os
+         LEFT JOIN users u ON u.id = os.requester_user_id
+         WHERE os.status = 'pending'
+         ORDER BY os.created_at ASC
          LIMIT 200",
     )
     .fetch_all(pool)
@@ -553,17 +569,21 @@ pub async fn list_pending(pool: &Pool<Postgres>) -> Result<Vec<OutboundShare>, A
     Ok(rows)
 }
 
-/// All non-purged shares — used by the admin overview.
+/// All non-purged shares — used by the admin overview and the
+/// `/approvals` queue. JOINed with `users` for the same reason as
+/// [`list_pending`].
 pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<OutboundShare>, AppError> {
     let rows: Vec<OutboundShare> = sqlx::query_as(
-        "SELECT id, requester_user_id, session_id, connection_id,
-                filename, content_type, size, sha256, storage_path,
-                sealed_dek_ciphertext, sealed_dek_nonce,
-                justification, dlp_score, dlp_reasons, status,
-                decided_by, decided_at, decision_reason,
-                download_token, downloaded_at, created_at, expires_at, purged_at
-         FROM outbound_shares
-         ORDER BY created_at DESC
+        "SELECT os.id, os.requester_user_id, os.session_id, os.connection_id,
+                os.filename, os.content_type, os.size, os.sha256, os.storage_path,
+                os.sealed_dek_ciphertext, os.sealed_dek_nonce,
+                os.justification, os.dlp_score, os.dlp_reasons, os.status,
+                os.decided_by, os.decided_at, os.decision_reason,
+                os.download_token, os.downloaded_at, os.created_at, os.expires_at, os.purged_at,
+                u.username AS requester_username
+         FROM outbound_shares os
+         LEFT JOIN users u ON u.id = os.requester_user_id
+         ORDER BY os.created_at DESC
          LIMIT 500",
     )
     .fetch_all(pool)

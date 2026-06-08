@@ -2056,6 +2056,14 @@ export interface OutboundShare {
   created_at: string;
   expires_at: string;
   purged_at: string | null;
+  /**
+   * Server-side join on `users.username`. Populated by
+   * `GET /admin/outbound-shares` and `/admin/outbound-shares/pending`
+   * so non-admin approvers viewing the queue from `/approvals` see a
+   * friendly name without needing access to `/admin/users`. May be
+   * `null` if the requester row has since been deleted.
+   */
+  requester_username?: string | null;
 }
 
 /** Wire response from POST /user/outbound-shares. */

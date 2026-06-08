@@ -390,6 +390,11 @@ export default function SharedViewer() {
             >
               Display name
               <input
+                // Modal-only text input that appears in response to an
+                // explicit user action; auto-focusing the single input is
+                // the expected behaviour for a name-prompt modal and keeps
+                // keyboard users from having to mouse-grab focus.
+                // eslint-disable-next-line jsx-a11y/no-autofocus
                 autoFocus
                 type="text"
                 maxLength={32}

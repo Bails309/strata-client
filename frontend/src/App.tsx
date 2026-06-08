@@ -106,9 +106,7 @@ export default function App() {
       <SessionManagerProvider
         canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
         canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
-        canUseQuickShareOutbound={
-          !!user?.can_manage_system || !!user?.can_use_quick_share_outbound
-        }
+        canUseQuickShareOutbound={!!user?.can_manage_system || !!user?.can_use_quick_share_outbound}
       >
         {!authenticated ? (
           <Routes>

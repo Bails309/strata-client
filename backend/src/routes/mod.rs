@@ -63,8 +63,7 @@ pub fn build_router(state: SharedState) -> Router {
         // 10-minute TTL, minted via the authed `ingest-token` route).
         .route(
             "/api/outbound-shares/ingest/{token}",
-            post(outbound_shares::ingest_via_token)
-                .layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+            post(outbound_shares::ingest_via_token).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route(
             "/api/shared/tunnel/{share_token}",
@@ -503,9 +502,9 @@ pub fn build_router(state: SharedState) -> Router {
         // ── Outbound Quick-Share (approval-gated) ───────────────────
         .route(
             "/api/user/outbound-shares",
-            get(outbound_shares::list_mine).post(outbound_shares::submit).layer(
-                DefaultBodyLimit::max(500 * 1024 * 1024),
-            ),
+            get(outbound_shares::list_mine)
+                .post(outbound_shares::submit)
+                .layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route(
             "/api/user/outbound-shares/download/{token}",
@@ -523,10 +522,7 @@ pub fn build_router(state: SharedState) -> Router {
         )
         // Approver / system-admin endpoints (per-handler gate; not under
         // require_admin because approvers may not hold any admin perm).
-        .route(
-            "/api/admin/outbound-shares",
-            get(outbound_shares::list_all),
-        )
+        .route("/api/admin/outbound-shares", get(outbound_shares::list_all))
         .route(
             "/api/admin/outbound-shares/pending",
             get(outbound_shares::list_pending),

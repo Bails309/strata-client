@@ -5,56 +5,157 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [1.10.9] — 2026-06-08
+## [1.11.0] — 2026-06-08
 
 ### Added
 
-- **Outbound Quick-Share (approval-gated file export).** Mirror of the
-  inbound Quick-Share for exporting files out of a remote session.
-  Files are encrypted at rest (envelope encryption: per-share DEK
-  sealed by Vault Transit; ciphertext on disk + sealed DEK in DB), run
-  through a built-in DLP scanner, and either auto-approve (low DLP
-  score + per-user opt-in) or queue for approver review. Approved
-  shares are released as a time-limited single-use download; denied or
-  expired shares are purged and their DEK is zeroised by a periodic
-  worker. New surfaces:
-  - Role permission `can_use_quick_share_outbound` — grants the
-    in-session **Outbound Share** button.
-  - Per-user flag `outbound_share_requires_approval` (default `true`)
-    — flip off in Admin → Access to auto-approve low-risk
-    submissions for trusted users.
-  - `outbound_share_approvers` delegation table — managed from the
-    new Admin → Outbound Shares tab. Super-admins are implicit
-    approvers; this list adds non-admin delegates (e.g. compliance
-    officers).
-  - New endpoints under `/api/user/outbound-shares` (submit, list
-    mine, download by token) and `/api/admin/outbound-shares`
-    (list-all, list-pending, decide, purge, approver CRUD).
-  - Migration `073_outbound_quick_share.sql` adds the
-    `outbound_shares` and `outbound_share_approvers` tables plus the
-    role permission and per-user gate columns.
-  - Migration `074_outbound_share_ingest_tokens.sql` adds the
-    `outbound_share_ingest_tokens` table backing the HTTPS upload
-    snippet path (single-use, 10-minute TTL, swept by the daily
-    cleanup worker).
-  - HTTPS upload snippet path for environments where RDP drive
-    redirection is blocked by group policy: the Outbound Share panel
-    mints a one-shot token via
-    `POST /api/user/outbound-shares/ingest-token` (cookie+CSRF
-    authed) and renders a `curl` / `curl.exe` / PowerShell 7 `-Form`
-    one-liner. The remote-session shell POSTs the file at
-    `/api/outbound-shares/ingest/{token}` — unauthenticated at the
-    cookie layer (the token is the auth) — which consumes the token
-    atomically, re-checks the minter's
-    `can_use_quick_share_outbound` role permission, and feeds the
-    upload through the same DLP / approval / audit pipeline as the
-    drive-channel path.
-  - Audit events: `outbound_share.submitted`,
+- **Outbound Quick-Share — approval-gated file export with dual
+  ingest paths.** New feature mirroring the inbound Quick-Share but
+  in reverse: files leaving a remote session are intercepted, sealed
+  at rest, run through a built-in DLP heuristic, and either
+  auto-approved (low score + per-user opt-in) or queued for an
+  approver. Approved shares are released as a time-limited
+  single-use download; denied or expired shares are purged and the
+  sealed DEK is zeroised by a periodic worker so the staging blob
+  cannot be recovered after TTL.
+
+  - **Drive-channel ingest path.** `SessionManager`'s
+    `Guacamole.Client.onfile` handler is rewired: when the active
+    role grants `can_use_quick_share_outbound`, files that guacd
+    pushes back over the RDP/SFTP drive channel are buffered in the
+    browser (`Guacamole.BlobReader`) and uploaded to
+    `POST /api/user/outbound-shares` instead of triggering an
+    automatic download. The active-session pending-justification
+    text is included in the multipart body and cleared on success.
+    A `strata:outbound-share-submitted` window event triggers the
+    panel to refresh its history list.
+
+  - **HTTPS upload-command ingest path** (drive-redirect bypass).
+    For environments where group policy disables RDP / SFTP drive
+    redirection at the target — and the drive-channel interceptor
+    therefore never fires — the Outbound Share panel can mint a
+    single-use, 10-minute upload token via
+    `POST /api/user/outbound-shares/ingest-token` (cookie + CSRF
+    authed). The panel renders the token into a `curl` / `curl.exe`
+    / PowerShell 7 `-Form` one-liner with an optional
+    skip-TLS-cert-check toggle and a live mm:ss expiry countdown;
+    the user pastes the snippet inside the remote session shell.
+    The remote-session shell POSTs the file to
+    `POST /api/outbound-shares/ingest/{token}` — unauthenticated at
+    the cookie layer (the token IS the auth) — which atomically
+    consumes the token, re-checks the minter's
+    `can_use_quick_share_outbound` role permission at consume time
+    (so a revoked role cannot launder a previously-minted token),
+    and feeds the upload through the same DLP / approval / audit
+    pipeline. Tokens are bound to the minting user + session +
+    connection + justification at issue time so the audit chain
+    survives the unauthenticated network hop. Rate-limited 10
+    mints/minute/user; expired tokens reaped by the existing daily
+    cleanup worker.
+
+  - **Role permission `can_use_quick_share_outbound`.** Enforced by
+    `services::middleware::check_quick_share_outbound_permission`
+    on every authed outbound endpoint and re-checked at token
+    consume time. `can_manage_system` does NOT bypass this gate —
+    outbound file export is treated as a deliberately separate
+    capability from general system administration.
+
+  - **Per-user `outbound_share_requires_approval` flag** (default
+    `true`). Admin → Access exposes a per-user toggle; when off, a
+    submission with `dlp_score <= AUTO_APPROVE_THRESHOLD` is
+    released directly without queueing.
+
+  - **Approver delegation** (`outbound_share_approvers` table).
+    Super-admins (`can_manage_system`) are implicit approvers; the
+    new Admin → Outbound Shares tab lists explicit non-admin
+    delegates (e.g. compliance officers). Adding / removing
+    approvers is gated to super-admins.
+
+  - **Admin → Outbound Shares tab.** Combines the pending queue
+    (Approve / Deny with reason), full history with download /
+    purge actions, and the approver delegation list. Visible when
+    the calling user has `can_manage_system` OR
+    `is_outbound_approver` (the per-user flag computed from
+    `outbound_share_approvers`).
+
+  - **`/me` response extensions.** `can_use_quick_share_outbound`
+    and `is_outbound_approver` are now returned so the SPA can
+    light up the in-session button and the admin tab without an
+    extra round-trip.
+
+  - **In-session UX.** A new **Outbound Share** button is added to
+    the Session Bar next to Quick Share (icon: outbound arrow with
+    folder). The panel shows: how-to banner naming the active
+    session's mapped Strata drive, a justification textarea
+    attached to the next intercepted file from this session, the
+    HTTPS upload-command generator with format dropdown
+    (`curl` / `curl.exe` / PowerShell 7) and insecure-TLS toggle,
+    and the user's submission history with status badges, DLP
+    score, decision reason, and per-share download link for
+    approved files.
+
+  - **Endpoints.** Authed user surface:
+    `POST /api/user/outbound-shares` (multipart submit),
+    `GET  /api/user/outbound-shares` (list mine),
+    `GET  /api/user/outbound-shares/download/{token}` (single-use
+    download for the requester),
+    `POST /api/user/outbound-shares/ingest-token` (mint upload token).
+    Authed admin/approver surface:
+    `GET    /api/admin/outbound-shares` (list all),
+    `GET    /api/admin/outbound-shares/pending`,
+    `POST   /api/admin/outbound-shares/{id}/decide`,
+    `DELETE /api/admin/outbound-shares/{id}` (purge),
+    `GET    /api/admin/outbound-shares/approvers`,
+    `POST   /api/admin/outbound-shares/approvers`,
+    `DELETE /api/admin/outbound-shares/approvers/{user_id}`.
+    Unauthenticated token-auth surface (public router, no CSRF):
+    `POST /api/outbound-shares/ingest/{token}` (500 MB body cap).
+
+  - **Migrations.** `073_outbound_quick_share.sql` adds the
+    `outbound_shares` (id, requester_user_id, session_id,
+    connection_id, filename, content_type, size, justification,
+    sealed_dek, ciphertext_path, dlp_score, dlp_reasons, status,
+    decided_by_user_id, decision_reason, download_token,
+    download_consumed_at, created_at, expires_at) and
+    `outbound_share_approvers` (user_id PK, granted_by, granted_at)
+    tables, plus the `roles.can_use_quick_share_outbound` and
+    `users.outbound_share_requires_approval` columns.
+    `074_outbound_share_ingest_tokens.sql` adds the
+    `outbound_share_ingest_tokens` (token PK, user_id, session_id,
+    connection_id, justification, expires_at, created_at,
+    created_ip, used_at, used_ip) table.
+
+  - **Audit events.** `outbound_share.submitted`,
     `outbound_share.decided`, `outbound_share.downloaded`,
     `outbound_share.purged`, `outbound_share.approver_added`,
     `outbound_share.approver_removed`,
     `outbound_share.ingest_token.minted`,
     `outbound_share.ingest_token.consumed`.
+
+  - **Periodic worker integration.** The existing daily
+    `user_cleanup` worker now also calls
+    `services::outbound_shares::purge_expired` (sweeps expired
+    shares + zeroises sealed DEKs) and
+    `services::outbound_share_ingest::purge_expired` (sweeps
+    expired ingest tokens older than 1 day).
+
+  - **`STRATA_OUTBOUND_SHARES_DIR` env var** — configurable staging
+    directory for sealed outbound blobs. Defaults to
+    `/tmp/strata-outbound-shares` (Linux containers) with a
+    platform-temp-dir fallback when that path isn't writable.
+
+### Operational impact
+
+- Two new migrations apply automatically on first boot
+  (`073_outbound_quick_share.sql`, `074_outbound_share_ingest_tokens.sql`).
+- No new operator configuration required. The feature is dormant
+  until at least one role has `can_use_quick_share_outbound`
+  enabled.
+- Recommended deploy: rebuild and recreate the backend container.
+  Existing roles do not gain the new permission automatically — an
+  administrator must enable it explicitly per role.
+
+## [1.10.9] — 2026-06-08
 
 ### Patch Release — Safeguard one‑off profile ticket routing and local-unseal guard
 

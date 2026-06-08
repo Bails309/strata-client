@@ -1,4 +1,187 @@
 
+# What's New in v1.11.0
+
+> **Outbound Quick-Share — approval-gated file export with dual ingest
+> paths.** v1.11.0 lands the long-tracked roadmap item for **files
+> leaving** a remote session: a Vault-sealed staging area, a built-in
+> DLP heuristic, an approver workflow, and two complementary ingest
+> paths so the feature works in environments that allow RDP drive
+> redirection *and* in ones that don't.
+
+## What outbound Quick-Share solves
+
+Inbound Quick-Share has always handled files *going into* a session
+(drag-and-drop upload from the Session Bar, single-use token URL the
+user pastes inside the remote shell). The inverse — files *leaving*
+the session — was historically either implicit (drive-channel
+auto-downloads via guacd's `client.onfile`) or impossible (when GPO
+blocked drive redirection). Either way there was no audit trail, no
+content scan, and no approval gate.
+
+Outbound Quick-Share replaces that with a single, audited pipeline:
+
+```
+remote session ──► (drive channel OR HTTPS token) ──► sealed staging
+                                                         │
+                                              DLP heuristic
+                                                         │
+                                          ┌──────────────┴───────────────┐
+                                          ▼                              ▼
+                            auto-approve (low score +              queue for approver
+                            user opted out of approval)            (decide → release/deny)
+                                          │                              │
+                                          └──────────────┬───────────────┘
+                                                         ▼
+                                          single-use download link
+                                          (or purge + zeroise DEK)
+```
+
+Every transition is written to the hash-chained audit log
+(`outbound_share.submitted`, `.decided`, `.downloaded`, `.purged`,
+`.approver_added`, `.approver_removed`, `.ingest_token.minted`,
+`.ingest_token.consumed`).
+
+## Two ingest paths, one pipeline
+
+### 1. Drive-channel interception (transparent)
+
+When the active role grants `can_use_quick_share_outbound`,
+`SessionManager.client.onfile` no longer triggers an automatic
+browser download. Instead it buffers the file with
+`Guacamole.BlobReader`, wraps it in a multipart `FormData`, and
+POSTs it to `/api/user/outbound-shares` along with the active
+session id, connection id, and any pending justification the user
+typed in the Outbound Share panel. A toast surfaces the resulting
+status (auto-approved + downloadable, queued for approval, or
+denied with a DLP reason) and a window event refreshes the panel's
+history list.
+
+This is the zero-friction path — the user copies a file to the
+Strata virtual drive inside the session exactly as before, but
+behind the scenes the bytes are sealed, scanned, audited, and
+either released or queued.
+
+### 2. HTTPS upload command (drive-redirect bypass)
+
+In environments where group policy disables RDP / SFTP drive
+redirection at the target, the drive channel never carries any
+bytes, so the `onfile` handler never fires. For these sites the
+Outbound Share panel mints a single-use, 10-minute **upload token**
+and renders it into a paste-friendly one-liner:
+
+- **curl (Linux / macOS):**
+  `curl -fL -F 'file=@./<your-file>' 'https://strata.example.com/api/outbound-shares/ingest/<token>'`
+- **curl.exe (Windows 10+):**
+  `curl.exe -fL -F "file=@<your-file>" "https://strata.example.com/api/outbound-shares/ingest/<token>"`
+- **PowerShell 7+:**
+  `Invoke-WebRequest -Uri '<url>' -Method POST -Form @{ file = Get-Item '<your-file>' }`
+
+A "Skip TLS cert check" toggle injects `-k` /
+`ServicePointManager` bypass for sites with self-signed or
+internal-CA certificates.
+
+The user pastes the snippet inside the remote session shell. The
+file uploads back to Strata over plain HTTPS on the connection the
+browser is already using — **no SMB, no port 445, no drive channel** —
+and is fed into the exact same DLP / approval / audit pipeline as
+the drive-channel path.
+
+The token IS the auth:
+
+- Bound at mint time to the requesting user, session id,
+  connection id, and justification.
+- 32-byte URL-safe base64 (~192 bits of entropy).
+- 10-minute TTL.
+- Single-use: the consume `UPDATE … SET used_at = now() WHERE
+  token = $1 AND used_at IS NULL AND expires_at > now()` is
+  atomic; a token that has been used or expired is rejected with
+  the same opaque error as an unknown token.
+- Re-checks the minter's `can_use_quick_share_outbound` role
+  permission at consume time, so a role revoked between mint and
+  consume cannot launder a previously-minted token.
+- Rate-limited at 10 mints/minute/user at the route layer.
+- Reaped by the existing daily `user_cleanup` worker.
+
+## New role & user controls
+
+- **`can_use_quick_share_outbound`** — role permission, off by
+  default. Grants the in-session **Outbound Share** button and the
+  ability to mint upload tokens. Enforced by
+  `services::middleware::check_quick_share_outbound_permission`.
+  `can_manage_system` does **not** bypass this gate — outbound file
+  export is a deliberately separate capability from general
+  administration.
+- **`outbound_share_requires_approval`** — per-user flag in
+  Admin → Access, defaults `true`. When off and the submission's
+  DLP score is below `AUTO_APPROVE_THRESHOLD`, the share is
+  released directly without queueing.
+- **Outbound Share approvers** — managed from the new
+  Admin → Outbound Shares tab. Super-admins (`can_manage_system`)
+  are implicit approvers; this list adds non-admin delegates (e.g.
+  compliance officers). Adding / removing approvers is gated to
+  super-admins.
+
+## Admin → Outbound Shares tab
+
+Combines three things in one place:
+
+1. **Pending queue.** Approve / Deny with a free-text reason. The
+   approver's user id and reason are recorded; on approval a
+   single-use download token is generated and the requester sees
+   the download link in their panel history.
+2. **Full history.** Every share with its DLP score, DLP flags,
+   decision reason, status (pending / approved / denied / downloaded /
+   purged), and a Purge action for super-admins.
+3. **Approver delegation list.** Add / remove non-admin approvers
+   by user id.
+
+The tab is visible when the calling user has `can_manage_system`
+OR the new `is_outbound_approver` flag (computed from
+`outbound_share_approvers` and returned on `/me`).
+
+## At-rest security
+
+Every staged file is sealed before it touches disk:
+
+1. A fresh per-share 256-bit data encryption key is generated.
+2. The file is encrypted with that DEK using AES-256-GCM.
+3. The DEK is sealed by Vault Transit and stored in the
+   `outbound_shares.sealed_dek` column.
+4. The ciphertext is written to the configurable staging directory
+   (`STRATA_OUTBOUND_SHARES_DIR`, default
+   `/tmp/strata-outbound-shares` with a platform-temp-dir fallback).
+
+When a share is denied or its TTL elapses, the periodic worker
+zeroises the sealed DEK and deletes the ciphertext file, so the
+staging blob cannot be recovered even from a forensic disk image.
+
+## Migrations
+
+- `073_outbound_quick_share.sql` — `outbound_shares` +
+  `outbound_share_approvers` tables, `roles.can_use_quick_share_outbound`,
+  `users.outbound_share_requires_approval` columns.
+- `074_outbound_share_ingest_tokens.sql` — `outbound_share_ingest_tokens`
+  table backing the HTTPS upload snippet path.
+
+Both apply automatically on first boot. Existing roles do **not**
+gain `can_use_quick_share_outbound` automatically; an administrator
+must enable it explicitly per role.
+
+## Operational impact
+
+- No new operator configuration is required. The feature is dormant
+  until at least one role has `can_use_quick_share_outbound`
+  enabled.
+- The drive-channel ingest path activates as soon as a user with
+  the new permission triggers `client.onfile` from inside a
+  session. The HTTPS-snippet path activates as soon as the user
+  clicks **Generate upload command** in the Outbound Share panel.
+- Recommended deploy: rebuild and recreate the backend container,
+  then enable the new permission on one trusted role and walk a
+  test file end-to-end through both ingest paths.
+
+---
+
 # What's New in v1.10.9
 
 > **Patch release: Safeguard one-off profile routing and local-unseal guard.** v1.10.9
@@ -9,51 +192,6 @@
 > `safeguard`-kind profiles. This resolves 502/500 failures observed during
 > ad‑hoc credential selection and restores reliable Safeguard-backed
 > credential resolution.
-
-### Outbound Quick-Share (approval-gated file export)
-
-> Mirror of the existing inbound Quick-Share but in reverse: a user in a
-> session can submit a file for **outbound** review. Submissions are
-> encrypted at rest with envelope-encryption (per-share data encryption
-> key sealed by Vault Transit; ciphertext on disk + sealed DEK in the
-> database) and either auto-approve when the built-in DLP scanner gives
-> them a low risk score, or sit in an approver queue for explicit
-> review. Approved files are released as a time-limited single-use
-> download; denied shares are purged immediately. A periodic worker
-> sweeps expired rows and zeroises the sealed DEK so the staging blob
-> cannot be recovered after TTL.
->
-> Three new role / user controls land:
->
-> - **`can_use_quick_share_outbound`** role permission — grants the
->   in-session **Outbound Share** button (icon next to the existing
->   Quick Share button).
-> - **`outbound_share_requires_approval`** per-user toggle (Admin →
->   Access) — defaults to ON; flip to OFF for trusted users whose
->   low-risk submissions should auto-approve.
-> - **Outbound Share approvers** (Admin → Outbound Shares) — delegate
->   approval authority to non-admin users (e.g. compliance officers).
->   Super-admins (`can_manage_system`) are implicit approvers.
->
-> The new admin tab combines the pending queue (Approve / Deny with
-> reason), full history with download / purge actions, and the approver
-> delegation list. Every submit / decide / download / purge is logged to
-> the audit trail.
->
-> **HTTPS upload command (no drive redirection required).** For
-> environments where group policy disables the RDP / SFTP drive
-> channel — and the virtual drive interception path therefore never
-> fires — the Outbound Share panel can mint a single-use, 10-minute
-> upload token rendered as a `curl` / `curl.exe` / PowerShell 7 `-Form`
-> one-liner. The user pastes the snippet inside the remote session
-> shell; the file uploads back to Strata over plain HTTPS on the
-> connection the browser is already using — no SMB, no port 445, no
-> drive channel — and is fed into the same DLP / approval / audit
-> pipeline as the drive-channel path. Tokens are bound to the
-> minting user + session + connection + justification at issue time,
-> burn on first use, and the user's `can_use_quick_share_outbound`
-> role permission is re-checked at consume time so a revoked role
-> cannot launder a previously-minted token.
 
 ### Credentials UI: Request Checkout feedback
 

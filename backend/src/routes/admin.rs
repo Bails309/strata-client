@@ -1678,8 +1678,7 @@ pub async fn update_user(
     }
 
     if let Some(requires_approval) = body.outbound_share_requires_approval {
-        if !users_svc::set_outbound_share_requires_approval(&db.pool, id, requires_approval)
-            .await?
+        if !users_svc::set_outbound_share_requires_approval(&db.pool, id, requires_approval).await?
         {
             return Err(AppError::NotFound("User not found".into()));
         }
@@ -4372,6 +4371,7 @@ mod tests {
             deleted_at: None,
             last_login_at: None,
             safeguard_jit_enabled: false,
+            outbound_share_requires_approval: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "admin");
@@ -4394,6 +4394,7 @@ mod tests {
             deleted_at: Some(deleted_at),
             last_login_at: None,
             safeguard_jit_enabled: false,
+            outbound_share_requires_approval: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "deleted-user");
@@ -4957,6 +4958,7 @@ mod tests {
             deleted_at: None,
             last_login_at: None,
             safeguard_jit_enabled: false,
+            outbound_share_requires_approval: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["sub"], "auth0|12345");

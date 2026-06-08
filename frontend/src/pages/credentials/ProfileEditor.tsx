@@ -78,6 +78,9 @@ export default function ProfileEditor(props: ProfileEditorProps) {
   useEffect(() => {
     if (!safeguardEnabled || !isSafeguard) return;
     let cancelled = false;
+    // Fetch-loading pattern: flipping these state flags at the start of
+    // an async fetch is correct and self-bounded.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEntitlementsLoading(true);
     setEntitlementsError(null);
     listSafeguardAccounts()

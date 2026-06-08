@@ -176,6 +176,12 @@ After token validation, the backend looks up the user in the local database by O
 | `/api/admin/users/:id/reset-password`                                                  | `require_auth` + `require_admin` + `can_manage_users`                                                                   |
 | `/api/user/*`, `/api/tunnel/*`, `/api/recordings/*`                                    | `require_auth`                                                                                                          |
 | `/api/files/upload` (POST), `/api/files/session/*` (GET), `/api/files/:token` (DELETE) | `require_auth` + `can_use_quick_share` (POST only; `can_manage_system` bypass); delete = owner-only                     |
+| `/api/user/outbound-shares` (POST), `/api/user/outbound-shares/*` (GET)                | `require_auth` + `can_use_quick_share_outbound` (POST only); **NOT** bypassed by `can_manage_system`                    |
+| `/api/user/outbound-shares/ingest-token` (POST)                                        | `require_auth` + `can_use_quick_share_outbound`; rate-limited 10 mints/min/user; **NOT** bypassed by `can_manage_system`|
+| `/api/outbound-shares/ingest/:token` (POST)                                            | None (public, capability-based — the path-segment token IS the auth; atomic single-use; re-checks the minter's `can_use_quick_share_outbound` at consume time) |
+| `/api/outbound-shares/:id/download/:token` (GET)                                       | None (public, capability-based — single-use download token issued on approval / auto-release)                           |
+| `/api/admin/outbound-shares` (GET), `/api/admin/outbound-shares/:id/decide` (POST), `/api/admin/outbound-shares/:id/purge` (DELETE) | `require_auth` + (`can_manage_system` OR `is_outbound_approver`); purge restricted to `can_manage_system` |
+| `/api/admin/outbound-share-approvers` (GET, POST, DELETE)                              | `require_auth` + `can_manage_system`                                                                                    |
 | `/api/user/sessions`                                                                   | `require_auth` (filtered to own sessions)                                                                               |
 | `/api/user/recordings`                                                                 | `require_auth` (filtered to own recordings)                                                                             |
 
@@ -204,6 +210,7 @@ All admin API endpoints enforce fine-grained permission checks beyond the `requi
 | Permission            | Runtime Effect                                                                                                                                                                      |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `can_use_quick_share` | Permits `POST /api/files/upload` (ephemeral in-session file CDN). Gate enforced by `services::middleware::check_quick_share_permission()`. `can_manage_system` bypasses this check. |
+| `can_use_quick_share_outbound` | Permits `POST /api/user/outbound-shares` (drive-channel ingest) and `POST /api/user/outbound-shares/ingest-token` (HTTPS-snippet ingest token mint). Gate enforced by `services::middleware::check_quick_share_outbound_permission()`. **`can_manage_system` does NOT bypass this check** — outbound file export is deliberately separable from general administration so a super-admin can manage the platform without inadvertently being able to exfiltrate files from every session. The check is re-applied at HTTPS-snippet consume time so a role revoked between mint and consume cannot launder a previously-minted token. |
 
 Endpoints that do not match a specific permission category (e.g. role CRUD) require `can_manage_system`.
 
@@ -552,6 +559,126 @@ If any permission is missing, the service account will receive an LDAP error whe
 - Delegate permissions **only on the specific OUs** containing accounts that will be managed, not the entire domain.
 - Do **not** add the PM service account to Domain Admins, Account Operators, or any other built-in privileged group.
 - Use a strong, unique password for the PM service account. Enable auto-rotation in Strata to rotate the service account's own password on a schedule (zero-knowledge — sealed in Vault).
+
+---
+
+## Outbound Quick-Share — File Egress Pipeline (v1.11.0+)
+
+**Status:** invariant from v1.11.0 onwards.
+
+The Outbound Quick-Share pipeline gates files **leaving** a remote
+session through DLP scan + approver review + at-rest envelope
+encryption, with full audit. Two ingest paths feed the same backend
+service.
+
+### Ingest path 1 — Drive-channel interception (transparent)
+
+When a session is established under a role granting
+`can_use_quick_share_outbound`, `SessionManager.client.onfile`
+(`frontend/src/services/SessionManager.ts`) suppresses the legacy
+auto-download path. Instead the bytes guacd pushes back over the RDP /
+SFTP drive channel are buffered via `Guacamole.BlobReader`, wrapped in
+a `FormData` (with `session_id`, `connection_id`, and any pending
+justification), and POSTed to `/api/user/outbound-shares` over the
+authenticated, CSRF-protected user API.
+
+### Ingest path 2 — HTTPS upload command (drive-redirect bypass)
+
+For sites where group policy disables RDP / SFTP drive redirection at
+the target, the drive channel never carries any bytes and the `onfile`
+handler never fires. For these sites the Outbound Share panel mints a
+single-use, 10-minute **ingest token**:
+
+```
+                      ┌────────────────────────────────────────────────────┐
+                      │  SPA (Outbound Share panel)                        │
+                      │  • user types justification                         │
+                      │  • clicks "Generate upload command"                 │
+                      └───────────────────────────┬────────────────────────┘
+                                                  │
+                  POST /api/user/outbound-shares/ingest-token (auth + CSRF)
+                                                  │
+                                                  ▼
+                      ┌────────────────────────────────────────────────────┐
+                      │  Backend (services::outbound_share_ingest)         │
+                      │  • generate 32-byte URL-safe base64 token          │
+                      │  • bind token ↔ user + session + connection +      │
+                      │    justification                                   │
+                      │  • INSERT outbound_share_ingest_tokens             │
+                      │    (expires_at = now() + 10 min, used_at NULL)     │
+                      │  • audit outbound_share.ingest_token.minted        │
+                      │  • rate-limit 10 mints / min / user                │
+                      └───────────────────────────┬────────────────────────┘
+                                                  │
+                                  token returned to SPA
+                                                  │
+                                                  ▼
+                      ┌────────────────────────────────────────────────────┐
+                      │  SPA renders one-liner snippet:                    │
+                      │    curl -fL -F 'file=@./<your-file>' '<url>'       │
+                      │    curl.exe -fL -F "file=@<your-file>" "<url>"     │
+                      │    Invoke-WebRequest -Method POST -Form @{ ... }   │
+                      │  User copies the snippet into the remote session   │
+                      │  shell and runs it.                                │
+                      └───────────────────────────┬────────────────────────┘
+                                                  │
+              POST /api/outbound-shares/ingest/{token}  (PUBLIC router,
+                                                  │     no cookie auth,
+                                                  │     no CSRF)
+                                                  ▼
+                      ┌────────────────────────────────────────────────────┐
+                      │  Backend (routes::outbound_shares::ingest_via_token)│
+                      │  1. atomic consume                                 │
+                      │       UPDATE outbound_share_ingest_tokens          │
+                      │       SET    used_at = now()                       │
+                      │       WHERE  token = $1                            │
+                      │         AND  used_at IS NULL                       │
+                      │         AND  expires_at > now()                    │
+                      │       RETURNING user_id, session_id, ...           │
+                      │  2. re-check minter's can_use_quick_share_outbound │
+                      │  3. audit outbound_share.ingest_token.consumed     │
+                      │  4. hand off to services::outbound_shares::submit  │
+                      │     (same code path as drive-channel ingest)       │
+                      └────────────────────────────────────────────────────┘
+```
+
+### Common pipeline (both paths)
+
+1. A fresh cryptographically random 256-bit **DEK** is generated.
+2. The plaintext is AES-256-GCM-encrypted with that DEK (12-byte
+   nonce).
+3. The DEK is sealed by **Vault Transit** and stored in
+   `outbound_shares.sealed_dek`.
+4. The ciphertext is written to `STRATA_OUTBOUND_SHARES_DIR` (default
+   `/tmp/strata-outbound-shares`, platform-temp-dir fallback).
+5. A built-in DLP heuristic computes `dlp_score` and a list of
+   `dlp_flags` against the plaintext.
+6. If `dlp_score ≤ AUTO_APPROVE_THRESHOLD` **and** the submitter's
+   `users.outbound_share_requires_approval = false`, a single-use
+   download token is issued and `status = 'approved'`.
+7. Otherwise `status = 'pending'` until a super-admin
+   (`can_manage_system`) **or** a delegated approver
+   (`outbound_share_approvers`) decides via
+   `POST /api/admin/outbound-shares/{id}/decide`.
+8. Audit: `outbound_share.submitted` → `.decided` → `.downloaded` →
+   eventually `.purged`. Denied or expired shares trigger a periodic
+   worker that **zeroises the sealed DEK** and deletes the ciphertext
+   file so the staging blob cannot be recovered from a forensic disk
+   image.
+
+### Threat model
+
+| Threat                                                         | Mitigation                                                                                                                                                                                                                       |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token capture in browser DevTools / shoulder-surfing snippet   | 10-minute TTL, single-use atomic consume, role re-check at consume time. The window for misuse is narrow and any consumption is auditable to the minting user.                                                                  |
+| Token in URL path is logged by reverse proxy / WAF             | The token is in the path, not a query string, so it is **not** in `Referer` headers. Operators should treat outbound-share ingest paths as sensitive in access-log retention (same class as `/api/files/:token` download URLs). |
+| Role revoked between mint and consume                          | Re-check at `ingest_via_token` re-reads the minter's role and rejects if `can_use_quick_share_outbound` is no longer granted.                                                                                                  |
+| Replay after success                                           | `UPDATE … WHERE used_at IS NULL` makes the consume strictly atomic at the database level. A replay always returns the generic "token unknown / expired / used" error and is logged.                                            |
+| Super-admin silently exfiltrates files                          | `can_manage_system` does **not** bypass `can_use_quick_share_outbound`. Outbound mint is a separable permission; an organisation can deliberately deny super-admins outbound capability while still letting them manage the platform. |
+| Approver-delegation abuse                                       | `outbound_share_approvers` add / remove is gated to `can_manage_system` and emits `outbound_share.approver_added` / `.approver_removed` audit events.                                                                          |
+| Forensic recovery of denied/expired ciphertext                  | Periodic worker zeroises `sealed_dek` and deletes the ciphertext file. Without the sealed DEK the on-disk bytes (even if recovered) cannot be unsealed.                                                                         |
+| Plaintext leaks via DLP scan                                    | DLP runs in-process on the already-decrypted submission buffer; the plaintext is never written to disk in cleartext. After scan the plaintext buffer is dropped and only the ciphertext persists.                              |
+| Excessive token minting (enumeration / DoS)                     | Rate-limited 10 mints / minute / user at the route layer. Tokens are 32-byte URL-safe base64 (~192 bits of entropy) so brute force is infeasible.                                                                              |
 
 ---
 

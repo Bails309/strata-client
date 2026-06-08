@@ -304,8 +304,12 @@ export default function AuditLogs() {
   );
 
   // Reset to page 1 whenever filters change, otherwise a deep page
-  // number from a previous search may render an empty table.
+  // number from a previous search may render an empty table. This is an
+  // intentional derived-state reset; React's rule-of-thumb against
+  // setState-in-effect targets cascading-render bugs, but a single
+  // setPage(1) on the filter-change boundary is bounded and correct.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(1);
   }, [filters]);
 

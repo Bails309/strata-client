@@ -10,6 +10,15 @@
 > ad‑hoc credential selection and restores reliable Safeguard-backed
 > credential resolution.
 
+### Credentials UI: Request Checkout feedback
+
+> The Credentials → Request Checkout form now gives clearer feedback when a
+> checkout requires approver review. After submitting a request the UI shows
+> an explicit "submitted for approval" message and navigates the user to
+> **My Checkouts** so they can track the Pending/Scheduled/Approved status.
+> This prevents the previous confusing form reset where no confirmation was
+> visible to the requester.
+
 ---
 
 # What's New in v1.10.6

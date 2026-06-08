@@ -166,9 +166,7 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
           const before = prev.get(item.id);
           if (
             before === "pending" &&
-            (item.status === "approved" ||
-              item.status === "denied" ||
-              item.status === "purged")
+            (item.status === "approved" || item.status === "denied" || item.status === "purged")
           ) {
             fresh.push({
               id: item.id,

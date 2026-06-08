@@ -308,6 +308,8 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
                         {s.status === "approved" && s.download_token && (
                           <a
                             href={outboundShareDownloadUrl(s.download_token)}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="btn-ghost text-[10px] px-2 py-0.5"
                           >
                             Download

@@ -381,6 +381,8 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                   {isApproved && n.download_token && (
                     <a
                       href={outboundShareDownloadUrl(n.download_token)}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="inline-block mt-1 px-2 py-1 rounded bg-success text-bg-primary font-semibold text-[11px]"
                       onClick={() => dismissNotification(n.id)}
                     >
@@ -613,6 +615,8 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
               {h.status === "approved" && h.download_token && (
                 <a
                   href={outboundShareDownloadUrl(h.download_token)}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-accent underline text-[10px]"
                 >
                   Download →

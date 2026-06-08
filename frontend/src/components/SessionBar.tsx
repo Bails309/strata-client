@@ -451,9 +451,13 @@ export default function SessionBar() {
                   </button>
                 )}
 
-                {/* Outbound Quick Share — gated by `can_use_quick_share_outbound`.
-                    Exports files OUT of the session through an approver queue. */}
-                {canUseQuickShareOutbound && (
+                {/* Outbound Quick Share — gated by `can_use_quick_share_outbound`
+                    AND by the session having drive redirection enabled. Without
+                    the virtual drive the in-session interceptor can’t fire and
+                    the panel’s HTTPS-upload fallback is the only path; if the
+                    connection has file transfer disabled entirely the button is
+                    hidden to keep the top menu uncluttered. */}
+                {canUseQuickShareOutbound && activeSession.fileTransferEnabled && (
                   <button
                     className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${outboundOpen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}
                     onClick={() => setOutboundOpen(!outboundOpen)}

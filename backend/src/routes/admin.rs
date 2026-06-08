@@ -4299,7 +4299,6 @@ mod tests {
             can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
-            outbound_share_requires_approval: true,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "admin");
@@ -5062,7 +5061,6 @@ mod tests {
             can_use_quick_share_outbound: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
-            outbound_share_requires_approval: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["can_manage_system"], true);

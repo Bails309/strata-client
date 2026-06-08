@@ -118,7 +118,11 @@ pub async fn consume(
         ));
     }
 
-    let row: Option<(Uuid, Option<String>, Option<Uuid>, Option<String>)> = sqlx::query_as(
+    // Tuple shape returned by the RETURNING clause; named to keep clippy
+    // (`type_complexity`) happy without leaking the alias outside this fn.
+    type ConsumeRow = (Uuid, Option<String>, Option<Uuid>, Option<String>);
+
+    let row: Option<ConsumeRow> = sqlx::query_as(
         "UPDATE outbound_share_ingest_tokens
                 SET used_at = now(),
                     used_ip = $2

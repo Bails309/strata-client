@@ -414,219 +414,228 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
         </div>
       )}
 
-      {/* How-to banner + justification field.
-          Hidden when the active connection has file transfer disabled
-          (drive redirection is the subject of this whole box, so it's
-          noise on connections where the user must fall back to the
-          HTTPS upload below). Still shown when no session is active so
-          the informational copy and the "open or focus a session" hint
-          remain discoverable. */}
-      {!(activeSession && !activeSession.fileTransferEnabled) && (
-        <div className="p-4 border-b border-white/5 space-y-3 text-xs">
-          <div className="rounded bg-accent/10 border border-accent/20 p-3 space-y-2">
-            <div className="font-semibold text-accent-bright">
-              How to export a file from this session
-            </div>
-            <ol className="list-decimal list-inside space-y-1 text-txt-secondary">
-              <li>
-                Inside the remote desktop, open the Strata virtual drive
-                {driveName ? (
-                  <span>
-                    {" "}
-                    (mapped as <span className="font-mono text-accent">{driveName}</span>)
-                  </span>
-                ) : driveProtocol === "rdp" ? (
-                  <span>
-                    {" "}
-                    (mapped under <span className="font-mono">This PC</span>)
-                  </span>
-                ) : null}
-                .
-              </li>
-              <li>Copy or drag the file you want to export into that drive.</li>
-              <li>
-                The file is intercepted here, scanned for sensitive data, and either auto-approved
-                or queued for an approver.
-              </li>
-              <li>Approved files appear below with a one-time download link.</li>
-            </ol>
-            {!activeSession && (
-              <div className="text-warning text-[11px]">
-                Open or focus a session to enable outbound transfers.
+      {/* Scrollable body — everything below the header and the
+          (sticky) notifications banner. Wrapping all three sections
+          in a single overflow-y-auto container ensures the user can
+          always scroll the how-to + upload-snippet cards out of the
+          way to reach the submissions history, no matter how tall
+          the panel content gets. */}
+      <div className="flex-1 overflow-y-auto">
+        {/* How-to banner + justification field.
+            Hidden when the active connection has file transfer disabled
+            (drive redirection is the subject of this whole box, so it's
+            noise on connections where the user must fall back to the
+            HTTPS upload below). Still shown when no session is active so
+            the informational copy and the "open or focus a session" hint
+            remain discoverable. */}
+        {!(activeSession && !activeSession.fileTransferEnabled) && (
+          <div className="p-4 border-b border-white/5 space-y-3 text-xs">
+            <div className="rounded bg-accent/10 border border-accent/20 p-3 space-y-2">
+              <div className="font-semibold text-accent-bright">
+                How to export a file from this session
               </div>
-            )}
-          </div>
+              <ol className="list-decimal list-inside space-y-1 text-txt-secondary">
+                <li>
+                  Inside the remote desktop, open the Strata virtual drive
+                  {driveName ? (
+                    <span>
+                      {" "}
+                      (mapped as <span className="font-mono text-accent">{driveName}</span>)
+                    </span>
+                  ) : driveProtocol === "rdp" ? (
+                    <span>
+                      {" "}
+                      (mapped under <span className="font-mono">This PC</span>)
+                    </span>
+                  ) : null}
+                  .
+                </li>
+                <li>Copy or drag the file you want to export into that drive.</li>
+                <li>
+                  The file is intercepted here, scanned for sensitive data, and either auto-approved
+                  or queued for an approver.
+                </li>
+                <li>Approved files appear below with a one-time download link.</li>
+              </ol>
+              {!activeSession && (
+                <div className="text-warning text-[11px]">
+                  Open or focus a session to enable outbound transfers.
+                </div>
+              )}
+            </div>
 
-          <label className="block">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
-              Justification for the next file (optional)
-            </span>
-            <textarea
-              className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
-              rows={2}
-              placeholder="Why does the next exported file need to leave the session?"
-              value={justification}
-              onChange={(e) => setJustification(e.target.value)}
-              maxLength={1000}
-              disabled={!activeSession}
-            />
-            <span className="block mt-1 text-[10px] text-txt-tertiary">
-              Attached to the next file intercepted from this session, then cleared.
-            </span>
-          </label>
-        </div>
-      )}
-
-      {/* HTTPS upload snippet (fallback when drive redirection is blocked) */}
-      <div className="p-4 border-b border-white/5 space-y-3 text-xs">
-        <div className="rounded bg-warning/5 border border-warning/20 p-3 space-y-2">
-          <div className="font-semibold text-warning">
-            Drive redirection blocked? Use HTTPS upload
-          </div>
-          <p className="text-txt-secondary text-[11px] leading-snug">
-            When the virtual drive isn&apos;t available (commonly because group policy blocks RDP
-            drive redirection at the target), mint a one-shot upload command instead. Paste it into
-            a terminal or PowerShell window
-            <em> inside the remote session</em>; the file flows back over HTTPS on the same
-            connection your browser is already using — no SMB, no port 445, no drive channel.
-          </p>
-
-          <div className="space-y-2">
-            <label
-              htmlFor="outbound-snippet-format"
-              className="block text-[10px] font-bold uppercase tracking-wider text-txt-tertiary"
-            >
-              Snippet format
-            </label>
-            <Select
-              id="outbound-snippet-format"
-              value={snippetFormat}
-              onChange={(v) => setSnippetFormat(v as SnippetFormat)}
-              options={[
-                { value: "curl", label: "curl (Linux / macOS)" },
-                { value: "curl-win", label: "curl (Windows 10+)" },
-                { value: "powershell", label: "PowerShell 7+" },
-              ]}
-            />
-            <label
-              htmlFor="outbound-insecure-tls"
-              className="flex items-center gap-2.5 cursor-pointer select-none group pt-1"
-              title="Adds -k / ServicePointManager bypass so the snippet works against a Strata server with a self-signed or internal-CA TLS cert."
-            >
-              <input
-                id="outbound-insecure-tls"
-                type="checkbox"
-                checked={insecureTls}
-                onChange={(e) => setInsecureTls(e.target.checked)}
-                className="h-4 w-4 shrink-0 rounded border border-white/20 bg-white/5 accent-accent cursor-pointer"
+            <label className="block">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
+                Justification for the next file (optional)
+              </span>
+              <textarea
+                className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
+                rows={2}
+                placeholder="Why does the next exported file need to leave the session?"
+                value={justification}
+                onChange={(e) => setJustification(e.target.value)}
+                maxLength={1000}
+                disabled={!activeSession}
               />
-              <span className="text-xs text-txt-secondary group-hover:text-txt-primary transition-colors">
-                Skip TLS cert check
+              <span className="block mt-1 text-[10px] text-txt-tertiary">
+                Attached to the next file intercepted from this session, then cleared.
               </span>
             </label>
           </div>
+        )}
 
-          <button
-            type="button"
-            className="w-full px-3 py-1.5 text-xs rounded bg-accent text-bg-primary font-semibold disabled:opacity-50"
-            onClick={issueToken}
-            disabled={!activeSession || issuing}
-          >
-            {issuing
-              ? "Generating…"
-              : ingestToken && !tokenExpired
-                ? "Regenerate upload command"
-                : "Generate upload command"}
-          </button>
-
-          {issueError && <div className="text-[11px] text-danger">{issueError}</div>}
-
-          {ingestToken && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-[10px] text-txt-tertiary">
-                <span>
-                  {tokenExpired
-                    ? "Token expired — generate a new one."
-                    : `Expires in ${formatExpiry(expiresInSec)}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={copySnippet}
-                  disabled={tokenExpired}
-                  className="text-accent hover:text-accent-bright disabled:opacity-50"
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-              </div>
-              <pre className="text-[10px] whitespace-pre-wrap break-all bg-black/40 border border-white/5 rounded p-2 font-mono text-txt-primary">
-                {snippet}
-              </pre>
-              <p className="text-[10px] text-txt-tertiary leading-snug">
-                Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of the
-                file you want to export. The command is single-use — it stops working as soon as one
-                upload completes or the timer hits zero.
-              </p>
+        {/* HTTPS upload snippet (fallback when drive redirection is blocked) */}
+        <div className="p-4 border-b border-white/5 space-y-3 text-xs">
+          <div className="rounded bg-warning/5 border border-warning/20 p-3 space-y-2">
+            <div className="font-semibold text-warning">
+              Drive redirection blocked? Use HTTPS upload
             </div>
+            <p className="text-txt-secondary text-[11px] leading-snug">
+              When the virtual drive isn&apos;t available (commonly because group policy blocks RDP
+              drive redirection at the target), mint a one-shot upload command instead. Paste it
+              into a terminal or PowerShell window
+              <em> inside the remote session</em>; the file flows back over HTTPS on the same
+              connection your browser is already using — no SMB, no port 445, no drive channel.
+            </p>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="outbound-snippet-format"
+                className="block text-[10px] font-bold uppercase tracking-wider text-txt-tertiary"
+              >
+                Snippet format
+              </label>
+              <Select
+                id="outbound-snippet-format"
+                value={snippetFormat}
+                onChange={(v) => setSnippetFormat(v as SnippetFormat)}
+                options={[
+                  { value: "curl", label: "curl (Linux / macOS)" },
+                  { value: "curl-win", label: "curl (Windows 10+)" },
+                  { value: "powershell", label: "PowerShell 7+" },
+                ]}
+              />
+              <label
+                htmlFor="outbound-insecure-tls"
+                className="flex items-center gap-2.5 cursor-pointer select-none group pt-1"
+                title="Adds -k / ServicePointManager bypass so the snippet works against a Strata server with a self-signed or internal-CA TLS cert."
+              >
+                <input
+                  id="outbound-insecure-tls"
+                  type="checkbox"
+                  checked={insecureTls}
+                  onChange={(e) => setInsecureTls(e.target.checked)}
+                  className="h-4 w-4 shrink-0 rounded border border-white/20 bg-white/5 accent-accent cursor-pointer"
+                />
+                <span className="text-xs text-txt-secondary group-hover:text-txt-primary transition-colors">
+                  Skip TLS cert check
+                </span>
+              </label>
+            </div>
+
+            <button
+              type="button"
+              className="w-full px-3 py-1.5 text-xs rounded bg-accent text-bg-primary font-semibold disabled:opacity-50"
+              onClick={issueToken}
+              disabled={!activeSession || issuing}
+            >
+              {issuing
+                ? "Generating…"
+                : ingestToken && !tokenExpired
+                  ? "Regenerate upload command"
+                  : "Generate upload command"}
+            </button>
+
+            {issueError && <div className="text-[11px] text-danger">{issueError}</div>}
+
+            {ingestToken && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-[10px] text-txt-tertiary">
+                  <span>
+                    {tokenExpired
+                      ? "Token expired — generate a new one."
+                      : `Expires in ${formatExpiry(expiresInSec)}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={copySnippet}
+                    disabled={tokenExpired}
+                    className="text-accent hover:text-accent-bright disabled:opacity-50"
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <pre className="text-[10px] whitespace-pre-wrap break-all bg-black/40 border border-white/5 rounded p-2 font-mono text-txt-primary">
+                  {snippet}
+                </pre>
+                <p className="text-[10px] text-txt-tertiary leading-snug">
+                  Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of the
+                  file you want to export. The command is single-use — it stops working as soon as
+                  one upload completes or the timer hits zero.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* History */}
+        <div className="p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
+              My submissions
+            </span>
+            <button
+              className="text-[10px] text-txt-secondary hover:text-txt-primary"
+              onClick={refresh}
+              disabled={loading}
+            >
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+          {history.length === 0 ? (
+            <div className="text-[11px] text-txt-tertiary italic">No submissions yet.</div>
+          ) : (
+            history.map((h) => (
+              <div
+                key={h.id}
+                className="rounded border border-white/5 bg-black/20 p-2 text-xs space-y-1"
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusClasses(h.status)}`}
+                  >
+                    {h.status}
+                  </span>
+                  <span className="truncate flex-1 font-medium">{h.filename}</span>
+                </div>
+                <div className="text-[10px] text-txt-tertiary">
+                  {formatSize(h.size)} · DLP {h.dlp_score} ·{" "}
+                  {new Date(h.created_at).toLocaleString()}
+                </div>
+                {h.dlp_reasons.length > 0 && (
+                  <div className="text-[10px] text-txt-tertiary">
+                    Flags: {h.dlp_reasons.join(", ")}
+                  </div>
+                )}
+                {h.decision_reason && (
+                  <div className="text-[10px] text-txt-tertiary italic">
+                    Approver: {h.decision_reason}
+                  </div>
+                )}
+                {h.status === "approved" && h.download_token && (
+                  <a
+                    href={outboundShareDownloadUrl(h.download_token)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent underline text-[10px]"
+                  >
+                    Download →
+                  </a>
+                )}
+              </div>
+            ))
           )}
         </div>
-      </div>
-
-      {/* History */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
-            My submissions
-          </span>
-          <button
-            className="text-[10px] text-txt-secondary hover:text-txt-primary"
-            onClick={refresh}
-            disabled={loading}
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
-        {history.length === 0 ? (
-          <div className="text-[11px] text-txt-tertiary italic">No submissions yet.</div>
-        ) : (
-          history.map((h) => (
-            <div
-              key={h.id}
-              className="rounded border border-white/5 bg-black/20 p-2 text-xs space-y-1"
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusClasses(h.status)}`}
-                >
-                  {h.status}
-                </span>
-                <span className="truncate flex-1 font-medium">{h.filename}</span>
-              </div>
-              <div className="text-[10px] text-txt-tertiary">
-                {formatSize(h.size)} · DLP {h.dlp_score} · {new Date(h.created_at).toLocaleString()}
-              </div>
-              {h.dlp_reasons.length > 0 && (
-                <div className="text-[10px] text-txt-tertiary">
-                  Flags: {h.dlp_reasons.join(", ")}
-                </div>
-              )}
-              {h.decision_reason && (
-                <div className="text-[10px] text-txt-tertiary italic">
-                  Approver: {h.decision_reason}
-                </div>
-              )}
-              {h.status === "approved" && h.download_token && (
-                <a
-                  href={outboundShareDownloadUrl(h.download_token)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-accent underline text-[10px]"
-                >
-                  Download →
-                </a>
-              )}
-            </div>
-          ))
-        )}
       </div>
     </div>
   );

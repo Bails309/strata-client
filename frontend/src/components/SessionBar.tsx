@@ -15,6 +15,7 @@ import {
 } from "../api";
 import FileBrowser from "./FileBrowser";
 import QuickShare from "./QuickShare";
+import QuickShareOutbound from "./QuickShareOutbound";
 import { requestFullscreenWithLock, exitFullscreenWithUnlock } from "../utils/keyboardLock";
 
 // Modern flat checkbox: borderless until checked, accent-filled with a crisp
@@ -41,6 +42,7 @@ export default function SessionBar() {
     setSessionBarCollapsed,
     canShare,
     canUseQuickShare,
+    canUseQuickShareOutbound,
   } = useSessionManager();
 
   const navigate = useNavigate();
@@ -85,6 +87,7 @@ export default function SessionBar() {
   const [shareLoading, setShareLoading] = useState(false);
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const [quickShareOpen, setQuickShareOpen] = useState(false);
+  const [outboundOpen, setOutboundOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -444,6 +447,31 @@ export default function SessionBar() {
                       <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
                       <polyline points="17 8 12 3 7 8" />
                       <line x1="12" y1="3" x2="12" y2="15" />
+                    </svg>
+                  </button>
+                )}
+
+                {/* Outbound Quick Share — gated by `can_use_quick_share_outbound`.
+                    Exports files OUT of the session through an approver queue. */}
+                {canUseQuickShareOutbound && (
+                  <button
+                    className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${outboundOpen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}
+                    onClick={() => setOutboundOpen(!outboundOpen)}
+                    title="Outbound Share – export files from the session (approval-gated)"
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M3 9v10a2 2 0 002 2h14a2 2 0 002-2V9" />
+                      <polyline points="7 4 12 9 17 4" />
+                      <line x1="12" y1="9" x2="12" y2="21" />
                     </svg>
                   </button>
                 )}
@@ -926,6 +954,15 @@ export default function SessionBar() {
           connectionId={activeSession.connectionId}
           protocol={activeSession.protocol}
           onClose={() => setQuickShareOpen(false)}
+          sidebarWidth={220}
+          sessionBarCollapsed={sessionBarCollapsed}
+        />
+      )}
+
+      {/* Outbound Share Overlay */}
+      {outboundOpen && activeSession && (
+        <QuickShareOutbound
+          onClose={() => setOutboundOpen(false)}
           sidebarWidth={220}
           sessionBarCollapsed={sessionBarCollapsed}
         />

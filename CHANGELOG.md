@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.9] — 2026-06-08
 
+### Added
+
+- **Outbound Quick-Share (approval-gated file export).** Mirror of the
+  inbound Quick-Share for exporting files out of a remote session.
+  Files are encrypted at rest (envelope encryption: per-share DEK
+  sealed by Vault Transit; ciphertext on disk + sealed DEK in DB), run
+  through a built-in DLP scanner, and either auto-approve (low DLP
+  score + per-user opt-in) or queue for approver review. Approved
+  shares are released as a time-limited single-use download; denied or
+  expired shares are purged and their DEK is zeroised by a periodic
+  worker. New surfaces:
+  - Role permission `can_use_quick_share_outbound` — grants the
+    in-session **Outbound Share** button.
+  - Per-user flag `outbound_share_requires_approval` (default `true`)
+    — flip off in Admin → Access to auto-approve low-risk
+    submissions for trusted users.
+  - `outbound_share_approvers` delegation table — managed from the
+    new Admin → Outbound Shares tab. Super-admins are implicit
+    approvers; this list adds non-admin delegates (e.g. compliance
+    officers).
+  - New endpoints under `/api/user/outbound-shares` (submit, list
+    mine, download by token) and `/api/admin/outbound-shares`
+    (list-all, list-pending, decide, purge, approver CRUD).
+  - Migration `073_outbound_quick_share.sql` adds the
+    `outbound_shares` and `outbound_share_approvers` tables plus the
+    role permission and per-user gate columns.
+  - Migration `074_outbound_share_ingest_tokens.sql` adds the
+    `outbound_share_ingest_tokens` table backing the HTTPS upload
+    snippet path (single-use, 10-minute TTL, swept by the daily
+    cleanup worker).
+  - HTTPS upload snippet path for environments where RDP drive
+    redirection is blocked by group policy: the Outbound Share panel
+    mints a one-shot token via
+    `POST /api/user/outbound-shares/ingest-token` (cookie+CSRF
+    authed) and renders a `curl` / `curl.exe` / PowerShell 7 `-Form`
+    one-liner. The remote-session shell POSTs the file at
+    `/api/outbound-shares/ingest/{token}` — unauthenticated at the
+    cookie layer (the token is the auth) — which consumes the token
+    atomically, re-checks the minter's
+    `can_use_quick_share_outbound` role permission, and feeds the
+    upload through the same DLP / approval / audit pipeline as the
+    drive-channel path.
+  - Audit events: `outbound_share.submitted`,
+    `outbound_share.decided`, `outbound_share.downloaded`,
+    `outbound_share.purged`, `outbound_share.approver_added`,
+    `outbound_share.approver_removed`,
+    `outbound_share.ingest_token.minted`,
+    `outbound_share.ingest_token.consumed`.
+
 ### Patch Release — Safeguard one‑off profile ticket routing and local-unseal guard
 
 v1.10.9 fixes a runtime reliability bug observed when connections

@@ -12,7 +12,7 @@ use sqlx::{FromRow, Pool, Postgres};
 use uuid::Uuid;
 
 const SELECT_COLUMNS: &str =
-    "u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at, u.last_login_at, u.safeguard_jit_enabled";
+    "u.id, u.username, u.email, u.full_name, u.auth_type, u.sub, r.name as role_name, u.deleted_at, u.last_login_at, u.safeguard_jit_enabled, u.outbound_share_requires_approval";
 
 #[derive(Serialize, FromRow, Debug, Clone)]
 pub struct UserRow {
@@ -29,6 +29,11 @@ pub struct UserRow {
     /// `safeguard_config.enabled` still applies; both must be true for
     /// the user to see the credential editor's Safeguard option.
     pub safeguard_jit_enabled: bool,
+    /// Outbound Quick-Share gate: when true (default), every outbound
+    /// file export by this user is held in the approver queue. Admins
+    /// can flip this to false for trusted users so their submissions
+    /// auto-approve (the DLP scanner still runs and can force a hold).
+    pub outbound_share_requires_approval: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -45,6 +50,11 @@ pub struct UpdateUserRequest {
     pub role_id: Option<Uuid>,
     /// When present, toggle the per-user Safeguard JIT opt-in flag.
     pub safeguard_jit_enabled: Option<bool>,
+    /// When present, toggle the per-user outbound Quick-Share approval
+    /// requirement. `true` (default for all users) routes every export
+    /// into the approver queue; `false` auto-approves submissions whose
+    /// DLP score is below the auto-flag threshold.
+    pub outbound_share_requires_approval: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -158,6 +168,25 @@ pub async fn safeguard_jit_enabled(pool: &Pool<Postgres>, id: Uuid) -> bool {
     .ok()
     .flatten()
     .unwrap_or(false)
+}
+
+/// Toggle the per-user outbound Quick-Share approval-required flag.
+/// Returns `true` when a row was updated. Setting this to `false` lets
+/// the user's outbound submissions auto-approve when the DLP score is
+/// below the auto-flag threshold (see `outbound_shares::DLP_AUTO_FLAG_SCORE`).
+pub async fn set_outbound_share_requires_approval(
+    pool: &Pool<Postgres>,
+    id: Uuid,
+    requires_approval: bool,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE users SET outbound_share_requires_approval = $1 WHERE id = $2 AND deleted_at IS NULL",
+    )
+    .bind(requires_approval)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 /// Check whether any live user already has the given (lower-cased)
@@ -287,6 +316,7 @@ pub struct UserAuthRow {
     pub can_create_user_groups: bool,
     pub can_create_connections: bool,
     pub can_use_quick_share: bool,
+    pub can_use_quick_share_outbound: bool,
     pub can_create_sharing_profiles: bool,
 }
 
@@ -299,7 +329,7 @@ pub async fn find_local_by_username_or_email(
         "SELECT u.id, u.username, u.password_hash, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_use_quick_share, r.can_create_sharing_profiles
+                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE (LOWER(u.username) = LOWER($1) OR LOWER(u.email) = LOWER($1)) AND u.auth_type = 'local' AND u.deleted_at IS NULL",
     )
@@ -326,6 +356,7 @@ pub struct AuthStatusRow {
     pub can_create_user_groups: bool,
     pub can_create_connections: bool,
     pub can_use_quick_share: bool,
+    pub can_use_quick_share_outbound: bool,
     pub can_create_sharing_profiles: bool,
     pub can_view_sessions: bool,
     pub terms_accepted_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -340,7 +371,7 @@ pub async fn find_auth_status(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_use_quick_share, r.can_create_sharing_profiles, r.can_view_sessions,
+                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions,
                 u.terms_accepted_at, u.terms_accepted_version
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",
@@ -512,6 +543,7 @@ mod tests {
             deleted_at: None,
             last_login_at: None,
             safeguard_jit_enabled: false,
+            outbound_share_requires_approval: true,
         };
         let v = serde_json::to_value(&row).unwrap();
         assert!(v.get("password_hash").is_none(), "leaked password_hash");
@@ -533,6 +565,7 @@ mod tests {
             "u.deleted_at",
             "u.last_login_at",
             "u.safeguard_jit_enabled",
+            "u.outbound_share_requires_approval",
         ] {
             assert!(
                 SELECT_COLUMNS.contains(col),

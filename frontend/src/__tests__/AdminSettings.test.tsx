@@ -200,9 +200,11 @@ const defaultUser: import("../api").MeResponse = {
   can_create_user_groups: true,
   can_create_connections: true,
   can_use_quick_share: true,
+  can_use_quick_share_outbound: true,
   can_create_sharing_profiles: true,
   can_view_sessions: true,
   is_approver: false,
+  is_outbound_approver: false,
 };
 
 function renderAdmin() {
@@ -967,6 +969,7 @@ describe("AccessTab", () => {
         can_create_user_groups: true,
         can_create_connections: true,
         can_use_quick_share: true,
+        can_use_quick_share_outbound: true,
         can_create_sharing_profiles: true,
         can_view_sessions: true,
       },
@@ -981,6 +984,7 @@ describe("AccessTab", () => {
         can_create_user_groups: false,
         can_create_connections: false,
         can_use_quick_share: false,
+        can_use_quick_share_outbound: false,
         can_create_sharing_profiles: false,
         can_view_sessions: false,
       },
@@ -1022,6 +1026,7 @@ describe("AccessTab", () => {
       can_create_user_groups: false,
       can_create_connections: false,
       can_use_quick_share: false,
+      can_use_quick_share_outbound: false,
       can_create_sharing_profiles: false,
       can_view_sessions: false,
     });
@@ -1374,6 +1379,7 @@ describe("AccessTab", () => {
         role_name: "admin",
         sub: "oidc-sub-123",
         safeguard_jit_enabled: false,
+        outbound_share_requires_approval: true,
       },
     ]);
     const user = userEvent.setup();
@@ -1393,6 +1399,7 @@ describe("AccessTab", () => {
         role_name: "user",
         sub: "",
         safeguard_jit_enabled: false,
+        outbound_share_requires_approval: true,
       },
     ]);
     const user = userEvent.setup();
@@ -1414,6 +1421,7 @@ describe("AccessTab", () => {
         role_name: "admin",
         sub: "",
         safeguard_jit_enabled: false,
+        outbound_share_requires_approval: true,
       },
     ]);
     vi.mocked(updateUser).mockResolvedValue({ status: "updated" });

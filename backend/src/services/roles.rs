@@ -26,6 +26,9 @@ pub struct RoleRow {
     /// Whether members of this role may use the Quick Share upload
     /// quick-action.  Added in migration 054.
     pub can_use_quick_share: bool,
+    /// Whether members of this role may submit outbound (session→endpoint)
+    /// quick-share files for approval.  Added in migration 073.
+    pub can_use_quick_share_outbound: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -41,6 +44,7 @@ pub struct CreateRoleRequest {
     pub can_create_sharing_profiles: Option<bool>,
     pub can_view_sessions: Option<bool>,
     pub can_use_quick_share: Option<bool>,
+    pub can_use_quick_share_outbound: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -56,12 +60,14 @@ pub struct UpdateRoleRequest {
     pub can_create_sharing_profiles: Option<bool>,
     pub can_view_sessions: Option<bool>,
     pub can_use_quick_share: Option<bool>,
+    pub can_use_quick_share_outbound: Option<bool>,
 }
 
 const SELECT_COLUMNS: &str =
     "id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, \
      can_create_users, can_create_user_groups, can_create_connections, \
-     can_create_sharing_profiles, can_view_sessions, can_use_quick_share";
+     can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
+     can_use_quick_share_outbound";
 
 pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<RoleRow>, AppError> {
     let rows: Vec<RoleRow> =
@@ -75,8 +81,9 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     let row: RoleRow = sqlx::query_as(&format!(
         "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, \
          can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, \
-         can_create_sharing_profiles, can_view_sessions, can_use_quick_share) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+         can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
+         can_use_quick_share_outbound) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
          RETURNING {SELECT_COLUMNS}"
     ))
     .bind(&body.name)
@@ -90,6 +97,7 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     .bind(body.can_create_sharing_profiles.unwrap_or(false))
     .bind(body.can_view_sessions.unwrap_or(false))
     .bind(body.can_use_quick_share.unwrap_or(false))
+    .bind(body.can_use_quick_share_outbound.unwrap_or(false))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -112,7 +120,8 @@ pub async fn update(
             can_create_connections = COALESCE($9, can_create_connections),
             can_create_sharing_profiles = COALESCE($10, can_create_sharing_profiles),
             can_view_sessions = COALESCE($11, can_view_sessions),
-            can_use_quick_share = COALESCE($12, can_use_quick_share)
+            can_use_quick_share = COALESCE($12, can_use_quick_share),
+            can_use_quick_share_outbound = COALESCE($13, can_use_quick_share_outbound)
          WHERE id = $1
          RETURNING {SELECT_COLUMNS}"
     ))
@@ -128,6 +137,7 @@ pub async fn update(
     .bind(body.can_create_sharing_profiles)
     .bind(body.can_view_sessions)
     .bind(body.can_use_quick_share)
+    .bind(body.can_use_quick_share_outbound)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -249,6 +259,7 @@ mod tests {
             can_create_sharing_profiles: true,
             can_view_sessions: true,
             can_use_quick_share: true,
+            can_use_quick_share_outbound: true,
         };
         let v = serde_json::to_value(&row).unwrap();
         // Every permission flag must be a top-level boolean in the JSON
@@ -264,6 +275,7 @@ mod tests {
             "can_create_sharing_profiles",
             "can_view_sessions",
             "can_use_quick_share",
+            "can_use_quick_share_outbound",
         ] {
             assert_eq!(v[key], json!(true), "missing or non-bool {key}");
         }

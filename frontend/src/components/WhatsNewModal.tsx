@@ -31,8 +31,18 @@ export const RELEASE_CARDS: ReleaseCard[] = [
   {
     version: "1.10.9",
     subtitle:
-      "Patch release — Safeguard one-off profile routing and local-unseal guard: fixes 502/500 failures when tunnel tickets selected ad‑hoc Safeguard profiles.",
+      "Patch release — Safeguard one-off profile routing and local-unseal guard: fixes 502/500 failures when tunnel tickets selected ad‑hoc Safeguard profiles. Also ships Outbound Quick-Share, the approval-gated mirror of the inbound Quick-Share.",
     sections: [
+      {
+        title: "Outbound Quick-Share (approval-gated)",
+        description:
+          "Export files out of a remote session through a new approval queue. Files are encrypted at rest with Vault-sealed envelope encryption, scanned by a built-in DLP heuristic, and either auto-approved (low score + per-user opt-in) or held for approver review. Approved shares become a time-limited single-use download; denied or expired shares are purged. New role permission can_use_quick_share_outbound, per-user outbound_share_requires_approval toggle, and a separate approver-delegation list let you grant the perm without giving up super-admin.",
+      },
+      {
+        title: "HTTPS upload command (drive-redirect bypass)",
+        description:
+          "For sites where group policy disables RDP / SFTP drive redirection — the virtual drive never appears inside the session and the file-channel interceptor never fires — the Outbound Share panel can mint a single-use, 10-minute upload token rendered as a curl / curl.exe / PowerShell 7 -Form one-liner. Paste it inside the remote session shell; the file uploads back over HTTPS on the connection your browser is already using (no SMB, no port 445, no drive channel) and runs through the same DLP / approval / audit pipeline. Tokens are bound to the minting user + session + connection + justification, burn on first use, and re-check the user's outbound permission at consume time.",
+      },
       {
         title: "One-off Safeguard profile routing",
         description:

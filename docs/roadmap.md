@@ -167,7 +167,7 @@ Exportable CSV / PDF for management reporting.
 
 ### Quick-Share Outbound (Approval-Gated)
 
-**Status:** Proposed  
+**Status:** Shipped in v1.10.9  
 **Area:** File Transfer · DLP
 
 Mirror of the existing inbound Quick-Share but in reverse: a user in a
@@ -179,6 +179,17 @@ session requests to export a file. The file is copied to a **staging area**
 
 Approved files are released to the user's browser as a time-limited download;
 rejected files are purged. Every request + decision is logged.
+
+For environments where group policy disables RDP / SFTP drive redirection
+(so the in-session virtual drive interceptor never fires), v1.10.9 also
+ships an **HTTPS upload-command** path: the Outbound Share panel mints a
+single-use, 10-minute token rendered as a `curl` / `curl.exe` / PowerShell 7
+`-Form` one-liner. The user pastes it inside the remote session shell; the
+file uploads back over HTTPS on the connection the browser is already
+using (no SMB, no port 445, no drive channel) and runs through the same
+DLP / approval / audit pipeline. Tokens are bound to the minting user +
+session + connection + justification, burn on first use, and re-check the
+user's `can_use_quick_share_outbound` permission at consume time.
 
 ---
 

@@ -74,6 +74,7 @@ export default function AccessTab({
     can_create_user_groups: boolean;
     can_create_connections: boolean;
     can_use_quick_share: boolean;
+    can_use_quick_share_outbound: boolean;
     can_create_sharing_profiles: boolean;
     can_view_sessions: boolean;
   }>({
@@ -86,6 +87,7 @@ export default function AccessTab({
     can_create_user_groups: false,
     can_create_connections: false,
     can_use_quick_share: false,
+    can_use_quick_share_outbound: false,
     can_create_sharing_profiles: false,
     can_view_sessions: false,
   });
@@ -115,6 +117,7 @@ export default function AccessTab({
       can_create_user_groups: r.can_create_user_groups,
       can_create_connections: r.can_create_connections,
       can_use_quick_share: r.can_use_quick_share,
+      can_use_quick_share_outbound: r.can_use_quick_share_outbound,
       can_create_sharing_profiles: r.can_create_sharing_profiles,
       can_view_sessions: r.can_view_sessions,
     });
@@ -431,6 +434,11 @@ export default function AccessTab({
                           Quick Share
                         </span>
                       )}
+                      {r.can_use_quick_share_outbound && (
+                        <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">
+                          QS Outbound
+                        </span>
+                      )}
                       {r.can_create_sharing_profiles && (
                         <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">
                           Sharing
@@ -449,6 +457,7 @@ export default function AccessTab({
                         !r.can_create_user_groups &&
                         !r.can_create_connections &&
                         !r.can_use_quick_share &&
+                        !r.can_use_quick_share_outbound &&
                         !r.can_create_sharing_profiles &&
                         !r.can_view_sessions && (
                           <span className="text-txt-tertiary text-[10px] italic">
@@ -514,6 +523,7 @@ export default function AccessTab({
                   can_create_user_groups: false,
                   can_create_connections: false,
                   can_use_quick_share: false,
+                  can_use_quick_share_outbound: false,
                   can_create_sharing_profiles: false,
                   can_view_sessions: false,
                 });
@@ -676,6 +686,25 @@ export default function AccessTab({
                           <span className="text-sm font-medium">Use Quick Share</span>
                           <span className="text-[10px] text-txt-tertiary">
                             Upload and share files during a session
+                          </span>
+                        </div>
+                      </label>
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          className="checkbox"
+                          checked={newRole.can_use_quick_share_outbound}
+                          onChange={(e) =>
+                            setNewRole({
+                              ...newRole,
+                              can_use_quick_share_outbound: e.target.checked,
+                            })
+                          }
+                        />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Use Outbound Quick Share</span>
+                          <span className="text-[10px] text-txt-tertiary">
+                            Export files out of a session (approval-gated)
                           </span>
                         </div>
                       </label>
@@ -1360,6 +1389,9 @@ export default function AccessTab({
                   <th>Auth Type</th>
                   <th>Role</th>
                   <th>Safeguard JIT</th>
+                  <th title="When ON (default), every outbound Quick-Share submission by this user is queued for approver review. When OFF, low-risk submissions auto-approve.">
+                    Outbound Approval
+                  </th>
                   <th>OIDC Sub</th>
                   <th>Last Login</th>
                   <th className="w-[100px]">Actions</th>
@@ -1428,6 +1460,38 @@ export default function AccessTab({
                         />
                         <span className="text-[10px] uppercase tracking-wider text-txt-tertiary">
                           {u.safeguard_jit_enabled ? "Enabled" : "Disabled"}
+                        </span>
+                      </label>
+                    </td>
+                    <td>
+                      <label
+                        className="inline-flex items-center gap-2 cursor-pointer"
+                        title="When ON, every outbound Quick-Share submission by this user is queued for approver review. Disable to auto-approve low-risk exports."
+                      >
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm"
+                          checked={!!u.outbound_share_requires_approval}
+                          disabled={!!u.deleted_at}
+                          onChange={async (e) => {
+                            const requires_approval = e.target.checked;
+                            try {
+                              await updateUser(u.id, {
+                                outbound_share_requires_approval: requires_approval,
+                              });
+                              const refreshed = await getUsers();
+                              onUsersChanged(refreshed);
+                            } catch (err) {
+                              alert(
+                                err instanceof Error
+                                  ? err.message
+                                  : "Failed to toggle outbound approval"
+                              );
+                            }
+                          }}
+                        />
+                        <span className="text-[10px] uppercase tracking-wider text-txt-tertiary">
+                          {u.outbound_share_requires_approval ? "Required" : "Auto"}
                         </span>
                       </label>
                     </td>

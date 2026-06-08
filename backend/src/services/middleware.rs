@@ -30,6 +30,8 @@ pub struct AuthUser {
     pub can_view_sessions: bool,
     /// Whether the user may use Quick Share (file-store quick-action).
     pub can_use_quick_share: bool,
+    /// Whether the user may submit outbound (approval-gated) Quick Shares.
+    pub can_use_quick_share_outbound: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -49,6 +51,7 @@ struct UserPermissionsRow {
     pub can_create_sharing_profiles: bool,
     pub can_view_sessions: bool,
     pub can_use_quick_share: bool,
+    pub can_use_quick_share_outbound: bool,
 }
 
 impl AuthUser {
@@ -118,6 +121,17 @@ pub fn check_session_permission(user: &AuthUser) -> Result<(), crate::error::App
 /// when the user is a super-admin (`can_manage_system`).
 pub fn check_quick_share_permission(user: &AuthUser) -> Result<(), crate::error::AppError> {
     if !user.can_use_quick_share && !user.can_manage_system {
+        return Err(crate::error::AppError::Forbidden);
+    }
+    Ok(())
+}
+
+/// Outbound (approval-gated) Quick Share is a separate user-level feature:
+/// allow when the role flag is set, or when the user is a super-admin.
+pub fn check_quick_share_outbound_permission(
+    user: &AuthUser,
+) -> Result<(), crate::error::AppError> {
+    if !user.can_use_quick_share_outbound && !user.can_manage_system {
         return Err(crate::error::AppError::Forbidden);
     }
     Ok(())
@@ -508,7 +522,7 @@ async fn try_local_jwt(
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_use_quick_share, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
@@ -534,6 +548,7 @@ async fn try_local_jwt(
         can_create_user_groups: user.can_create_user_groups,
         can_create_connections: user.can_create_connections,
         can_use_quick_share: user.can_use_quick_share,
+        can_use_quick_share_outbound: user.can_use_quick_share_outbound,
         can_create_sharing_profiles: user.can_create_sharing_profiles,
         can_view_sessions: user.can_view_sessions,
     }))
@@ -560,7 +575,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         "SELECT u.id, u.username, u.full_name, r.name,
                 r.can_manage_system, r.can_manage_users, r.can_manage_connections, r.can_view_audit_logs,
                 r.can_create_users, r.can_create_user_groups, r.can_create_connections,
-                r.can_use_quick_share, r.can_create_sharing_profiles, r.can_view_sessions
+                r.can_use_quick_share, r.can_use_quick_share_outbound, r.can_create_sharing_profiles, r.can_view_sessions
          FROM users u JOIN roles r ON u.role_id = r.id
          WHERE u.sub = $1 AND u.deleted_at IS NULL",
     )
@@ -592,6 +607,7 @@ async fn validate_oidc_token(token: &str, db: &crate::db::Database) -> Result<Au
         can_create_user_groups: user.can_create_user_groups,
         can_create_connections: user.can_create_connections,
         can_use_quick_share: user.can_use_quick_share,
+        can_use_quick_share_outbound: user.can_use_quick_share_outbound,
         can_create_sharing_profiles: user.can_create_sharing_profiles,
         can_view_sessions: user.can_view_sessions,
     })
@@ -633,6 +649,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -659,6 +676,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -684,6 +702,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -709,6 +728,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -736,6 +756,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -813,6 +834,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -835,6 +857,7 @@ mod tests {
             can_create_user_groups: true,
             can_create_connections: true,
             can_use_quick_share: true,
+            can_use_quick_share_outbound: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
         };
@@ -930,6 +953,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: sessions,
         }

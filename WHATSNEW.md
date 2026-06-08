@@ -10,6 +10,51 @@
 > ad‑hoc credential selection and restores reliable Safeguard-backed
 > credential resolution.
 
+### Outbound Quick-Share (approval-gated file export)
+
+> Mirror of the existing inbound Quick-Share but in reverse: a user in a
+> session can submit a file for **outbound** review. Submissions are
+> encrypted at rest with envelope-encryption (per-share data encryption
+> key sealed by Vault Transit; ciphertext on disk + sealed DEK in the
+> database) and either auto-approve when the built-in DLP scanner gives
+> them a low risk score, or sit in an approver queue for explicit
+> review. Approved files are released as a time-limited single-use
+> download; denied shares are purged immediately. A periodic worker
+> sweeps expired rows and zeroises the sealed DEK so the staging blob
+> cannot be recovered after TTL.
+>
+> Three new role / user controls land:
+>
+> - **`can_use_quick_share_outbound`** role permission — grants the
+>   in-session **Outbound Share** button (icon next to the existing
+>   Quick Share button).
+> - **`outbound_share_requires_approval`** per-user toggle (Admin →
+>   Access) — defaults to ON; flip to OFF for trusted users whose
+>   low-risk submissions should auto-approve.
+> - **Outbound Share approvers** (Admin → Outbound Shares) — delegate
+>   approval authority to non-admin users (e.g. compliance officers).
+>   Super-admins (`can_manage_system`) are implicit approvers.
+>
+> The new admin tab combines the pending queue (Approve / Deny with
+> reason), full history with download / purge actions, and the approver
+> delegation list. Every submit / decide / download / purge is logged to
+> the audit trail.
+>
+> **HTTPS upload command (no drive redirection required).** For
+> environments where group policy disables the RDP / SFTP drive
+> channel — and the virtual drive interception path therefore never
+> fires — the Outbound Share panel can mint a single-use, 10-minute
+> upload token rendered as a `curl` / `curl.exe` / PowerShell 7 `-Form`
+> one-liner. The user pastes the snippet inside the remote session
+> shell; the file uploads back to Strata over plain HTTPS on the
+> connection the browser is already using — no SMB, no port 445, no
+> drive channel — and is fed into the same DLP / approval / audit
+> pipeline as the drive-channel path. Tokens are bound to the
+> minting user + session + connection + justification at issue time,
+> burn on first use, and the user's `can_use_quick_share_outbound`
+> role permission is re-checked at consume time so a revoked role
+> cannot launder a previously-minted token.
+
 ### Credentials UI: Request Checkout feedback
 
 > The Credentials → Request Checkout form now gives clearer feedback when a

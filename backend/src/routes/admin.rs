@@ -1638,7 +1638,10 @@ pub async fn update_user(
     crate::services::middleware::check_user_management_permission(&user)?;
     let db = require_running(&state).await?;
 
-    if body.role_id.is_none() && body.safeguard_jit_enabled.is_none() {
+    if body.role_id.is_none()
+        && body.safeguard_jit_enabled.is_none()
+        && body.outbound_share_requires_approval.is_none()
+    {
         return Err(AppError::Validation("No updatable fields supplied".into()));
     }
 
@@ -1670,6 +1673,22 @@ pub async fn update_user(
             Some(user.id),
             "user.safeguard_jit_toggled",
             &json!({ "user_id": id.to_string(), "enabled": enabled }),
+        )
+        .await?;
+    }
+
+    if let Some(requires_approval) = body.outbound_share_requires_approval {
+        if !users_svc::set_outbound_share_requires_approval(&db.pool, id, requires_approval)
+            .await?
+        {
+            return Err(AppError::NotFound("User not found".into()));
+        }
+
+        audit::log(
+            &db.pool,
+            Some(user.id),
+            "user.outbound_share_approval_toggled",
+            &json!({ "user_id": id.to_string(), "requires_approval": requires_approval }),
         )
         .await?;
     }
@@ -4278,6 +4297,7 @@ mod tests {
             can_create_user_groups: false,
             can_create_connections: false,
             can_use_quick_share: false,
+            can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
         };
@@ -5036,6 +5056,7 @@ mod tests {
             can_create_user_groups: true,
             can_create_connections: true,
             can_use_quick_share: true,
+            can_use_quick_share_outbound: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
         };

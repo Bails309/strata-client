@@ -29,20 +29,42 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
-    version: "1.10.9",
+    version: "1.11.0",
     subtitle:
-      "Patch release — Safeguard one-off profile routing and local-unseal guard: fixes 502/500 failures when tunnel tickets selected ad‑hoc Safeguard profiles. Also ships Outbound Quick-Share, the approval-gated mirror of the inbound Quick-Share.",
+      "Outbound Quick-Share — approval-gated file export with two ingest paths. The transparent drive-channel interceptor handles environments where RDP / SFTP drive redirection is allowed; a new tokenised HTTPS upload-command path covers sites where drive redirection is disabled by group policy. Both feed the same DLP / approval / audit pipeline.",
     sections: [
       {
         title: "Outbound Quick-Share (approval-gated)",
         description:
-          "Export files out of a remote session through a new approval queue. Files are encrypted at rest with Vault-sealed envelope encryption, scanned by a built-in DLP heuristic, and either auto-approved (low score + per-user opt-in) or held for approver review. Approved shares become a time-limited single-use download; denied or expired shares are purged. New role permission can_use_quick_share_outbound, per-user outbound_share_requires_approval toggle, and a separate approver-delegation list let you grant the perm without giving up super-admin.",
+          "Export files out of a remote session through a new approval queue. Files are encrypted at rest with Vault-sealed envelope encryption, scanned by a built-in DLP heuristic, and either auto-approved (low score + per-user opt-in) or held for approver review. Approved shares become a time-limited single-use download; denied or expired shares are purged and the sealed DEK is zeroised by a periodic worker. New role permission can_use_quick_share_outbound, per-user outbound_share_requires_approval toggle, and a separate approver-delegation list let you grant the perm without giving up super-admin.",
+      },
+      {
+        title: "Drive-channel ingest (transparent)",
+        description:
+          "When the active role grants can_use_quick_share_outbound, SessionManager's Guacamole.Client.onfile handler buffers files that guacd pushes back over the RDP / SFTP drive channel and POSTs them to /api/user/outbound-shares instead of triggering an automatic browser download. The active-session pending justification is attached and a toast surfaces auto-approved / queued / denied status.",
       },
       {
         title: "HTTPS upload command (drive-redirect bypass)",
         description:
-          "For sites where group policy disables RDP / SFTP drive redirection — the virtual drive never appears inside the session and the file-channel interceptor never fires — the Outbound Share panel can mint a single-use, 10-minute upload token rendered as a curl / curl.exe / PowerShell 7 -Form one-liner. Paste it inside the remote session shell; the file uploads back over HTTPS on the connection your browser is already using (no SMB, no port 445, no drive channel) and runs through the same DLP / approval / audit pipeline. Tokens are bound to the minting user + session + connection + justification, burn on first use, and re-check the user's outbound permission at consume time.",
+          "For sites where group policy disables RDP / SFTP drive redirection — the virtual drive never appears inside the session and the file-channel interceptor never fires — the Outbound Share panel can mint a single-use, 10-minute upload token rendered as a curl / curl.exe / PowerShell 7 -Form one-liner. Paste it inside the remote session shell; the file uploads back over HTTPS on the connection your browser is already using (no SMB, no port 445, no drive channel) and runs through the same DLP / approval / audit pipeline. Tokens are bound to the minting user + session + connection + justification, burn on first use, and re-check the user's outbound permission at consume time so a revoked role cannot launder a previously-minted token.",
       },
+      {
+        title: "Admin → Outbound Shares tab",
+        description:
+          "Combines pending queue (Approve / Deny with reason), full history with download / purge actions, and approver-delegation list. Visible to users with can_manage_system or the new is_outbound_approver flag (computed from outbound_share_approvers and returned on /me).",
+      },
+      {
+        title: "Operator impact",
+        description:
+          "Two new migrations (073, 074) apply automatically. No new operator configuration required — the feature is dormant until a role enables can_use_quick_share_outbound. Existing roles do not gain the permission automatically. Recommended deploy: rebuild and recreate the backend container.",
+      },
+    ],
+  },
+  {
+    version: "1.10.9",
+    subtitle:
+      "Patch release — Safeguard one-off profile routing and local-unseal guard: fixes 502/500 failures when tunnel tickets selected ad‑hoc Safeguard profiles. Plus a clearer 'submitted for approval' feedback path in the Credentials → Request Checkout form.",
+    sections: [
       {
         title: "One-off Safeguard profile routing",
         description:
@@ -52,6 +74,11 @@ export const RELEASE_CARDS: ReleaseCard[] = [
         title: "Skip local unseal for Safeguard-backed profiles",
         description:
           "The backend no longer attempts to call vault::unseal on empty local encrypted payloads for profiles of kind 'safeguard'. This avoids 'missing ciphertext' errors and restores reliable credential resolution for Safeguard-backed tunnels.",
+      },
+      {
+        title: "Request Checkout feedback",
+        description:
+          "The Credentials → Request Checkout form now shows an explicit 'submitted for approval' message and navigates to My Checkouts so the requester can track the Pending / Scheduled / Approved status instead of seeing a confusing silent form reset.",
       },
       {
         title: "Operator impact",

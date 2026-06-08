@@ -601,6 +601,7 @@ List all roles with their full permission matrix.
     "can_create_user_groups": true,
     "can_create_connections": true,
     "can_use_quick_share": true,
+    "can_use_quick_share_outbound": true,
     "can_create_sharing_profiles": true,
     "can_view_sessions": true
   }
@@ -617,6 +618,7 @@ List all roles with their full permission matrix.
 | `can_create_user_groups`      | boolean | Role CRUD                                                                                |
 | `can_create_connections`      | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0)         |
 | `can_use_quick_share`         | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin) |
+| `can_use_quick_share_outbound` | boolean | **(v1.11.0+)** Submit files **out of** a remote session via the Outbound Quick-Share pipeline (drive-channel ingest and HTTPS upload-command mint). **`can_manage_system` does NOT bypass this check.** |
 | `can_create_sharing_profiles` | boolean | Generate live session share links                                                        |
 | `can_view_sessions`           | boolean | NVR observation, active session listing, kill session                                    |
 
@@ -1088,9 +1090,12 @@ Current authenticated user profile, including all role permissions.
   "can_create_user_groups": false,
   "can_create_connections": false,
   "can_use_quick_share": false,
+  "can_use_quick_share_outbound": false,
   "can_create_sharing_profiles": false,
   "can_view_sessions": true,
-  "is_approver": true
+  "is_approver": true,
+  "is_outbound_approver": false,
+  "outbound_share_requires_approval": true
 }
 ```
 
@@ -2265,6 +2270,187 @@ Delete a file. Requires authentication and ownership (only the uploader can dele
 **Response** `403 Forbidden` — not the file owner.
 
 **Response** `404 Not Found` — file not found.
+
+---
+
+## Outbound Quick-Share (Approval-Gated File Egress, v1.11.0+)
+
+Pipeline for files **leaving** a remote session: Vault-sealed at rest, scanned by a built-in DLP heuristic, and either auto-approved (low score + per-user opt-in) or queued for an approver. Two ingest paths feed the same backend service.
+
+All authenticated endpoints below require the `can_use_quick_share_outbound` role permission. **`can_manage_system` does NOT bypass this check** — outbound file export is deliberately separable from general administration.
+
+### Drive-channel ingest (transparent)
+
+#### `POST /api/user/outbound-shares`
+
+Submit a file pulled from the in-session virtual drive. Called by `SessionManager.client.onfile` when the active role grants `can_use_quick_share_outbound`.
+
+**Auth**: cookie + CSRF; requires `can_use_quick_share_outbound`.
+
+**Content-Type**: `multipart/form-data`
+
+| Field            | Type   | Required | Description                                                   |
+| ---------------- | ------ | -------- | ------------------------------------------------------------- |
+| `session_id`     | text   | Yes      | Active session ID                                             |
+| `connection_id`  | text   | Yes      | Connection UUID                                               |
+| `justification`  | text   | No       | Free-text business reason (shown to approver)                 |
+| `file`           | file   | Yes      | Binary payload                                                |
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "11111111-2222-3333-4444-555555555555",
+  "status": "pending",
+  "dlp_score": 12,
+  "dlp_flags": ["high-entropy"],
+  "download_url": null,
+  "expires_at": "2026-06-08T18:00:00Z"
+}
+```
+
+When the share is auto-approved, `status = "approved"` and `download_url` is populated with a single-use URL.
+
+**Audit**: `outbound_share.submitted`. Auto-approve additionally emits `outbound_share.decided`.
+
+### HTTPS upload-command ingest (drive-redirect bypass)
+
+#### `POST /api/user/outbound-shares/ingest-token`
+
+Mint a single-use, 10-minute upload token for the snippet-paste path.
+
+**Auth**: cookie + CSRF; requires `can_use_quick_share_outbound`. Rate-limited to **10 mints per minute per user**.
+
+**Request**
+
+```json
+{
+  "session_id": "...",
+  "connection_id": "...",
+  "justification": "Customer requested copy of generated report"
+}
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "token": "VGhpcy1pcy1hLXNhbXBsZS1iYXNlNjQtdXJsLXNhZmUtdG9rZW4tdmFsdWU",
+  "expires_at": "2026-06-08T18:10:00Z",
+  "ingest_url": "https://strata.example.com/api/outbound-shares/ingest/VGhpcy1pcy1hLXNhbXBsZS1iYXNlNjQtdXJsLXNhZmUtdG9rZW4tdmFsdWU"
+}
+```
+
+The SPA renders the token into a `curl` / `curl.exe` / PowerShell 7 `-Form` one-liner. The user pastes the snippet inside the remote session shell.
+
+**Audit**: `outbound_share.ingest_token.minted`.
+
+**Errors**: `429 Too Many Requests` if the per-user mint rate is exceeded.
+
+#### `POST /api/outbound-shares/ingest/{token}`
+
+**Public router. No cookie auth. No CSRF. The path-segment token IS the auth.**
+
+The remote-session shell POSTs the file back to Strata over HTTPS using the token from the snippet.
+
+**Path parameter**: `token` (32-byte URL-safe base64, ~192 bits of entropy)
+
+**Content-Type**: `multipart/form-data`
+
+| Field  | Type | Required | Description     |
+| ------ | ---- | -------- | --------------- |
+| `file` | file | Yes      | Binary payload  |
+
+**Body limit**: 500 MiB.
+
+**Backend behaviour**:
+
+1. Atomically consume the token: `UPDATE outbound_share_ingest_tokens SET used_at = now() WHERE token = $1 AND used_at IS NULL AND expires_at > now() RETURNING user_id, session_id, connection_id, justification`.
+2. Re-check the minter's current `can_use_quick_share_outbound` permission (revoked role rejects).
+3. Hand off to the same `services::outbound_shares::submit` pipeline as the drive-channel path (DEK + AES-256-GCM + Vault Transit seal + DLP + auto-approve / queue).
+
+**Response** `200 OK`: identical shape to `POST /api/user/outbound-shares`.
+
+**Errors**: `400 Bad Request` for unknown / expired / already-used token (opaque error — does not distinguish between cases). `403 Forbidden` if minter's role has been revoked since mint.
+
+**Audit**: `outbound_share.ingest_token.consumed` (records token-id, never the raw token) followed by `outbound_share.submitted`.
+
+### Submitter views
+
+#### `GET /api/user/outbound-shares`
+
+List own outbound-share submissions (newest first), including current status and download URL where applicable.
+
+**Auth**: cookie + CSRF.
+
+#### `GET /api/user/outbound-shares/{id}`
+
+Fetch a single submission (must be own).
+
+### Approver / admin views
+
+The following endpoints require **either** `can_manage_system` **or** `is_outbound_approver` (via the `outbound_share_approvers` table). Purge is restricted to `can_manage_system` only.
+
+#### `GET /api/admin/outbound-shares`
+
+List all shares. Query params: `status` (`pending` | `approved` | `denied` | `downloaded` | `purged`), `limit`, `cursor`.
+
+#### `POST /api/admin/outbound-shares/{id}/decide`
+
+```json
+{
+  "decision": "approved",
+  "reason": "Verified business need; low DLP score"
+}
+```
+
+`decision` is `"approved"` or `"denied"`. On approval a single-use download token is generated and returned in the response and to the requester's panel.
+
+**Audit**: `outbound_share.decided`.
+
+#### `DELETE /api/admin/outbound-shares/{id}/purge`
+
+Force-purge a share regardless of status. Zeroises the sealed DEK and deletes the ciphertext file. **Requires `can_manage_system`.**
+
+**Audit**: `outbound_share.purged`.
+
+### Approver delegation
+
+#### `GET /api/admin/outbound-share-approvers`
+
+List delegated approvers (super-admins are implicit and not enumerated here).
+
+**Auth**: `can_manage_system`.
+
+#### `POST /api/admin/outbound-share-approvers`
+
+```json
+{ "user_id": "..." }
+```
+
+**Audit**: `outbound_share.approver_added`.
+
+#### `DELETE /api/admin/outbound-share-approvers/{user_id}`
+
+**Audit**: `outbound_share.approver_removed`.
+
+### Download
+
+#### `GET /api/outbound-shares/{id}/download/{token}`
+
+**Public, capability-based.** The single-use download token is issued on approval / auto-release. First successful GET marks the share `downloaded` and consumes the token; subsequent attempts return `404`.
+
+**Audit**: `outbound_share.downloaded`.
+
+### Environment
+
+| Variable                       | Default                          | Description                                                                                |
+| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------ |
+| `STRATA_OUTBOUND_SHARES_DIR`   | `/tmp/strata-outbound-shares`    | Filesystem directory for sealed staging ciphertexts. Falls back to the platform temp dir.  |
+
+### Audit events
+
+`outbound_share.submitted`, `.decided`, `.downloaded`, `.purged`, `.approver_added`, `.approver_removed`, `.ingest_token.minted`, `.ingest_token.consumed`. All are written to the hash-chained append-only audit log.
 
 ---
 

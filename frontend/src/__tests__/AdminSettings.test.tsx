@@ -970,6 +970,7 @@ describe("AccessTab", () => {
         can_create_connections: true,
         can_use_quick_share: true,
         can_use_quick_share_outbound: true,
+        outbound_share_requires_approval: true,
         can_create_sharing_profiles: true,
         can_view_sessions: true,
       },
@@ -985,6 +986,7 @@ describe("AccessTab", () => {
         can_create_connections: false,
         can_use_quick_share: false,
         can_use_quick_share_outbound: false,
+        outbound_share_requires_approval: true,
         can_create_sharing_profiles: false,
         can_view_sessions: false,
       },
@@ -1027,6 +1029,7 @@ describe("AccessTab", () => {
       can_create_connections: false,
       can_use_quick_share: false,
       can_use_quick_share_outbound: false,
+      outbound_share_requires_approval: true,
       can_create_sharing_profiles: false,
       can_view_sessions: false,
     });

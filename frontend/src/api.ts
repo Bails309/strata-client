@@ -918,6 +918,13 @@ export interface Role {
   can_use_quick_share: boolean;
   /** Outbound Quick-Share (export files from session, approval-gated). */
   can_use_quick_share_outbound: boolean;
+  /** Role-level default for the outbound Quick-Share approval queue.
+   *  When true (the default), every outbound submission from members of
+   *  this role is held for approver review. When false, low-risk
+   *  submissions auto-approve via the DLP scanner. The per-user
+   *  `User.outbound_share_requires_approval` override (when non-null)
+   *  wins over this default. */
+  outbound_share_requires_approval: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
 }
@@ -1043,10 +1050,11 @@ export interface User {
   /** Per-user opt-in for Safeguard JIT. The global master switch on the
    *  Safeguard admin tab still applies; both must be true. */
   safeguard_jit_enabled: boolean;
-  /** When true (the default), every outbound Quick-Share submission by
-   *  this user is queued for approver review. When false, low-risk
-   *  submissions auto-approve via the DLP scanner. */
-  outbound_share_requires_approval: boolean;
+  /** Per-user outbound Quick-Share approval-required override.
+   *  `true` / `false` pins the user to that value regardless of the
+   *  role default; `null` means "inherit `Role.outbound_share_requires_approval`".
+   *  Surfaced on the admin Access tab as a tri-state select. */
+  outbound_share_requires_approval: boolean | null;
 }
 
 export interface CreateUserRequest {
@@ -1077,7 +1085,10 @@ export const updateUser = (
   data: {
     role_id?: string;
     safeguard_jit_enabled?: boolean;
-    outbound_share_requires_approval?: boolean;
+    /** `true`/`false` sets an explicit per-user override; `null`
+     *  clears the override so the effective value falls back to the
+     *  user's role default; omit the field to leave it unchanged. */
+    outbound_share_requires_approval?: boolean | null;
   }
 ) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(data) });

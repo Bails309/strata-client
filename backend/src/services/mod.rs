@@ -34,6 +34,7 @@ pub mod retry;
 pub mod roles;
 pub mod safeguard;
 pub mod schema;
+pub mod serde_helpers;
 pub mod session_cleanup;
 pub mod session_registry;
 pub mod settings;

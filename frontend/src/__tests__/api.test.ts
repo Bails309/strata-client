@@ -473,6 +473,7 @@ describe("API endpoint functions", () => {
       can_create_connections: false,
       can_use_quick_share: false,
       can_use_quick_share_outbound: false,
+      outbound_share_requires_approval: true,
       can_create_sharing_profiles: false,
       can_view_sessions: false,
     });
@@ -490,6 +491,7 @@ describe("API endpoint functions", () => {
       can_create_connections: false,
       can_use_quick_share: false,
       can_use_quick_share_outbound: false,
+      outbound_share_requires_approval: true,
       can_create_sharing_profiles: false,
       can_view_sessions: false,
     });

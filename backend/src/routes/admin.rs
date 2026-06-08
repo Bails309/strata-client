@@ -4299,6 +4299,7 @@ mod tests {
             can_use_quick_share_outbound: false,
             can_create_sharing_profiles: false,
             can_view_sessions: false,
+            outbound_share_requires_approval: true,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["name"], "admin");
@@ -4371,7 +4372,7 @@ mod tests {
             deleted_at: None,
             last_login_at: None,
             safeguard_jit_enabled: false,
-            outbound_share_requires_approval: false,
+            outbound_share_requires_approval: Some(false),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "admin");
@@ -4394,7 +4395,7 @@ mod tests {
             deleted_at: Some(deleted_at),
             last_login_at: None,
             safeguard_jit_enabled: false,
-            outbound_share_requires_approval: false,
+            outbound_share_requires_approval: Some(false),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["username"], "deleted-user");
@@ -4958,7 +4959,7 @@ mod tests {
             deleted_at: None,
             last_login_at: None,
             safeguard_jit_enabled: false,
-            outbound_share_requires_approval: false,
+            outbound_share_requires_approval: Some(false),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["sub"], "auth0|12345");
@@ -5061,6 +5062,7 @@ mod tests {
             can_use_quick_share_outbound: true,
             can_create_sharing_profiles: true,
             can_view_sessions: true,
+            outbound_share_requires_approval: false,
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["can_manage_system"], true);

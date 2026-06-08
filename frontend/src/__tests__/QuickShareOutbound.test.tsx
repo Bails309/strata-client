@@ -192,7 +192,9 @@ describe("QuickShareOutbound", () => {
     // upload box below now carries the entire workflow, so the how-to
     // and per-file justification field become noise.
     expect(screen.queryByText(/How to export a file from this session/i)).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/Why does the next exported file/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText(/Why does the next exported file/i)
+    ).not.toBeInTheDocument();
     // The legacy "File transfer is not configured" warning is no longer
     // needed: the HTTPS upload section's "Drive redirection blocked?"
     // heading conveys the same information without the duplicate copy.

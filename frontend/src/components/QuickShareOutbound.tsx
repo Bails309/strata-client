@@ -365,7 +365,7 @@ export default function QuickShareOutbound({
             Drive redirection blocked? Use HTTPS upload
           </div>
           <p className="text-txt-secondary text-[11px] leading-snug">
-            When the virtual drive isn't available (commonly because group policy
+            When the virtual drive isn&apos;t available (commonly because group policy
             blocks RDP drive redirection at the target), mint a one-shot upload
             command instead. Paste it into a terminal or PowerShell window
             <em> inside the remote session</em>; the file flows back over HTTPS

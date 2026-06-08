@@ -334,7 +334,18 @@ export default function Layout({
                   return user?.vault_configured;
                 }
                 if (item.to === "/approvals") {
-                  return user?.vault_configured && user?.is_approver;
+                  // Two flows feed this surface:
+                  //  - Credential checkout approvals (Safeguard JIT) require
+                  //    `vault_configured && is_approver`.
+                  //  - Outbound Quick-Share approvals require
+                  //    `is_outbound_approver` (super-admins are implicit
+                  //    approvers, see routes/user.rs).
+                  // Show the nav item if EITHER flow is available so a
+                  // compliance officer delegated outbound approvals doesn't
+                  // need vault to be configured to see the queue.
+                  return (
+                    (user?.vault_configured && user?.is_approver) || user?.is_outbound_approver
+                  );
                 }
                 return true;
               }).map((item) => {

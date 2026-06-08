@@ -182,15 +182,25 @@ describe("QuickShareOutbound", () => {
     expect(screen.getByText("This PC")).toBeInTheDocument();
   });
 
-  it("warns when the active connection has file transfer disabled", async () => {
+  it("hides the how-to + justification block when the active connection has file transfer disabled", async () => {
     mockSessionState = {
       sessions: [makeSession({ id: "sess-1", fileTransferEnabled: false })],
       activeSessionId: "sess-1",
     };
     render(<QuickShareOutbound {...baseProps} />);
+    // The drive-redirection how-to is hidden in this state — the HTTPS
+    // upload box below now carries the entire workflow, so the how-to
+    // and per-file justification field become noise.
+    expect(screen.queryByText(/How to export a file from this session/i)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Why does the next exported file/i)).not.toBeInTheDocument();
+    // The legacy "File transfer is not configured" warning is no longer
+    // needed: the HTTPS upload section's "Drive redirection blocked?"
+    // heading conveys the same information without the duplicate copy.
     expect(
-      screen.getByText(/File transfer is not configured on this connection/i)
-    ).toBeInTheDocument();
+      screen.queryByText(/File transfer is not configured on this connection/i)
+    ).not.toBeInTheDocument();
+    // HTTPS upload fallback is still rendered.
+    expect(screen.getByText(/Drive redirection blocked\? Use HTTPS upload/i)).toBeInTheDocument();
   });
 
   it("disables the justification textarea when no session is active", () => {

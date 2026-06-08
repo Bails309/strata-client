@@ -452,7 +452,10 @@ export default function SessionBar() {
                 )}
 
                 {/* Outbound Quick Share — gated by `can_use_quick_share_outbound`.
-                    Exports files OUT of the session through an approver queue. */}
+                    Exports files OUT of the session through an approver queue.
+                    Not gated on `fileTransferEnabled` because the panel offers
+                    an HTTPS-upload fallback that works even when drive
+                    redirection is blocked by GPO. */}
                 {canUseQuickShareOutbound && (
                   <button
                     className={`flex-1 h-9 flex items-center justify-center rounded-lg border transition-all duration-200 ${outboundOpen ? "bg-accent/20 border-accent/40 text-accent-light" : "bg-white/5 border-white/10 text-txt-secondary hover:bg-white/10 hover:border-white/20"}`}

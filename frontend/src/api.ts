@@ -1043,10 +1043,12 @@ export interface User {
   /** Per-user opt-in for Safeguard JIT. The global master switch on the
    *  Safeguard admin tab still applies; both must be true. */
   safeguard_jit_enabled: boolean;
-  /** When true (the default), every outbound Quick-Share submission by
-   *  this user is queued for approver review. When false, low-risk
-   *  submissions auto-approve via the DLP scanner. */
-  outbound_share_requires_approval: boolean;
+  /** Per-user outbound Quick-Share approval-required override.
+   *  `false` opts this user out of the approval queue (DLP-gated
+   *  auto-approval applies); `true` or `null` keeps the system
+   *  default of "every export held for approver review". Surfaced on
+   *  the admin Access tab as a single "Outbound Share Bypass" checkbox. */
+  outbound_share_requires_approval: boolean | null;
 }
 
 export interface CreateUserRequest {
@@ -1077,7 +1079,10 @@ export const updateUser = (
   data: {
     role_id?: string;
     safeguard_jit_enabled?: boolean;
-    outbound_share_requires_approval?: boolean;
+    /** `false` opts this user out of outbound approval; `null` clears
+     *  the override so the system default (require approval) applies;
+     *  omit the field to leave it unchanged. */
+    outbound_share_requires_approval?: boolean | null;
   }
 ) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(data) });
@@ -2045,6 +2050,14 @@ export interface OutboundShare {
   created_at: string;
   expires_at: string;
   purged_at: string | null;
+  /**
+   * Server-side join on `users.username`. Populated by
+   * `GET /admin/outbound-shares` and `/admin/outbound-shares/pending`
+   * so non-admin approvers viewing the queue from `/approvals` see a
+   * friendly name without needing access to `/admin/users`. May be
+   * `null` if the requester row has since been deleted.
+   */
+  requester_username?: string | null;
 }
 
 /** Wire response from POST /user/outbound-shares. */

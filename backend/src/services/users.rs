@@ -29,11 +29,12 @@ pub struct UserRow {
     /// `safeguard_config.enabled` still applies; both must be true for
     /// the user to see the credential editor's Safeguard option.
     pub safeguard_jit_enabled: bool,
-    /// Outbound Quick-Share gate: when true (default), every outbound
-    /// file export by this user is held in the approver queue. Admins
-    /// can flip this to false for trusted users so their submissions
-    /// auto-approve (the DLP scanner still runs and can force a hold).
-    pub outbound_share_requires_approval: bool,
+    /// Outbound Quick-Share approval-required override. `Some(true)` /
+    /// `Some(false)` forces the per-user behaviour; `None` means "use
+    /// the system default (require approval)". Migration 076 dropped
+    /// the role-level setting, so this column is now the only override
+    /// surface and the default for missing rows is always TRUE.
+    pub outbound_share_requires_approval: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -50,11 +51,16 @@ pub struct UpdateUserRequest {
     pub role_id: Option<Uuid>,
     /// When present, toggle the per-user Safeguard JIT opt-in flag.
     pub safeguard_jit_enabled: Option<bool>,
-    /// When present, toggle the per-user outbound Quick-Share approval
-    /// requirement. `true` (default for all users) routes every export
-    /// into the approver queue; `false` auto-approves submissions whose
-    /// DLP score is below the auto-flag threshold.
-    pub outbound_share_requires_approval: Option<bool>,
+    /// When present, set or clear the per-user outbound Quick-Share
+    /// approval-required override. The outer `Option` distinguishes
+    /// "field absent" (no change) from `Some(None)` / JSON `null`
+    /// (clear the override so the system default — require approval —
+    /// applies). `Some(Some(bool))` sets an explicit per-user value.
+    #[serde(
+        default,
+        deserialize_with = "crate::services::serde_helpers::double_option::deserialize"
+    )]
+    pub outbound_share_requires_approval: Option<Option<bool>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -170,14 +176,15 @@ pub async fn safeguard_jit_enabled(pool: &Pool<Postgres>, id: Uuid) -> bool {
     .unwrap_or(false)
 }
 
-/// Toggle the per-user outbound Quick-Share approval-required flag.
-/// Returns `true` when a row was updated. Setting this to `false` lets
-/// the user's outbound submissions auto-approve when the DLP score is
-/// below the auto-flag threshold (see `outbound_shares::DLP_AUTO_FLAG_SCORE`).
+/// Set or clear the per-user outbound Quick-Share approval-required
+/// override. `Some(true)`/`Some(false)` pins the user to that value;
+/// `None` clears the override so the effective behaviour falls back to
+/// the system default (require approval). Returns `true` when a row
+/// was updated.
 pub async fn set_outbound_share_requires_approval(
     pool: &Pool<Postgres>,
     id: Uuid,
-    requires_approval: bool,
+    requires_approval: Option<bool>,
 ) -> Result<bool, AppError> {
     let result = sqlx::query(
         "UPDATE users SET outbound_share_requires_approval = $1 WHERE id = $2 AND deleted_at IS NULL",
@@ -543,7 +550,7 @@ mod tests {
             deleted_at: None,
             last_login_at: None,
             safeguard_jit_enabled: false,
-            outbound_share_requires_approval: true,
+            outbound_share_requires_approval: Some(true),
         };
         let v = serde_json::to_value(&row).unwrap();
         assert!(v.get("password_hash").is_none(), "leaked password_hash");

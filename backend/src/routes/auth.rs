@@ -957,6 +957,17 @@ pub async fn check_auth(
         .await
         .unwrap_or(false);
 
+    // Designated outbound-share approver? Super-admins are implicit
+    // approvers (they bypass the gate in routes/outbound_shares.rs::
+    // require_approver), so true for either condition. Mirrors the
+    // computation in routes/user.rs::me — both endpoints must surface
+    // this flag so the SPA's bootstrap (`checkAuthStatus` -> /auth/check)
+    // and refresh (`getMe` -> /user/me) paths agree on nav visibility.
+    let is_outbound_approver = user.can_manage_system
+        || crate::services::outbound_shares::is_outbound_approver(&db.pool, user_id)
+            .await
+            .unwrap_or(false);
+
     Json(json!({
         "authenticated": true,
         "user": {
@@ -982,6 +993,7 @@ pub async fn check_auth(
             "can_create_sharing_profiles": user.can_create_sharing_profiles,
             "can_view_sessions": user.can_view_sessions,
             "is_approver": is_approver,
+            "is_outbound_approver": is_outbound_approver,
         }
     }))
 }

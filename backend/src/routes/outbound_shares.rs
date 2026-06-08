@@ -246,14 +246,22 @@ async fn finalize_submit(
     content_type: &str,
     plaintext: &[u8],
 ) -> Result<SubmitResponse, AppError> {
-    // Per-user approval flag — defaults TRUE (every user requires
-    // approval) unless an admin has explicitly opted them out.
-    let requires_approval: bool =
-        sqlx::query_scalar("SELECT outbound_share_requires_approval FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?
-            .unwrap_or(true);
+    // Approval is required by default for every outbound submission;
+    // the only way to bypass is an explicit per-user opt-out
+    // (`users.outbound_share_requires_approval = FALSE`). Migration 076
+    // dropped the role-level toggle introduced in 075 — the role layer
+    // now governs only whether the feature is available at all
+    // (`can_use_quick_share_outbound`). NULL on the user column means
+    // "use the system default (require approval)"; an unknown/deleted
+    // user likewise falls back to TRUE.
+    let requires_approval: bool = sqlx::query_scalar(
+        "SELECT COALESCE(outbound_share_requires_approval, TRUE)
+         FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or(true);
 
     let staging = staging_root();
 

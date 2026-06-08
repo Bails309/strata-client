@@ -431,7 +431,7 @@ export default function AccessTab({
                       )}
                       {r.can_use_quick_share && (
                         <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">
-                          Quick Share
+                          QS Inbound
                         </span>
                       )}
                       {r.can_use_quick_share_outbound && (
@@ -683,9 +683,9 @@ export default function AccessTab({
                           }
                         />
                         <div className="flex flex-col">
-                          <span className="text-sm font-medium">Use Quick Share</span>
+                          <span className="text-sm font-medium">Use Inbound Quick Share</span>
                           <span className="text-[10px] text-txt-tertiary">
-                            Upload and share files during a session
+                            Upload files into an active session
                           </span>
                         </div>
                       </label>
@@ -704,7 +704,8 @@ export default function AccessTab({
                         <div className="flex flex-col">
                           <span className="text-sm font-medium">Use Outbound Quick Share</span>
                           <span className="text-[10px] text-txt-tertiary">
-                            Export files out of a session (approval-gated)
+                            Export files out of a session. Approval is required for every submission
+                            by default; individual users may be opted out on the Users tab below.
                           </span>
                         </div>
                       </label>
@@ -1389,8 +1390,8 @@ export default function AccessTab({
                   <th>Auth Type</th>
                   <th>Role</th>
                   <th>Safeguard JIT</th>
-                  <th title="When ON (default), every outbound Quick-Share submission by this user is queued for approver review. When OFF, low-risk submissions auto-approve.">
-                    Outbound Approval
+                  <th title="By default every outbound Quick-Share submission is queued for approver review. Check this column to opt an individual user out of the approval queue (DLP scanner still gates the file).">
+                    Outbound Share Bypass
                   </th>
                   <th>OIDC Sub</th>
                   <th>Last Login</th>
@@ -1464,17 +1465,27 @@ export default function AccessTab({
                       </label>
                     </td>
                     <td>
+                      {/* Per-user outbound-share approval override.
+                          Approval is required by default for every user;
+                          this checkbox is the per-user opt-out. Sends
+                          `false` when checked (explicit bypass) and
+                          `null` when unchecked (clear override — system
+                          default of "require approval" applies). The
+                          backend still honours an explicit `true` for
+                          historical rows, but the UI only writes
+                          null/false. */}
                       <label
                         className="inline-flex items-center gap-2 cursor-pointer"
-                        title="When ON, every outbound Quick-Share submission by this user is queued for approver review. Disable to auto-approve low-risk exports."
+                        title="When checked, this user's outbound Quick-Share submissions skip the approver queue and are auto-approved by the DLP scanner. When unchecked, every submission is queued (system default)."
                       >
                         <input
                           type="checkbox"
                           className="checkbox checkbox-sm"
-                          checked={!!u.outbound_share_requires_approval}
+                          checked={u.outbound_share_requires_approval === false}
                           disabled={!!u.deleted_at}
                           onChange={async (e) => {
-                            const requires_approval = e.target.checked;
+                            const bypass = e.target.checked;
+                            const requires_approval: boolean | null = bypass ? false : null;
                             try {
                               await updateUser(u.id, {
                                 outbound_share_requires_approval: requires_approval,
@@ -1485,13 +1496,13 @@ export default function AccessTab({
                               alert(
                                 err instanceof Error
                                   ? err.message
-                                  : "Failed to toggle outbound approval"
+                                  : "Failed to update outbound approval"
                               );
                             }
                           }}
                         />
                         <span className="text-[10px] uppercase tracking-wider text-txt-tertiary">
-                          {u.outbound_share_requires_approval ? "Required" : "Auto"}
+                          {u.outbound_share_requires_approval === false ? "Bypass" : "Required"}
                         </span>
                       </label>
                     </td>

@@ -43,18 +43,43 @@ interface Props {
    *  can manage the approver list and run manual purges. */
   isSuperAdmin: boolean;
   onSave: () => void;
+  /**
+   * Which sections of the tab to render. Lets the same component back
+   * two surfaces:
+   *  - `'admin'`        (default, back-compat) — Pending + History + Approvers.
+   *  - `'policy-only'`  — only the Approver-delegation block. Used by
+   *                       the renamed "Outbound Share Policy" Admin tab
+   *                       now that the operational queue lives under
+   *                       `/approvals`.
+   *  - `'queue-only'`   — Pending + History, no Approvers. Used by the
+   *                       tabbed `/approvals` page so designated
+   *                       approvers and super-admins share one queue
+   *                       view without seeing the delegation roster
+   *                       twice.
+   */
+  variant?: "admin" | "policy-only" | "queue-only";
 }
 
 /**
- * Outbound Quick-Share admin surface. Combines:
+ * Outbound Quick-Share admin / approver surface. Combines:
  *  - The pending-approval queue (Approve / Deny actions).
  *  - Full history with filter.
  *  - Approver-list management (super-admin only).
  *
  * Designated approvers without `can_manage_system` see only the queue
  * and history; they can decide but cannot purge or change delegations.
+ *
+ * `variant` controls which of those three blocks render — see the
+ * [`Props`] docstring for the breakdown.
  */
-export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props) {
+export default function OutboundSharesTab({
+  users,
+  isSuperAdmin,
+  onSave,
+  variant = "admin",
+}: Props) {
+  const showQueue = variant === "admin" || variant === "queue-only";
+  const showApprovers = variant === "admin" || variant === "policy-only";
   const [pending, setPending] = useState<OutboundShare[]>([]);
   const [history, setHistory] = useState<OutboundShare[]>([]);
   const [approvers, setApprovers] = useState<OutboundShareApprover[]>([]);
@@ -66,10 +91,12 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const [p, h] = await Promise.all([listPendingOutboundShares(), listOutboundShares()]);
-      setPending(p);
-      setHistory(h);
-      if (isSuperAdmin) {
+      if (showQueue) {
+        const [p, h] = await Promise.all([listPendingOutboundShares(), listOutboundShares()]);
+        setPending(p);
+        setHistory(h);
+      }
+      if (showApprovers && isSuperAdmin) {
         const a = await listOutboundApprovers();
         setApprovers(a);
       }
@@ -78,7 +105,7 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
     } finally {
       setLoading(false);
     }
-  }, [isSuperAdmin]);
+  }, [isSuperAdmin, showQueue, showApprovers]);
 
   useEffect(() => {
     refresh();
@@ -169,8 +196,29 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
     return <div className="text-txt-tertiary text-sm p-4">Loading outbound shares…</div>;
   }
 
-  return (
-    <div className="space-y-6">
+  // Resolve a requester display name, preferring the server-side JOIN
+  // (`OutboundShare.requester_username`) so non-admin approvers who
+  // cannot call `/admin/users` still get a friendly name. Falls back to
+  // the admin-fetched user list, then to the raw user id.
+  const requesterLabel = (s: OutboundShare): string =>
+    s.requester_username || userById.get(s.requester_user_id)?.username || s.requester_user_id;
+
+  // Header / intro copy varies by surface:
+  //  - admin       → the original "Outbound Quick-Share" intro.
+  //  - policy-only → "Outbound Share Policy" (delegation only).
+  //  - queue-only  → no intro — the parent tabbed `/approvals` page
+  //                  supplies its own heading.
+  const headerBlock =
+    variant === "queue-only" ? null : variant === "policy-only" ? (
+      <div>
+        <h2 className="text-lg font-bold mb-1">Outbound Share Policy</h2>
+        <p className="text-xs text-txt-tertiary">
+          Delegate the Outbound Quick-Share approval queue to non-admin reviewers (e.g. compliance
+          officers). The operational queue itself now lives under <strong>Pending Approvals</strong>{" "}
+          in the left nav.
+        </p>
+      </div>
+    ) : (
       <div>
         <h2 className="text-lg font-bold mb-1">Outbound Quick-Share</h2>
         <p className="text-xs text-txt-tertiary">
@@ -178,161 +226,170 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
           TTL or on denial.
         </p>
       </div>
+    );
+
+  return (
+    <div className="space-y-6">
+      {headerBlock}
 
       {error && <div className="rounded px-3 py-2 bg-danger/10 text-danger text-sm">{error}</div>}
 
       {/* Pending queue */}
-      <section>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-txt-secondary">
-            Pending ({pending.length})
-          </h3>
-          <button className="text-xs text-txt-secondary hover:text-txt-primary" onClick={refresh}>
-            Refresh
-          </button>
-        </div>
-        {pending.length === 0 ? (
-          <div className="text-xs text-txt-tertiary italic p-4 rounded bg-surface-secondary/40 border border-white/5">
-            No shares waiting for approval.
+      {showQueue && (
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-txt-secondary">
+              Pending ({pending.length})
+            </h3>
+            <button className="text-xs text-txt-secondary hover:text-txt-primary" onClick={refresh}>
+              Refresh
+            </button>
           </div>
-        ) : (
-          <div className="space-y-2">
-            {pending.map((s) => {
-              const requester = userById.get(s.requester_user_id);
-              return (
-                <div
-                  key={s.id}
-                  className="rounded border border-white/10 bg-surface-secondary/50 p-3 space-y-2"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold truncate" title={s.filename}>
-                        {s.filename}
-                      </div>
-                      <div className="text-[11px] text-txt-tertiary">
-                        {requester?.username || s.requester_user_id} · {formatSize(s.size)} ·{" "}
-                        {s.content_type || "application/octet-stream"} ·{" "}
-                        {new Date(s.created_at).toLocaleString()}
-                      </div>
-                    </div>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusBadge(s.status)}`}
-                    >
-                      DLP {s.dlp_score}
-                    </span>
-                  </div>
-                  {s.dlp_reasons.length > 0 && (
-                    <div className="text-[11px] text-txt-tertiary">
-                      Flags: {s.dlp_reasons.join(", ")}
-                    </div>
-                  )}
-                  {s.justification && (
-                    <div className="text-[11px] text-txt-secondary italic border-l-2 border-white/10 pl-2">
-                      &ldquo;{s.justification}&rdquo;
-                    </div>
-                  )}
-                  <div className="flex gap-2 pt-1">
-                    <button
-                      className="btn-primary text-xs px-3 py-1"
-                      onClick={() => handleApprove(s)}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      className="btn-ghost text-xs px-3 py-1 text-danger"
-                      onClick={() => setDenyModal({ share: s, reason: "" })}
-                    >
-                      Deny
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* History */}
-      <section>
-        <h3 className="text-sm font-bold uppercase tracking-wider text-txt-secondary mb-2">
-          History ({history.length})
-        </h3>
-        {history.length === 0 ? (
-          <div className="text-xs text-txt-tertiary italic">No submissions yet.</div>
-        ) : (
-          <table className="w-full text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-txt-tertiary">
-              <tr>
-                <th className="text-left py-1">File</th>
-                <th className="text-left py-1">Requester</th>
-                <th className="text-left py-1">Status</th>
-                <th className="text-left py-1">DLP</th>
-                <th className="text-left py-1">Created</th>
-                <th className="text-left py-1">Decision</th>
-                <th className="text-left py-1 w-[140px]">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((s) => {
-                const requester = userById.get(s.requester_user_id);
-                const decider = s.decided_by ? userById.get(s.decided_by) : null;
+          {pending.length === 0 ? (
+            <div className="text-xs text-txt-tertiary italic p-4 rounded bg-surface-secondary/40 border border-white/5">
+              No shares waiting for approval.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {pending.map((s) => {
                 return (
-                  <tr key={s.id} className="border-t border-white/5">
-                    <td className="py-1.5">
-                      <div className="font-medium truncate max-w-[200px]" title={s.filename}>
-                        {s.filename}
+                  <div
+                    key={s.id}
+                    className="rounded border border-white/10 bg-surface-secondary/50 p-3 space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold truncate" title={s.filename}>
+                          {s.filename}
+                        </div>
+                        <div className="text-[11px] text-txt-tertiary">
+                          {requesterLabel(s)} · {formatSize(s.size)} ·{" "}
+                          {s.content_type || "application/octet-stream"} ·{" "}
+                          {new Date(s.created_at).toLocaleString()}
+                        </div>
                       </div>
-                      <div className="text-[10px] text-txt-tertiary">{formatSize(s.size)}</div>
-                    </td>
-                    <td className="py-1.5">{requester?.username || s.requester_user_id}</td>
-                    <td className="py-1.5">
                       <span
                         className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusBadge(s.status)}`}
                       >
-                        {s.status}
+                        DLP {s.dlp_score}
                       </span>
-                    </td>
-                    <td className="py-1.5">{s.dlp_score}</td>
-                    <td className="py-1.5 text-txt-tertiary">
-                      {new Date(s.created_at).toLocaleString()}
-                    </td>
-                    <td className="py-1.5 text-txt-tertiary">
-                      {decider?.username ? (
-                        <span title={s.decision_reason || ""}>{decider.username}</span>
-                      ) : (
-                        <span className="opacity-40">—</span>
-                      )}
-                    </td>
-                    <td className="py-1.5">
-                      <div className="flex gap-1">
-                        {s.status === "approved" && s.download_token && (
-                          <a
-                            href={outboundShareDownloadUrl(s.download_token)}
-                            className="btn-ghost text-[10px] px-2 py-0.5"
-                          >
-                            Download
-                          </a>
-                        )}
-                        {isSuperAdmin && s.status !== "purged" && (
-                          <button
-                            className="btn-ghost text-[10px] px-2 py-0.5 text-danger"
-                            onClick={() => handlePurge(s)}
-                          >
-                            Purge
-                          </button>
-                        )}
+                    </div>
+                    {s.dlp_reasons.length > 0 && (
+                      <div className="text-[11px] text-txt-tertiary">
+                        Flags: {s.dlp_reasons.join(", ")}
                       </div>
-                    </td>
-                  </tr>
+                    )}
+                    {s.justification && (
+                      <div className="text-[11px] text-txt-secondary italic border-l-2 border-white/10 pl-2">
+                        &ldquo;{s.justification}&rdquo;
+                      </div>
+                    )}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        className="btn-primary text-xs px-3 py-1"
+                        onClick={() => handleApprove(s)}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        className="btn-ghost text-xs px-3 py-1 text-danger"
+                        onClick={() => setDenyModal({ share: s, reason: "" })}
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
-        )}
-      </section>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* History */}
+      {showQueue && (
+        <section>
+          <h3 className="text-sm font-bold uppercase tracking-wider text-txt-secondary mb-2">
+            History ({history.length})
+          </h3>
+          {history.length === 0 ? (
+            <div className="text-xs text-txt-tertiary italic">No submissions yet.</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="text-[10px] uppercase tracking-wider text-txt-tertiary">
+                <tr>
+                  <th className="text-left py-1">File</th>
+                  <th className="text-left py-1">Requester</th>
+                  <th className="text-left py-1">Status</th>
+                  <th className="text-left py-1">DLP</th>
+                  <th className="text-left py-1">Created</th>
+                  <th className="text-left py-1">Decision</th>
+                  <th className="text-left py-1 w-[140px]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((s) => {
+                  const decider = s.decided_by ? userById.get(s.decided_by) : null;
+                  return (
+                    <tr key={s.id} className="border-t border-white/5">
+                      <td className="py-1.5">
+                        <div className="font-medium truncate max-w-[200px]" title={s.filename}>
+                          {s.filename}
+                        </div>
+                        <div className="text-[10px] text-txt-tertiary">{formatSize(s.size)}</div>
+                      </td>
+                      <td className="py-1.5">{requesterLabel(s)}</td>
+                      <td className="py-1.5">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusBadge(s.status)}`}
+                        >
+                          {s.status}
+                        </span>
+                      </td>
+                      <td className="py-1.5">{s.dlp_score}</td>
+                      <td className="py-1.5 text-txt-tertiary">
+                        {new Date(s.created_at).toLocaleString()}
+                      </td>
+                      <td className="py-1.5 text-txt-tertiary">
+                        {decider?.username ? (
+                          <span title={s.decision_reason || ""}>{decider.username}</span>
+                        ) : (
+                          <span className="opacity-40">—</span>
+                        )}
+                      </td>
+                      <td className="py-1.5">
+                        <div className="flex gap-1">
+                          {s.status === "approved" && s.download_token && (
+                            <a
+                              href={outboundShareDownloadUrl(s.download_token)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn-ghost text-[10px] px-2 py-0.5"
+                            >
+                              Download
+                            </a>
+                          )}
+                          {isSuperAdmin && s.status !== "purged" && (
+                            <button
+                              className="btn-ghost text-[10px] px-2 py-0.5 text-danger"
+                              onClick={() => handlePurge(s)}
+                            >
+                              Purge
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
 
       {/* Approver list — super-admin only */}
-      {isSuperAdmin && (
+      {showApprovers && isSuperAdmin && (
         <section>
           <h3 className="text-sm font-bold uppercase tracking-wider text-txt-secondary mb-1">
             Designated Approvers

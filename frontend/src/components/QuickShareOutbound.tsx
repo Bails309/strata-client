@@ -381,6 +381,8 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                   {isApproved && n.download_token && (
                     <a
                       href={outboundShareDownloadUrl(n.download_token)}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       className="inline-block mt-1 px-2 py-1 rounded bg-success text-bg-primary font-semibold text-[11px]"
                       onClick={() => dismissNotification(n.id)}
                     >
@@ -419,66 +421,68 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
           way to reach the submissions history, no matter how tall
           the panel content gets. */}
       <div className="flex-1 overflow-y-auto">
-        {/* How-to banner */}
-        <div className="p-4 border-b border-white/5 space-y-3 text-xs">
-          <div className="rounded bg-accent/10 border border-accent/20 p-3 space-y-2">
-            <div className="font-semibold text-accent-bright">
-              How to export a file from this session
+        {/* How-to banner + justification field.
+            Hidden when the active connection has file transfer disabled
+            (drive redirection is the subject of this whole box, so it's
+            noise on connections where the user must fall back to the
+            HTTPS upload below). Still shown when no session is active so
+            the informational copy and the "open or focus a session" hint
+            remain discoverable. */}
+        {!(activeSession && !activeSession.fileTransferEnabled) && (
+          <div className="p-4 border-b border-white/5 space-y-3 text-xs">
+            <div className="rounded bg-accent/10 border border-accent/20 p-3 space-y-2">
+              <div className="font-semibold text-accent-bright">
+                How to export a file from this session
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-txt-secondary">
+                <li>
+                  Inside the remote desktop, open the Strata virtual drive
+                  {driveName ? (
+                    <span>
+                      {" "}
+                      (mapped as <span className="font-mono text-accent">{driveName}</span>)
+                    </span>
+                  ) : driveProtocol === "rdp" ? (
+                    <span>
+                      {" "}
+                      (mapped under <span className="font-mono">This PC</span>)
+                    </span>
+                  ) : null}
+                  .
+                </li>
+                <li>Copy or drag the file you want to export into that drive.</li>
+                <li>
+                  The file is intercepted here, scanned for sensitive data, and either auto-approved
+                  or queued for an approver.
+                </li>
+                <li>Approved files appear below with a one-time download link.</li>
+              </ol>
+              {!activeSession && (
+                <div className="text-warning text-[11px]">
+                  Open or focus a session to enable outbound transfers.
+                </div>
+              )}
             </div>
-            <ol className="list-decimal list-inside space-y-1 text-txt-secondary">
-              <li>
-                Inside the remote desktop, open the Strata virtual drive
-                {driveName ? (
-                  <span>
-                    {" "}
-                    (mapped as <span className="font-mono text-accent">{driveName}</span>)
-                  </span>
-                ) : driveProtocol === "rdp" ? (
-                  <span>
-                    {" "}
-                    (mapped under <span className="font-mono">This PC</span>)
-                  </span>
-                ) : null}
-                .
-              </li>
-              <li>Copy or drag the file you want to export into that drive.</li>
-              <li>
-                The file is intercepted here, scanned for sensitive data, and either auto-approved
-                or queued for an approver.
-              </li>
-              <li>Approved files appear below with a one-time download link.</li>
-            </ol>
-            {!activeSession && (
-              <div className="text-warning text-[11px]">
-                Open or focus a session to enable outbound transfers.
-              </div>
-            )}
-            {activeSession && !activeSession.fileTransferEnabled && (
-              <div className="text-warning text-[11px]">
-                File transfer is not configured on this connection. Ask an admin to enable the
-                virtual drive in the connection settings.
-              </div>
-            )}
-          </div>
 
-          <label className="block">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
-              Justification for the next file (optional)
-            </span>
-            <textarea
-              className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
-              rows={2}
-              placeholder="Why does the next exported file need to leave the session?"
-              value={justification}
-              onChange={(e) => setJustification(e.target.value)}
-              maxLength={1000}
-              disabled={!activeSession}
-            />
-            <span className="block mt-1 text-[10px] text-txt-tertiary">
-              Attached to the next file intercepted from this session, then cleared.
-            </span>
-          </label>
-        </div>
+            <label className="block">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
+                Justification for the next file (optional)
+              </span>
+              <textarea
+                className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
+                rows={2}
+                placeholder="Why does the next exported file need to leave the session?"
+                value={justification}
+                onChange={(e) => setJustification(e.target.value)}
+                maxLength={1000}
+                disabled={!activeSession}
+              />
+              <span className="block mt-1 text-[10px] text-txt-tertiary">
+                Attached to the next file intercepted from this session, then cleared.
+              </span>
+            </label>
+          </div>
+        )}
 
         {/* HTTPS upload snippet (fallback when drive redirection is blocked) */}
         <div className="p-4 border-b border-white/5 space-y-3 text-xs">
@@ -621,6 +625,8 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 {h.status === "approved" && h.download_token && (
                   <a
                     href={outboundShareDownloadUrl(h.download_token)}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="text-accent underline text-[10px]"
                   >
                     Download →

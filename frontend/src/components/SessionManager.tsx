@@ -6,6 +6,8 @@ import { createContext, useContext, useCallback, useEffect, useRef, useState } f
 import Guacamole from "guacamole-common-js";
 import { preparePastePayload } from "./pastePayload";
 import { notifySessionActivity } from "./sessionActivity";
+import { submitOutboundShare } from "../api";
+import { useOptionalToast } from "./ToastProvider";
 export interface GuacSession {
   id: string; // connection UUID
   connectionId: string;
@@ -23,6 +25,13 @@ export interface GuacSession {
   filesystems: { object: Guacamole.GuacObject; name: string }[];
   /** Remote clipboard text (last received from the session) */
   remoteClipboard: string;
+  /**
+   * Justification text to attach to the *next* outbound-share file
+   * intercepted from this session. Set by the user via the
+   * QuickShareOutbound panel; consumed (and cleared) by
+   * `client.onfile` when an outbound file arrives.
+   */
+  pendingOutboundJustification?: string;
   /** Cleanup function for paste event listener */
   _cleanupPaste?: () => void;
   /** Pop-out state and actions */
@@ -94,6 +103,7 @@ interface SessionManagerValue {
   barWidth: number;
   canShare: boolean;
   canUseQuickShare: boolean;
+  canUseQuickShareOutbound: boolean;
 }
 
 interface CreateSessionOpts {
@@ -131,10 +141,12 @@ export function SessionManagerProvider({
   children,
   canShare = false,
   canUseQuickShare = false,
+  canUseQuickShareOutbound = false,
 }: {
   children: React.ReactNode;
   canShare?: boolean;
   canUseQuickShare?: boolean;
+  canUseQuickShareOutbound?: boolean;
 }) {
   const [sessions, setSessions] = useState<GuacSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -145,6 +157,13 @@ export function SessionManagerProvider({
   // is intentionally not persisted (re-collapses on every page load).
   const [sessionBarCollapsed, setSessionBarCollapsed] = useState(true);
   const sessionsRef = useRef<GuacSession[]>([]);
+  const toast = useOptionalToast();
+
+  // Keep a live ref so the `client.onfile` closure (captured at session
+  // create-time) can read the *current* permission rather than the value
+  // that was true when the session was opened.
+  const canUseQuickShareOutboundRef = useRef<boolean>(canUseQuickShareOutbound);
+  canUseQuickShareOutboundRef.current = canUseQuickShareOutbound;
 
   const barWidth = 0; // Floating overlay doesn't reserve space
 
@@ -399,6 +418,65 @@ export function SessionManagerProvider({
       const reader = new Guacamole.BlobReader(stream, mimetype);
       reader.onend = () => {
         const blob = reader.getBlob();
+
+        // Outbound approval-gated interception: when the user has the
+        // `can_use_quick_share_outbound` permission, every file the
+        // remote session pushes out (via the mapped drive / SFTP) is
+        // routed to the outbound-shares endpoint for DLP scan +
+        // optional approver review instead of being auto-downloaded.
+        // The per-user `outbound_share_requires_approval` flag is
+        // enforced server-side (auto-approves when off).
+        if (canUseQuickShareOutboundRef.current) {
+          const live = sessionsRef.current.find((s) => s.id === sessionId);
+          const justification = live?.pendingOutboundJustification?.trim() ?? "";
+          const file = new File([blob], filename, { type: mimetype });
+          const fd = new FormData();
+          fd.append("file", file, filename);
+          if (live) {
+            fd.append("session_id", live.id);
+            fd.append("connection_id", live.connectionId);
+          }
+          if (justification) fd.append("justification", justification);
+
+          submitOutboundShare(fd)
+            .then((res) => {
+              if (live && live.pendingOutboundJustification) {
+                live.pendingOutboundJustification = undefined;
+                setSessions((prev) => [...prev]);
+              }
+              // Fire a window event so any open QuickShareOutbound panel
+              // can refresh its submission history immediately.
+              window.dispatchEvent(
+                new CustomEvent("strata:outbound-share-submitted", { detail: res })
+              );
+              if (res.status === "approved") {
+                toast?.success({
+                  title: `Outbound share auto-approved: ${filename}`,
+                  description: res.download_url
+                    ? "Open the Outbound Share panel to download."
+                    : undefined,
+                });
+              } else if (res.status === "pending") {
+                toast?.info({
+                  title: `Outbound share queued: ${filename}`,
+                  description: `DLP score ${res.dlp_score}. Awaiting approver decision.`,
+                });
+              } else {
+                toast?.warning({
+                  title: `Outbound share ${res.status}: ${filename}`,
+                });
+              }
+            })
+            .catch((err: unknown) => {
+              toast?.error({
+                title: `Outbound share failed: ${filename}`,
+                description: err instanceof Error ? err.message : String(err),
+              });
+            });
+          return;
+        }
+
+        // Default behaviour: stream straight to the browser as a download.
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -597,6 +675,7 @@ export function SessionManagerProvider({
         barWidth,
         canShare,
         canUseQuickShare,
+        canUseQuickShareOutbound,
       }}
     >
       {children}

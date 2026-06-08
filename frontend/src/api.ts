@@ -192,6 +192,8 @@ export interface LoginResponse {
     can_create_user_groups: boolean;
     can_create_connections: boolean;
     can_use_quick_share: boolean;
+    /** Outbound Quick-Share (export files from session, approval-gated). */
+    can_use_quick_share_outbound: boolean;
     can_create_sharing_profiles: boolean;
     can_view_sessions: boolean;
   };
@@ -261,9 +263,15 @@ export interface MeResponse {
   can_create_user_groups: boolean;
   can_create_connections: boolean;
   can_use_quick_share: boolean;
+  /** Outbound Quick-Share (export files from session, approval-gated). */
+  can_use_quick_share_outbound: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
   is_approver: boolean;
+  /** True for super-admins (implicit) or users listed in
+   *  `outbound_share_approvers`. Drives visibility of the outbound
+   *  shares admin tab. */
+  is_outbound_approver: boolean;
 }
 
 export const getMe = () => request<MeResponse>("/user/me");
@@ -908,6 +916,8 @@ export interface Role {
   can_create_user_groups: boolean;
   can_create_connections: boolean;
   can_use_quick_share: boolean;
+  /** Outbound Quick-Share (export files from session, approval-gated). */
+  can_use_quick_share_outbound: boolean;
   can_create_sharing_profiles: boolean;
   can_view_sessions: boolean;
 }
@@ -1033,6 +1043,10 @@ export interface User {
   /** Per-user opt-in for Safeguard JIT. The global master switch on the
    *  Safeguard admin tab still applies; both must be true. */
   safeguard_jit_enabled: boolean;
+  /** When true (the default), every outbound Quick-Share submission by
+   *  this user is queued for approver review. When false, low-risk
+   *  submissions auto-approve via the DLP scanner. */
+  outbound_share_requires_approval: boolean;
 }
 
 export interface CreateUserRequest {
@@ -1060,7 +1074,11 @@ export const deleteUser = (id: string) =>
 
 export const updateUser = (
   id: string,
-  data: { role_id?: string; safeguard_jit_enabled?: boolean }
+  data: {
+    role_id?: string;
+    safeguard_jit_enabled?: boolean;
+    outbound_share_requires_approval?: boolean;
+  }
 ) =>
   request<{ status: string }>(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(data) });
 
@@ -1994,3 +2012,152 @@ export const updateTrustedCa = (
 export const deleteTrustedCa = (id: string) =>
   request<{ status: string }>(`/admin/trusted-cas/${id}`, { method: "DELETE" });
 export const getTrustedCasForPicker = () => request<TrustedCaPickerEntry[]>("/user/trusted-cas");
+
+// ── Outbound Quick-Share (approval-gated file export) ──────────────
+
+/**
+ * One row from the outbound-share queue. The download token is intentionally
+ * server-side only; clients obtain a download URL from a separate field
+ * on the submit/decide responses.
+ */
+export interface OutboundShare {
+  id: string;
+  requester_user_id: string;
+  session_id: string | null;
+  connection_id: string | null;
+  filename: string;
+  content_type: string;
+  size: number;
+  sha256: string;
+  storage_path: string | null;
+  justification: string | null;
+  dlp_score: number;
+  /** JSON array of free-form reason strings. */
+  dlp_reasons: string[];
+  /** "pending" · "approved" · "denied" · "downloaded" · "purged". */
+  status: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_reason: string | null;
+  /** Present when the share is approved; consumed on first download. */
+  download_token: string | null;
+  downloaded_at: string | null;
+  created_at: string;
+  expires_at: string;
+  purged_at: string | null;
+}
+
+/** Wire response from POST /user/outbound-shares. */
+export interface OutboundShareSubmitResponse {
+  id: string;
+  status: string;
+  /** Present when status === "approved" (auto-approval path). */
+  download_url?: string;
+  dlp_score: number;
+  dlp_reasons: string[];
+  expires_at: string;
+}
+
+/** Wire response from POST /admin/outbound-shares/:id/decide. */
+export interface OutboundShareDecideResponse {
+  id: string;
+  status: string;
+  /** Present when the decision was Approve. */
+  download_url?: string | null;
+}
+
+/** Joined view of an outbound-share approver delegation. */
+export interface OutboundShareApprover {
+  user_id: string;
+  username: string;
+  email: string;
+  full_name: string | null;
+  created_at: string;
+}
+
+/**
+ * Submit a file for outbound review. The handler reads `file`, `filename`
+ * (optional override of File.name), and `justification` (optional).
+ * Returns immediately — even auto-approved shares only include a
+ * `download_url` that the caller must follow separately.
+ */
+export const submitOutboundShare = async (
+  formData: FormData
+): Promise<OutboundShareSubmitResponse> => {
+  const headers = buildHeaders("POST"); // no Content-Type — browser sets boundary
+  const res = await fetch(`${API_BASE}/user/outbound-shares`, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, body.error || res.statusText);
+  }
+  return res.json();
+};
+
+export const listMyOutboundShares = () =>
+  request<OutboundShare[]>("/user/outbound-shares");
+
+/** Browser-direct URL for downloading an approved outbound share. */
+export const outboundShareDownloadUrl = (token: string) =>
+  `${API_BASE}/user/outbound-shares/download/${encodeURIComponent(token)}`;
+
+/**
+ * Response from `POST /user/outbound-shares/ingest-token`. The
+ * returned token is single-use, ten-minute TTL, and is meant to be
+ * rendered into a `curl` / `Invoke-WebRequest` command the user
+ * pastes inside the remote session shell. The actual upload hits
+ * `${origin}${upload_path}` with no cookie auth — the token is the
+ * auth.
+ */
+export interface OutboundShareIngestToken {
+  token: string;
+  expires_at: string;
+  /** Relative path; prefix with `window.location.origin` to build
+   *  the absolute URL embedded in the upload snippet. */
+  upload_path: string;
+}
+
+export const issueOutboundShareIngestToken = (body: {
+  session_id?: string;
+  connection_id?: string;
+  justification?: string;
+}) =>
+  request<OutboundShareIngestToken>("/user/outbound-shares/ingest-token", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+// ── Admin / approver surface ────────────────────────────────────────
+
+export const listOutboundShares = () =>
+  request<OutboundShare[]>("/admin/outbound-shares");
+
+export const listPendingOutboundShares = () =>
+  request<OutboundShare[]>("/admin/outbound-shares/pending");
+
+export const decideOutboundShare = (id: string, approve: boolean, reason?: string) =>
+  request<OutboundShareDecideResponse>(`/admin/outbound-shares/${id}/decide`, {
+    method: "POST",
+    body: JSON.stringify({ approve, reason }),
+  });
+
+export const purgeOutboundShare = (id: string) =>
+  request<{ status?: string }>(`/admin/outbound-shares/${id}`, { method: "DELETE" });
+
+export const listOutboundApprovers = () =>
+  request<OutboundShareApprover[]>("/admin/outbound-shares/approvers");
+
+export const addOutboundApprover = (user_id: string) =>
+  request<{ status?: string }>("/admin/outbound-shares/approvers", {
+    method: "POST",
+    body: JSON.stringify({ user_id }),
+  });
+
+export const removeOutboundApprover = (user_id: string) =>
+  request<{ status?: string }>(`/admin/outbound-shares/approvers/${user_id}`, {
+    method: "DELETE",
+  });

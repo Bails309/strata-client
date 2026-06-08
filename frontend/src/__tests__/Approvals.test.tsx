@@ -27,9 +27,11 @@ const mockUser: MeResponse = {
   can_create_user_groups: true,
   can_create_connections: true,
   can_use_quick_share: true,
+  can_use_quick_share_outbound: true,
   can_create_sharing_profiles: true,
   can_view_sessions: true,
   is_approver: true,
+  is_outbound_approver: false,
 };
 
 const pendingRequests = [

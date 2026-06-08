@@ -87,6 +87,14 @@ pub async fn me(
         .await
         .unwrap_or(false);
 
+    // Designated outbound-share approver? Super-admins are implicit
+    // approvers (they bypass the gate in routes/outbound_shares.rs::
+    // require_approver), so true for either condition.
+    let is_outbound_approver = user.can_manage_system
+        || crate::services::outbound_shares::is_outbound_approver(&db.pool, user.id)
+            .await
+            .unwrap_or(false);
+
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -106,9 +114,11 @@ pub async fn me(
         "can_create_user_groups": user.can_create_user_groups,
         "can_create_connections": user.can_create_connections,
         "can_use_quick_share": user.can_use_quick_share,
+        "can_use_quick_share_outbound": user.can_use_quick_share_outbound,
         "can_create_sharing_profiles": user.can_create_sharing_profiles,
         "can_view_sessions": user.can_view_sessions,
         "is_approver": is_approver,
+        "is_outbound_approver": is_outbound_approver,
     })))
 }
 

@@ -213,5 +213,17 @@ async fn run_cleanup(state: SharedState) -> anyhow::Result<()> {
         }
     }
 
+    // Same for one-shot outbound-share ingest tokens.
+    if let Ok(purged) =
+        crate::services::outbound_share_ingest::purge_expired(&db.pool).await
+    {
+        if purged > 0 {
+            tracing::info!(
+                "Purged {} expired outbound-share ingest token(s)",
+                purged
+            );
+        }
+    }
+
     Ok(())
 }

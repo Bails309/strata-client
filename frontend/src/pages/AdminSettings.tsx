@@ -35,6 +35,7 @@ import TrustedCAsTab from "./admin/TrustedCAsTab";
 import VdiTab from "./admin/VdiTab";
 import DmzLinksTab from "./admin/DmzLinksTab";
 import SafeguardTab from "./admin/SafeguardTab";
+import OutboundSharesTab from "./admin/OutboundSharesTab";
 
 type Tab =
   | "health"
@@ -54,6 +55,7 @@ type Tab =
   | "trusted-cas"
   | "dmz-links"
   | "safeguard"
+  | "outbound-shares"
   | "security";
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
@@ -231,6 +233,15 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Safeguard JIT ── */}
         {tab === "safeguard" && <SafeguardTab onSave={() => flash("Safeguard config updated")} />}
 
+        {/* ── Outbound Shares (approval queue + approver delegations) ── */}
+        {tab === "outbound-shares" && (
+          <OutboundSharesTab
+            users={users}
+            isSuperAdmin={!!user.can_manage_system}
+            onSave={() => flash("Outbound shares updated")}
+          />
+        )}
+
         {/* ── Security ── */}
         {tab === "security" && (
           <SecurityTab
@@ -274,14 +285,14 @@ const TAB_LABELS: Record<Tab, string> = {
   "trusted-cas": "Trusted CAs",
   "dmz-links": "DMZ Links",
   safeguard: "Safeguard JIT",
+  "outbound-shares": "Outbound Shares",
   security: "Security",
 };
 
 const ADMIN_NAV_GROUPS: Array<{ title: string; items: Tab[] }> = [
   { title: "Overview", items: ["health", "sessions"] },
-  {
-    title: "Identity & Access",
-    items: ["access", "ad-sync", "sso", "kerberos", "passwords", "safeguard"],
+  { title: "Identity & Access",
+    items: ["access", "ad-sync", "sso", "kerberos", "passwords", "safeguard", "outbound-shares"],
   },
   { title: "Connectivity", items: ["network", "dmz-links", "trusted-cas", "vdi"] },
   { title: "Workspace", items: ["display", "tags", "notifications", "recordings"] },
@@ -301,6 +312,7 @@ function tabVisible(t: Tab, user: MeResponse): boolean {
     );
   if (t === "tags") return user.can_manage_system || user.can_manage_connections;
   if (t === "sessions") return user.can_manage_system || user.can_view_audit_logs;
+  if (t === "outbound-shares") return user.can_manage_system || user.is_outbound_approver;
   return user.can_manage_system;
 }
 

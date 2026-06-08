@@ -338,6 +338,8 @@ async fn main() -> anyhow::Result<()> {
         // ── Spawn VDI container reaper (rustguac parity, Phase 3) ──
         // No-op when STRATA_VDI_ENABLED is unset (NoopVdiDriver).
         services::session_cleanup::spawn_vdi_reaper(state.clone(), shutdown.clone()),
+        // ── Spawn outbound Quick-Share purge worker (hourly) ──
+        services::outbound_shares::spawn_purge_worker(state.clone(), shutdown.clone()),
     ];
 
     // ── Spawn SSO state pruner ──

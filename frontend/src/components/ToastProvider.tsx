@@ -77,6 +77,15 @@ export function useToast(): ToastApi {
   return ctx;
 }
 
+/** Same as `useToast`, but returns `null` when no provider is mounted
+ *  instead of throwing. Use this from providers/hooks that may legitimately
+ *  be rendered in isolation (e.g. SessionManager unit tests that don't
+ *  also mount ToastProvider). Production paths always have a provider
+ *  in scope. */
+export function useOptionalToast(): ToastApi | null {
+  return useContext(ToastContext);
+}
+
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Provider                                                                  */
 /* ────────────────────────────────────────────────────────────────────────── */

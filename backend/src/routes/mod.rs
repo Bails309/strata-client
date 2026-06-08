@@ -4,6 +4,7 @@ pub mod certs;
 pub mod files;
 pub mod health;
 pub mod notifications;
+pub mod outbound_shares;
 pub mod roadmap;
 pub mod setup;
 pub mod share;
@@ -55,6 +56,16 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/auth/sso/callback", get(auth::sso_callback))
         .route("/api/setup/initialize", post(setup::initialize))
         .route("/api/safeguard/enrol", post(user::enrol_safeguard_token))
+        // Outbound Quick-Share — token-auth ingest endpoint used by
+        // the curl / Invoke-WebRequest snippet that the user pastes
+        // inside the remote session. UNAUTHENTICATED at the cookie
+        // layer; the path-segment token IS the auth (single-use,
+        // 10-minute TTL, minted via the authed `ingest-token` route).
+        .route(
+            "/api/outbound-shares/ingest/{token}",
+            post(outbound_shares::ingest_via_token)
+                .layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+        )
         .route(
             "/api/shared/tunnel/{share_token}",
             get(share::ws_shared_tunnel),
@@ -489,6 +500,54 @@ pub fn build_router(state: SharedState) -> Router {
             get(files::list_session_files),
         )
         .route("/api/files/delete/{token}", delete(files::delete_file))
+        // ── Outbound Quick-Share (approval-gated) ───────────────────
+        .route(
+            "/api/user/outbound-shares",
+            get(outbound_shares::list_mine).post(outbound_shares::submit).layer(
+                DefaultBodyLimit::max(500 * 1024 * 1024),
+            ),
+        )
+        .route(
+            "/api/user/outbound-shares/download/{token}",
+            get(outbound_shares::download),
+        )
+        // Mint a one-shot upload token for the in-session HTTPS
+        // ingest path. Authed + CSRF-protected (the cookie session
+        // proves who is asking for the token); the resulting token
+        // is then used by an unauthenticated POST at
+        // `/api/outbound-shares/ingest/{token}` from inside the
+        // remote session shell.
+        .route(
+            "/api/user/outbound-shares/ingest-token",
+            post(outbound_shares::issue_ingest_token),
+        )
+        // Approver / system-admin endpoints (per-handler gate; not under
+        // require_admin because approvers may not hold any admin perm).
+        .route(
+            "/api/admin/outbound-shares",
+            get(outbound_shares::list_all),
+        )
+        .route(
+            "/api/admin/outbound-shares/pending",
+            get(outbound_shares::list_pending),
+        )
+        .route(
+            "/api/admin/outbound-shares/{id}/decide",
+            post(outbound_shares::decide),
+        )
+        .route(
+            "/api/admin/outbound-shares/{id}",
+            delete(outbound_shares::purge),
+        )
+        // Approver-list management (super-admin only — handlers re-check)
+        .route(
+            "/api/admin/outbound-shares/approvers",
+            get(outbound_shares::list_approvers).post(outbound_shares::add_approver),
+        )
+        .route(
+            "/api/admin/outbound-shares/approvers/{user_id}",
+            delete(outbound_shares::remove_approver),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_auth))
         .layer(middleware::from_fn(require_csrf));
 

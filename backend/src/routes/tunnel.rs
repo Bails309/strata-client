@@ -328,8 +328,7 @@ pub async fn ws_tunnel(
             .await?
         };
 
-        if let Some((profile_id, account_id, asset, profile_ttl_hours)) = safeguard_target
-        {
+        if let Some((profile_id, account_id, asset, profile_ttl_hours)) = safeguard_target {
             let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
 
             // 1. Try the cache first when admin-enabled. A live cache

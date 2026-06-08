@@ -135,14 +135,8 @@ pub async fn safeguard_target_for_profile(
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, acc, asset, ttl)| {
-        (
-            id,
-            acc.unwrap_or_default(),
-            asset.unwrap_or_default(),
-            ttl,
-        )
-    }))
+    Ok(row
+        .map(|(id, acc, asset, ttl)| (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)))
 }
 
 /// Insert a `kind='safeguard'` profile. No envelope payload is

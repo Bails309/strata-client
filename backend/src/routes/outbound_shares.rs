@@ -246,17 +246,17 @@ async fn finalize_submit(
     content_type: &str,
     plaintext: &[u8],
 ) -> Result<SubmitResponse, AppError> {
-    // Per-user override falls back to the role default. Migration 075
-    // lifted the bypass flag onto the role row; `users.outbound_share_requires_approval`
-    // is now an optional override (NULL = inherit). COALESCE returns the
-    // first non-NULL value, so an explicit per-user TRUE/FALSE always wins
-    // and a missing override picks up the role's `outbound_share_requires_approval`.
-    // The outer COALESCE defaults to TRUE so a deleted/unknown user falls
-    // back to the safest behaviour (every export held for approval).
+    // Approval is required by default for every outbound submission;
+    // the only way to bypass is an explicit per-user opt-out
+    // (`users.outbound_share_requires_approval = FALSE`). Migration 076
+    // dropped the role-level toggle introduced in 075 — the role layer
+    // now governs only whether the feature is available at all
+    // (`can_use_quick_share_outbound`). NULL on the user column means
+    // "use the system default (require approval)"; an unknown/deleted
+    // user likewise falls back to TRUE.
     let requires_approval: bool = sqlx::query_scalar(
-        "SELECT COALESCE(u.outbound_share_requires_approval, r.outbound_share_requires_approval, TRUE)
-         FROM users u JOIN roles r ON u.role_id = r.id
-         WHERE u.id = $1",
+        "SELECT COALESCE(outbound_share_requires_approval, TRUE)
+         FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)

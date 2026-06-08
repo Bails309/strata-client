@@ -30,10 +30,10 @@ pub struct UserRow {
     /// the user to see the credential editor's Safeguard option.
     pub safeguard_jit_enabled: bool,
     /// Outbound Quick-Share approval-required override. `Some(true)` /
-    /// `Some(false)` forces the per-user behaviour regardless of the role
-    /// default; `None` means "inherit `roles.outbound_share_requires_approval`".
-    /// Migration 075 lifted the underlying setting onto the role row;
-    /// existing user values are preserved as explicit overrides.
+    /// `Some(false)` forces the per-user behaviour; `None` means "use
+    /// the system default (require approval)". Migration 076 dropped
+    /// the role-level setting, so this column is now the only override
+    /// surface and the default for missing rows is always TRUE.
     pub outbound_share_requires_approval: Option<bool>,
 }
 
@@ -54,8 +54,8 @@ pub struct UpdateUserRequest {
     /// When present, set or clear the per-user outbound Quick-Share
     /// approval-required override. The outer `Option` distinguishes
     /// "field absent" (no change) from `Some(None)` / JSON `null`
-    /// (clear the override — effective value falls back to the user's
-    /// role default). `Some(Some(bool))` sets an explicit per-user value.
+    /// (clear the override so the system default — require approval —
+    /// applies). `Some(Some(bool))` sets an explicit per-user value.
     #[serde(
         default,
         deserialize_with = "crate::services::serde_helpers::double_option::deserialize"
@@ -179,8 +179,8 @@ pub async fn safeguard_jit_enabled(pool: &Pool<Postgres>, id: Uuid) -> bool {
 /// Set or clear the per-user outbound Quick-Share approval-required
 /// override. `Some(true)`/`Some(false)` pins the user to that value;
 /// `None` clears the override so the effective behaviour falls back to
-/// the user's role default (`roles.outbound_share_requires_approval`).
-/// Returns `true` when a row was updated.
+/// the system default (require approval). Returns `true` when a row
+/// was updated.
 pub async fn set_outbound_share_requires_approval(
     pool: &Pool<Postgres>,
     id: Uuid,

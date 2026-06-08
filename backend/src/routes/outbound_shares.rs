@@ -248,12 +248,14 @@ async fn finalize_submit(
 ) -> Result<SubmitResponse, AppError> {
     // Approval is required by default for every outbound submission;
     // the only way to bypass is an explicit per-user opt-out
-    // (`users.outbound_share_requires_approval = FALSE`). Migration 076
-    // dropped the role-level toggle introduced in 075 — the role layer
-    // now governs only whether the feature is available at all
-    // (`can_use_quick_share_outbound`). NULL on the user column means
-    // "use the system default (require approval)"; an unknown/deleted
-    // user likewise falls back to TRUE.
+    // (`users.outbound_share_requires_approval = FALSE`). When that
+    // flag is set the share is auto-approved unconditionally — the
+    // DLP score is still computed and surfaced for audit but does NOT
+    // override the bypass. Migration 076 dropped the role-level toggle
+    // introduced in 075 — the role layer now governs only whether the
+    // feature is available at all (`can_use_quick_share_outbound`).
+    // NULL on the user column means "use the system default (require
+    // approval)"; an unknown/deleted user likewise falls back to TRUE.
     let requires_approval: bool = sqlx::query_scalar(
         "SELECT COALESCE(outbound_share_requires_approval, TRUE)
          FROM users WHERE id = $1",

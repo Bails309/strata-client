@@ -13,11 +13,12 @@
 //!
 //! 1. `submit()` — staging blob written to disk, sealed via [`vault::seal`],
 //!    sealed DEK + nonce stored in DB. A basic DLP scorer runs on the
-//!    filename/MIME/size and records a score + reasons. If the user has
-//!    `outbound_share_requires_approval = false` (admin override) and the
-//!    DLP score is below the auto-deny threshold, status transitions to
-//!    `Approved` and a one-shot `download_token` is generated immediately.
-//!    Otherwise status is `Pending`.
+//!    filename/MIME/size and records a score + reasons for audit/UI
+//!    surfacing. If the user has `outbound_share_requires_approval = false`
+//!    (admin override), status transitions to `Approved` and a one-shot
+//!    `download_token` is generated immediately — the DLP score is
+//!    recorded but does not gate the auto-approval. Otherwise status is
+//!    `Pending` and an approver must decide.
 //! 2. `decide()` — only an outbound-share approver (entry in
 //!    `outbound_share_approvers`) can flip a `Pending` row to `Approved` or
 //!    `Denied`. Denial purges the blob and clears the sealed key columns;
@@ -166,9 +167,12 @@ pub struct SubmitOutcome {
 
 /// Stage and persist a new outbound share. Always seals via Vault.
 ///
-/// Auto-approval happens iff `requires_approval == false` AND the DLP
-/// score is below [`DLP_AUTO_FLAG_SCORE`]. Otherwise the row is created
-/// in `Pending` for an approver to decide.
+/// Auto-approval happens iff `requires_approval == false`. The DLP
+/// score is computed and persisted in either case for audit/UI
+/// surfacing, but it does not gate auto-approval — the per-user bypass
+/// is a deliberate admin override that says "trust this user". When
+/// `requires_approval == true` the row is created in `Pending` for an
+/// approver to decide regardless of DLP score.
 pub async fn submit(
     pool: &Pool<Postgres>,
     vault_cfg: &VaultConfig,
@@ -208,10 +212,12 @@ pub async fn submit(
     let now = Utc::now();
     let expires_at = now + default_ttl();
 
-    // Decide initial status. Auto-approval requires both:
-    //   a) the requester is not required to seek approval, and
-    //   b) the DLP score is below the auto-flag threshold.
-    let auto_approve = !input.requires_approval && dlp_score < DLP_AUTO_FLAG_SCORE;
+    // Decide initial status. Auto-approval is granted whenever the
+    // requester has been opted out of approval — the per-user bypass is
+    // a deliberate admin override that means "trust this user", so the
+    // DLP score is recorded for audit but does NOT veto the bypass.
+    // Users without the bypass are always queued for an approver.
+    let auto_approve = !input.requires_approval;
     let (status, download_token) = if auto_approve {
         (OutboundShareStatus::Approved, Some(mint_token()))
     } else {
@@ -809,9 +815,11 @@ async fn ensure_staging_path(root: &Path, id: Uuid) -> Result<PathBuf, AppError>
 /// obviously-bad-looking uploads (executables, archives, certain
 /// keywords) without pretending to be a real DLP product.
 ///
-/// Returns `(score, reasons)`. A score `>= DLP_AUTO_FLAG_SCORE` forces
-/// the row into `Pending` even if the requester is on the no-approval
-/// allowlist.
+/// Returns `(score, reasons)`. [`DLP_AUTO_FLAG_SCORE`] is a reference
+/// threshold for "this file looks risky"; the score is recorded on
+/// every row and surfaced to approvers/admins, but it does NOT
+/// override the per-user bypass — opting a user out of approval is a
+/// deliberate admin decision that means "trust this user".
 pub fn compute_dlp_score(filename: &str, content_type: &str, size: i64) -> (i32, Vec<String>) {
     let mut score = 0i32;
     let mut reasons: Vec<String> = Vec::new();

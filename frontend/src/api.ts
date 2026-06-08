@@ -1044,10 +1044,12 @@ export interface User {
    *  Safeguard admin tab still applies; both must be true. */
   safeguard_jit_enabled: boolean;
   /** Per-user outbound Quick-Share approval-required override.
-   *  `false` opts this user out of the approval queue (DLP-gated
-   *  auto-approval applies); `true` or `null` keeps the system
-   *  default of "every export held for approver review". Surfaced on
-   *  the admin Access tab as a single "Outbound Share Bypass" checkbox. */
+   *  `false` opts this user out of the approval queue — submissions
+   *  are auto-approved unconditionally (the DLP score is still
+   *  recorded for audit but does not block the transfer). `true` or
+   *  `null` keeps the system default of "every export held for
+   *  approver review". Surfaced on the admin Access tab as a single
+   *  "Outbound Share Bypass" checkbox. */
   outbound_share_requires_approval: boolean | null;
 }
 

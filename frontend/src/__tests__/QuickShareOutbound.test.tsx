@@ -27,10 +27,7 @@ vi.mock("../api", async () => {
   };
 });
 
-import {
-  issueOutboundShareIngestToken,
-  listMyOutboundShares,
-} from "../api";
+import { issueOutboundShareIngestToken, listMyOutboundShares } from "../api";
 
 // ── SessionManager mock ───────────────────────────────────────────────
 const updateSession = vi.fn();
@@ -63,12 +60,7 @@ vi.mock("../components/Select", () => ({
     onChange: (v: string) => void;
     options: { value: string; label: string }[];
   }) => (
-    <select
-      id={id}
-      data-testid="select"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    >
+    <select id={id} data-testid="select" value={value} onChange={(e) => onChange(e.target.value)}>
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
@@ -260,9 +252,7 @@ describe("QuickShareOutbound", () => {
     // The snippet for curl format
     expect(screen.getByText(/curl -fL -F 'file=@\.\/<your-file>'/)).toBeInTheDocument();
     // Button label flips to Regenerate
-    expect(
-      screen.getByRole("button", { name: /Regenerate upload command/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Regenerate upload command/i })).toBeInTheDocument();
   });
 
   it("includes the trimmed justification in the mint request when present", async () => {

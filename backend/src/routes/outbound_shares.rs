@@ -103,12 +103,11 @@ async fn load_pool_and_vault(
     if s.phase != BootPhase::Running {
         return Err(AppError::SetupRequired);
     }
-    let pool = s
-        .db
-        .as_ref()
-        .ok_or_else(|| AppError::Internal("DB not initialised".into()))?
-        .pool
-        .clone();
+    let pool =
+        s.db.as_ref()
+            .ok_or_else(|| AppError::Internal("DB not initialised".into()))?
+            .pool
+            .clone();
     let vault_cfg = s
         .config
         .as_ref()
@@ -139,9 +138,12 @@ async fn parse_outbound_multipart(
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "session_id" => {
-                session_id = Some(field.text().await.map_err(|e| {
-                    AppError::Validation(format!("Invalid session_id: {e}"))
-                })?);
+                session_id = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::Validation(format!("Invalid session_id: {e}")))?,
+                );
             }
             "connection_id" => {
                 let s = field
@@ -156,9 +158,10 @@ async fn parse_outbound_multipart(
                 }
             }
             "justification" => {
-                let s = field.text().await.map_err(|e| {
-                    AppError::Validation(format!("Invalid justification: {e}"))
-                })?;
+                let s = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Validation(format!("Invalid justification: {e}")))?;
                 if !s.trim().is_empty() {
                     if s.len() > 1024 {
                         return Err(AppError::Validation(
@@ -174,11 +177,11 @@ async fn parse_outbound_multipart(
                     .content_type()
                     .unwrap_or("application/octet-stream")
                     .to_string();
-                let temp_path = std::env::temp_dir()
-                    .join(format!("strata-outbound-{}", Uuid::new_v4()));
-                let mut temp_file = tokio::fs::File::create(&temp_path).await.map_err(|e| {
-                    AppError::Internal(format!("Failed to create temp file: {e}"))
-                })?;
+                let temp_path =
+                    std::env::temp_dir().join(format!("strata-outbound-{}", Uuid::new_v4()));
+                let mut temp_file = tokio::fs::File::create(&temp_path)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to create temp file: {e}")))?;
                 let mut written: u64 = 0;
                 let mut stream = field;
                 while let Some(chunk) = stream.try_next().await.map_err(|e| {
@@ -245,13 +248,12 @@ async fn finalize_submit(
 ) -> Result<SubmitResponse, AppError> {
     // Per-user approval flag — defaults TRUE (every user requires
     // approval) unless an admin has explicitly opted them out.
-    let requires_approval: bool = sqlx::query_scalar(
-        "SELECT outbound_share_requires_approval FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?
-    .unwrap_or(true);
+    let requires_approval: bool =
+        sqlx::query_scalar("SELECT outbound_share_requires_approval FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or(true);
 
     let staging = staging_root();
 
@@ -388,12 +390,8 @@ pub async fn ingest_via_token(
 
     // Consume FIRST so any failure (oversize, bad form, vault error)
     // burns the token — prevents replay of a partially-valid upload.
-    let ctx = crate::services::outbound_share_ingest::consume(
-        &pool,
-        &token,
-        Some(&client_ip),
-    )
-    .await?;
+    let ctx =
+        crate::services::outbound_share_ingest::consume(&pool, &token, Some(&client_ip)).await?;
 
     // Re-check the requester's permission at consume time so a token
     // minted by a user whose role was revoked in the intervening
@@ -484,12 +482,11 @@ pub async fn download(
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
         }
-        let pool = s
-            .db
-            .as_ref()
-            .ok_or_else(|| AppError::Internal("DB not initialised".into()))?
-            .pool
-            .clone();
+        let pool =
+            s.db.as_ref()
+                .ok_or_else(|| AppError::Internal("DB not initialised".into()))?
+                .pool
+                .clone();
         let vault_cfg = s
             .config
             .as_ref()
@@ -505,13 +502,7 @@ pub async fn download(
         return Err(AppError::Forbidden);
     }
 
-    let plaintext = vault::unseal(
-        &vault_cfg,
-        &mat.sealed_dek,
-        &mat.ciphertext,
-        &mat.nonce,
-    )
-    .await?;
+    let plaintext = vault::unseal(&vault_cfg, &mat.sealed_dek, &mat.ciphertext, &mat.nonce).await?;
 
     let filename = mat.share.filename.clone();
     let content_type = mat.share.content_type.clone();
@@ -531,7 +522,13 @@ pub async fn download(
 
 fn sanitize_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c == '"' || c == '\n' || c == '\r' { '_' } else { c })
+        .map(|c| {
+            if c == '"' || c == '\n' || c == '\r' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 

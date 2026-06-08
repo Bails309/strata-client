@@ -348,11 +348,7 @@ pub async fn decide(
     let (new_status, download_token, storage_to_purge) = if input.approve {
         (OutboundShareStatus::Approved, Some(mint_token()), None)
     } else {
-        (
-            OutboundShareStatus::Denied,
-            None,
-            row.storage_path.clone(),
-        )
+        (OutboundShareStatus::Denied, None, row.storage_path.clone())
     };
 
     sqlx::query(
@@ -564,10 +560,7 @@ pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<OutboundShare>, AppEr
 }
 
 /// Look up a share by id (any user, used by admin).
-pub async fn find(
-    pool: &Pool<Postgres>,
-    id: Uuid,
-) -> Result<Option<OutboundShare>, AppError> {
+pub async fn find(pool: &Pool<Postgres>, id: Uuid) -> Result<Option<OutboundShare>, AppError> {
     let row: Option<OutboundShare> = sqlx::query_as(
         "SELECT id, requester_user_id, session_id, connection_id,
                 filename, content_type, size, sha256, storage_path,
@@ -585,10 +578,7 @@ pub async fn find(
 }
 
 /// Whether the given user is a registered outbound-share approver.
-pub async fn is_outbound_approver(
-    pool: &Pool<Postgres>,
-    user_id: Uuid,
-) -> Result<bool, AppError> {
+pub async fn is_outbound_approver(pool: &Pool<Postgres>, user_id: Uuid) -> Result<bool, AppError> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM outbound_share_approvers WHERE user_id = $1)",
     )
@@ -790,11 +780,7 @@ async fn ensure_staging_path(root: &Path, id: Uuid) -> Result<PathBuf, AppError>
 /// Returns `(score, reasons)`. A score `>= DLP_AUTO_FLAG_SCORE` forces
 /// the row into `Pending` even if the requester is on the no-approval
 /// allowlist.
-pub fn compute_dlp_score(
-    filename: &str,
-    content_type: &str,
-    size: i64,
-) -> (i32, Vec<String>) {
+pub fn compute_dlp_score(filename: &str, content_type: &str, size: i64) -> (i32, Vec<String>) {
     let mut score = 0i32;
     let mut reasons: Vec<String> = Vec::new();
 
@@ -803,8 +789,8 @@ pub fn compute_dlp_score(
 
     // Executable / installer extensions
     const HIGH_RISK_EXT: &[&str] = &[
-        ".exe", ".dll", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jar",
-        ".sh", ".scr", ".com", ".cpl", ".reg",
+        ".exe", ".dll", ".msi", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jar", ".sh", ".scr",
+        ".com", ".cpl", ".reg",
     ];
     for ext in HIGH_RISK_EXT {
         if name_lc.ends_with(ext) {
@@ -829,8 +815,17 @@ pub fn compute_dlp_score(
 
     // Credential / config-looking names
     const SENSITIVE_TOKENS: &[&str] = &[
-        "password", "secret", "credential", "token", "private", "id_rsa",
-        ".pem", ".pfx", ".p12", ".kdbx", ".keystore",
+        "password",
+        "secret",
+        "credential",
+        "token",
+        "private",
+        "id_rsa",
+        ".pem",
+        ".pfx",
+        ".p12",
+        ".kdbx",
+        ".keystore",
     ];
     for tok in SENSITIVE_TOKENS {
         if name_lc.contains(tok) {
@@ -917,8 +912,7 @@ mod tests {
 
     #[test]
     fn dlp_executable_mime_is_flagged_even_if_extension_is_hidden() {
-        let (score, _reasons) =
-            compute_dlp_score("update", "application/x-msdownload", 1024);
+        let (score, _reasons) = compute_dlp_score("update", "application/x-msdownload", 1024);
         assert!(score >= 40);
     }
 
@@ -926,24 +920,21 @@ mod tests {
     fn dlp_secret_file_is_flagged() {
         let (score, reasons) = compute_dlp_score("id_rsa", "text/plain", 2048);
         assert!(score >= 40, "score was {score}");
-        assert!(reasons.iter().any(|r| r.contains("id_rsa") || r.contains("private")));
+        assert!(reasons
+            .iter()
+            .any(|r| r.contains("id_rsa") || r.contains("private")));
     }
 
     #[test]
     fn dlp_zip_is_flagged_as_archive() {
-        let (score, reasons) =
-            compute_dlp_score("logs.zip", "application/zip", 10 * 1024 * 1024);
+        let (score, reasons) = compute_dlp_score("logs.zip", "application/zip", 10 * 1024 * 1024);
         assert!(score >= 25, "score was {score}");
         assert!(reasons.iter().any(|r| r.contains(".zip")));
     }
 
     #[test]
     fn dlp_large_file_adds_size_reason() {
-        let (_score, reasons) = compute_dlp_score(
-            "video.mp4",
-            "video/mp4",
-            150 * 1024 * 1024,
-        );
+        let (_score, reasons) = compute_dlp_score("video.mp4", "video/mp4", 150 * 1024 * 1024);
         assert!(reasons.iter().any(|r| r.contains("MiB")));
     }
 

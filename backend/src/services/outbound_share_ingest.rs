@@ -75,8 +75,7 @@ pub async fn mint(
     .await?;
     if recent.0 >= MAX_MINTS_PER_MINUTE {
         return Err(AppError::Validation(
-            "Too many upload tokens requested. Wait a minute and try again."
-                .into(),
+            "Too many upload tokens requested. Wait a minute and try again.".into(),
         ));
     }
 
@@ -119,27 +118,28 @@ pub async fn consume(
         ));
     }
 
-    let row: Option<(Uuid, Option<String>, Option<Uuid>, Option<String>)> =
-        sqlx::query_as(
-            "UPDATE outbound_share_ingest_tokens
+    let row: Option<(Uuid, Option<String>, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "UPDATE outbound_share_ingest_tokens
                 SET used_at = now(),
                     used_ip = $2
               WHERE token = $1
                 AND used_at IS NULL
                 AND expires_at > now()
               RETURNING user_id, session_id, connection_id, justification",
-        )
-        .bind(submitted)
-        .bind(used_ip)
-        .fetch_optional(pool)
-        .await?;
+    )
+    .bind(submitted)
+    .bind(used_ip)
+    .fetch_optional(pool)
+    .await?;
 
-    row.map(|(user_id, session_id, connection_id, justification)| IngestContext {
-        user_id,
-        session_id,
-        connection_id,
-        justification,
-    })
+    row.map(
+        |(user_id, session_id, connection_id, justification)| IngestContext {
+            user_id,
+            session_id,
+            connection_id,
+            justification,
+        },
+    )
     .ok_or_else(|| AppError::Validation("Invalid or expired upload token.".into()))
 }
 

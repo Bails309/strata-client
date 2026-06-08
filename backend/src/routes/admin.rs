@@ -1678,8 +1678,7 @@ pub async fn update_user(
     }
 
     if let Some(requires_approval) = body.outbound_share_requires_approval {
-        if !users_svc::set_outbound_share_requires_approval(&db.pool, id, requires_approval)
-            .await?
+        if !users_svc::set_outbound_share_requires_approval(&db.pool, id, requires_approval).await?
         {
             return Err(AppError::NotFound("User not found".into()));
         }

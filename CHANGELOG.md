@@ -3,7 +3,36 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
+
+## [1.10.9] — 2026-06-08
+
+### Patch Release — Safeguard one‑off profile ticket routing and local-unseal guard
+
+v1.10.9 fixes a runtime reliability bug observed when connections
+were established with a tunnel ticket that selected an ad‑hoc
+(`one-off`) Safeguard credential profile. The previous ticket path
+could attempt a Vault `unseal` on empty local encrypted payloads for
+profiles of `kind = 'safeguard'`, which produced a "missing ciphertext"
+error and caused the credential flow to fail with a 502/500 response.
+
+Fixes include:
+
+- Consume tunnel tickets early so the one‑off `credential_profile_id`
+  is canonicalised and routed through the same Safeguard JIT/cache
+  flow as mapped profiles.
+- Add `safeguard_target_for_profile` (with `ttl_hours`) and reuse the
+  JIT checkout + password cache path for one‑off profiles, avoiding
+  duplicated logic paths.
+- Skip calling `vault::unseal` on empty `encrypted_*` fields when a
+  `safeguard_password` is present (Safeguard‑backed profiles), so
+  local-empty placeholders do not trigger decryption errors.
+
+Operational impact:
+
+- No database migrations.
+- No operator configuration changes.
+- Recommended deploy: rebuild and recreate the backend container.
 
 ## [1.10.8] — 2026-06-03
 

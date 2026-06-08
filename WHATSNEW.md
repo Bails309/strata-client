@@ -1,9 +1,21 @@
+
+# What's New in v1.10.9
+
+> **Patch release: Safeguard one-off profile routing and local-unseal guard.** v1.10.9
+> fixes a backend runtime error that could occur when a tunnel ticket selected
+> an ad‑hoc Safeguard credential profile. The ticket path is now canonicalised
+> to reuse the Safeguard JIT and password cache flow, and the backend no
+> longer attempts to `vault::unseal` empty local encrypted payloads for
+> `safeguard`-kind profiles. This resolves 502/500 failures observed during
+> ad‑hoc credential selection and restores reliable Safeguard-backed
+> credential resolution.
+
+---
+
 # What's New in v1.10.6
 
 > **Patch release: Safeguard token sanitization, validation & improved client diagnostics.** v1.10.6
 > fixes an issue where pasted Safeguard bearer tokens containing trailing newlines or other control bytes could cause opaque `reqwest` `builder error` failures. Tokens are now trimmed on load, and storage rejects control bytes at store time; backend logs now surface reqwest error source chains to reveal underlying causes. The backend additionally validates user-supplied Safeguard tokens against the appliance (`/service/core/v4/Me`) before storing them and uses the JWT `exp` claim for the cached expiry. The token-status endpoint live-probes the cached token so a revoked or expired token no longer appears as "signed in" in the credential editor.
-
----
 
 # What's New in v1.10.8
 

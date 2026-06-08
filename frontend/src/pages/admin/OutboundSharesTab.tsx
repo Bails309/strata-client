@@ -14,6 +14,7 @@ import {
   OutboundShareApprover,
   User,
 } from "../../api";
+import Select from "../../components/Select";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -425,18 +426,18 @@ export default function OutboundSharesTab({
               </ul>
             )}
             <div className="flex gap-2 items-center pt-2">
-              <select
-                className="flex-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded"
-                value={addingApprover}
-                onChange={(e) => setAddingApprover(e.target.value)}
-              >
-                <option value="">Add an approver…</option>
-                {eligibleApprovers.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.username} ({u.email})
-                  </option>
-                ))}
-              </select>
+              <div className="flex-1">
+                <Select
+                  value={addingApprover}
+                  onChange={setAddingApprover}
+                  placeholder="Add an approver…"
+                  searchable
+                  options={eligibleApprovers.map((u) => ({
+                    value: u.id,
+                    label: `${u.username} (${u.email})`,
+                  }))}
+                />
+              </div>
               <button
                 className="btn-primary text-xs px-3 py-1"
                 disabled={!addingApprover}

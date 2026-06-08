@@ -120,14 +120,13 @@ pub async fn safeguard_target_for_connection(
 
 /// Variant for the one-off ticket path: look up safeguard target by
 /// profile_id rather than connection_id.
-#[allow(dead_code)]
 pub async fn safeguard_target_for_profile(
     pool: &PgPool,
     profile_id: Uuid,
     user_id: Uuid,
-) -> Result<Option<(String, String)>, AppError> {
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT cp.safeguard_account_id, cp.safeguard_asset
+) -> Result<Option<(Uuid, String, String, i32)>, AppError> {
+    let row: Option<(Uuid, Option<String>, Option<String>, i32)> = sqlx::query_as(
+        "SELECT cp.id, cp.safeguard_account_id, cp.safeguard_asset, cp.ttl_hours
            FROM credential_profiles cp
           WHERE cp.id = $1 AND cp.user_id = $2 AND cp.kind = 'safeguard'
             AND cp.expires_at > now()",
@@ -136,7 +135,8 @@ pub async fn safeguard_target_for_profile(
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(acc, asset)| (acc.unwrap_or_default(), asset.unwrap_or_default())))
+    Ok(row
+        .map(|(id, acc, asset, ttl)| (id, acc.unwrap_or_default(), asset.unwrap_or_default(), ttl)))
 }
 
 /// Insert a `kind='safeguard'` profile. No envelope payload is

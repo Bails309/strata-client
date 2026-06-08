@@ -704,9 +704,8 @@ export default function AccessTab({
                         <div className="flex flex-col">
                           <span className="text-sm font-medium">Use Outbound Quick Share</span>
                           <span className="text-[10px] text-txt-tertiary">
-                            Export files out of a session. Approval is required for every
-                            submission by default; individual users may be opted out on the
-                            Users tab below.
+                            Export files out of a session. Approval is required for every submission
+                            by default; individual users may be opted out on the Users tab below.
                           </span>
                         </div>
                       </label>
@@ -1392,7 +1391,7 @@ export default function AccessTab({
                   <th>Role</th>
                   <th>Safeguard JIT</th>
                   <th title="By default every outbound Quick-Share submission is queued for approver review. Check this column to opt an individual user out of the approval queue (DLP scanner still gates the file).">
-                    Bypass Approval
+                    Outbound Share Bypass
                   </th>
                   <th>OIDC Sub</th>
                   <th>Last Login</th>

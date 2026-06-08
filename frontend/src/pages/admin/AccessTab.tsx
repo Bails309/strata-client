@@ -1390,7 +1390,7 @@ export default function AccessTab({
                   <th>Auth Type</th>
                   <th>Role</th>
                   <th>Safeguard JIT</th>
-                  <th title="By default every outbound Quick-Share submission is queued for approver review. Check this column to opt an individual user out of the approval queue (DLP scanner still gates the file).">
+                  <th title="By default every outbound Quick-Share submission is queued for approver review. Check this column to opt an individual user out of the approval queue — their submissions are auto-approved unconditionally (DLP score is still recorded for audit but does not block the transfer).">
                     Outbound Share Bypass
                   </th>
                   <th>OIDC Sub</th>
@@ -1476,7 +1476,7 @@ export default function AccessTab({
                           null/false. */}
                       <label
                         className="inline-flex items-center gap-2 cursor-pointer"
-                        title="When checked, this user's outbound Quick-Share submissions skip the approver queue and are auto-approved by the DLP scanner. When unchecked, every submission is queued (system default)."
+                        title="When checked, this user's outbound Quick-Share submissions skip the approver queue and are auto-approved unconditionally. The DLP score is still recorded for audit but does not block the transfer. When unchecked, every submission is queued (system default)."
                       >
                         <input
                           type="checkbox"

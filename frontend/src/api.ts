@@ -2098,8 +2098,7 @@ export const submitOutboundShare = async (
   return res.json();
 };
 
-export const listMyOutboundShares = () =>
-  request<OutboundShare[]>("/user/outbound-shares");
+export const listMyOutboundShares = () => request<OutboundShare[]>("/user/outbound-shares");
 
 /** Browser-direct URL for downloading an approved outbound share. */
 export const outboundShareDownloadUrl = (token: string) =>
@@ -2133,8 +2132,7 @@ export const issueOutboundShareIngestToken = (body: {
 
 // ── Admin / approver surface ────────────────────────────────────────
 
-export const listOutboundShares = () =>
-  request<OutboundShare[]>("/admin/outbound-shares");
+export const listOutboundShares = () => request<OutboundShare[]>("/admin/outbound-shares");
 
 export const listPendingOutboundShares = () =>
   request<OutboundShare[]>("/admin/outbound-shares/pending");

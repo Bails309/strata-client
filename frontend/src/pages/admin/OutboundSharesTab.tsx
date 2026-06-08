@@ -60,9 +60,7 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
   const [approvers, setApprovers] = useState<OutboundShareApprover[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [denyModal, setDenyModal] = useState<{ share: OutboundShare; reason: string } | null>(
-    null
-  );
+  const [denyModal, setDenyModal] = useState<{ share: OutboundShare; reason: string } | null>(null);
   const [addingApprover, setAddingApprover] = useState<string>("");
 
   const refresh = useCallback(async () => {
@@ -189,10 +187,7 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
           <h3 className="text-sm font-bold uppercase tracking-wider text-txt-secondary">
             Pending ({pending.length})
           </h3>
-          <button
-            className="text-xs text-txt-secondary hover:text-txt-primary"
-            onClick={refresh}
-          >
+          <button className="text-xs text-txt-secondary hover:text-txt-primary" onClick={refresh}>
             Refresh
           </button>
         </div>
@@ -215,8 +210,8 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
                         {s.filename}
                       </div>
                       <div className="text-[11px] text-txt-tertiary">
-                        {requester?.username || s.requester_user_id} ·{" "}
-                        {formatSize(s.size)} · {s.content_type || "application/octet-stream"} ·{" "}
+                        {requester?.username || s.requester_user_id} · {formatSize(s.size)} ·{" "}
+                        {s.content_type || "application/octet-stream"} ·{" "}
                         {new Date(s.created_at).toLocaleString()}
                       </div>
                     </div>
@@ -415,10 +410,7 @@ export default function OutboundSharesTab({ users, isSuperAdmin, onSave }: Props
               maxLength={500}
             />
             <div className="flex justify-end gap-2">
-              <button
-                className="btn-ghost text-sm px-3 py-1"
-                onClick={() => setDenyModal(null)}
-              >
+              <button className="btn-ghost text-sm px-3 py-1" onClick={() => setDenyModal(null)}>
                 Cancel
               </button>
               <button

@@ -57,11 +57,7 @@ function defaultSnippetFormat(protocol: string): SnippetFormat {
   return "curl-win";
 }
 
-function snippetForOutbound(
-  format: SnippetFormat,
-  url: string,
-  insecure: boolean
-): string {
+function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolean): string {
   switch (format) {
     case "curl":
       return insecure
@@ -111,11 +107,7 @@ function formatExpiry(secondsLeft: number): string {
  *   3. The user's submission history with status + download links for
  *      approved files.
  */
-export default function QuickShareOutbound({
-  onClose,
-  sidebarWidth,
-  sessionBarCollapsed,
-}: Props) {
+export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCollapsed }: Props) {
   const { sessions, activeSessionId, updateSession } = useSessionManager();
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
   const driveName = activeSession?.filesystems[0]?.name ?? null;
@@ -147,8 +139,7 @@ export default function QuickShareOutbound({
       refresh();
     };
     window.addEventListener("strata:outbound-share-submitted", onSubmitted);
-    return () =>
-      window.removeEventListener("strata:outbound-share-submitted", onSubmitted);
+    return () => window.removeEventListener("strata:outbound-share-submitted", onSubmitted);
   }, [refresh]);
 
   // Keep the textarea seeded with whatever pending justification the
@@ -181,9 +172,7 @@ export default function QuickShareOutbound({
     defaultSnippetFormat(driveProtocol)
   );
   const [insecureTls, setInsecureTls] = useState(false);
-  const [ingestToken, setIngestToken] = useState<OutboundShareIngestToken | null>(
-    null
-  );
+  const [ingestToken, setIngestToken] = useState<OutboundShareIngestToken | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -223,24 +212,15 @@ export default function QuickShareOutbound({
   }, [activeSession, justification]);
 
   const uploadUrl = useMemo(
-    () =>
-      ingestToken
-        ? `${window.location.origin}${ingestToken.upload_path}`
-        : "",
+    () => (ingestToken ? `${window.location.origin}${ingestToken.upload_path}` : ""),
     [ingestToken]
   );
   const snippet = useMemo(
-    () =>
-      ingestToken
-        ? snippetForOutbound(snippetFormat, uploadUrl, insecureTls)
-        : "",
+    () => (ingestToken ? snippetForOutbound(snippetFormat, uploadUrl, insecureTls) : ""),
     [ingestToken, snippetFormat, uploadUrl, insecureTls]
   );
   const expiresInSec = ingestToken
-    ? Math.max(
-        0,
-        Math.floor((new Date(ingestToken.expires_at).getTime() - nowMs) / 1000)
-      )
+    ? Math.max(0, Math.floor((new Date(ingestToken.expires_at).getTime() - nowMs) / 1000))
     : 0;
   const tokenExpired = !!ingestToken && expiresInSec <= 0;
 
@@ -313,18 +293,19 @@ export default function QuickShareOutbound({
                   (mapped as <span className="font-mono text-accent">{driveName}</span>)
                 </span>
               ) : driveProtocol === "rdp" ? (
-                <span> (mapped under <span className="font-mono">This PC</span>)</span>
+                <span>
+                  {" "}
+                  (mapped under <span className="font-mono">This PC</span>)
+                </span>
               ) : null}
               .
             </li>
             <li>Copy or drag the file you want to export into that drive.</li>
             <li>
-              The file is intercepted here, scanned for sensitive data, and either
-              auto-approved or queued for an approver.
+              The file is intercepted here, scanned for sensitive data, and either auto-approved or
+              queued for an approver.
             </li>
-            <li>
-              Approved files appear below with a one-time download link.
-            </li>
+            <li>Approved files appear below with a one-time download link.</li>
           </ol>
           {!activeSession && (
             <div className="text-warning text-[11px]">
@@ -333,8 +314,8 @@ export default function QuickShareOutbound({
           )}
           {activeSession && !activeSession.fileTransferEnabled && (
             <div className="text-warning text-[11px]">
-              File transfer is not configured on this connection. Ask an admin
-              to enable the virtual drive in the connection settings.
+              File transfer is not configured on this connection. Ask an admin to enable the virtual
+              drive in the connection settings.
             </div>
           )}
         </div>
@@ -365,12 +346,11 @@ export default function QuickShareOutbound({
             Drive redirection blocked? Use HTTPS upload
           </div>
           <p className="text-txt-secondary text-[11px] leading-snug">
-            When the virtual drive isn&apos;t available (commonly because group policy
-            blocks RDP drive redirection at the target), mint a one-shot upload
-            command instead. Paste it into a terminal or PowerShell window
-            <em> inside the remote session</em>; the file flows back over HTTPS
-            on the same connection your browser is already using — no SMB,
-            no port 445, no drive channel.
+            When the virtual drive isn&apos;t available (commonly because group policy blocks RDP
+            drive redirection at the target), mint a one-shot upload command instead. Paste it into
+            a terminal or PowerShell window
+            <em> inside the remote session</em>; the file flows back over HTTPS on the same
+            connection your browser is already using — no SMB, no port 445, no drive channel.
           </p>
 
           <div className="space-y-2">
@@ -417,13 +397,11 @@ export default function QuickShareOutbound({
             {issuing
               ? "Generating…"
               : ingestToken && !tokenExpired
-              ? "Regenerate upload command"
-              : "Generate upload command"}
+                ? "Regenerate upload command"
+                : "Generate upload command"}
           </button>
 
-          {issueError && (
-            <div className="text-[11px] text-danger">{issueError}</div>
-          )}
+          {issueError && <div className="text-[11px] text-danger">{issueError}</div>}
 
           {ingestToken && (
             <div className="space-y-2">
@@ -446,10 +424,9 @@ export default function QuickShareOutbound({
                 {snippet}
               </pre>
               <p className="text-[10px] text-txt-tertiary leading-snug">
-                Replace <span className="font-mono">&lt;your-file&gt;</span> with
-                the path of the file you want to export. The command is
-                single-use — it stops working as soon as one upload completes
-                or the timer hits zero.
+                Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of the
+                file you want to export. The command is single-use — it stops working as soon as one
+                upload completes or the timer hits zero.
               </p>
             </div>
           )}
@@ -487,8 +464,7 @@ export default function QuickShareOutbound({
                 <span className="truncate flex-1 font-medium">{h.filename}</span>
               </div>
               <div className="text-[10px] text-txt-tertiary">
-                {formatSize(h.size)} · DLP {h.dlp_score} ·{" "}
-                {new Date(h.created_at).toLocaleString()}
+                {formatSize(h.size)} · DLP {h.dlp_score} · {new Date(h.created_at).toLocaleString()}
               </div>
               {h.dlp_reasons.length > 0 && (
                 <div className="text-[10px] text-txt-tertiary">

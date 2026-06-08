@@ -291,7 +291,8 @@ const TAB_LABELS: Record<Tab, string> = {
 
 const ADMIN_NAV_GROUPS: Array<{ title: string; items: Tab[] }> = [
   { title: "Overview", items: ["health", "sessions"] },
-  { title: "Identity & Access",
+  {
+    title: "Identity & Access",
     items: ["access", "ad-sync", "sso", "kerberos", "passwords", "safeguard", "outbound-shares"],
   },
   { title: "Connectivity", items: ["network", "dmz-links", "trusted-cas", "vdi"] },

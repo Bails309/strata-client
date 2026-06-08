@@ -2335,9 +2335,9 @@ Mint a single-use, 10-minute upload token for the snippet-paste path.
 
 ```json
 {
-  "token": "VGhpcy1pcy1hLXNhbXBsZS1iYXNlNjQtdXJsLXNhZmUtdG9rZW4tdmFsdWU",
+  "token": "<43-char-url-safe-base64-token>",
   "expires_at": "2026-06-08T18:10:00Z",
-  "ingest_url": "https://strata.example.com/api/outbound-shares/ingest/VGhpcy1pcy1hLXNhbXBsZS1iYXNlNjQtdXJsLXNhZmUtdG9rZW4tdmFsdWU"
+  "ingest_url": "https://strata.example.com/api/outbound-shares/ingest/<43-char-url-safe-base64-token>"
 }
 ```
 

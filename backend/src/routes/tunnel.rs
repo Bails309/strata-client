@@ -583,9 +583,17 @@ pub async fn ws_tunnel(
     // If the ticket carries a one-off credential_profile_id, decrypt those
     // vault credentials directly (no permanent mapping required).
     // Same checkout-aware logic: prefer the managed profile's password but keep the profile's username.
-    let (oneoff_username, oneoff_password) = if let (Some(profile_id), Some(vault_cfg)) =
-        (oneoff_profile_id, &config.vault)
-    {
+    //
+    // Skip this entire block when `safeguard_password` is already populated:
+    // the one-off profile is `kind='safeguard'` and its `encrypted_*` columns
+    // are empty placeholders, so calling `vault::unseal` on them returns
+    // "missing ciphertext to decrypt" and 502s the upgrade. The JIT/cache
+    // result is the authoritative credential in that case.
+    let (oneoff_username, oneoff_password) = if let (Some(profile_id), Some(vault_cfg), true) = (
+        oneoff_profile_id,
+        &config.vault,
+        safeguard_password.is_none(),
+    ) {
         // Load the profile's own credentials
         let own_cred =
             crate::services::user_credentials::load_profile_own(&db.pool, profile_id, user.id)

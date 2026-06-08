@@ -233,12 +233,15 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
         {/* ── Safeguard JIT ── */}
         {tab === "safeguard" && <SafeguardTab onSave={() => flash("Safeguard config updated")} />}
 
-        {/* ── Outbound Shares (approval queue + approver delegations) ── */}
+        {/* ── Outbound Share Policy (approver delegations only — the
+            operational queue lives under /approvals, shared with the
+            existing Pending Approvals (credential checkouts) surface) ── */}
         {tab === "outbound-shares" && (
           <OutboundSharesTab
             users={users}
             isSuperAdmin={!!user.can_manage_system}
-            onSave={() => flash("Outbound shares updated")}
+            onSave={() => flash("Outbound share policy updated")}
+            variant="policy-only"
           />
         )}
 
@@ -285,7 +288,7 @@ const TAB_LABELS: Record<Tab, string> = {
   "trusted-cas": "Trusted CAs",
   "dmz-links": "DMZ Links",
   safeguard: "Safeguard JIT",
-  "outbound-shares": "Outbound Shares",
+  "outbound-shares": "Outbound Share Policy",
   security: "Security",
 };
 
@@ -313,7 +316,10 @@ function tabVisible(t: Tab, user: MeResponse): boolean {
     );
   if (t === "tags") return user.can_manage_system || user.can_manage_connections;
   if (t === "sessions") return user.can_manage_system || user.can_view_audit_logs;
-  if (t === "outbound-shares") return user.can_manage_system || user.is_outbound_approver;
+  // Outbound Share Policy is the *delegation* surface only — super-admin
+  // only. Non-admin designated approvers reach the operational queue
+  // via the left-nav "Pending Approvals" item (see Layout.tsx).
+  if (t === "outbound-shares") return user.can_manage_system;
   return user.can_manage_system;
 }
 

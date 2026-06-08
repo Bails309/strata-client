@@ -75,6 +75,7 @@ export default function AccessTab({
     can_create_connections: boolean;
     can_use_quick_share: boolean;
     can_use_quick_share_outbound: boolean;
+    outbound_share_requires_approval: boolean;
     can_create_sharing_profiles: boolean;
     can_view_sessions: boolean;
   }>({
@@ -88,6 +89,9 @@ export default function AccessTab({
     can_create_connections: false,
     can_use_quick_share: false,
     can_use_quick_share_outbound: false,
+    // Default TRUE — matches the safe default in migration 075. Admins
+    // must explicitly opt a role out of the approval queue.
+    outbound_share_requires_approval: true,
     can_create_sharing_profiles: false,
     can_view_sessions: false,
   });
@@ -118,6 +122,7 @@ export default function AccessTab({
       can_create_connections: r.can_create_connections,
       can_use_quick_share: r.can_use_quick_share,
       can_use_quick_share_outbound: r.can_use_quick_share_outbound,
+      outbound_share_requires_approval: r.outbound_share_requires_approval,
       can_create_sharing_profiles: r.can_create_sharing_profiles,
       can_view_sessions: r.can_view_sessions,
     });
@@ -439,6 +444,18 @@ export default function AccessTab({
                           QS Outbound
                         </span>
                       )}
+                      {/* Surfaces the role-level approval-bypass default so
+                          admins can tell at a glance which roles skip the
+                          queue. Only meaningful for roles that can use
+                          outbound Quick Share at all. */}
+                      {r.can_use_quick_share_outbound && !r.outbound_share_requires_approval && (
+                        <span
+                          className="badge badge-warning text-[9px] py-0 px-1.5 uppercase"
+                          title="Outbound submissions auto-approve when DLP score is low (per-user override may still force approval)."
+                        >
+                          QS Auto
+                        </span>
+                      )}
                       {r.can_create_sharing_profiles && (
                         <span className="badge badge-accent text-[9px] py-0 px-1.5 uppercase">
                           Sharing
@@ -524,6 +541,9 @@ export default function AccessTab({
                   can_create_connections: false,
                   can_use_quick_share: false,
                   can_use_quick_share_outbound: false,
+                  // Default TRUE matches migration 075 — new roles start in
+                  // the safer "every outbound export held for approval" mode.
+                  outbound_share_requires_approval: true,
                   can_create_sharing_profiles: false,
                   can_view_sessions: false,
                 });
@@ -705,6 +725,33 @@ export default function AccessTab({
                           <span className="text-sm font-medium">Use Outbound Quick Share</span>
                           <span className="text-[10px] text-txt-tertiary">
                             Export files out of a session (approval-gated)
+                          </span>
+                        </div>
+                      </label>
+                      {/* Role-level default for the outbound approval queue.
+                          Only meaningful when the role can use outbound
+                          Quick Share at all, but we render it unconditionally
+                          so admins can pre-stage the setting. The per-user
+                          override on the Users tab still wins when non-null. */}
+                      <label className="flex items-center gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          className="checkbox"
+                          checked={newRole.outbound_share_requires_approval}
+                          onChange={(e) =>
+                            setNewRole({
+                              ...newRole,
+                              outbound_share_requires_approval: e.target.checked,
+                            })
+                          }
+                        />
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">
+                            Outbound exports require approval
+                          </span>
+                          <span className="text-[10px] text-txt-tertiary">
+                            When OFF, low-risk outbound submissions from members of this role
+                            auto-approve via the DLP scanner. Per-user overrides still apply.
                           </span>
                         </div>
                       </label>
@@ -1464,36 +1511,50 @@ export default function AccessTab({
                       </label>
                     </td>
                     <td>
-                      <label
-                        className="inline-flex items-center gap-2 cursor-pointer"
-                        title="When ON, every outbound Quick-Share submission by this user is queued for approver review. Disable to auto-approve low-risk exports."
+                      {/* Tri-state outbound-share approval setting.
+                          - "inherit" → NULL override; effective value comes
+                            from the user's role default
+                            (`Role.outbound_share_requires_approval`).
+                          - "required" → explicit TRUE; always queue.
+                          - "auto" → explicit FALSE; allow DLP-gated
+                            auto-approval regardless of the role default.
+                          Migration 075 lifted the canonical setting onto
+                          the role; the per-user select here only writes an
+                          override when the admin picks a non-inherit value. */}
+                      <select
+                        className="select select-sm bg-surface-secondary border border-border/50 text-xs px-2 py-1 rounded"
+                        value={
+                          u.outbound_share_requires_approval === null
+                            ? "inherit"
+                            : u.outbound_share_requires_approval
+                              ? "required"
+                              : "auto"
+                        }
+                        disabled={!!u.deleted_at}
+                        title="Inherit — follow the user's role default. Required — always queue this user's outbound exports. Auto — let the DLP scanner auto-approve low-risk submissions."
+                        onChange={async (e) => {
+                          const v = e.target.value;
+                          const requires_approval: boolean | null =
+                            v === "inherit" ? null : v === "required";
+                          try {
+                            await updateUser(u.id, {
+                              outbound_share_requires_approval: requires_approval,
+                            });
+                            const refreshed = await getUsers();
+                            onUsersChanged(refreshed);
+                          } catch (err) {
+                            alert(
+                              err instanceof Error
+                                ? err.message
+                                : "Failed to update outbound approval"
+                            );
+                          }
+                        }}
                       >
-                        <input
-                          type="checkbox"
-                          className="checkbox checkbox-sm"
-                          checked={!!u.outbound_share_requires_approval}
-                          disabled={!!u.deleted_at}
-                          onChange={async (e) => {
-                            const requires_approval = e.target.checked;
-                            try {
-                              await updateUser(u.id, {
-                                outbound_share_requires_approval: requires_approval,
-                              });
-                              const refreshed = await getUsers();
-                              onUsersChanged(refreshed);
-                            } catch (err) {
-                              alert(
-                                err instanceof Error
-                                  ? err.message
-                                  : "Failed to toggle outbound approval"
-                              );
-                            }
-                          }}
-                        />
-                        <span className="text-[10px] uppercase tracking-wider text-txt-tertiary">
-                          {u.outbound_share_requires_approval ? "Required" : "Auto"}
-                        </span>
-                      </label>
+                        <option value="inherit">Inherit (role)</option>
+                        <option value="required">Always required</option>
+                        <option value="auto">Auto-approve</option>
+                      </select>
                     </td>
                     <td className="font-mono text-[0.7rem] text-txt-tertiary">
                       {u.sub || <span className="opacity-30">—</span>}

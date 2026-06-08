@@ -29,6 +29,13 @@ pub struct RoleRow {
     /// Whether members of this role may submit outbound (session→endpoint)
     /// quick-share files for approval.  Added in migration 073.
     pub can_use_quick_share_outbound: bool,
+    /// Default approval requirement for outbound Quick-Share submissions
+    /// from members of this role. `true` (default for all roles on upgrade)
+    /// means every outbound export is held in the approver queue; `false`
+    /// lets the DLP-score gate auto-approve low-risk submissions. The
+    /// per-user `users.outbound_share_requires_approval` column overrides
+    /// this value when non-NULL. Added in migration 075.
+    pub outbound_share_requires_approval: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -45,6 +52,7 @@ pub struct CreateRoleRequest {
     pub can_view_sessions: Option<bool>,
     pub can_use_quick_share: Option<bool>,
     pub can_use_quick_share_outbound: Option<bool>,
+    pub outbound_share_requires_approval: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -61,13 +69,14 @@ pub struct UpdateRoleRequest {
     pub can_view_sessions: Option<bool>,
     pub can_use_quick_share: Option<bool>,
     pub can_use_quick_share_outbound: Option<bool>,
+    pub outbound_share_requires_approval: Option<bool>,
 }
 
 const SELECT_COLUMNS: &str =
     "id, name, can_manage_system, can_manage_users, can_manage_connections, can_view_audit_logs, \
      can_create_users, can_create_user_groups, can_create_connections, \
      can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
-     can_use_quick_share_outbound";
+     can_use_quick_share_outbound, outbound_share_requires_approval";
 
 pub async fn list_all(pool: &Pool<Postgres>) -> Result<Vec<RoleRow>, AppError> {
     let rows: Vec<RoleRow> =
@@ -82,8 +91,8 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
         "INSERT INTO roles (name, can_manage_system, can_manage_users, can_manage_connections, \
          can_view_audit_logs, can_create_users, can_create_user_groups, can_create_connections, \
          can_create_sharing_profiles, can_view_sessions, can_use_quick_share, \
-         can_use_quick_share_outbound) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+         can_use_quick_share_outbound, outbound_share_requires_approval) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
          RETURNING {SELECT_COLUMNS}"
     ))
     .bind(&body.name)
@@ -98,6 +107,9 @@ pub async fn create(pool: &Pool<Postgres>, body: &CreateRoleRequest) -> Result<R
     .bind(body.can_view_sessions.unwrap_or(false))
     .bind(body.can_use_quick_share.unwrap_or(false))
     .bind(body.can_use_quick_share_outbound.unwrap_or(false))
+    // Default to TRUE so the safer behaviour applies when the caller
+    // omits the field — matches the DB column default in migration 075.
+    .bind(body.outbound_share_requires_approval.unwrap_or(true))
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -121,7 +133,8 @@ pub async fn update(
             can_create_sharing_profiles = COALESCE($10, can_create_sharing_profiles),
             can_view_sessions = COALESCE($11, can_view_sessions),
             can_use_quick_share = COALESCE($12, can_use_quick_share),
-            can_use_quick_share_outbound = COALESCE($13, can_use_quick_share_outbound)
+            can_use_quick_share_outbound = COALESCE($13, can_use_quick_share_outbound),
+            outbound_share_requires_approval = COALESCE($14, outbound_share_requires_approval)
          WHERE id = $1
          RETURNING {SELECT_COLUMNS}"
     ))
@@ -138,6 +151,7 @@ pub async fn update(
     .bind(body.can_view_sessions)
     .bind(body.can_use_quick_share)
     .bind(body.can_use_quick_share_outbound)
+    .bind(body.outbound_share_requires_approval)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -260,6 +274,7 @@ mod tests {
             can_view_sessions: true,
             can_use_quick_share: true,
             can_use_quick_share_outbound: true,
+            outbound_share_requires_approval: true,
         };
         let v = serde_json::to_value(&row).unwrap();
         // Every permission flag must be a top-level boolean in the JSON

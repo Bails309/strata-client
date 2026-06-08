@@ -271,6 +271,26 @@ pub async fn ws_tunnel(
         }
     }
 
+    // Consume the one-time ticket early so credential resolution can
+    // treat a selected profile the same way as a stored mapping.
+    let ticket_creds = query.ticket.as_deref().and_then(tunnel_tickets::consume);
+
+    // Verify the ticket belongs to this authenticated user and path.
+    if let Some(ref tc) = ticket_creds {
+        if tc.user_id != user.id {
+            return Err(AppError::Auth(
+                "Tunnel ticket does not belong to the authenticated user".into(),
+            ));
+        }
+        if tc.connection_id != connection_id {
+            return Err(AppError::Auth(
+                "Tunnel ticket does not belong to this connection".into(),
+            ));
+        }
+    }
+
+    let oneoff_profile_id = ticket_creds.as_ref().and_then(|t| t.credential_profile_id);
+
     // Fetch connection details
     let (protocol, hostname, port, domain, connection_name, extra_json) =
         crate::services::connections::fetch_tunnel_details(&db.pool, connection_id)
@@ -294,13 +314,21 @@ pub async fn ws_tunnel(
     let mut safeguard_password: Option<String> = None;
     let mut safeguard_username: Option<String> = None;
     if let Some(vault_cfg) = &config.vault {
-        if let Some((profile_id, account_id, asset, profile_ttl_hours)) =
+        let safeguard_target = if let Some(profile_id) = oneoff_profile_id {
+            crate::services::credential_profiles::safeguard_target_for_profile(
+                &db.pool, profile_id, user.id,
+            )
+            .await?
+        } else {
             crate::services::credential_profiles::safeguard_target_for_connection(
                 &db.pool,
                 connection_id,
                 user.id,
             )
             .await?
+        };
+
+        if let Some((profile_id, account_id, asset, profile_ttl_hours)) = safeguard_target
         {
             let sg_cfg = crate::services::safeguard::config::load(&db.pool).await?;
 
@@ -553,23 +581,9 @@ pub async fn ws_tunnel(
 
     // ── Resolve credentials ──────────────────────────────────────────
 
-    // Priority: Vault profile > ticket > query-string fallback
-    // Consume the one-time ticket (if provided) to extract credentials
-    let ticket_creds = query.ticket.as_deref().and_then(tunnel_tickets::consume);
-
-    // Verify the ticket belongs to the authenticated user (prevent cross-user credential leakage)
-    if let Some(ref tc) = ticket_creds {
-        if tc.user_id != user.id {
-            return Err(AppError::Auth(
-                "Tunnel ticket does not belong to the authenticated user".into(),
-            ));
-        }
-    }
-
     // If the ticket carries a one-off credential_profile_id, decrypt those
     // vault credentials directly (no permanent mapping required).
     // Same checkout-aware logic: prefer the managed profile's password but keep the profile's username.
-    let oneoff_profile_id = ticket_creds.as_ref().and_then(|t| t.credential_profile_id);
     let (oneoff_username, oneoff_password) = if let (Some(profile_id), Some(vault_cfg)) =
         (oneoff_profile_id, &config.vault)
     {

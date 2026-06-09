@@ -89,6 +89,7 @@ function user(overrides: Partial<MeResponse> = {}): MeResponse {
     can_view_sessions: false,
     is_approver: true,
     is_outbound_approver: true,
+    outbound_share_requires_approval: true,
     ...overrides,
   };
 }

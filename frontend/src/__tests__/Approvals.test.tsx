@@ -32,6 +32,7 @@ const mockUser: MeResponse = {
   can_view_sessions: true,
   is_approver: true,
   is_outbound_approver: false,
+  outbound_share_requires_approval: true,
 };
 
 const pendingRequests = [

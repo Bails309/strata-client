@@ -39,8 +39,11 @@ let mockSessionState: {
   // here so the pre-existing tests — written before the bypass gate
   // was added — continue to exercise the bypass-user path (Generate
   // button enabled, no required asterisk). New tests can flip this
-  // to `false` to exercise the approval-required UX.
-  outboundShareBypass: boolean;
+  // to `false` to exercise the approval-required UX. Field is
+  // *optional* so a test can reassign the whole object without
+  // having to remember to keep the bypass flag — the consumer mock
+  // falls back to `true` (see `?? true` below).
+  outboundShareBypass?: boolean;
 } = { sessions: [], activeSessionId: null, outboundShareBypass: true };
 
 vi.mock("../components/SessionManager", () => ({

@@ -1,6 +1,6 @@
 /* Polls the approval queues an approver is gated for and surfaces in-session
    popup cards so a decision can be made without leaving the current page. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPortal } from "react-dom";
 import {
@@ -37,8 +37,6 @@ const STORAGE_KEY = "strata.pendingApprovalShown.v1";
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Types                                                                     */
 /* ────────────────────────────────────────────────────────────────────────── */
-
-type Kind = "checkout" | "outbound";
 
 interface CheckoutCard {
   uid: string;

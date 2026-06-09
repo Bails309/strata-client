@@ -5,6 +5,300 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.11.1] — 2026-06-09
+
+### Patch Release — Approver workflow polish: in-session popup, persisted deny reason, mandatory outbound-share justification
+
+v1.11.1 closes three follow-up gaps left by the v1.11.0 Outbound
+Quick-Share landing. None of these are protocol- or data-shape
+breaking changes; existing v1.11.0 deployments upgrade cleanly with
+one additive migration (`077_checkout_decision_reason.sql`).
+
+The three threads in this release tighten the **approver loop** end
+to end: how an approver becomes aware of work (in-session popup),
+what they can communicate back to the requester on a denial
+(persisted reason on the credential-checkout side, matching the
+already-persisted reason on the outbound-share side), and what a
+requester *must* supply to a non-bypass account before an outbound
+share even reaches the approver queue (a ≥ 10-character
+justification, enforced at both backend HTTP entry points).
+
+### Added
+
+- **In-session approval popup
+  (`frontend/src/components/PendingApprovalWatcher.tsx`).**
+  Approvers no longer have to leave their current page (a live
+  remote session, the dashboard, anywhere in the SPA) to action a
+  pending request. The watcher is mounted once in `App.tsx`,
+  polls the two approval queues the user is gated for
+  (`GET /api/user/pending-approvals` for credential checkouts and
+  `GET /api/admin/outbound-shares/pending` for outbound shares,
+  the latter only when the user has `can_manage_system` or
+  `is_outbound_approver`), and surfaces each new pending item as a
+  popup card with **Approve**, **Deny**, and **View all** actions
+  wired straight to the existing decide endpoints. Cards are
+  placed top-LEFT so they never collide with the regular toast
+  stack (top-right) or the session-timeout warning
+  (bottom-right). An unactioned card auto-dismisses after 30 s;
+  the dismiss is recorded in a `localStorage` de-dup tracker so
+  the next poll does not re-spawn the same card and so multiple
+  open tabs do not each show a duplicate. The poll cadence is
+  45 s with extra polls on `focus` and `visibilitychange` to
+  surface freshly-arrived work the moment the approver switches
+  back to the tab. On Deny the card expands an inline reason
+  composer (`<textarea>` + Confirm / Cancel) before calling the
+  decide endpoint, so denials never leave the requester guessing
+  why. Architecturally mirrors the existing
+  `CredentialProfileExpiryWatcher`, including the
+  `localStorage`-backed cross-tab de-dup and the polite
+  `Promise.allSettled`-style fanout that survives one endpoint
+  being temporarily 500.
+
+  - 2 new SPA API helpers in `frontend/src/api.ts`:
+    `decideCheckout(id, approved, reason?)` (the `reason`
+    parameter is the new addition — see below) and
+    `decideOutboundShare(id, approve, reason?)` (already shipped
+    in v1.11.0; reused here).
+  - Coverage: `frontend/src/__tests__/PendingApprovalWatcher.test.tsx`
+    exercises queue fanout, de-dup, auto-dismiss timing, Approve
+    happy-path, Deny composer flow, and tolerance to one of the
+    two queue endpoints being unavailable.
+
+- **Persisted approver deny reason on credential checkouts.**
+  Until now `password_checkout_requests.status = 'Denied'`
+  carried no explanation, so a requester reading the audit trail
+  saw only "Grace declined your request" with no further context.
+  The outbound-share queue already persisted a `decision_reason`
+  per row (see v1.11.0 / migration 073) and the new in-session
+  approval popup *requires* a reason before letting an approver
+  hit Deny, so the absence of the column on the credential side
+  was the only thing keeping the two queues asymmetric. This
+  release closes that gap:
+
+  - **Migration `077_checkout_decision_reason.sql`** —
+    `ALTER TABLE password_checkout_requests ADD COLUMN IF NOT
+    EXISTS decision_reason TEXT` (nullable; pre-077 rows stay
+    NULL rather than being backfilled to an empty string, so the
+    UI can distinguish "no reason supplied" from "legacy denial
+    that predates this field"). No length constraint at the DB
+    layer — the handler enforces a 1024-char server-side cap
+    after trimming, matching the outbound-share rule so the two
+    queues stay symmetric.
+
+  - **Handler change in `backend/src/services/checkouts.rs`** —
+    `decide_checkout` now accepts an optional `reason` field on
+    the request body, trims it, rejects > 1024 chars, persists it
+    on the row, and threads it into the rejection email
+    template. `approved` decisions accept (but do not require) a
+    reason; `denied` decisions accept any reason supplied by the
+    UI.
+
+  - **Email templates** — `checkout_rejected.mjml` and
+    `checkout_rejected.txt.tera` now render the approver's
+    `decision_reason` in a dedicated "Reason from approver" block
+    when present, falling back to silence when the field is NULL
+    so legacy denials and reason-less new denials do not surface
+    an empty block.
+
+  - **Audit / notification path** — `services/notifications.rs`
+    propagates `decision_reason` through the email render
+    pipeline alongside the existing approver-username field.
+    Audit-log shape is unchanged; the reason is captured in the
+    email body and in the row, not as a separate audit event.
+
+  - **API:** `POST /api/user/checkouts/:id/decide` now accepts
+    `{ "approved": false, "reason": "Out of change window" }`.
+    Body backwards-compatible — clients that omit `reason`
+    continue to work.
+
+  - **SPA wiring** — `frontend/src/pages/Approvals.tsx` was
+    rewritten in this release to use an inline deny composer
+    (textarea + Confirm / Cancel) that mirrors the popup's
+    composer; both call the same `decideCheckout(id, false,
+    reason)` helper. The composer placeholder text
+    (`e.g. Outside change window, contact owner first`) gives
+    the approver a worked example. Coverage:
+    `frontend/src/__tests__/Approvals.test.tsx` now drives the
+    composer end-to-end (open → type → confirm → assert
+    `decideCheckout` called with the trimmed reason).
+
+- **Mandatory justification on outbound shares for users without
+  the approval bypass.** When a user lacks the per-account
+  `users.outbound_share_requires_approval = FALSE` bypass, every
+  outbound submission must now carry a justification of **at
+  least 10 characters** (whitespace-trimmed, **character count
+  rather than byte count** so non-ASCII reasons such as accented
+  text or CJK are not penalised). Bypass users continue to
+  submit without one — auto-approval semantics are unchanged for
+  the bypass path.
+
+  - **Helper:**
+    `routes::outbound_shares::validate_outbound_justification(
+    requires_approval, justification) -> Result<(), AppError>` is
+    the single source of truth for the rule. It exists as a
+    free-standing function so both HTTP entry points share one
+    rule **and** so the rule is unit-testable without a database
+    fixture.
+
+  - **Backend chokepoint at BOTH outbound entry points:**
+
+    1. `finalize_submit` (the drag-and-drop / browser upload
+       path) — validation runs **after** the user-row lookup
+       (which gives the helper the `requires_approval` boolean
+       to gate on) and **before** the `staging_root()` / sealed
+       blob write, so a denied request never leaves a partial
+       sealed blob behind to be reaped later.
+
+    2. `issue_ingest_token` (the curl / curl.exe / PowerShell 7
+       snippet path) — validation runs **before**
+       `outbound_share_ingest::mint(...)`. This means the user
+       sees the "justification too short" error inside the
+       Outbound Share panel at the moment they click "Generate
+       upload command", **not** after they have already pasted
+       the snippet into a remote shell and run it (which would
+       have surfaced as an opaque 400 from inside the session,
+       far away from the panel where the textarea lives).
+
+  - **Error contract:** validation failures return
+    `AppError::Validation` (HTTP 400) with the user-facing
+    message *"A justification of at least 10 characters is
+    required for outbound shares unless the approval bypass is
+    enabled for your account."*
+
+  - **4 new unit tests in
+    `backend/src/routes/outbound_shares.rs`:**
+    - `justification_not_required_when_bypass_enabled` —
+      None / empty / whitespace-only / short all pass when
+      `requires_approval = false`.
+    - `justification_required_when_approval_required` — covers
+      None, `""`, `"   "`, and a too-short value (all fail) plus
+      a `"\u200B"`-padded edge case; verifies the exactly-10-char
+      boundary passes and a 33-char realistic justification
+      passes.
+    - `justification_counts_chars_not_bytes` — 10× `é` (20 bytes
+      but 10 Unicode scalar values) passes; 9× `é` fails. This
+      is the test that locks in the "count chars, not bytes"
+      contract.
+
+- **`MeResponse.outbound_share_requires_approval`** (extension to
+  the v1.11.0 `MeResponse` shape).
+  - Added to **both** `routes/auth.rs::check_auth` (the SPA
+    bootstrap path called by `checkAuthStatus()`) and
+    `routes/user.rs::me` (the refresh path called by
+    `getMe()`), so the field is present on the very first SPA
+    load **and** on every subsequent `/me` refresh. This honours
+    the repo's documented `MeResponse` drift rule — every new
+    `MeResponse` field MUST be added to both handlers or
+    nav / permission gates break asymmetrically depending on
+    which load path triggered first.
+  - Frontend exposes the tri-state as
+    `outbound_share_requires_approval: boolean | null` on the
+    `MeResponse` interface in `frontend/src/api.ts`. `App.tsx`
+    derives a single boolean `outboundShareBypass = user?.
+    outbound_share_requires_approval === false` and threads it
+    through to the existing `SessionManagerProvider` so the
+    drive-channel `onfile` interceptor and the
+    `QuickShareOutbound` panel both share the same source of
+    truth.
+
+### Changed
+
+- **`QuickShareOutbound` panel UX.** When the active user does
+  not have the outbound bypass:
+  - The justification `<label>` renders a red asterisk
+    (`<span className="text-danger">*</span>`) and the field
+    is marked `aria-required="true"`.
+  - The placeholder text changes from the generic *"Why does the
+    next exported file need to leave the session?"* to a worked
+    example: *"Required — e.g. Audit ticket INC-1234, exporting
+    redacted log for review"*.
+  - A small helper line — *"Required for your account (minimum
+    10 characters)"* — appears beneath the textarea so the
+    requirement is visible before the user clicks anything.
+  - The **Generate upload command** button stays disabled until
+    the trimmed justification reaches the 10-character minimum,
+    and renders a tooltip *"Enter at least 10 characters of
+    justification above before generating the upload command."*
+    while disabled so the user can self-diagnose without
+    clicking through to a 400.
+
+- **`SessionManager.client.onfile` interceptor.** The
+  drag-and-drop / drive-channel path now mirrors the
+  panel-level gate: if `outboundShareBypass` is `false` and the
+  active session's `pendingOutboundJustification` is shorter
+  than 10 characters (after trim), the interceptor surfaces a
+  warning toast (*"Justification required: <filename>"*) with
+  remediation copy (*"Open the Outbound Share panel, enter at
+  least 10 characters explaining why this file needs to leave
+  the session, then re-drop the file."*) and short-circuits
+  **before** the `FormData` POST. This avoids a confusing
+  toast-on-400 flow where the user has already let go of the
+  file and now has to guess why it was rejected.
+
+- **Inline deny composer on `frontend/src/pages/Approvals.tsx`.**
+  The standalone `decideCheckout(id, false)` call is replaced by
+  an inline composer (textarea + Confirm Deny / Cancel buttons)
+  that mirrors the in-session popup's composer, so the two
+  surfaces have a single deny-flow shape. The composer's
+  textarea is required before Confirm is enabled and the
+  trimmed value is sent as the `reason` field.
+
+### Fixed
+
+- `frontend/src/__tests__/Approvals.test.tsx` — the
+  "denies a request and shows flash message" test was stale
+  after the composer rewrite (it still expected the immediate
+  `decideCheckout(id, false)` call). Rewritten in this release
+  to drive the composer end-to-end: click Deny → wait for the
+  textarea → type *"Out of change window"* → click "Confirm
+  deny" → assert `decideCheckout` was called with
+  `("cr1", false, "Out of change window")`.
+
+### Operational impact
+
+- **One additive migration applies automatically on first
+  boot:** `077_checkout_decision_reason.sql`. The column is
+  nullable with no default; legacy `Denied` rows stay
+  `decision_reason = NULL` and the email template treats NULL
+  as "render no reason block", so the deploy is silent on
+  pre-077 data.
+- **No new environment variables.**
+- **No new role permissions** — the 10-char minimum reuses the
+  existing `outbound_share_requires_approval` per-user flag
+  shipped in v1.11.0.
+- **No protocol changes.** The drive-channel and HTTPS
+  upload-command ingest paths still target the same endpoints
+  with the same multipart shape; only the validation rule on
+  `justification` is new.
+- **Backwards-compatible request shapes.** Clients of
+  `POST /api/user/checkouts/:id/decide` that omit `reason`
+  continue to work; the rejection email simply renders no
+  reason block. Clients of
+  `POST /api/user/outbound-shares` and
+  `POST /api/user/outbound-shares/ingest-token` that submit
+  with a sufficient justification continue to work; only
+  bypass-off users submitting an empty or short justification
+  see the new 400.
+- **Recommended deploy:** rebuild and recreate the **backend**
+  container (picks up migration 077 + the new validation +
+  the email template change) and the **frontend** container
+  (picks up `PendingApprovalWatcher`, the composer rewrite of
+  `Approvals.tsx`, the `QuickShareOutbound` panel UX changes,
+  and the `SessionManager.onfile` gate). The `strata-dmz` relay
+  and `guacd` images are unchanged.
+
+### Test results
+
+- Backend: 16 `outbound_shares` unit tests pass under
+  `cargo test --bin strata-backend outbound_shares::tests` —
+  including the 3 new `justification_*` tests and the
+  pre-existing 13 DLP / status / sanitisation tests.
+- Frontend: all 76 vitest files pass under `npx vitest run` —
+  including the rewritten Approvals deny-flow test, the new
+  `QuickShareOutbound` bypass-off UX test, and the
+  `PendingApprovalWatcher` queue-fanout / de-dup / composer
+  tests.
+
 ## [1.11.0] — 2026-06-08
 
 ### Added

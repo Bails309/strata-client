@@ -129,6 +129,31 @@ The central orchestrator. Responsibilities:
   Backend pipeline: a fresh 256-bit DEK is generated per submission; the plaintext is AES-256-GCM-encrypted with that DEK; the DEK is sealed by Vault Transit and stored in `outbound_shares.sealed_dek`; the ciphertext is written to the staging directory (`STRATA_OUTBOUND_SHARES_DIR`, default `/tmp/strata-outbound-shares` with platform-temp-dir fallback). A built-in DLP heuristic computes a score and a list of reasons against the plaintext; if `dlp_score ≤ AUTO_APPROVE_THRESHOLD` and the per-user `outbound_share_requires_approval = false`, the share is auto-released with a single-use download token. Otherwise it sits in `status = 'pending'` until a super-admin (`can_manage_system`) or a delegated approver (`outbound_share_approvers`) decides via `POST /api/admin/outbound-shares/{id}/decide`. Denied or expired shares trigger a periodic worker that zeroises the sealed DEK and deletes the ciphertext file so the staging blob cannot be recovered from a forensic disk image.
 
   Audit events: `outbound_share.submitted`, `.decided`, `.downloaded`, `.purged`, `.approver_added`, `.approver_removed`, `.ingest_token.minted`, `.ingest_token.consumed`.
+
+  **v1.11.1 additions:** (1) The submitter side now enforces a
+  shared `validate_outbound_justification(requires_approval,
+  justification)` helper at **both** outbound entry points
+  (`finalize_submit` and `issue_ingest_token`) — when the
+  submitter's `users.outbound_share_requires_approval = TRUE`,
+  the justification must be at least 10 characters
+  (whitespace-trimmed, character count not byte count); bypass
+  users continue to submit without one. The check on
+  `issue_ingest_token` runs before the token is minted so the
+  user discovers the error inside the Outbound Share panel, not
+  after pasting the snippet into a remote shell. (2) A new
+  `PendingApprovalWatcher` component is mounted once in the SPA
+  shell (`App.tsx`) and polls the two approval queues the
+  active user is gated for — `GET /api/user/pending-approvals`
+  (credential checkouts) and `GET
+  /api/admin/outbound-shares/pending` (outbound shares, only
+  when the user has `can_manage_system` or
+  `is_outbound_approver`) — surfacing each new item as a
+  top-left popup card with Approve / Deny (with inline reason
+  composer) / View all actions wired to the existing decide
+  endpoints. 45 s poll cadence plus extra polls on tab focus /
+  visibilitychange; 30 s auto-dismiss; cross-tab de-dup via
+  `localStorage`. Architecturally mirrors the existing
+  `CredentialProfileExpiryWatcher`.
 - **Audit** — SHA-256 hash-chained append-only log
 
 ### 3. Frontend SPA

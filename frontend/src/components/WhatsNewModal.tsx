@@ -29,6 +29,38 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.11.1",
+    subtitle:
+      "Patch release — approver workflow polish. Approvers can now action pending work without leaving their current page via a new in-session popup, credential-checkout denials carry a free-form 'Reason from approver' through to the rejection email and the row itself (migration 077), and outbound shares from accounts without the approval bypass now require a ≥ 10-character justification before the file ever reaches the DLP / approval pipeline.",
+    sections: [
+      {
+        title: "In-session approval popup",
+        description:
+          "A new PendingApprovalWatcher component is mounted once in the SPA shell and polls both approval queues the active user is gated for (credential checkouts via /api/user/pending-approvals, outbound shares via /api/admin/outbound-shares/pending). Each new pending item surfaces as a top-left popup card with Approve / Deny / View all actions wired to the existing decide endpoints. Poll cadence is 45 s with extra polls on tab focus/visibilitychange. Cards auto-dismiss after 30 s and the dismiss is recorded in localStorage so the next poll does not re-spawn the same card and multiple open tabs do not show a duplicate. The Deny action expands an inline reason composer so denials never leave the requester guessing why. Mirrors the existing CredentialProfileExpiryWatcher architecturally.",
+      },
+      {
+        title: "Persisted 'Reason from approver' on credential checkouts",
+        description:
+          "Until now Denied checkouts carried no explanation. v1.11.1 adds migration 077 (nullable decision_reason TEXT on password_checkout_requests; legacy rows stay NULL), threads the field through the rejection email template under a 'Reason from approver' block, and accepts it as an optional reason field on POST /api/user/checkouts/:id/decide. The body remains backwards-compatible — clients that omit reason continue to work. The Approvals page and the in-session popup both use the same inline deny composer so the two surfaces have a single deny-flow shape.",
+      },
+      {
+        title: "Mandatory justification on outbound shares (no-bypass accounts)",
+        description:
+          "When a user lacks the per-account outbound_share_requires_approval = FALSE bypass, every outbound submission must now carry a justification of at least 10 characters (whitespace-trimmed, character count rather than byte count so non-ASCII reasons such as accented text or CJK are not penalised). Bypass users continue to submit without one — auto-approval semantics are unchanged for the bypass path. Enforced at BOTH outbound HTTP entry points (drag-and-drop finalize_submit and the curl/PowerShell ingest-token mint) by a single shared validate_outbound_justification helper.",
+      },
+      {
+        title: "Outbound Share panel UX mirrors the rule",
+        description:
+          "MeResponse.outbound_share_requires_approval is now returned on both /me and /auth/check so the SPA can derive a single boolean and thread it into SessionManagerProvider. When bypass is off the justification label gains a red asterisk and aria-required, the placeholder changes to a worked example ('Required — e.g. Audit ticket INC-1234, exporting redacted log for review'), a helper line reads 'Required for your account (minimum 10 characters)', and the Generate upload command button stays disabled with an explanatory tooltip until the trimmed value reaches 10 chars. The drive-channel onfile interceptor mirrors the gate with a clear warning toast and remediation copy, avoiding a confusing toast-on-400 flow.",
+      },
+      {
+        title: "Operator impact",
+        description:
+          "One additive migration (077_checkout_decision_reason.sql) applies automatically. No new environment variables, no new role permissions, backwards-compatible request shapes. Recommended deploy: rebuild and recreate the backend container (picks up migration 077, the new validation, and the email template change) and the frontend container (picks up the watcher, the composer, the panel UX, and the onfile gate). The strata-dmz relay and guacd images are unchanged.",
+      },
+    ],
+  },
+  {
     version: "1.11.0",
     subtitle:
       "Outbound Quick-Share — approval-gated file export with two ingest paths. The transparent drive-channel interceptor handles environments where RDP / SFTP drive redirection is allowed; a new tokenised HTTPS upload-command path covers sites where drive redirection is disabled by group policy. Both feed the same DLP / approval / audit pipeline.",

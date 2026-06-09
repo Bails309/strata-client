@@ -71,15 +71,30 @@ function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolea
   // render. Forcing the body up immediately makes progress visible
   // for any non-trivial file even when the server eventually
   // rejects (e.g. AV block).
+  //
+  // `-w "..."` (write-out format) prints a one-line summary AFTER
+  // the upload completes. We add it because `--progress-bar` may
+  // not be visible in every terminal/curl combination — notably
+  // (a) when the upload completes faster than curl's tty refresh
+  // (LAN / localhost transfers of even 100+ MB can finish in well
+  // under a second), and (b) on some Windows curl builds where
+  // the bar's `\r` redraw is swallowed by the host. The `-w`
+  // payload writes to stdout AFTER the response, so the user
+  // always sees `Done: <N> bytes in <T>s (HTTP <code>)` regardless
+  // of whether the live bar painted anything. `%{size_upload}` is
+  // the actual body byte count curl pushed; `%{time_total}` is
+  // wall-clock seconds from process start to last byte received;
+  // `%{http_code}` is the final HTTP status — 200 on accept, 400
+  // on stale-token / AV-block / payload-too-large, etc.
   switch (format) {
     case "curl":
       return insecure
-        ? `curl -kfL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' '${url}'`
-        : `curl -fL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' '${url}'`;
+        ? `curl -kfL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' -w '\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n' '${url}'`
+        : `curl -fL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' -w '\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n' '${url}'`;
     case "curl-win":
       return insecure
-        ? `curl.exe -kfL --progress-bar -H "Expect:" -F "file=@<your-file>" "${url}"`
-        : `curl.exe -fL --progress-bar -H "Expect:" -F "file=@<your-file>" "${url}"`;
+        ? `curl.exe -kfL --progress-bar -H "Expect:" -F "file=@<your-file>" -w "\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n" "${url}"`
+        : `curl.exe -fL --progress-bar -H "Expect:" -F "file=@<your-file>" -w "\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n" "${url}"`;
     case "powershell": {
       // PowerShell 7+. Built around a streaming HttpClient + a
       // background-task poll loop so we can paint a Write-Progress

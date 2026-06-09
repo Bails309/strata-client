@@ -1,6 +1,11 @@
 use axum::extract::State;
 use axum::Json;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Serialize;
+use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::RwLock as TokioRwLock;
 
 use crate::config::DatabaseMode;
 use crate::services::app_state::{BootPhase, SharedState};
@@ -137,6 +142,14 @@ pub struct SchemaHealth {
 /// always `false`. `address` is the clamd `host:port` (clamav backend)
 /// or the redacted first token of `STRATA_AV_COMMAND` (command
 /// backend); `None` for `off`.
+///
+/// For the `clamav` backend, when the TCP probe succeeds we also send
+/// a `VERSION` command to populate `engine_version`, `signatures_version`,
+/// and `signatures_built`. Independently, a 6-hour-cached HEAD against
+/// `database.clamav.net/daily.cvd` populates `upstream_version` and
+/// `upstream_checked_at`; comparing the two yields `status`
+/// (`"current"` / `"behind"` / `"unknown"`). All metadata fields are
+/// `None` for the `off` and `command` backends.
 #[derive(Serialize)]
 pub struct AvHealth {
     pub backend: &'static str,
@@ -144,6 +157,24 @@ pub struct AvHealth {
     pub reachable: bool,
     pub fail_mode: &'static str,
     pub address: Option<String>,
+    /// ClamAV engine version (e.g. `"1.4.1"`). `None` when the backend is
+    /// not `clamav` or the version probe failed.
+    pub engine_version: Option<String>,
+    /// Daily signature DB version currently loaded by clamd (e.g. `27468`).
+    pub signatures_version: Option<u32>,
+    /// RFC 3339 timestamp of the loaded daily DB's build time.
+    pub signatures_built: Option<String>,
+    /// Latest published daily DB version from `database.clamav.net`,
+    /// cached for 6 hours. `None` until the first successful upstream
+    /// check completes (refresh is fired off in the background so the
+    /// health endpoint never blocks on it).
+    pub upstream_version: Option<u32>,
+    /// RFC 3339 timestamp of the last successful upstream fetch.
+    pub upstream_checked_at: Option<String>,
+    /// `"current"` when `signatures_version >= upstream_version`,
+    /// `"behind"` when local is older, `"unknown"` when one side is
+    /// missing. `None` when the upstream check has never succeeded.
+    pub status: Option<&'static str>,
 }
 
 /// GET /api/admin/health – read-only service health for the admin dashboard.
@@ -249,6 +280,45 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
         _ => (false, false, None),
     };
 
+    // Metadata probes (clamav-only). The `VERSION` round-trip reuses
+    // the same address we just TCP-probed; the upstream lookup is
+    // served from a 6-hour cache so the health endpoint never blocks
+    // on database.clamav.net (a stale-while-revalidate refresh is
+    // fired off in the background when the cache is cold or stale).
+    let (av_engine_version, av_signatures_version, av_signatures_built) =
+        if av_backend == "clamav" && av_reachable {
+            match av_address.as_deref() {
+                Some(addr) => match probe_clamd_version(addr, Duration::from_secs(2)).await {
+                    Some(v) => (
+                        Some(v.engine),
+                        Some(v.signatures),
+                        Some(v.signatures_built.to_rfc3339()),
+                    ),
+                    None => (None, None, None),
+                },
+                None => (None, None, None),
+            }
+        } else {
+            (None, None, None)
+        };
+
+    let (av_upstream_version, av_upstream_checked_at, av_status) =
+        if av_backend == "clamav" && av_enabled {
+            match get_upstream_version_cached().await {
+                Some((upstream, checked_at)) => {
+                    let status = match av_signatures_version {
+                        Some(local) if local >= upstream => "current",
+                        Some(_) => "behind",
+                        None => "unknown",
+                    };
+                    (Some(upstream), Some(checked_at.to_rfc3339()), Some(status))
+                }
+                None => (None, None, None),
+            }
+        } else {
+            (None, None, None)
+        };
+
     Json(ServiceHealth {
         version: env!("STRATA_VERSION"),
         database: DatabaseHealth {
@@ -278,6 +348,12 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
             reachable: av_reachable,
             fail_mode: av_fail_mode,
             address: av_address,
+            engine_version: av_engine_version,
+            signatures_version: av_signatures_version,
+            signatures_built: av_signatures_built,
+            upstream_version: av_upstream_version,
+            upstream_checked_at: av_upstream_checked_at,
+            status: av_status,
         },
         uptime_secs,
         environment,
@@ -316,6 +392,130 @@ async fn check_tcp(host: &str, port: u16) -> bool {
     .await
     .map(|r| r.is_ok())
     .unwrap_or(false)
+}
+
+// ── ClamAV metadata helpers (v1.12.0+) ──
+
+/// Parsed `VERSION` reply from clamd.
+///
+/// Wire format is a single line like
+/// `ClamAV 1.4.1/27468/Tue Jun  3 09:18:33 2026` — engine version,
+/// daily.cvd version number, and the build timestamp of the loaded
+/// signature DB.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClamdVersion {
+    engine: String,
+    signatures: u32,
+    signatures_built: DateTime<Utc>,
+}
+
+fn parse_clamd_version_line(line: &str) -> Option<ClamdVersion> {
+    let mut parts = line.splitn(3, '/');
+    let header = parts.next()?;
+    let sigs = parts.next()?.trim();
+    let date = parts.next()?.trim();
+
+    let engine = header.trim().strip_prefix("ClamAV")?.trim().to_string();
+    if engine.is_empty() {
+        return None;
+    }
+    let signatures = sigs.parse::<u32>().ok()?;
+    // clamd's date is `Day Mon DD HH:MM:SS YYYY` with a space-padded DD.
+    let naive = NaiveDateTime::parse_from_str(date, "%a %b %e %H:%M:%S %Y").ok()?;
+    Some(ClamdVersion {
+        engine,
+        signatures,
+        signatures_built: DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc),
+    })
+}
+
+/// Send `zVERSION\0` to clamd and parse the reply. Returns `None` on
+/// any I/O error, timeout, or unparseable response — the dashboard
+/// degrades to showing just `Backend: ClamAV` without the version row.
+async fn probe_clamd_version(addr: &str, timeout: Duration) -> Option<ClamdVersion> {
+    let fut = async {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.ok()?;
+        stream.write_all(b"zVERSION\0").await.ok()?;
+        let mut buf = Vec::with_capacity(256);
+        stream.read_to_end(&mut buf).await.ok()?;
+        let text = String::from_utf8_lossy(&buf);
+        let line = text.trim_end_matches('\0').trim();
+        parse_clamd_version_line(line)
+    };
+    tokio::time::timeout(timeout, fut).await.ok().flatten()
+}
+
+/// Parse the version field out of a CVD header.
+///
+/// CVD files begin with a 512-byte ASCII header:
+/// `ClamAV-VDB:Day Mon DD HH:MM:SS YYYY:VERSION:NUMSIGS:FLEVEL:MD5:BUILDER:BUILDTIME:`
+/// followed by space padding. We only care about field index 2 (version).
+fn parse_cvd_header_version(header: &str) -> Option<u32> {
+    let mut parts = header.split(':');
+    if parts.next()? != "ClamAV-VDB" {
+        return None;
+    }
+    let _date = parts.next()?;
+    parts.next()?.trim().parse::<u32>().ok()
+}
+
+/// Range-fetch the first 512 bytes of `daily.cvd` from the public
+/// ClamAV mirror and return the published version number. Uses the
+/// shared `default_client()` (30s overall / 5s connect). Returns
+/// `None` on any network or parse error — callers treat that as
+/// “we don't know what the latest version is right now” and skip
+/// the up-to-date comparison.
+async fn fetch_upstream_daily_version() -> Option<u32> {
+    let client = crate::services::http_client::default_client();
+    let resp = client
+        .get("https://database.clamav.net/daily.cvd")
+        .header("Range", "bytes=0-511")
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    let header_slice = &bytes[..bytes.len().min(512)];
+    let header = std::str::from_utf8(header_slice).ok()?;
+    parse_cvd_header_version(header)
+}
+
+/// 6 h TTL — clamav.net publishes daily DB updates a few times per
+/// day during active threat windows; checking more often than every
+/// 6 h yields no useful operator signal and wastes bandwidth.
+const UPSTREAM_CACHE_TTL_SECS: i64 = 6 * 60 * 60;
+
+static UPSTREAM_CACHE: OnceLock<TokioRwLock<Option<(u32, DateTime<Utc>)>>> = OnceLock::new();
+
+fn upstream_cache() -> &'static TokioRwLock<Option<(u32, DateTime<Utc>)>> {
+    UPSTREAM_CACHE.get_or_init(|| TokioRwLock::new(None))
+}
+
+/// Stale-while-revalidate read of the upstream version cache.
+///
+/// - Cache fresh (< 6 h)  → return cached value, no network.
+/// - Cache stale or cold  → spawn a background refresh task and
+///   return whatever is currently cached (possibly `None`).
+///
+/// The health endpoint thus never blocks on the upstream HTTP call.
+/// The very first call after boot returns `None`; a few seconds
+/// later the cache is warm and subsequent calls return the value.
+async fn get_upstream_version_cached() -> Option<(u32, DateTime<Utc>)> {
+    let snapshot = *upstream_cache().read().await;
+    let needs_refresh = match snapshot {
+        Some((_, fetched)) => (Utc::now() - fetched).num_seconds() > UPSTREAM_CACHE_TTL_SECS,
+        None => true,
+    };
+    if needs_refresh {
+        tokio::spawn(async {
+            if let Some(v) = fetch_upstream_daily_version().await {
+                *upstream_cache().write().await = Some((v, Utc::now()));
+            }
+        });
+    }
+    snapshot
 }
 
 #[cfg(test)]
@@ -395,6 +595,12 @@ mod tests {
                 reachable: false,
                 fail_mode: "block",
                 address: None,
+                engine_version: None,
+                signatures_version: None,
+                signatures_built: None,
+                upstream_version: None,
+                upstream_checked_at: None,
+                status: None,
             },
             uptime_secs: 3600,
             environment: "production".into(),
@@ -408,6 +614,8 @@ mod tests {
         assert_eq!(json["av"]["backend"], "off");
         assert_eq!(json["av"]["enabled"], false);
         assert_eq!(json["av"]["fail_mode"], "block");
+        assert_eq!(json["av"]["signatures_version"], serde_json::Value::Null);
+        assert_eq!(json["av"]["status"], serde_json::Value::Null);
         assert_eq!(json["uptime_secs"], 3600);
         assert_eq!(json["environment"], "production");
     }
@@ -441,6 +649,51 @@ mod tests {
         // Connect to a port that's almost certainly not listening
         let result = check_tcp("127.0.0.1", 19999).await;
         assert!(!result);
+    }
+
+    #[test]
+    fn parse_clamd_version_line_typical_reply() {
+        let line = "ClamAV 1.4.1/27468/Tue Jun  3 09:18:33 2026";
+        let v = parse_clamd_version_line(line).expect("must parse");
+        assert_eq!(v.engine, "1.4.1");
+        assert_eq!(v.signatures, 27468);
+        // 2026-06-03T09:18:33Z
+        assert_eq!(v.signatures_built.to_rfc3339(), "2026-06-03T09:18:33+00:00");
+    }
+
+    #[test]
+    fn parse_clamd_version_line_double_digit_day() {
+        let line = "ClamAV 1.0.5/27500/Mon Dec 15 11:00:00 2025";
+        let v = parse_clamd_version_line(line).expect("must parse");
+        assert_eq!(v.signatures, 27500);
+        assert_eq!(v.signatures_built.to_rfc3339(), "2025-12-15T11:00:00+00:00");
+    }
+
+    #[test]
+    fn parse_clamd_version_line_rejects_garbage() {
+        assert!(parse_clamd_version_line("PONG").is_none());
+        assert!(parse_clamd_version_line("ClamAV-no-slashes").is_none());
+        assert!(parse_clamd_version_line("ClamAV 1/notanumber/Tue Jun 3 09:18:33 2026").is_none());
+        assert!(parse_clamd_version_line("ClamAV /27468/Tue Jun 3 09:18:33 2026").is_none());
+    }
+
+    #[test]
+    fn parse_cvd_header_version_extracts_field_2() {
+        let header =
+            "ClamAV-VDB:Tue Jun  3 09:18:33 2026:27500:5400000:90:abcdef0123:builder:1717405113:";
+        assert_eq!(parse_cvd_header_version(header), Some(27500));
+    }
+
+    #[test]
+    fn parse_cvd_header_version_rejects_wrong_tag() {
+        let header = "NotACVD:Tue Jun  3 09:18:33 2026:27500:5400000:90:abc:b:1:";
+        assert_eq!(parse_cvd_header_version(header), None);
+    }
+
+    #[test]
+    fn parse_cvd_header_version_rejects_non_numeric() {
+        let header = "ClamAV-VDB:Tue Jun  3 09:18:33 2026:not-a-number:5400000:90:abc:b:1:";
+        assert_eq!(parse_cvd_header_version(header), None);
     }
 
     #[test]

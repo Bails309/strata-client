@@ -132,4 +132,52 @@ describe("HealthTab", () => {
     await screen.findByRole("heading", { name: /^Antivirus$/i });
     expect(screen.getByText("Unreachable")).toBeInTheDocument();
   });
+
+  it("renders the signature DB version and 'Up to date' status when the upstream check succeeds", async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue(
+      health({
+        av: {
+          backend: "clamav",
+          enabled: true,
+          reachable: true,
+          fail_mode: "block",
+          address: "clamav:3310",
+          engine_version: "1.4.1",
+          signatures_version: 27500,
+          signatures_built: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+          upstream_version: 27500,
+          upstream_checked_at: new Date().toISOString(),
+          status: "current",
+        },
+      })
+    );
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    await screen.findByRole("heading", { name: /^Antivirus$/i });
+    expect(screen.getByText("27500")).toBeInTheDocument();
+    expect(screen.getByText(/3h ago/)).toBeInTheDocument();
+    expect(screen.getByText("Up to date")).toBeInTheDocument();
+  });
+
+  it("shows 'Behind by N' when the local signature DB is older than upstream", async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue(
+      health({
+        av: {
+          backend: "clamav",
+          enabled: true,
+          reachable: true,
+          fail_mode: "block",
+          address: "clamav:3310",
+          engine_version: "1.4.1",
+          signatures_version: 27450,
+          signatures_built: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+          upstream_version: 27500,
+          upstream_checked_at: new Date().toISOString(),
+          status: "behind",
+        },
+      })
+    );
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    await screen.findByRole("heading", { name: /^Antivirus$/i });
+    expect(screen.getByText("Behind by 50")).toBeInTheDocument();
+  });
 });

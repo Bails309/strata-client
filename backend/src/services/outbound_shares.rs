@@ -172,6 +172,16 @@ pub struct SubmitInput<'a> {
     pub plaintext: &'a [u8],
     pub staging_root: &'a Path,
     pub requires_approval: bool,
+    /// Verdict from the AV scanner that inspected the upload's temp
+    /// file *before* sealing. Persisted into the `av_*` columns. The
+    /// route layer is responsible for blocking Infected uploads
+    /// before they reach this function — by the time we're here the
+    /// verdict is informational (Clean / Skipped / allowed-Error).
+    pub av_verdict: &'a crate::services::av::Verdict,
+    /// Backend tag (`off` / `clamav` / `command`) of the scanner that
+    /// produced [`av_verdict`]. Persisted alongside the verdict so the
+    /// audit trail records *which* engine spoke.
+    pub av_backend: &'a str,
 }
 
 /// Outcome of a successful [`submit`] call. Returned to the caller so it
@@ -261,13 +271,15 @@ pub async fn submit(
             filename, content_type, size, sha256,
             storage_path, sealed_dek_ciphertext, sealed_dek_nonce,
             justification, dlp_score, dlp_reasons,
-            status, download_token, created_at, expires_at
+            status, download_token, created_at, expires_at,
+            av_scan_status, av_signature, av_scanned_at, av_scanner_backend
         ) VALUES (
             $1, $2, $3, $4,
             $5, $6, $7, $8,
             $9, $10, $11,
             $12, $13, $14,
-            $15, $16, $17, $18
+            $15, $16, $17, $18,
+            $19, $20, $21, $22
         )",
     )
     .bind(id)
@@ -288,6 +300,10 @@ pub async fn submit(
     .bind(download_token.as_deref())
     .bind(now)
     .bind(expires_at)
+    .bind(input.av_verdict.as_str())
+    .bind(input.av_verdict.signature())
+    .bind(now)
+    .bind(input.av_backend)
     .execute(pool)
     .await?;
 
@@ -305,6 +321,9 @@ pub async fn submit(
             "auto_approved": auto_approve,
             "session_id": input.session_id,
             "connection_id": input.connection_id,
+            "av_status": input.av_verdict.as_str(),
+            "av_signature": input.av_verdict.signature(),
+            "av_backend": input.av_backend,
         }),
     )
     .await;

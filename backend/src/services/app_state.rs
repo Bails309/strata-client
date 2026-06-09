@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 
 use crate::config::AppConfig;
 use crate::db::Database;
+use crate::services::av::{FailMode as AvFailMode, Scanner as AvScanner};
 use crate::services::file_store::FileStore;
 use crate::services::guacd_pool::GuacdPool;
 use crate::services::session_registry::SessionRegistry;
@@ -44,6 +45,16 @@ pub struct AppState {
     /// here so admin / readiness endpoints can observe link health
     /// without coupling to the supervisor's internals.
     pub dmz_link_registry: Option<crate::services::dmz_link::LinkRegistry>,
+    /// Antivirus scanner used by both upload paths (`routes::files::upload`
+    /// and `routes::outbound_shares::parse_outbound_multipart`). Defaults
+    /// to [`crate::services::av::OffScanner`] when `STRATA_AV_BACKEND` is
+    /// unset / `off`; replaced with [`crate::services::av::ClamAvScanner`]
+    /// or [`crate::services::av::CommandScanner`] at boot when the
+    /// operator opts in.
+    pub av_scanner: Arc<dyn AvScanner>,
+    /// What to do when the AV scanner reports `Verdict::Error`. Read
+    /// from `STRATA_AV_FAIL_MODE` at boot (default `Block`).
+    pub av_fail_mode: AvFailMode,
     pub started_at: Instant,
 }
 
@@ -100,6 +111,8 @@ mod tests {
             )),
             vdi_driver: Arc::new(NoopVdiDriver),
             dmz_link_registry: None,
+            av_scanner: Arc::new(crate::services::av::OffScanner),
+            av_fail_mode: crate::services::av::FailMode::Block,
             started_at: Instant::now(),
         };
         let debug = format!("{:?}", state);

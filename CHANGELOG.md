@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Pluggable antivirus scanning for Quick Share uploads
+  (`backend/src/services/av.rs`, migration `078_av_scanning.sql`).**
+  Both upload paths — inbound (`POST /api/user/files/upload`) and
+  outbound (`POST /api/user/outbound-shares/submit` plus the
+  token-auth `POST /api/internal/outbound-ingest/{token}` shell-side
+  variant) — now run the streamed temp file through a configurable
+  AV backend *before* it lands in the session file store / before
+  it is sealed via Vault Transit. Three backends ship:
+  - `off` (default, no-op `Verdict::Skipped`),
+  - `clamav` (clamd `INSTREAM` over TCP — full wire protocol
+    implementation, 64 KB chunks, 16 MB clamd-side ceiling),
+  - `command` (shell-out to any scanner with the exit-code contract
+    `0 = clean`, `1 = infected`, other = error; signature parsed
+    from the last non-empty stdout/stderr line, stripping
+    `Threat: ` / `Found: ` prefixes).
+  Selected via `STRATA_AV_BACKEND={off|clamav|command}`. Block-vs-
+  allow behaviour on scanner *errors* (timeouts, daemon down,
+  unreachable) is governed by `STRATA_AV_FAIL_MODE={block|allow}`,
+  defaulting to `block` — fail-closed by design. Infected uploads
+  are always rejected, the temp file is deleted, and an audit
+  event (`file.av_blocked` / persisted in
+  `outbound_shares.av_scan_status`) records the signature, file
+  metadata, and which engine produced the verdict. The
+  `outbound_shares` table gains four new nullable columns
+  (`av_scan_status`, `av_signature`, `av_scanned_at`,
+  `av_scanner_backend`) plus a partial index targeting rows that
+  need operator attention (`status IN ('infected','error')`). The
+  ClamAV sidecar is opt-in via a new `av` compose profile
+  (`docker compose --profile av up -d`); the backend tolerates an
+  absent scanner because `off` is the default.
+
 ## [1.11.1] — 2026-06-09
 
 ### Patch Release — Approver workflow polish: in-session popup, persisted deny reason, mandatory outbound-share justification

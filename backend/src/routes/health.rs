@@ -447,6 +447,8 @@ mod tests {
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             dmz_link_registry: None,
+            av_scanner: std::sync::Arc::new(crate::services::av::OffScanner),
+            av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
         let result = status(axum::extract::State(state)).await;
@@ -479,6 +481,8 @@ mod tests {
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             dmz_link_registry: None,
+            av_scanner: std::sync::Arc::new(crate::services::av::OffScanner),
+            av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -529,6 +533,8 @@ mod tests {
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             dmz_link_registry: None,
+            av_scanner: std::sync::Arc::new(crate::services::av::OffScanner),
+            av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;
@@ -581,6 +587,8 @@ mod tests {
             ),
             vdi_driver: std::sync::Arc::new(crate::services::vdi::NoopVdiDriver),
             dmz_link_registry: None,
+            av_scanner: std::sync::Arc::new(crate::services::av::OffScanner),
+            av_fail_mode: crate::services::av::FailMode::Block,
             started_at: std::time::Instant::now(),
         }));
         let axum::Json(result) = service_health(axum::extract::State(state)).await;

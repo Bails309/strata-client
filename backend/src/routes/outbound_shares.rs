@@ -77,8 +77,8 @@ pub async fn submit(
     multipart: axum::extract::Multipart,
 ) -> Result<Json<SubmitResponse>, AppError> {
     check_quick_share_outbound_permission(&user)?;
-    let (pool, vault_cfg) = load_pool_and_vault(&state).await?;
-    let parsed = parse_outbound_multipart(multipart).await?;
+    let (pool, vault_cfg, av_scanner, av_fail_mode) = load_pool_vault_and_av(&state).await?;
+    let parsed = parse_outbound_multipart(multipart, &av_scanner, av_fail_mode).await?;
     finalize_submit(
         &pool,
         &vault_cfg,
@@ -89,16 +89,29 @@ pub async fn submit(
         &parsed.filename,
         &parsed.content_type,
         &parsed.plaintext,
+        &parsed.av_verdict,
+        parsed.av_backend,
     )
     .await
     .map(Json)
 }
 
 /// Shared state-fetch used by both the cookie-auth `submit` handler
-/// and the token-auth `ingest_via_token` handler.
-async fn load_pool_and_vault(
+/// and the token-auth `ingest_via_token` handler. Returns the DB
+/// pool, the active Vault config, the AV scanner handle, and its
+/// configured fail-mode — all four are needed to drive
+/// `parse_outbound_multipart` and `finalize_submit`.
+async fn load_pool_vault_and_av(
     state: &SharedState,
-) -> Result<(sqlx::PgPool, crate::config::VaultConfig), AppError> {
+) -> Result<
+    (
+        sqlx::PgPool,
+        crate::config::VaultConfig,
+        std::sync::Arc<dyn crate::services::av::Scanner>,
+        crate::services::av::FailMode,
+    ),
+    AppError,
+> {
     let s = state.read().await;
     if s.phase != BootPhase::Running {
         return Err(AppError::SetupRequired);
@@ -113,7 +126,7 @@ async fn load_pool_and_vault(
         .as_ref()
         .and_then(|c| c.vault.clone())
         .ok_or_else(|| AppError::Vault("Vault is not configured".into()))?;
-    Ok((pool, vault_cfg))
+    Ok((pool, vault_cfg, s.av_scanner.clone(), s.av_fail_mode))
 }
 
 /// Result of parsing the outbound-share multipart body.
@@ -124,10 +137,21 @@ struct ParsedOutboundUpload {
     session_id: Option<String>,
     connection_id: Option<Uuid>,
     justification: Option<String>,
+    /// Verdict from the configured AV scanner. Always present — for
+    /// `STRATA_AV_BACKEND=off` it is `Skipped { reason: "scanning
+    /// disabled" }`. Persisted into the `outbound_shares.av_*` columns
+    /// by `services::outbound_shares::submit`.
+    av_verdict: crate::services::av::Verdict,
+    /// Backend tag (`off` / `clamav` / `command`) of the scanner that
+    /// produced [`av_verdict`]. Persisted alongside so the audit trail
+    /// records *which* engine spoke.
+    av_backend: &'static str,
 }
 
 async fn parse_outbound_multipart(
     mut multipart: axum::extract::Multipart,
+    av_scanner: &std::sync::Arc<dyn crate::services::av::Scanner>,
+    av_fail_mode: crate::services::av::FailMode,
 ) -> Result<ParsedOutboundUpload, AppError> {
     let mut session_id: Option<String> = None;
     let mut connection_id: Option<Uuid> = None;
@@ -214,6 +238,42 @@ async fn parse_outbound_multipart(
     let (filename, content_type, temp_path, _size) =
         file_meta.ok_or_else(|| AppError::Validation("Missing file field".into()))?;
 
+    // ── AV scan (W7-1) ────────────────────────────────────────────────
+    //
+    // Scan the on-disk temp file *before* we load it into memory and
+    // *before* the service layer seals it via Vault — sealing destroys
+    // the only thing the scanner could match a signature against. A
+    // blocking verdict (Infected, or Error in fail_mode=Block) deletes
+    // the temp file and short-circuits the request so the sealed blob
+    // and the DB row are never created. The verdict is plumbed down to
+    // `submit()` even when allowed, so the row records *which* engine
+    // saw the file and *what* it said (including the bypass cases:
+    // Skipped/oversize, Skipped/scanning-disabled, allowed-Error).
+    let av_verdict = av_scanner.scan(&temp_path).await;
+    let av_backend = av_scanner.backend_tag();
+    if av_verdict.blocks(av_fail_mode) {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        let msg = match &av_verdict {
+            crate::services::av::Verdict::Infected { signature } => {
+                format!("File rejected by malware scan: {signature}")
+            }
+            crate::services::av::Verdict::Error { message } => {
+                format!("Antivirus scan failed: {message}")
+            }
+            crate::services::av::Verdict::Clean | crate::services::av::Verdict::Skipped { .. } => {
+                unreachable!()
+            }
+        };
+        tracing::warn!(
+            filename = %filename,
+            av_status = av_verdict.as_str(),
+            av_signature = ?av_verdict.signature(),
+            av_backend = av_backend,
+            "Outbound Quick Share upload blocked by AV scan"
+        );
+        return Err(AppError::Validation(msg));
+    }
+
     // Load plaintext from temp file. The submit() service seals it via
     // Vault before writing to the staging directory.
     let plaintext = tokio::fs::read(&temp_path)
@@ -228,6 +288,8 @@ async fn parse_outbound_multipart(
         session_id,
         connection_id,
         justification,
+        av_verdict,
+        av_backend,
     })
 }
 
@@ -245,6 +307,8 @@ async fn finalize_submit(
     filename: &str,
     content_type: &str,
     plaintext: &[u8],
+    av_verdict: &crate::services::av::Verdict,
+    av_backend: &'static str,
 ) -> Result<SubmitResponse, AppError> {
     // Approval is required by default for every outbound submission;
     // the only way to bypass is an explicit per-user opt-out
@@ -286,6 +350,8 @@ async fn finalize_submit(
             plaintext,
             staging_root: &staging,
             requires_approval,
+            av_verdict,
+            av_backend,
         },
     )
     .await?;
@@ -417,7 +483,7 @@ pub async fn ingest_via_token(
     headers: axum::http::HeaderMap,
     multipart: axum::extract::Multipart,
 ) -> Result<Json<SubmitResponse>, AppError> {
-    let (pool, vault_cfg) = load_pool_and_vault(&state).await?;
+    let (pool, vault_cfg, av_scanner, av_fail_mode) = load_pool_vault_and_av(&state).await?;
 
     let client_ip = crate::routes::auth::extract_client_ip(&headers);
 
@@ -442,7 +508,7 @@ pub async fn ingest_via_token(
         return Err(AppError::Forbidden);
     }
 
-    let parsed = parse_outbound_multipart(multipart).await?;
+    let parsed = parse_outbound_multipart(multipart, &av_scanner, av_fail_mode).await?;
 
     // Token-supplied context wins over anything the multipart
     // happens to include — the remote shell shouldn't be able to
@@ -464,6 +530,8 @@ pub async fn ingest_via_token(
         &parsed.filename,
         &parsed.content_type,
         &parsed.plaintext,
+        &parsed.av_verdict,
+        parsed.av_backend,
     )
     .await?;
 

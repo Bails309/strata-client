@@ -80,12 +80,17 @@ pub async fn upload(
     // RBAC: Quick Share must be explicitly enabled on the user's role.
     crate::services::middleware::check_quick_share_permission(&user)?;
 
-    let file_store = {
+    let (file_store, av_scanner, av_fail_mode, db_pool) = {
         let s = state.read().await;
         if s.phase != BootPhase::Running {
             return Err(AppError::SetupRequired);
         }
-        s.file_store.clone()
+        (
+            s.file_store.clone(),
+            s.av_scanner.clone(),
+            s.av_fail_mode,
+            s.db.as_ref().map(|d| d.pool.clone()),
+        )
     };
 
     let mut session_id: Option<String> = None;
@@ -166,6 +171,60 @@ pub async fn upload(
         .inspect_err(|_e| {
             let _ = std::fs::remove_file(&temp_path);
         })?;
+
+    // ── AV scan (W7-1) ────────────────────────────────────────────────
+    //
+    // Scan the on-disk temp file *before* it lands in the session file
+    // store. Verdict semantics are defined in `services::av`:
+    //   - Clean   → proceed.
+    //   - Skipped → proceed (oversize / scanning disabled).
+    //   - Infected → reject, audit, delete temp file.
+    //   - Error    → reject if `av_fail_mode == Block` (default), else
+    //                proceed and rely on the audit row for forensics.
+    let verdict = av_scanner.scan(&temp_path).await;
+    if verdict.blocks(av_fail_mode) {
+        let _ = std::fs::remove_file(&temp_path);
+        let msg = match &verdict {
+            crate::services::av::Verdict::Infected { signature } => {
+                format!("File rejected by malware scan: {signature}")
+            }
+            crate::services::av::Verdict::Error { message } => {
+                format!("Antivirus scan failed: {message}")
+            }
+            // The two non-blocking variants can't reach this branch (see
+            // `Verdict::blocks`), but exhaustively matching documents
+            // intent for future maintainers.
+            crate::services::av::Verdict::Clean | crate::services::av::Verdict::Skipped { .. } => {
+                unreachable!()
+            }
+        };
+        if let Some(pool) = db_pool.as_ref() {
+            let _ = crate::services::audit::log(
+                pool,
+                Some(user.id),
+                "file.av_blocked",
+                &serde_json::json!({
+                    "session_id": session_id,
+                    "filename": filename,
+                    "size": size,
+                    "av_status": verdict.as_str(),
+                    "av_signature": verdict.signature(),
+                    "av_backend": av_scanner.backend_tag(),
+                }),
+            )
+            .await;
+        }
+        tracing::warn!(
+            user = %user.username,
+            session = %session_id,
+            filename = %filename,
+            av_status = verdict.as_str(),
+            av_signature = ?verdict.signature(),
+            av_backend = av_scanner.backend_tag(),
+            "Inbound Quick Share upload blocked by AV scan"
+        );
+        return Err(AppError::Validation(msg));
+    }
 
     let meta = file_store
         .store_from_path(

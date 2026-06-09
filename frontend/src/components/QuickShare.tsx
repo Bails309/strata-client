@@ -10,6 +10,7 @@ import {
   QuickShareFile,
 } from "../api";
 import Select from "./Select";
+import { useOptionalToast } from "./ToastProvider";
 
 interface Props {
   connectionId: string;
@@ -155,6 +156,7 @@ export default function QuickShare({
   // depends on which target the URL is being pasted into.
   const [insecure, setInsecure] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const toast = useOptionalToast();
 
   // If the active session changes (different protocol) reset the
   // format to the new protocol's default. The user's per-session
@@ -183,7 +185,62 @@ export default function QuickShare({
       setUploading(true);
       try {
         for (const file of Array.from(fileList)) {
-          await uploadQuickShareFile(connectionId, file);
+          // Per-file sticky toast covering both the byte-streaming
+          // upload phase (real XHR progress) and the server-side AV
+          // scan phase (indeterminate — clamd does not stream
+          // progress). Same `key` across all updates so the
+          // ToastProvider replaces in place rather than spawning
+          // a new toast per progress event.
+          const toastKey = `quickshare-upload-${connectionId}-${file.name}-${Date.now()}`;
+          toast?.info({
+            key: toastKey,
+            title: `Uploading: ${file.name}`,
+            description: "Sending to server\u2026",
+            progress: 0,
+            duration: null,
+          });
+          try {
+            await uploadQuickShareFile(connectionId, file, {
+              onProgress: (loaded, total) => {
+                const pct = total > 0 ? loaded / total : 0;
+                const human =
+                  total > 0
+                    ? `${formatSize(loaded)} of ${formatSize(total)}`
+                    : `${formatSize(loaded)} uploaded`;
+                toast?.info({
+                  key: toastKey,
+                  title: `Uploading: ${file.name}`,
+                  description: human,
+                  progress: pct,
+                  duration: null,
+                });
+              },
+              onUploadComplete: () => {
+                toast?.info({
+                  key: toastKey,
+                  title: `Scanning: ${file.name}`,
+                  description:
+                    "Running antivirus checks. Deeply-nested archives can take a few minutes.",
+                  progress: "indeterminate",
+                  duration: null,
+                });
+              },
+            });
+            // Replace the progress toast in place with the success
+            // confirmation so the user only ever sees one toast per
+            // upload, not two.
+            toast?.success({
+              key: toastKey,
+              title: `Uploaded: ${file.name}`,
+            });
+          } catch (e: unknown) {
+            toast?.error({
+              key: toastKey,
+              title: `Upload failed: ${file.name}`,
+              description: e instanceof Error ? e.message : String(e),
+            });
+            throw e;
+          }
         }
         await loadFiles();
       } catch (e: unknown) {
@@ -193,7 +250,7 @@ export default function QuickShare({
         if (fileInputRef.current) fileInputRef.current.value = "";
       }
     },
-    [connectionId, loadFiles]
+    [connectionId, loadFiles, toast]
   );
 
   const handleDelete = useCallback(async (token: string) => {

@@ -43,13 +43,22 @@ export interface ToastOptions {
    *  replaces the existing one in-place (used by the credential-expiry
    *  watcher to update the same toast as the deadline approaches). */
   key?: string;
+  /** Optional progress indicator rendered as a thin bar below the
+   *  description. A number in `[0, 1]` shows determinate progress
+   *  (uploaded bytes / total bytes). The string `"indeterminate"`
+   *  renders an animated sweep — used for the post-upload AV scan
+   *  phase where the server gives no progress events. Combine with
+   *  `duration: null` and the replace-by-key pattern to drive a
+   *  single live-updating toast through both phases. */
+  progress?: number | "indeterminate";
 }
 
-interface ToastEntry extends Required<Omit<ToastOptions, "description" | "action" | "duration">> {
+interface ToastEntry extends Required<Omit<ToastOptions, "description" | "action" | "duration" | "progress">> {
   id: string;
   description?: string;
   action?: ToastAction;
   duration: number | null;
+  progress?: number | "indeterminate";
   createdAt: number;
 }
 
@@ -148,6 +157,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
         duration,
         action: opts.action,
         key: opts.key ?? id,
+        progress: opts.progress,
         createdAt: Date.now(),
       };
 
@@ -331,6 +341,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastEntry; onDismiss: () => v
         {toast.description && (
           <p className="text-xs text-txt-secondary leading-relaxed mb-2">{toast.description}</p>
         )}
+        {toast.progress !== undefined && <ToastProgressBar value={toast.progress} color={color} />}
 
         {toast.action && (
           <div className="flex gap-2 mt-1">
@@ -382,6 +393,78 @@ function ToastCard({ toast, onDismiss }: { toast: ToastEntry; onDismiss: () => v
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Progress bar                                                              */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Thin horizontal progress bar slotted into the toast body. Two modes:
+ *
+ * - **Determinate** (`value` is a finite number) — clamps `value` into
+ *   `[0, 1]` and renders a fill at that fraction. Includes proper ARIA
+ *   so screen readers announce the percentage.
+ * - **Indeterminate** (`value === "indeterminate"`) — renders an
+ *   animated sweeping segment. Used for the post-upload AV scan phase
+ *   where clamd gives no progress events; the bar communicates
+ *   "still working" without lying about completion.
+ *
+ * `color` matches the parent toast's variant accent so the bar reads as
+ * part of the card, not a generic widget.
+ */
+function ToastProgressBar({
+  value,
+  color,
+}: {
+  value: number | "indeterminate";
+  color: string;
+}) {
+  const isIndeterminate = value === "indeterminate";
+  const pct = isIndeterminate ? 0 : Math.min(1, Math.max(0, value));
+  const rounded = Math.round(pct * 100);
+
+  return (
+    <div
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={isIndeterminate ? undefined : rounded}
+      aria-label={isIndeterminate ? "In progress" : `${rounded}% complete`}
+      className="relative w-full h-1 mt-1 mb-1 rounded-full overflow-hidden"
+      style={{ background: "var(--color-surface-secondary, rgba(127,127,127,0.18))" }}
+    >
+      {isIndeterminate ? (
+        <div
+          className="absolute top-0 h-full rounded-full"
+          style={{
+            background: color,
+            width: "33%",
+            animation: "strata-toast-indeterminate 1.4s ease-in-out infinite",
+          }}
+        />
+      ) : (
+        <div
+          className="absolute top-0 left-0 h-full rounded-full"
+          style={{
+            background: color,
+            width: `${rounded}%`,
+            transition: "width 120ms linear",
+          }}
+        />
+      )}
+      {/* Keyframes are scoped inline so the component is fully
+          self-contained — no Tailwind / global CSS edits needed. The
+          rule is idempotent: defining the same @keyframes twice is a
+          no-op per CSS spec. */}
+      <style>{`
+        @keyframes strata-toast-indeterminate {
+          0%   { left: -33%; }
+          100% { left: 100%; }
+        }
+      `}</style>
     </div>
   );
 }

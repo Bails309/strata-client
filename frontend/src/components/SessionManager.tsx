@@ -137,6 +137,23 @@ export function closeAllSessionsExternal(): void {
   _closeAllSessionsHandler?.();
 }
 
+// ── Byte-size formatter for upload progress toasts ──────────────────
+// Compact `1.2 MB` / `847 KB` style \u2014 not localised, because the
+// numbers appear inline in English progress copy and we want a
+// stable monospace-ish width. Negative / NaN safely fall back to
+// `"0 B"` so a transient onprogress event with bogus values can't
+// break the toast.
+function formatBytesShort(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const kib = bytes / 1024;
+  if (kib < 1024) return `${kib.toFixed(kib < 10 ? 1 : 0)} KB`;
+  const mib = kib / 1024;
+  if (mib < 1024) return `${mib.toFixed(mib < 10 ? 1 : 0)} MB`;
+  const gib = mib / 1024;
+  return `${gib.toFixed(gib < 10 ? 2 : 1)} GB`;
+}
+
 export function useSessionManager() {
   const ctx = useContext(SessionManagerContext);
   if (!ctx) throw new Error("useSessionManager must be used within SessionManagerProvider");
@@ -473,7 +490,49 @@ export function SessionManagerProvider({
           }
           if (justification) fd.append("justification", justification);
 
-          submitOutboundShare(fd)
+          // Sticky live-updating toast for the two phases of an outbound
+          // upload. Phase 1 is byte-streaming to the backend (we get
+          // real XHR progress events). Phase 2 is the server-side AV
+          // scan + DLP scoring, which has no progress signal — we
+          // switch to an indeterminate bar so a slow WAR/JAR scan
+          // doesn't look like the UI has frozen. Same `key` across
+          // all updates means the ToastProvider replaces in place.
+          const toastKey = `outbound-share-${live?.id ?? "no-session"}-${filename}-${Date.now()}`;
+          toast?.info({
+            key: toastKey,
+            title: `Uploading: ${filename}`,
+            description: `Sending to server\u2026`,
+            progress: 0,
+            duration: null,
+          });
+
+          submitOutboundShare(fd, {
+            onProgress: (loaded, total) => {
+              const pct = total > 0 ? loaded / total : 0;
+              const human =
+                total > 0
+                  ? `${formatBytesShort(loaded)} of ${formatBytesShort(total)}`
+                  : `${formatBytesShort(loaded)} uploaded`;
+              toast?.info({
+                key: toastKey,
+                title: `Uploading: ${filename}`,
+                description: human,
+                progress: pct,
+                duration: null,
+              });
+            },
+            onUploadComplete: () => {
+              toast?.info({
+                key: toastKey,
+                title: `Scanning: ${filename}`,
+                description:
+                  "Running antivirus + DLP checks. Java WAR/JAR or deeply-nested " +
+                  "archives can take a few minutes.",
+                progress: "indeterminate",
+                duration: null,
+              });
+            },
+          })
             .then((res) => {
               if (live && live.pendingOutboundJustification) {
                 live.pendingOutboundJustification = undefined;
@@ -484,8 +543,12 @@ export function SessionManagerProvider({
               window.dispatchEvent(
                 new CustomEvent("strata:outbound-share-submitted", { detail: res })
               );
+              // Replace the progress toast in place with the final
+              // verdict so the user never sees two toasts for one
+              // upload.
               if (res.status === "approved") {
                 toast?.success({
+                  key: toastKey,
                   title: `Outbound share auto-approved: ${filename}`,
                   description: res.download_url
                     ? "Open the Outbound Share panel to download."
@@ -493,17 +556,20 @@ export function SessionManagerProvider({
                 });
               } else if (res.status === "pending") {
                 toast?.info({
+                  key: toastKey,
                   title: `Outbound share queued: ${filename}`,
                   description: `DLP score ${res.dlp_score}. Awaiting approver decision.`,
                 });
               } else {
                 toast?.warning({
+                  key: toastKey,
                   title: `Outbound share ${res.status}: ${filename}`,
                 });
               }
             })
             .catch((err: unknown) => {
               toast?.error({
+                key: toastKey,
                 title: `Outbound share failed: ${filename}`,
                 description: err instanceof Error ? err.message : String(err),
               });

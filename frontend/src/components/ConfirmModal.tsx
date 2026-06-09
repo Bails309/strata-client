@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useFocusTrap } from "./useFocusTrap";
 
 interface ConfirmModalProps {
@@ -37,7 +38,12 @@ export default function ConfirmModal({
 
   if (!isOpen) return null;
 
-  return (
+  // Render through a portal so `position: fixed` is anchored to the
+  // viewport and not to any ancestor that establishes a containing
+  // block via `transform`, `filter`, `backdrop-filter`, etc. Without
+  // this the dim backdrop only covers the parent card instead of the
+  // whole screen, which looks like a stray dark rectangle.
+  return createPortal(
     <div
       ref={dialogRef}
       role="dialog"
@@ -96,6 +102,7 @@ export default function ConfirmModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

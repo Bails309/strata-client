@@ -77,7 +77,7 @@ describe("ConfirmModal", () => {
   });
 
   it("renders danger icon when isDangerous", () => {
-    const { container } = render(
+    render(
       <ConfirmModal
         isOpen={true}
         title="T"
@@ -87,11 +87,12 @@ describe("ConfirmModal", () => {
         isDangerous={true}
       />
     );
-    expect(container.querySelector("svg")).toBeInTheDocument();
+    // ConfirmModal renders through a portal into document.body.
+    expect(document.body.querySelector("svg")).toBeInTheDocument();
   });
 
   it("does not render danger icon when not isDangerous", () => {
-    const { container } = render(
+    render(
       <ConfirmModal
         isOpen={true}
         title="T"
@@ -101,11 +102,15 @@ describe("ConfirmModal", () => {
         isDangerous={false}
       />
     );
-    expect(container.querySelector("svg")).not.toBeInTheDocument();
+    // Dialog ships with a Close-dialog button (also rendered as an SVG-less
+    // <button>), so scope to the dialog body to avoid picking up overlay
+    // chrome from other tests sharing document.body.
+    const dialog = document.body.querySelector('[role="dialog"]');
+    expect(dialog?.querySelector("svg")).toBeNull();
   });
 
   it("applies danger border style when isDangerous", () => {
-    const { container } = render(
+    render(
       <ConfirmModal
         isOpen={true}
         title="T"
@@ -115,7 +120,7 @@ describe("ConfirmModal", () => {
         isDangerous={true}
       />
     );
-    const card = container.querySelector(".card") as HTMLElement;
+    const card = document.body.querySelector(".card") as HTMLElement;
     expect(card.style.border).toContain("solid");
   });
 

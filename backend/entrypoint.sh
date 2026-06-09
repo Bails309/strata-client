@@ -16,7 +16,8 @@ set -euo pipefail
 # its own `guacd:guacd` (gid 101). Re-chowning to strata:strata would
 # (a) race with in-flight guacd writes and (b) destroy the gid signal
 # the supplementary-group block below uses to grant strata read
-# access to recordings. Backend never needs to write into this volume.
+# (and, since the Azure-sync sweeper landed, write) access to
+# recordings.
 chown -R strata:strata /app/config 2>/dev/null || true
 chown -R strata:strata /etc/krb5 2>/dev/null || true
 
@@ -56,20 +57,31 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
-# ── Recording playback access ─────────────────────────────────────────
+# ── Recording playback + sweeper access ──────────────────────────────
 # guacd writes session recordings into the shared `guac-recordings`
 # volume as its in-container `guacd:guacd` user (typically uid/gid
-# 100/101) with mode 0640 — group-only read. The backend reads those
-# files back when the UI requests historic playback (HistoricalPlayer
-# → /api/{admin,user}/recordings/{id}/stream → tokio::fs::File::open).
-# Without group membership the open() returns EACCES and the playback
-# WebSocket closes immediately, surfacing as "Tunnel error" in the UI.
+# 100/101) with mode 0640 — group-only read. The backend interacts
+# with this directory two ways:
+#
+#   1. READ — historic playback (HistoricalPlayer
+#      → /api/{admin,user}/recordings/{id}/stream → tokio::fs::File::open).
+#      Without group membership the open() returns EACCES and the playback
+#      WebSocket closes immediately, surfacing as "Tunnel error" in the UI.
+#
+#   2. UNLINK — the Azure-sync sweeper (services::recordings::sync_once)
+#      removes each .guac after a successful blob upload and also prunes
+#      anything older than recordings_retention_days. Unlinking a file
+#      requires write+execute on the *parent directory*, not the file
+#      itself — so even with group-read on the .guac the dir must be g+w.
 #
 # To match the writer's gid we create a local group with the same
 # numeric id (looked up off the recordings directory at runtime, since
 # different guacd builds may pick a different system gid) and add
-# strata to it as a supplementary group. Mirrors the docker.sock
-# pattern above.
+# strata to it as a supplementary group. We then widen the directory
+# itself to g+w (so unlink works) and set g+s so any file created
+# later inherits the gid — keeping the writer/reader group invariant
+# stable across container restarts. Mirrors the docker.sock pattern
+# above.
 RECORDINGS_DIR=/var/lib/guacamole/recordings
 if [ -d "$RECORDINGS_DIR" ]; then
     # Find a guacd-written file to read its gid; fall back to the dir's
@@ -101,6 +113,16 @@ if [ -d "$RECORDINGS_DIR" ]; then
             echo "[entrypoint] Added strata to ${EXISTING_GROUP} (gid=${REC_GID}) for recording playback access"
         fi
     fi
+
+    # Grant the recording group write (for unlink) + setgid (so new
+    # files keep the shared gid) on the recordings dir itself. Without
+    # g+w the Azure-sync sweeper's tokio::fs::remove_file() returns
+    # EACCES and stale .guac files accumulate on disk after being
+    # uploaded to Azure. Failures here are non-fatal — the dir may be
+    # on a read-only mount, in which case the sweeper has nothing to
+    # do anyway and the existing EROFS-aggregating warning kicks in.
+    chmod g+ws "$RECORDINGS_DIR" 2>/dev/null || \
+        echo "[entrypoint] WARN: could not chmod g+ws on ${RECORDINGS_DIR} (read-only mount?)"
 fi
 
 exec gosu strata strata-backend "$@"

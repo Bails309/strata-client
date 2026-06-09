@@ -420,8 +420,14 @@ fn parse_clamd_version_line(line: &str) -> Option<ClamdVersion> {
         return None;
     }
     let signatures = sigs.parse::<u32>().ok()?;
-    // clamd's date is `Day Mon DD HH:MM:SS YYYY` with a space-padded DD.
-    let naive = NaiveDateTime::parse_from_str(date, "%a %b %e %H:%M:%S %Y").ok()?;
+    // clamd's date is `Day Mon DD HH:MM:SS YYYY`. Single-digit days
+    // are space-padded (`Jun  3`), which chrono's `%e` does not
+    // strip cleanly when preceded by the literal space in our format
+    // string — collapse all runs of whitespace to single spaces and
+    // parse with `%d` so the same format works for both 1- and
+    // 2-digit days.
+    let date_normalized: String = date.split_whitespace().collect::<Vec<_>>().join(" ");
+    let naive = NaiveDateTime::parse_from_str(&date_normalized, "%a %b %d %H:%M:%S %Y").ok()?;
     Some(ClamdVersion {
         engine,
         signatures,
@@ -657,7 +663,9 @@ mod tests {
 
     #[test]
     fn parse_clamd_version_line_typical_reply() {
-        let line = "ClamAV 1.4.1/27468/Tue Jun  3 09:18:33 2026";
+        // Jun 3 2026 is a Wednesday — chrono's %a validates the weekday
+        // strictly, so the fixture must match the real calendar.
+        let line = "ClamAV 1.4.1/27468/Wed Jun  3 09:18:33 2026";
         let v = parse_clamd_version_line(line).expect("must parse");
         assert_eq!(v.engine, "1.4.1");
         assert_eq!(v.signatures, 27468);
@@ -683,20 +691,22 @@ mod tests {
 
     #[test]
     fn parse_cvd_header_version_extracts_field_2() {
+        // Real CVD headers use HYPHENS in the time component
+        // (`06-25` not `06:25`) precisely so colon-splitting works.
         let header =
-            "ClamAV-VDB:Tue Jun  3 09:18:33 2026:27500:5400000:90:abcdef0123:builder:1717405113:";
+            "ClamAV-VDB:Tue Jun  3 09-18-33 2026:27500:5400000:90:abcdef0123:builder:1717405113:";
         assert_eq!(parse_cvd_header_version(header), Some(27500));
     }
 
     #[test]
     fn parse_cvd_header_version_rejects_wrong_tag() {
-        let header = "NotACVD:Tue Jun  3 09:18:33 2026:27500:5400000:90:abc:b:1:";
+        let header = "NotACVD:Tue Jun  3 09-18-33 2026:27500:5400000:90:abc:b:1:";
         assert_eq!(parse_cvd_header_version(header), None);
     }
 
     #[test]
     fn parse_cvd_header_version_rejects_non_numeric() {
-        let header = "ClamAV-VDB:Tue Jun  3 09:18:33 2026:not-a-number:5400000:90:abc:b:1:";
+        let header = "ClamAV-VDB:Tue Jun  3 09-18-33 2026:not-a-number:5400000:90:abc:b:1:";
         assert_eq!(parse_cvd_header_version(header), None);
     }
 

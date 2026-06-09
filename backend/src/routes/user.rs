@@ -102,14 +102,13 @@ pub async fn me(
     // mark the Quick-Share Outbound justification field as required
     // and disable submit until it's filled — the chokepoint stays in
     // routes/outbound_shares.rs::validate_outbound_justification.
-    let outbound_share_requires_approval: Option<bool> = sqlx::query_scalar(
-        "SELECT outbound_share_requires_approval FROM users WHERE id = $1",
-    )
-    .bind(user.id)
-    .fetch_optional(&db.pool)
-    .await
-    .unwrap_or(None)
-    .flatten();
+    let outbound_share_requires_approval: Option<bool> =
+        sqlx::query_scalar("SELECT outbound_share_requires_approval FROM users WHERE id = $1")
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
 
     Ok(Json(json!({
         "id": user.id,

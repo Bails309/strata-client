@@ -973,14 +973,13 @@ pub async fn check_auth(
     // (/auth/check) and refresh path (/user/me) agree on whether the
     // Quick-Share Outbound justification field should be marked
     // required.
-    let outbound_share_requires_approval: Option<bool> = sqlx::query_scalar(
-        "SELECT outbound_share_requires_approval FROM users WHERE id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(&db.pool)
-    .await
-    .unwrap_or(None)
-    .flatten();
+    let outbound_share_requires_approval: Option<bool> =
+        sqlx::query_scalar("SELECT outbound_share_requires_approval FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&db.pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
 
     Json(json!({
         "authenticated": true,

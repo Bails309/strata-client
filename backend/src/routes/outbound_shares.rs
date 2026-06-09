@@ -854,7 +854,8 @@ mod tests {
         assert!(validate_outbound_justification(true, Some("1234567890")).is_ok());
         // Well above the minimum passes.
         assert!(
-            validate_outbound_justification(true, Some("Audit ticket INC-1234, urgent fix.")).is_ok()
+            validate_outbound_justification(true, Some("Audit ticket INC-1234, urgent fix."))
+                .is_ok()
         );
         // Surrounding whitespace is trimmed before measuring.
         assert!(validate_outbound_justification(true, Some("   1234567890   ")).is_ok());

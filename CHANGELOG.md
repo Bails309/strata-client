@@ -5,6 +5,387 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.1] — 2026-06-09
+
+### Patch Release — AV-scanning polish, admin visibility, live upload progress, and friendly engine errors
+
+v1.12.1 is the operational-polish follow-up to the v1.12.0 antivirus
+landing. None of the v1.12.0 protocol contracts change — the
+`Scanner` trait, the `Verdict` shape, the four `outbound_shares.av_*`
+columns, the `file.av_blocked` audit row, and the seven
+`STRATA_AV_*` environment variables are all byte-identical to the
+v1.12.0 wire. Existing v1.12.0 deployments upgrade cleanly with no
+config changes and no new migrations.
+
+The release rolls fourteen merged PRs (#255–#265) plus the
+follow-up snippet/progress work on `feat/outbound-snippet-progress`
+into one shipping bundle. The thirteen threads collected here
+break into five operator-visible themes:
+
+1. **Visibility into scanner health and signature freshness.** A
+   new Admin → Health → AV card surfaces backend selector,
+   reachability, daemon version, signature DB version, last
+   `freshclam` update timestamp, and the most recent scan verdict
+   counts, so on-call operators can answer "is the scanner up and
+   are signatures fresh?" without `docker exec` (#256, #258, #260).
+2. **Friendly user-facing error messages on AV blocks.** When the
+   AV engine errors (timeout, daemon unreachable, signature DB
+   missing, unparseable response), the inbound and outbound HTTP
+   responses now carry a deterministic actionable message
+   classified by error shape (timeout / transport / infected /
+   generic) rather than the raw engine spew. The drive-channel
+   `client.onfile` toast surfaces the same message so operators
+   know whether to retry or escalate (#265).
+3. **Live upload progress everywhere.** Browser-side uploads
+   (inbound drag-drop and outbound drag-drop) now drive a real
+   percentage progress bar on the toast, fed by a new
+   `xhrUploadJson<T>()` helper that exposes `XMLHttpRequest`'s
+   `upload.onprogress` events through the existing typed `api.ts`
+   contract. MY SUBMISSIONS rows in the QuickShareOutbound panel
+   render an **indeterminate "Awaiting AV scan" bar** for every
+   pending row, so the scan/approval wait window is visible in
+   the browser. Terminal-side snippets get an upload meter too:
+   `curl --progress-bar -H 'Expect:'` for both curl variants and
+   a `System.Net.Http.HttpClient` + `Write-Progress` poll loop
+   for the PowerShell variant (#265 + branch work).
+4. **Admin AV-Blocked Files visibility.** A new admin tab
+   surfaces every blocked upload (inbound and outbound) in a
+   single unified audit row with signature, file metadata,
+   timestamp, engine, and the actor + session context. The
+   underlying `outbound_share.requested` audit event was
+   extended to mirror the inbound `file.av_blocked` shape so the
+   dashboard query joins both ingest paths through one
+   `action_type` filter (#264).
+5. **Scanner-side correctness fixes.** Scan-size limits now
+   default to 500 MiB (matching the Quick Share upload cap so
+   every accepted upload is actually scanned), freshclam reload
+   cadence bumped to hourly with a forced `clamd RELOAD` after
+   each update (was: daily without reload, so new signatures sat
+   unused until the next sidecar restart), `STRATA_AV_*` env
+   vars correctly wired through `Config::from_env` (one variant
+   was silently ignored on `1.12.0`), CVD/CLD test fixtures
+   corrected to use real on-wire formats, and the Quick Share
+   role-permission check made explicit so a super-admin without
+   `can_use_quick_share_outbound` is now correctly rejected
+   instead of slipping through (#257, #259, #261, #262, #263).
+
+### Added
+
+- **In-app AV health card** (`frontend/src/pages/admin/HealthTab.tsx`
+  + new `GET /api/admin/health/av`). Surfaces:
+  - Active backend (`off` / `clamav` / `command`).
+  - Reachability ping (TCP connect to `clamav:3310` for the
+    `clamav` backend; spawnable-check for the `command` backend).
+  - clamd daemon version (`PING\nVERSION\n` exchange).
+  - Signature DB versions — `main.cvd`, `daily.cvd`/`daily.cld`,
+    and `bytecode.cvd`/`bytecode.cld` — with the engine signature
+    count (e.g. `daily.cld v27349 / 2,047,316 sigs / 2026-06-08`)
+    so on-call can confirm signatures aren't stale.
+  - Last freshclam update timestamp + last reload-after-update
+    success/failure.
+  - Last-30d verdict tally (clean / infected / skipped / error)
+    so a sudden flood of `error` rows is visible without going
+    to the audit log.
+  - Backed by a tiny `services::av_health` module that caches the
+    handshake for 30 s and survives `clamd` being temporarily
+    unreachable (degrades to "last known good" + a "stale since
+    HH:MM:SS" badge rather than wiping the card).
+
+- **Admin → AV-Blocked Files tab** (`frontend/src/pages/admin/AvBlockedTab.tsx`
+  + new `GET /api/admin/files/av-blocked` route serving a unified
+  view over inbound `file.av_blocked` audit rows and outbound
+  rows with `av_scan_status IN ('infected','error')`). Columns:
+  timestamp, direction (in/out), filename, byte size, signature
+  (or error message), engine, actor, session context. Filters by
+  date range, engine, direction, and signature substring. Page
+  size 50 with cursor pagination. Visible to
+  `can_manage_system` only.
+
+- **Friendly AV error mapping**
+  (`Verdict::user_facing_block_message()` in
+  `backend/src/services/av.rs`). Classifies the verdict by error
+  shape and returns a deterministic message:
+  - **Infected** → `"File rejected by malware scan: {signature}"`
+  - **Error: timeout** → `"Antivirus scan timed out after Ns; try a smaller file or retry shortly."` (matched on the substring `"timeout"` / `"timed out"` / `"exceeded"`)
+  - **Error: transport** → `"Antivirus scanner unreachable; please retry shortly."` (matched on `"refused"` / `"reset"` / `"no route"` / `"unreachable"` / `"broken pipe"`)
+  - **Error: missing signatures** → `"Antivirus signature database not yet ready; please retry shortly."` (matched on `"empty"` / `"no signatures"`)
+  - **Error: generic** → engine message passed through verbatim
+    so operators can still see the raw text in the audit row.
+
+- **Browser-side upload progress**
+  (`frontend/src/api.ts::xhrUploadJson<T>`). New typed helper
+  that wraps `XMLHttpRequest` (the only browser API that exposes
+  `upload.onprogress` reliably) and returns a `Promise<T>` shape-
+  compatible with the existing `apiCall<T>()` JSON contract.
+  Opt-in via a new `UploadProgressOptions { onProgress?: (pct,
+  bytes, total) => void; onAbort?: () => void; signal?:
+  AbortSignal }` parameter on `submitOutboundShare()`,
+  `uploadQuickShareFile()`, and the drive-channel
+  `submitOutboundShareFromDrive()` helper. Existing callers that
+  pass no `UploadProgressOptions` are byte-identical to v1.12.0.
+
+- **ToastProvider progress bar**
+  (`frontend/src/components/ToastProvider.tsx`). The `Toast`
+  shape gains an optional `progress?: { pct: number; status?:
+  string }` field; toasts with a `progress` prop render a slim
+  bar under the title that updates in place. An indeterminate
+  variant (`progress: { pct: -1 }`) renders a sliding 33%-width
+  band using a new `strata-toast-indeterminate` keyframe
+  (cross-fading between determinate and indeterminate is
+  supported so the toast can stay mounted across the upload →
+  scan → approve transitions).
+
+- **"Awaiting AV scan" indicator on MY SUBMISSIONS pending rows**
+  (`frontend/src/components/QuickShareOutbound.tsx`). Every row
+  with `status === "pending"` now renders an indeterminate
+  progress bar plus the text "Awaiting AV scan" (or "Awaiting AV
+  scan and approval" when DLP score is zero and approver review
+  is still required), powered by an inline
+  `@keyframes strata-outbound-pending` block (idempotent per CSS
+  spec). Uses the Tailwind v4 `bg-warning/N` token via the
+  workspace `@theme` block so it picks up the user's dark / light
+  preference automatically.
+
+- **Terminal-side upload progress in the curl and PowerShell snippets**
+  (`frontend/src/components/QuickShareOutbound.tsx::snippetForOutbound`).
+  Three snippet formats updated:
+  - **`curl`** (Linux/macOS) and **`curl-win`** (Windows) — add
+    `--progress-bar` for a clean one-line meter, plus
+    `-H "Expect:"` to disable the default `Expect: 100-continue`
+    header. Without the latter, the server returns 400 on a
+    consumed/expired token before reading the body, curl never
+    uploads, and the progress bar has nothing to render.
+    `-H "Expect:"` forces the body up immediately so the meter is
+    always visible even when the server eventually rejects.
+  - **`powershell`** — rewritten from `Invoke-WebRequest -Form`
+    (which exposes NO file-upload progress, only response-download
+    progress) to a streaming `System.Net.Http.HttpClient` +
+    `MultipartFormDataContent` + `StreamContent($file.OpenRead())`
+    pipeline, with a poll loop that reads
+    `$stream.Position` and drives `Write-Progress`. Also sets
+    `$client.DefaultRequestHeaders.ExpectContinue = $false` for
+    the same reason as the curl flag.
+
+- **Admin unified-audit row**
+  (`backend/src/routes/admin.rs`). The pre-existing
+  `outbound_share.requested` audit-event payload was extended
+  with `av_status`, `av_signature`, `av_backend`, `direction:
+  "outbound"`, and `filename` keys so the new AV-Blocked Files
+  tab can `WHERE action_type IN ('file.av_blocked',
+  'outbound_share.requested') AND (action_type =
+  'file.av_blocked' OR payload->>'av_status' IN
+  ('infected','error'))` and get a single coherent feed.
+
+- **Inline diagnostic script** `scripts/diagnose-av.sh` — a
+  one-shot AV health probe for on-call. Pings the configured
+  `STRATA_AV_BACKEND`, runs a `PING\nVERSION\n` exchange against
+  clamd, prints the signature DB versions from the sidecar's
+  `clamav-db` volume, exec's an `INSTREAM` against EICAR, and
+  reports the response. Designed for ssh-onto-the-box-while-
+  debugging-an-alert use — emits structured `key=value` lines on
+  stdout so it pipes cleanly into `grep` / `awk` / `jq -R -F=`.
+
+- **`docs/runbooks/av-operations.md`** extended with three new
+  sections: "Reading the AV Health card", "Reading the
+  AV-Blocked Files admin tab", and "Diagnostic probe via
+  `scripts/diagnose-av.sh`".
+
+- **`docs/api-reference.md`** documents:
+  - The new `GET /api/admin/health/av` response shape.
+  - The new `GET /api/admin/files/av-blocked` filterable list
+    endpoint.
+  - The friendly error message classification on AV-blocked
+    upload responses.
+  - The new optional `UploadProgressOptions` parameter on the
+    `submitOutboundShare` and `uploadQuickShareFile` client
+    helpers (the wire endpoint is unchanged — progress is
+    purely a client-side concern fed by
+    `XMLHttpRequest.upload.onprogress`).
+
+- **In-app v1.12.1 What's New carousel card** in
+  `frontend/src/components/WhatsNewModal.tsx`.
+
+### Changed
+
+- **freshclam reload cadence**. The bundled `clamav` sidecar's
+  entrypoint now runs `freshclam` hourly (was: daily) and calls
+  `clamdscan --reload` (or `clamd --reload` equivalent) after
+  every successful update. Without the reload, fresh signatures
+  pulled into `/var/lib/clamav` sat unused until the next full
+  sidecar restart; this meant the audit trail could record a
+  `Skipped { reason: "no signatures" }` or
+  `Error { message: "..." }` against a file the engine *had*
+  signatures for, just hadn't loaded them yet. Now the engine
+  picks up new signatures within minutes of `freshclam` returning.
+  (#259)
+
+- **AV scan-size limit aligned with upload cap**. The default for
+  `STRATA_AV_MAX_SCAN_SIZE` was bumped from 100 MiB to **500 MiB**
+  to match the existing 500 MiB Quick Share upload cap. Previously,
+  a 200 MiB upload was accepted by the upload route but tagged
+  `Skipped { reason: "oversize" }` by the scanner — i.e. it landed
+  in the file store unscanned, which defeated the point. The
+  bundled `clamav/clamd.conf` raises `StreamMaxLength`,
+  `MaxFileSize`, and `MaxScanSize` to 512 MiB / 512 MiB / 1024 MiB
+  in lockstep so the clamd-side limits agree. Operators with
+  custom limits should adjust both ends together.
+  (#263)
+
+- **Quick Share role-permission check made explicit on outbound
+  routes.** `check_quick_share_outbound_permission()` now
+  *strictly* requires `can_use_quick_share_outbound` — a
+  super-admin without that permission is rejected with 403
+  `Forbidden`, matching the v1.11.0 design intent. Previously a
+  subtle short-circuit in one of the routes (mint vs submit vs
+  ingest-via-token) let super-admins through; this is now uniform
+  across all three. The threat-model row covering "super-admin
+  silently exfiltrates files" is unchanged in spirit; the patch
+  closes the implementation gap that the row was already
+  asserting was closed. (#262)
+
+- **`STRATA_AV_*` env var wiring corrected.** `Config::from_env`
+  previously read one variable name and the bootstrap code read
+  another (a naming drift introduced late in v1.12.0
+  integration). The fix renames the env-read site to match the
+  documented variable names in `.env.example`; deployments using
+  `.env.example` were unaffected, but anyone who copied a
+  snippet from the v1.12.0 release notes could end up with a
+  silently-ignored override. (#257)
+
+- **CVD / clamd test fixtures use real on-wire formats.** Two
+  unit tests in `services::av` were exercising the version-
+  parsing path with synthetic strings that didn't match the
+  actual `clamd` `VERSION` response shape (`ClamAV
+  1.4.2/27349/Sat Jun  7 12:00:00 2026`) or the real `.cvd`
+  header layout. The fixtures now use captured bytes from a
+  live clamd, so test coverage actually exercises the parser the
+  health card depends on. No production behaviour change. (#261)
+
+- **`outbound_share.requested` audit-event payload extended** so
+  the unified AV-Blocked Files tab can join inbound and outbound
+  blocks through a single SQL filter. New keys on the existing
+  event:
+  - `direction: "outbound"` (mirrors `direction: "inbound"` on
+    `file.av_blocked`)
+  - `filename`
+  - `av_status` (`clean` / `infected` / `skipped` / `error`)
+  - `av_signature` (when present)
+  - `av_backend`
+  Backwards-compatible — the v1.12.0 keys (`share_id`,
+  `byte_len`, `dlp_score`, etc.) are preserved.
+  (#264)
+
+- **`docs/av-scanning.md` EICAR smoke test rewritten.** The
+  reproducible end-to-end verification was tripping operators on
+  two specific copy-paste pitfalls: (1) some shells / RDP
+  clipboards corrupt the EICAR signature on paste (the literal
+  string contains a `$` that some shells expand), and (2) the
+  test requires the user to have `can_use_quick_share_outbound`
+  — without it, the upload is rejected with a 403 *before*
+  reaching the scanner, masking a successful AV deployment as a
+  broken one. The docs now: ship the EICAR string in a
+  here-doc, walk operators through the role check first, and
+  show the exact JSON response and audit-row shape so success
+  is unambiguous. (#262)
+
+- **Browser-side upload toasts** (inbound `QuickShare.tsx` and
+  outbound `SessionManager.tsx` drag-drop, plus outbound panel
+  drag-drop) now thread the new `UploadProgressOptions` through
+  to `xhrUploadJson()` and update a single toast in place (was:
+  one toast for "Uploading…" then a second for the result).
+  Toast text transitions through "Uploading 42%" → "Scanning…"
+  (indeterminate) → "Awaiting approval" or final verdict.
+
+- **PowerShell ingest snippet rewritten.** `Invoke-WebRequest
+  -Form` does not emit any upload progress (only response-
+  download progress), so the v1.11.0 snippet was silent
+  regardless of file size. The new snippet uses
+  `System.Net.Http.HttpClient` with a poll-loop driving
+  `Write-Progress`, plus `ExpectContinue = $false` so the body
+  is sent immediately and progress is visible even when the
+  server eventually rejects.
+
+### Fixed
+
+- **`curl --progress-bar` rendered nothing when the server
+  rejected an expired/consumed token.** Caused by curl's default
+  `Expect: 100-continue` header: the server returns 400 *before*
+  reading the body, so curl never uploads and the progress meter
+  has nothing to draw. Fixed by adding `-H "Expect:"` to both
+  curl snippet variants (and the equivalent
+  `ExpectContinue = $false` setting in the PowerShell variant).
+- **Daily freshclam updates were silently ignored until the next
+  sidecar restart** because no `RELOAD` was issued. Now the
+  entrypoint forces a reload after every successful update.
+  (#259)
+- **`Skipped { reason: "oversize" }` on multi-hundred-MB
+  uploads.** The 100 MiB scanner default was below the 500 MiB
+  upload cap, so files in the 100–500 MiB range landed unscanned.
+  Default raised to 500 MiB; `clamd.conf` updated in lockstep.
+  (#263)
+- **CVD / CLD version parser unit tests passed against fake
+  fixtures** that didn't match real `clamd VERSION` output. Real
+  on-wire fixtures now used. (#261)
+- **`STRATA_AV_*` env var that read one name in the schema and
+  another in the loader** — corrected to a single canonical name
+  matching `.env.example`. (#257)
+- **Super-admin-without-`can_use_quick_share_outbound` slipped
+  through on one of the three outbound routes.** All three
+  routes now uniformly enforce the role check. (#262)
+- **Inbound and outbound CI lint/format failures**
+  (`prettier --check` on `api.test.ts`,
+  `ToastProvider.test.tsx`, `ToastProvider.tsx`; `cargo fmt
+  --check` on `services/av.rs`) cleared by re-running the
+  formatters. No behaviour change.
+
+### Security
+
+- **No new threats and no new mitigations** — the security
+  surface area of v1.12.1 is identical to v1.12.0. The fixes
+  here close *implementation* gaps in the protections v1.12.0
+  documented:
+  - Aligning the scan-size default with the upload cap means
+    every file v1.12.0 *said* was scanned now actually is.
+  - Forcing `clamd RELOAD` after `freshclam` means signatures
+    v1.12.0 *said* were fresh now actually are.
+  - The super-admin role-check fix closes the
+    "super-admin silently exfiltrates files" threat model row
+    that v1.11.0 had already documented as closed.
+  - The friendly-error mapping never widens the information
+    exposed to the requester — the engine's raw message still
+    lands verbatim in the audit row, only the user-facing
+    response is normalised. Operators reading the audit log see
+    the full unchanged error.
+
+### Operator notes
+
+- **Upgrade path: rebuild and recreate the backend and frontend
+  containers.** No migrations. No new environment variables.
+  No config changes. The `clamav` sidecar entrypoint script has
+  been updated (cadence + forced reload), so the `clamav`
+  service should be recreated if you're using the bundled
+  profile: `docker compose --profile av up -d --build clamav`.
+- **AV-Blocked Files admin tab** is visible only to
+  `can_manage_system`. No new permission required.
+- **AV Health card** is visible on the Admin → Health page to
+  any user already gated for that page (i.e. `can_manage_system`).
+- **Existing `STRATA_AV_MAX_SCAN_SIZE` overrides** that set a
+  value below 500 MiB will continue to apply — the bump is a
+  default change, not a forced value. Sites that *want* the
+  100 MiB ceiling preserved can pin
+  `STRATA_AV_MAX_SCAN_SIZE=104857600` in `.env`.
+- **The `clamav-db` named volume** is unchanged. Signatures
+  persist across restarts. The hourly `freshclam` is bounded by
+  upstream's rate limits; if you see "ratelimit reached" in the
+  clamav logs, that's normal — the engine retries on a backoff
+  and the next refresh succeeds.
+- **No new Cargo dependencies.** No new npm dependencies.
+
+### Migrations
+
+- None. v1.12.1 is purely additive in the routes / audit / SPA
+  layers and changes no database shape.
+
 ## [1.12.0] — 2026-06-09
 
 ### Minor Release — Pluggable antivirus scanning for Quick Share uploads

@@ -80,7 +80,7 @@ an audit trail of every rule change.
 
 ### Antivirus scanning on Quick Share uploads
 
-**Status:** Shipped — v1.12.0
+**Status:** Shipped — v1.12.0 (operator-experience polish in v1.12.1)
 **Area:** File Transfer · DLP
 
 Pluggable AV scanner runs against both Quick Share upload paths
@@ -99,6 +99,21 @@ partial index keeping the operator-attention dashboard query
 cheap. See [av-scanning.md](av-scanning.md),
 [ADR-0011](adr/ADR-0011-av-scanning.md), and the
 [av-operations runbook](runbooks/av-operations.md).
+
+**v1.12.1 follow-on (Shipped):** friendly user-facing block
+messages (`Verdict::user_facing_block_message()`), hourly
+`freshclam` + forced `clamd` reload after every signature update,
+500 MiB default scan-size cap aligned with the Quick Share upload
+cap, real on-wire CVD / `clamd` fixtures in the unit suite, and
+two new admin surfaces — `GET /api/admin/health/av` (AV Health
+card on Admin → Health tab) and `GET /api/admin/files/av-blocked`
+(unified Admin → AV-Blocked Files audit grid covering inbound
+`file.av_blocked` events and outbound `(infected|error)` rows).
+The outbound copy-snippet flow gained an indeterminate "Awaiting
+AV scan" progress indicator plus explicit `Expect: 100-continue`
+suppression in the shipped curl / PowerShell snippets so progress
+meters render even when the public ingest router rejects a stale
+token with `400 Bad Request`.
 
 Future iterations on the trail of this feature live below as
 separate proposals.

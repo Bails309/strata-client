@@ -8,4 +8,4 @@ Expires: {{ expiry_human }}
 Open Strata Profile: {{ profile_url }}
 
 -- Strata Client
-You can opt out of these notifications under Profile then Notifications.
+Sent automatically by Strata Client.

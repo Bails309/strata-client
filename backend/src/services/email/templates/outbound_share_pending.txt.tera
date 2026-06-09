@@ -11,5 +11,4 @@ Justification: {{ justification }}
 Review in Strata: {{ approve_url }}
 
 -- Strata Client
-You can opt out of these notifications under Profile then Notifications.
-Audit-trail messages will continue regardless.
+Sent because you are a designated outbound-share approver.

@@ -8,4 +8,4 @@ Reason: "{{ reason }}"
 with additional context.
 
 -- Strata Client
-You can opt out of these notifications under Profile then Notifications.
+Sent automatically by Strata Client.

@@ -444,7 +444,9 @@ kubectl -n strata wait --for=condition=Ready pod -l app=strata-clamav --timeout=
 # 2. Backend logs report the scanner is wired
 kubectl -n strata logs -l app=strata-backend | grep 'av scanner ready'
 
-# 3. EICAR smoke test
+# 3. EICAR smoke test (the smoke-test user MUST have the "Use Quick Share"
+#    role flag enabled — otherwise the upload returns 403 FORBIDDEN before
+#    the scanner is consulted. See docs/av-scanning.md → Verification.)
 kubectl -n strata exec deploy/strata-backend -- \
   sh -c 'printf "X5O!P%%@AP[4\\PZX54(P^)7CC)7}\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\$H+H*" > /tmp/eicar.com \
          && curl -sS -o /dev/null -w "%{http_code}\n" \

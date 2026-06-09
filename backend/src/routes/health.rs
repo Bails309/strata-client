@@ -225,7 +225,7 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
     };
 
     // ── Antivirus (v1.12.0+) ──
-    let av_backend = s.av_scanner.backend_name();
+    let av_backend = s.av_scanner.backend_tag();
     let av_fail_mode = match s.av_fail_mode {
         AvFailMode::Block => "block",
         AvFailMode::Allow => "allow",

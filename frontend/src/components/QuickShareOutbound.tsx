@@ -58,23 +58,60 @@ function defaultSnippetFormat(protocol: string): SnippetFormat {
 }
 
 function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolean): string {
+  // `--progress-bar` (curl) replaces the verbose default meter with
+  // a clean one-line bar — works on multipart uploads (-F), unlike
+  // some -X POST permutations that disable progress.
   switch (format) {
     case "curl":
       return insecure
-        ? `curl -kfL -F 'file=@./<your-file>' '${url}'`
-        : `curl -fL -F 'file=@./<your-file>' '${url}'`;
+        ? `curl -kfL --progress-bar -F 'file=@./<your-file>' '${url}'`
+        : `curl -fL --progress-bar -F 'file=@./<your-file>' '${url}'`;
     case "curl-win":
       return insecure
-        ? `curl.exe -kfL -F "file=@<your-file>" "${url}"`
-        : `curl.exe -fL -F "file=@<your-file>" "${url}"`;
-    case "powershell":
-      // PowerShell 7+ (`-Form` parameter). For Windows PowerShell 5.1
-      // we recommend the `curl-win` variant instead — easier to paste
-      // than the equivalent System.Net.Http MultipartFormDataContent
-      // ceremony.
-      return insecure
-        ? `[Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; Invoke-WebRequest -Uri '${url}' -Method POST -Form @{ file = Get-Item '<your-file>' }`
-        : `Invoke-WebRequest -Uri '${url}' -Method POST -Form @{ file = Get-Item '<your-file>' }`;
+        ? `curl.exe -kfL --progress-bar -F "file=@<your-file>" "${url}"`
+        : `curl.exe -fL --progress-bar -F "file=@<your-file>" "${url}"`;
+    case "powershell": {
+      // PowerShell 7+. Built around a streaming HttpClient + a
+      // background-task poll loop so we can paint a Write-Progress
+      // bar as bytes leave the box — `Invoke-WebRequest -Form` is
+      // known to NOT emit progress for file uploads (only for the
+      // response download), so it's useless for our purposes.
+      //
+      // The `${...}` substitutions below are JavaScript template
+      // expressions — only the literal `${url}` and `${tlsBypass}`
+      // are resolved at JS render time; every PowerShell `$x` is
+      // backslash-escaped so it lands in the snippet as a literal
+      // dollar sign.
+      const tlsBypass = insecure
+        ? "[Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}\n"
+        : "";
+      return (
+        tlsBypass +
+        [
+          `$file = Get-Item '<your-file>'`,
+          `$total = $file.Length`,
+          `$client = [System.Net.Http.HttpClient]::new()`,
+          `$client.Timeout = [TimeSpan]::FromHours(1)`,
+          `$form = [System.Net.Http.MultipartFormDataContent]::new()`,
+          `$stream = $file.OpenRead()`,
+          `$content = [System.Net.Http.StreamContent]::new($stream)`,
+          `$form.Add($content, 'file', $file.Name)`,
+          `$task = $client.PostAsync('${url}', $form)`,
+          `while (-not $task.IsCompleted) {`,
+          `  $sent = $stream.Position`,
+          `  $pct  = if ($total -gt 0) { [int](($sent / $total) * 100) } else { 0 }`,
+          `  Write-Progress -Activity "Uploading $($file.Name)" -Status "$sent / $total bytes" -PercentComplete $pct`,
+          `  Start-Sleep -Milliseconds 250`,
+          `}`,
+          `Write-Progress -Activity "Uploading $($file.Name)" -Completed`,
+          `$stream.Close()`,
+          `$response = $task.Result`,
+          `$body = $response.Content.ReadAsStringAsync().Result`,
+          `$client.Dispose()`,
+          `if ($response.IsSuccessStatusCode) { Write-Host "Upload complete:" $body } else { Write-Error "HTTP $($response.StatusCode): $body"; exit 1 }`,
+        ].join("\n")
+      );
+    }
   }
 }
 
@@ -325,6 +362,17 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
       className="fixed top-0 bottom-0 z-[101] w-[360px] bg-surface-secondary border-l border-white/10 shadow-2xl flex flex-col"
       style={{ right: sessionBarCollapsed ? 0 : sidebarWidth }}
     >
+      {/* Single inline keyframe definition for the "awaiting scan"
+          indeterminate bar on `pending` rows below. Defining the same
+          @keyframes block twice (e.g. another instance of this panel
+          opens) is a no-op per the CSS spec, so this is safe to
+          inline even when React mounts multiple copies. */}
+      <style>{`
+        @keyframes strata-outbound-pending {
+          0%   { left: -33%; }
+          100% { left: 100%; }
+        }
+      `}</style>
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-white/5 bg-black/20">
         <div className="flex items-center gap-2">
@@ -653,6 +701,31 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                   {formatSize(h.size)} · DLP {h.dlp_score} ·{" "}
                   {new Date(h.created_at).toLocaleString()}
                 </div>
+                {/* Live AV-scan / approval-queue indicator. Backend has
+                    no streaming progress for clamd INSTREAM scans, so
+                    we render an indeterminate sweep while the row sits
+                    in `pending` — it absorbs both the AV-scan window
+                    and any subsequent approver-review wait, which from
+                    the user's POV are indistinguishable. */}
+                {h.status === "pending" && (
+                  <div className="pt-1">
+                    <div
+                      role="progressbar"
+                      aria-label={`Awaiting scan and approval: ${h.filename}`}
+                      className="relative h-1 w-full overflow-hidden rounded bg-warning/10"
+                    >
+                      <div
+                        className="absolute top-0 h-full w-1/3 rounded bg-warning/70"
+                        style={{
+                          animation: "strata-outbound-pending 1.4s ease-in-out infinite",
+                        }}
+                      />
+                    </div>
+                    <div className="text-[10px] text-txt-tertiary mt-0.5">
+                      Awaiting AV scan{h.dlp_score === 0 ? " and approval" : ""}…
+                    </div>
+                  </div>
+                )}
                 {h.dlp_reasons.length > 0 && (
                   <div className="text-[10px] text-txt-tertiary">
                     Flags: {h.dlp_reasons.join(", ")}

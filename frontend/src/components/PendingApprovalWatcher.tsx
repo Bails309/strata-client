@@ -317,11 +317,7 @@ function ApprovalCardView({
     setBusy(true);
     try {
       if (card.kind === "checkout") {
-        // The checkout decide endpoint does not currently accept a reason;
-        // we still gate the UI on a reason for audit-trail symmetry with
-        // the outbound flow. If/when the backend grows a reason field on
-        // /user/checkouts/:id/decide, plumb `trimmed` through here.
-        await decideCheckout(card.id, false);
+        await decideCheckout(card.id, false, trimmed);
       } else {
         await decideOutboundShare(card.id, false, trimmed);
       }

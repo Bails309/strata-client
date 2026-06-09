@@ -199,6 +199,26 @@ describe("PendingApprovalWatcher", () => {
     );
   });
 
+  it("forwards the deny reason through to decideCheckout for credential checkouts", async () => {
+    const user_ = userEvent.setup();
+    vi.mocked(getPendingApprovals).mockResolvedValue([checkoutRequest()]);
+    vi.mocked(decideCheckout).mockResolvedValue({ status: "Denied" });
+    mount();
+    await waitFor(() =>
+      expect(screen.getByText(/Credential checkout requested/)).toBeInTheDocument()
+    );
+    await user_.click(screen.getByRole("button", { name: /^Deny$/ }));
+    await user_.type(
+      screen.getByLabelText(/Reason for denial/),
+      "Out of change window"
+    );
+    vi.mocked(getPendingApprovals).mockResolvedValue([]);
+    await user_.click(screen.getByRole("button", { name: /Confirm deny/ }));
+    await waitFor(() =>
+      expect(decideCheckout).toHaveBeenCalledWith("co-1", false, "Out of change window")
+    );
+  });
+
   it("does not re-show the same pending item on subsequent polls after dismissal", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

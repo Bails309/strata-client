@@ -692,6 +692,10 @@ export interface CheckoutRequest {
   updated_at: string;
   requester_username?: string;
   emergency_bypass?: boolean;
+  /** Free-form reason captured from the approver. Populated on Deny
+   *  (required by the UI) or optionally on Approve. Server-side cap of
+   *  1024 chars. */
+  decision_reason?: string | null;
 }
 
 export interface DiscoveredAccount {
@@ -797,10 +801,10 @@ export const requestCheckout = (data: {
     method: "POST",
     body: JSON.stringify(data),
   });
-export const decideCheckout = (id: string, approved: boolean) =>
+export const decideCheckout = (id: string, approved: boolean, reason?: string) =>
   request<{ status: string }>(`/user/checkouts/${id}/decide`, {
     method: "POST",
-    body: JSON.stringify({ approved }),
+    body: JSON.stringify({ approved, reason }),
   });
 export const revealCheckoutPassword = (id: string) =>
   request<{ password: string; expires_at?: string }>(`/user/checkouts/${id}/reveal`);

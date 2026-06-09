@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::config::DatabaseMode;
 use crate::services::app_state::{BootPhase, SharedState};
+use crate::services::av::FailMode as AvFailMode;
 use crate::services::settings;
 
 #[derive(Serialize)]
@@ -89,6 +90,7 @@ pub struct ServiceHealth {
     pub guacd: GuacdHealth,
     pub vault: VaultHealth,
     pub schema: SchemaHealth,
+    pub av: AvHealth,
     pub uptime_secs: u64,
     pub environment: String,
 }
@@ -121,6 +123,27 @@ pub struct SchemaHealth {
     pub status: String,
     pub applied_migrations: i64,
     pub expected_migrations: i64,
+}
+
+/// Antivirus scanner health (v1.12.0+).
+///
+/// `backend` mirrors the boot-time `STRATA_AV_BACKEND` value (`off`,
+/// `clamav`, or `command`). `enabled` is `true` whenever the backend
+/// is anything other than `off`. For `clamav`, `reachable` is the
+/// result of a 2-second TCP probe against the configured clamd
+/// address; for `command`, `reachable` mirrors `enabled` (we cannot
+/// usefully liveness-probe an exec-driven scanner without invoking
+/// the binary, which would have real side-effects); for `off` it is
+/// always `false`. `address` is the clamd `host:port` (clamav backend)
+/// or the redacted first token of `STRATA_AV_COMMAND` (command
+/// backend); `None` for `off`.
+#[derive(Serialize)]
+pub struct AvHealth {
+    pub backend: &'static str,
+    pub enabled: bool,
+    pub reachable: bool,
+    pub fail_mode: &'static str,
+    pub address: Option<String>,
 }
 
 /// GET /api/admin/health – read-only service health for the admin dashboard.
@@ -201,6 +224,31 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
         (false, String::new(), String::new())
     };
 
+    // ── Antivirus (v1.12.0+) ──
+    let av_backend = s.av_scanner.backend_tag();
+    let av_fail_mode = match s.av_fail_mode {
+        AvFailMode::Block => "block",
+        AvFailMode::Allow => "allow",
+    };
+    let (av_enabled, av_reachable, av_address) = match av_backend {
+        "clamav" => {
+            let addr =
+                std::env::var("STRATA_AV_CLAMD_ADDR").unwrap_or_else(|_| "clamav:3310".to_string());
+            let (host, port) = parse_host_port(&addr, 3310);
+            let reachable = check_tcp(&host, port).await;
+            (true, reachable, Some(addr))
+        }
+        "command" => {
+            // First whitespace-delimited token only — never echo args /
+            // {path} placeholders to the dashboard.
+            let cmd = std::env::var("STRATA_AV_COMMAND").unwrap_or_default();
+            let display = cmd.split_whitespace().next().unwrap_or("").to_string();
+            let enabled = !display.is_empty();
+            (enabled, enabled, if enabled { Some(display) } else { None })
+        }
+        _ => (false, false, None),
+    };
+
     Json(ServiceHealth {
         version: env!("STRATA_VERSION"),
         database: DatabaseHealth {
@@ -224,9 +272,29 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
             applied_migrations,
             expected_migrations,
         },
+        av: AvHealth {
+            backend: av_backend,
+            enabled: av_enabled,
+            reachable: av_reachable,
+            fail_mode: av_fail_mode,
+            address: av_address,
+        },
         uptime_secs,
         environment,
     })
+}
+
+/// Split `host:port` into its parts, falling back to `default_port` if
+/// the port is missing or unparseable. Bracketed IPv6 literals are not
+/// stripped — the dashboard renders the raw configured value.
+fn parse_host_port(addr: &str, default_port: u16) -> (String, u16) {
+    match addr.rsplit_once(':') {
+        Some((host, port_str)) => match port_str.parse::<u16>() {
+            Ok(port) => (host.to_string(), port),
+            Err(_) => (addr.to_string(), default_port),
+        },
+        None => (addr.to_string(), default_port),
+    }
 }
 
 /// Strip credentials from a postgres URL, returning host:port/dbname.
@@ -321,6 +389,13 @@ mod tests {
                 applied_migrations: 28,
                 expected_migrations: 28,
             },
+            av: AvHealth {
+                backend: "off",
+                enabled: false,
+                reachable: false,
+                fail_mode: "block",
+                address: None,
+            },
             uptime_secs: 3600,
             environment: "production".into(),
         };
@@ -330,8 +405,35 @@ mod tests {
         assert_eq!(json["guacd"]["port"], 4822);
         assert_eq!(json["vault"]["mode"], "local");
         assert_eq!(json["schema"]["status"], "in_sync");
+        assert_eq!(json["av"]["backend"], "off");
+        assert_eq!(json["av"]["enabled"], false);
+        assert_eq!(json["av"]["fail_mode"], "block");
         assert_eq!(json["uptime_secs"], 3600);
         assert_eq!(json["environment"], "production");
+    }
+
+    #[test]
+    fn parse_host_port_splits_clamav_default() {
+        assert_eq!(
+            parse_host_port("clamav:3310", 3310),
+            ("clamav".to_string(), 3310)
+        );
+    }
+
+    #[test]
+    fn parse_host_port_falls_back_when_no_port() {
+        assert_eq!(
+            parse_host_port("clamav", 3310),
+            ("clamav".to_string(), 3310)
+        );
+    }
+
+    #[test]
+    fn parse_host_port_falls_back_when_port_unparseable() {
+        assert_eq!(
+            parse_host_port("clamav:not-a-number", 3310),
+            ("clamav:not-a-number".to_string(), 3310)
+        );
     }
 
     #[tokio::test]

@@ -138,7 +138,11 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
       </div>
 
       {/* Service Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div
+        className={`grid grid-cols-1 md:grid-cols-2 ${
+          health.av?.enabled ? "xl:grid-cols-5" : "xl:grid-cols-4"
+        } gap-4`}
+      >
         {/* Database */}
         <div
           className="rounded-xl p-5 flex flex-col gap-4"
@@ -387,6 +391,96 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
             </div>
           </div>
         </div>
+
+        {/* Antivirus (v1.12.0+) — only rendered when STRATA_AV_BACKEND != off */}
+        {health.av?.enabled && (
+          <div
+            className="rounded-xl p-5 flex flex-col gap-4"
+            style={{
+              background: "var(--color-surface-secondary)",
+              border: "1px solid var(--color-glass-border)",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 var(--color-glass-highlight)",
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <div style={iconStyle("#ef4444")}>
+                {/* shield-check / virus glyph */}
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+              </div>
+              <span
+                className={`badge ${
+                  health.av.reachable
+                    ? "badge-success"
+                    : health.av.fail_mode === "block"
+                      ? "badge-error"
+                      : "badge-warning"
+                }`}
+              >
+                {health.av.reachable
+                  ? "Healthy"
+                  : health.av.fail_mode === "block"
+                    ? "Unreachable"
+                    : "Degraded"}
+              </span>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-txt-primary mb-0.5">Antivirus</h3>
+              <p className="text-xs text-txt-tertiary">Upload Malware Scanner</p>
+            </div>
+            <div className="mt-auto space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-txt-tertiary">Backend</span>
+                <span className="font-semibold text-txt-primary capitalize">
+                  {health.av.backend === "clamav" ? "ClamAV" : health.av.backend}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-txt-tertiary">Fail mode</span>
+                <span
+                  className="font-semibold capitalize"
+                  style={{
+                    color:
+                      health.av.fail_mode === "block"
+                        ? "var(--color-txt-primary)"
+                        : "var(--color-warning, #f59e0b)",
+                  }}
+                  title={
+                    health.av.fail_mode === "block"
+                      ? "Scanner errors reject the upload (fail-closed)"
+                      : "Scanner errors allow the upload (fail-open)"
+                  }
+                >
+                  {health.av.fail_mode}
+                </span>
+              </div>
+              {health.av.address && (
+                <div className="flex justify-between">
+                  <span className="text-txt-tertiary">
+                    {health.av.backend === "clamav" ? "Address" : "Command"}
+                  </span>
+                  <span
+                    className="font-mono text-txt-secondary text-[0.65rem] truncate ml-2"
+                    title={health.av.address}
+                  >
+                    {health.av.address}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Stat Cards */}

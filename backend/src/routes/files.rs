@@ -184,20 +184,10 @@ pub async fn upload(
     let verdict = av_scanner.scan(&temp_path).await;
     if verdict.blocks(av_fail_mode) {
         let _ = std::fs::remove_file(&temp_path);
-        let msg = match &verdict {
-            crate::services::av::Verdict::Infected { signature } => {
-                format!("File rejected by malware scan: {signature}")
-            }
-            crate::services::av::Verdict::Error { message } => {
-                format!("Antivirus scan failed: {message}")
-            }
-            // The two non-blocking variants can't reach this branch (see
-            // `Verdict::blocks`), but exhaustively matching documents
-            // intent for future maintainers.
-            crate::services::av::Verdict::Clean | crate::services::av::Verdict::Skipped { .. } => {
-                unreachable!()
-            }
-        };
+        // Map the raw engine output to an actionable user-facing
+        // message — see `Verdict::user_facing_block_message` for the
+        // exact mapping (timeout/transport/infected/generic).
+        let msg = verdict.user_facing_block_message();
         if let Some(pool) = db_pool.as_ref() {
             let _ = crate::services::audit::log(
                 pool,

@@ -119,7 +119,14 @@ describe("QuickShare", () => {
     });
 
     await waitFor(() => {
-      expect(mockUpload).toHaveBeenCalledWith("conn-1", expect.any(File));
+      expect(mockUpload).toHaveBeenCalledWith(
+        "conn-1",
+        expect.any(File),
+        expect.objectContaining({
+          onProgress: expect.any(Function),
+          onUploadComplete: expect.any(Function),
+        })
+      );
     });
   });
 

@@ -272,17 +272,10 @@ async fn parse_outbound_multipart(
     let av_backend = av_scanner.backend_tag();
     if av_verdict.blocks(av_fail_mode) {
         let _ = tokio::fs::remove_file(&temp_path).await;
-        let msg = match &av_verdict {
-            crate::services::av::Verdict::Infected { signature } => {
-                format!("File rejected by malware scan: {signature}")
-            }
-            crate::services::av::Verdict::Error { message } => {
-                format!("Antivirus scan failed: {message}")
-            }
-            crate::services::av::Verdict::Clean | crate::services::av::Verdict::Skipped { .. } => {
-                unreachable!()
-            }
-        };
+        // Map the raw engine output to an actionable user-facing
+        // message — see `Verdict::user_facing_block_message` for the
+        // exact mapping (timeout/transport/infected/generic).
+        let msg = av_verdict.user_facing_block_message();
         // Mirror the inbound `file.av_blocked` audit row (see
         // routes/files.rs) so the admin AV-blocked dashboard sees
         // both ingest paths through a single action_type filter.

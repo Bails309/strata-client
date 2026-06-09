@@ -138,6 +138,122 @@ export class ApiError extends Error {
   }
 }
 
+// ── Upload-with-progress helper ─────────────────────────────────────
+
+/**
+ * Caller-supplied hooks for tracking a long-running multipart upload.
+ * All three are optional so the helper degrades gracefully:
+ *
+ * - `onProgress(loaded, total)` fires whenever the browser flushes a
+ *   chunk. `total` is `0` when the file's length is unknown (which
+ *   should not happen for `File`/`Blob` bodies but the XHR contract
+ *   allows it).
+ * - `onUploadComplete()` fires once when the request body has been
+ *   fully written to the wire but **before** the server has
+ *   responded. This is the cue to flip a UI from "Uploading 100 %"
+ *   to "Scanning…" — for outbound uploads the post-upload phase is
+ *   the AV scan, which can take seconds (small files) to minutes
+ *   (large WAR/JAR archives) and never reports progress itself.
+ * - `signal` cancels an in-flight upload (`AbortController`-style).
+ *   The helper hooks `signal.addEventListener("abort", …)` so the
+ *   caller's existing abort plumbing works unchanged.
+ */
+export interface UploadProgressOptions {
+  onProgress?: (loaded: number, total: number) => void;
+  onUploadComplete?: () => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * `fetch` equivalent for multipart uploads that need real upload
+ * progress. We can't use `fetch` because it has no spec'd way to
+ * observe upload bytes — the `ReadableStream` request-body workaround
+ * isn't shipped in any non-Chromium browser today.
+ *
+ * Returns the parsed JSON body on `2xx`, throws `ApiError` otherwise.
+ * Network/abort failures throw `ApiError` with `status: 0`.
+ *
+ * The function intentionally does **not** re-implement `request`'s
+ * 401-then-refresh dance. Refreshing mid-upload would mean replaying
+ * the whole `FormData` body, which (a) is expensive for large files
+ * and (b) is moot in practice because the outbound flow uses a
+ * single-use ingest token (no cookie auth) and the inbound flow
+ * pre-refreshes via the surrounding session activity. Callers that
+ * need refresh-on-401 can wrap this helper.
+ */
+export function xhrUploadJson<T>(
+  url: string,
+  formData: FormData,
+  headers: Record<string, string>,
+  opts: UploadProgressOptions = {}
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.withCredentials = true;
+    for (const [name, value] of Object.entries(headers)) {
+      // The browser MUST own the multipart Content-Type so the
+      // boundary string matches the body. Reject any caller-supplied
+      // value defensively rather than silently letting the request
+      // become malformed.
+      if (name.toLowerCase() === "content-type") continue;
+      xhr.setRequestHeader(name, value);
+    }
+
+    if (opts.onProgress) {
+      xhr.upload.onprogress = (ev) => {
+        // `lengthComputable` is true for `File` / `Blob` bodies; only
+        // dial total to 0 when the browser couldn't determine it.
+        opts.onProgress!(ev.loaded, ev.lengthComputable ? ev.total : 0);
+      };
+    }
+    if (opts.onUploadComplete) {
+      xhr.upload.onload = () => opts.onUploadComplete!();
+    }
+
+    xhr.onload = () => {
+      const status = xhr.status;
+      const raw = xhr.responseText ?? "";
+      if (status >= 200 && status < 300) {
+        try {
+          resolve(raw ? (JSON.parse(raw) as T) : (undefined as T));
+        } catch (e) {
+          reject(new ApiError(status, `Invalid JSON response: ${(e as Error).message}`));
+        }
+        return;
+      }
+      // Try to surface `{ "error": "…" }` from the standard backend
+      // error envelope; fall back to status text / raw body.
+      let msg = xhr.statusText || `HTTP ${status}`;
+      if (raw) {
+        try {
+          const body = JSON.parse(raw) as { error?: string };
+          if (typeof body.error === "string" && body.error.length > 0) {
+            msg = body.error;
+          }
+        } catch {
+          // non-JSON body; keep statusText
+        }
+      }
+      reject(new ApiError(status, msg));
+    };
+
+    xhr.onerror = () => reject(new ApiError(0, "Network error"));
+    xhr.ontimeout = () => reject(new ApiError(0, "Network timeout"));
+    xhr.onabort = () => reject(new ApiError(0, "Upload aborted"));
+
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        xhr.abort();
+        return;
+      }
+      opts.signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    }
+
+    xhr.send(formData);
+  });
+}
+
 // ── Setup / Initialize ──────────────────────────────────────────────
 
 export interface InitRequest {
@@ -1729,13 +1845,39 @@ export interface QuickShareFile {
   created_at?: string;
 }
 
-export async function uploadQuickShareFile(sessionId: string, file: File): Promise<QuickShareFile> {
+/**
+ * Upload a file to the Quick Share temporary CDN. When
+ * `opts.onProgress` / `opts.onUploadComplete` are provided the
+ * implementation routes through an XHR-backed path so the caller can
+ * surface byte-level upload progress; the post-upload AV scan phase
+ * has no progress events available (clamd's INSTREAM is a black box)
+ * so flip the UI to an indeterminate spinner from `onUploadComplete`.
+ *
+ * Without progress callbacks the original `fetch` + 401-refresh-retry
+ * code path is used unchanged, so existing callers and tests behave
+ * exactly as before. The XHR path intentionally skips the auto-refresh
+ * retry — see `xhrUploadJson` for the rationale.
+ */
+export async function uploadQuickShareFile(
+  sessionId: string,
+  file: File,
+  opts?: UploadProgressOptions
+): Promise<QuickShareFile> {
   const form = new FormData();
   form.append("session_id", sessionId);
   form.append("file", file);
 
   // multipart upload — don't set Content-Type; let the browser pick the
   // boundary. We DO need the CSRF header though (mutating method).
+  if (opts?.onProgress || opts?.onUploadComplete || opts?.signal) {
+    return xhrUploadJson<QuickShareFile>(
+      `${API_BASE}/files/upload`,
+      form,
+      buildHeaders("POST"),
+      opts
+    );
+  }
+
   const res = await fetch(`${API_BASE}/files/upload`, {
     method: "POST",
     headers: buildHeaders("POST"),
@@ -2161,11 +2303,26 @@ export interface OutboundShareApprover {
  * (optional override of File.name), and `justification` (optional).
  * Returns immediately — even auto-approved shares only include a
  * `download_url` that the caller must follow separately.
+ *
+ * When `opts.onProgress` / `opts.onUploadComplete` are provided the
+ * helper switches from `fetch` to an XHR-backed path so the caller can
+ * surface byte-level upload progress. Without those callbacks the
+ * original `fetch` code path is used so existing tests (and any
+ * progress-agnostic callers) keep working unchanged.
  */
 export const submitOutboundShare = async (
-  formData: FormData
+  formData: FormData,
+  opts?: UploadProgressOptions
 ): Promise<OutboundShareSubmitResponse> => {
   const headers = buildHeaders("POST"); // no Content-Type — browser sets boundary
+  if (opts?.onProgress || opts?.onUploadComplete || opts?.signal) {
+    return xhrUploadJson<OutboundShareSubmitResponse>(
+      `${API_BASE}/user/outbound-shares`,
+      formData,
+      headers,
+      opts
+    );
+  }
   const res = await fetch(`${API_BASE}/user/outbound-shares`, {
     method: "POST",
     headers,

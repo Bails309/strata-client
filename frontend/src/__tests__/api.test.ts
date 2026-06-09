@@ -1809,3 +1809,265 @@ describe("remaining uncovered wrappers", () => {
     expect(res.authenticated).toBe(false);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  xhrUploadJson — multipart upload with progress events                     */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+import { xhrUploadJson, submitOutboundShare } from "../api";
+
+/**
+ * Minimal `XMLHttpRequest` stand-in that lets the test drive the
+ * upload lifecycle by hand: trigger progress events, the
+ * upload-complete signal, and finally the response. Mirrors the
+ * subset of the XHR surface area that `xhrUploadJson` actually uses,
+ * so we exercise the real production code path rather than a parallel
+ * implementation. Constructed once per test via the
+ * `installFakeXhr()` helper to keep cleanup local.
+ */
+class FakeXhr {
+  upload: {
+    onprogress?: (ev: { loaded: number; total: number; lengthComputable: boolean }) => void;
+    onload?: () => void;
+  } = {};
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  ontimeout: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  status = 0;
+  statusText = "";
+  responseText = "";
+  withCredentials = false;
+  requestHeaders: Record<string, string> = {};
+  sentBody: unknown = null;
+  opened: { method?: string; url?: string; async?: boolean } = {};
+  aborted = false;
+
+  open(method: string, url: string, async: boolean) {
+    this.opened = { method, url, async };
+  }
+  setRequestHeader(name: string, value: string) {
+    this.requestHeaders[name] = value;
+  }
+  send(body: unknown) {
+    this.sentBody = body;
+  }
+  abort() {
+    this.aborted = true;
+    this.onabort?.();
+  }
+
+  // ── Test-side helpers (not on the real XHR API). ──────────────────
+  fireProgress(loaded: number, total: number) {
+    this.upload.onprogress?.({ loaded, total, lengthComputable: total > 0 });
+  }
+  fireUploadComplete() {
+    this.upload.onload?.();
+  }
+  fireSuccess(status: number, body: unknown) {
+    this.status = status;
+    this.statusText = status === 200 ? "OK" : "";
+    this.responseText = typeof body === "string" ? body : JSON.stringify(body);
+    this.onload?.();
+  }
+  fireServerError(status: number, body: unknown) {
+    this.status = status;
+    this.statusText = `HTTP ${status}`;
+    this.responseText = typeof body === "string" ? body : JSON.stringify(body);
+    this.onload?.();
+  }
+  fireNetworkError() {
+    this.onerror?.();
+  }
+}
+
+function installFakeXhr(): { xhr: FakeXhr; restore: () => void } {
+  const xhr = new FakeXhr();
+  const original = globalThis.XMLHttpRequest;
+  // `new XMLHttpRequest()` in the helper expects a constructor, so we
+  // hand back a plain `function` (not a vi.fn) — vi.fn produces an
+  // object that is not `new`-able in this vitest/jsdom version.
+  function FakeCtor(this: unknown) {
+    return xhr;
+  }
+  globalThis.XMLHttpRequest = FakeCtor as unknown as typeof XMLHttpRequest;
+  return {
+    xhr,
+    restore: () => {
+      globalThis.XMLHttpRequest = original;
+    },
+  };
+}
+
+describe("xhrUploadJson", () => {
+  it("opens a POST with credentials, forwards headers, sends the form body, resolves with parsed JSON", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const form = new FormData();
+      form.append("file", new Blob(["abc"]), "x.txt");
+      const p = xhrUploadJson<{ id: string }>("/api/upload", form, {
+        "X-CSRF-Token": "tok",
+      });
+      // Resolve via a 200 response.
+      queueMicrotask(() => xhr.fireSuccess(200, { id: "abc" }));
+      const out = await p;
+      expect(out).toEqual({ id: "abc" });
+      expect(xhr.opened.method).toBe("POST");
+      expect(xhr.opened.url).toBe("/api/upload");
+      expect(xhr.withCredentials).toBe(true);
+      expect(xhr.requestHeaders["X-CSRF-Token"]).toBe("tok");
+      // The browser owns the multipart Content-Type — the helper
+      // MUST strip any caller-supplied value to preserve the
+      // boundary string. Sanity-check that with a deliberate try.
+      const { xhr: xhr2, restore: restore2 } = installFakeXhr();
+      const p2 = xhrUploadJson<unknown>("/api/upload", form, {
+        "Content-Type": "should-be-stripped",
+        "X-CSRF-Token": "tok",
+      });
+      queueMicrotask(() => xhr2.fireSuccess(200, {}));
+      await p2;
+      expect(xhr2.requestHeaders["Content-Type"]).toBeUndefined();
+      expect(xhr2.requestHeaders["X-CSRF-Token"]).toBe("tok");
+      restore2();
+    } finally {
+      restore();
+    }
+  });
+
+  it("forwards progress events to onProgress with loaded/total", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const onProgress = vi.fn();
+      const onUploadComplete = vi.fn();
+      const form = new FormData();
+      const p = xhrUploadJson<unknown>("/api/upload", form, {}, { onProgress, onUploadComplete });
+      xhr.fireProgress(100, 1000);
+      xhr.fireProgress(500, 1000);
+      xhr.fireUploadComplete();
+      queueMicrotask(() => xhr.fireSuccess(200, {}));
+      await p;
+      expect(onProgress).toHaveBeenNthCalledWith(1, 100, 1000);
+      expect(onProgress).toHaveBeenNthCalledWith(2, 500, 1000);
+      expect(onUploadComplete).toHaveBeenCalledOnce();
+    } finally {
+      restore();
+    }
+  });
+
+  it("rejects with ApiError carrying the backend error envelope on non-2xx", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const p = xhrUploadJson<unknown>("/api/upload", new FormData(), {});
+      queueMicrotask(() =>
+        xhr.fireServerError(400, { error: "File rejected by malware scan: EICAR" })
+      );
+      await expect(p).rejects.toMatchObject({
+        status: 400,
+        message: "File rejected by malware scan: EICAR",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("falls back to statusText when the error body is not JSON", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const p = xhrUploadJson<unknown>("/api/upload", new FormData(), {});
+      queueMicrotask(() => xhr.fireServerError(500, "<html>oops</html>"));
+      await expect(p).rejects.toMatchObject({ status: 500, message: "HTTP 500" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("rejects with ApiError(0) on network failure", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const p = xhrUploadJson<unknown>("/api/upload", new FormData(), {});
+      queueMicrotask(() => xhr.fireNetworkError());
+      await expect(p).rejects.toMatchObject({ status: 0, message: "Network error" });
+    } finally {
+      restore();
+    }
+  });
+
+  it("aborts the XHR when the provided AbortSignal fires", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const ctrl = new AbortController();
+      const p = xhrUploadJson<unknown>("/api/upload", new FormData(), {}, { signal: ctrl.signal });
+      ctrl.abort();
+      await expect(p).rejects.toMatchObject({ status: 0, message: "Upload aborted" });
+      expect(xhr.aborted).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("aborts immediately when the AbortSignal is already aborted", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      const ctrl = new AbortController();
+      ctrl.abort();
+      const p = xhrUploadJson<unknown>("/api/upload", new FormData(), {}, { signal: ctrl.signal });
+      await expect(p).rejects.toMatchObject({ status: 0 });
+      expect(xhr.aborted).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("submitOutboundShare progress opt-in", () => {
+  it("uses the XHR path when onProgress is provided", async () => {
+    const { xhr, restore } = installFakeXhr();
+    try {
+      // Cookie used by buildHeaders("POST") to attach CSRF header.
+      document.cookie = "csrf_token=csrf-xyz";
+      const fd = new FormData();
+      fd.append("file", new Blob(["data"]), "f.bin");
+      const onProgress = vi.fn();
+      const p = submitOutboundShare(fd, { onProgress });
+      xhr.fireProgress(50, 100);
+      queueMicrotask(() =>
+        xhr.fireSuccess(200, {
+          id: "1",
+          status: "approved",
+          dlp_score: 0,
+          dlp_reasons: [],
+          download_url: "/x",
+          expires_at: "2030-01-01T00:00:00Z",
+        })
+      );
+      const out = await p;
+      expect(out.status).toBe("approved");
+      expect(xhr.opened.url).toContain("/api/user/outbound-shares");
+      expect(xhr.requestHeaders["X-CSRF-Token"]).toBe("csrf-xyz");
+      expect(onProgress).toHaveBeenCalledWith(50, 100);
+    } finally {
+      restore();
+    }
+  });
+
+  it("uses the fetch path when no progress callbacks are provided (backward compat)", async () => {
+    const original = globalThis.fetch;
+    try {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ id: "2", status: "approved", dlp_score: 0, dlp_reasons: [], download_url: null, expires_at: null }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      const fd = new FormData();
+      const out = await submitOutboundShare(fd);
+      expect(out.status).toBe("approved");
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+

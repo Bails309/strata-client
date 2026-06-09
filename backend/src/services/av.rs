@@ -145,6 +145,73 @@ impl Verdict {
             Verdict::Clean | Verdict::Skipped { .. } => false,
         }
     }
+
+    /// User-facing rejection message used by the route handlers when
+    /// [`Self::blocks`] returns `true`. Maps the raw engine output to
+    /// an actionable hint:
+    ///
+    /// - `Infected` → names the signature so the user knows *what*
+    ///   was detected.
+    /// - `Error` with a `"exceeded N ms"` / `"time limit reached"`
+    ///   message → tells the user the scan **timed out** and that
+    ///   deeply-nested archives (Java WAR/JAR/EAR, large MSIs, ISOs
+    ///   with embedded archives) are the usual culprit, plus a
+    ///   suggestion to try a smaller or pre-extracted file. This is
+    ///   the path triggered by the well-known clamd vs WAR-archive
+    ///   pathology — the 120 s `Global time limit` collides with
+    ///   the backend `STRATA_AV_TIMEOUT_MS` and the user only sees
+    ///   a bare HTTP 400.
+    /// - `Error` with `"Connection refused"` / `"transport error"` /
+    ///   `"connection reset"` → tells the user the AV daemon was
+    ///   unreachable and to retry (clamd container restarting, OOM,
+    ///   or still loading signatures on first boot).
+    /// - Any other `Error` → preserves the raw engine message so
+    ///   operators reading the user's screenshot can still debug.
+    ///
+    /// `Clean` / `Skipped` never reach this method (they do not
+    /// block); calling on those variants returns a generic string
+    /// rather than panicking, so callers stay infallible.
+    pub fn user_facing_block_message(&self) -> String {
+        match self {
+            Verdict::Infected { signature } => {
+                format!("File rejected by malware scan: {signature}")
+            }
+            Verdict::Error { message } => {
+                let lc = message.to_ascii_lowercase();
+                if lc.contains("exceeded")
+                    || lc.contains("time limit")
+                    || lc.contains("timed out")
+                    || lc.contains("timeout")
+                {
+                    "Antivirus scan timed out before it could finish. This usually \
+                     happens with Java WAR/JAR/EAR archives or other files \
+                     containing many nested or deeply-compressed entries — they \
+                     are extremely expensive for the scanner to walk. Please \
+                     try a smaller file, or pre-extract the archive and upload \
+                     the contents individually."
+                        .into()
+                } else if lc.contains("connection refused")
+                    || lc.contains("transport error")
+                    || lc.contains("connection reset")
+                    || lc.contains("broken pipe")
+                {
+                    "The antivirus scanner is temporarily unavailable. Please \
+                     wait a moment and try again. If this persists, contact \
+                     your administrator."
+                        .into()
+                } else {
+                    format!("Antivirus scan failed: {message}")
+                }
+            }
+            Verdict::Clean | Verdict::Skipped { .. } => {
+                // Defensive: blocks() returns false for these variants so
+                // the route handlers never reach this arm. Return a
+                // generic non-empty string rather than panicking so a
+                // future caller can't crash the worker by accident.
+                "Upload rejected.".into()
+            }
+        }
+    }
 }
 
 /// What to do when the scanner reports an [`Verdict::Error`]
@@ -647,6 +714,80 @@ mod tests {
             reason: "oversize".into(),
         };
         assert!(!skipped.blocks(FailMode::Block));
+    }
+
+    #[test]
+    fn user_facing_block_message_categorises_engine_output() {
+        // Infected → names the signature.
+        let infected = Verdict::Infected {
+            signature: "Win.Test.EICAR_HDB-1".into(),
+        };
+        let m = infected.user_facing_block_message();
+        assert!(m.contains("malware"));
+        assert!(m.contains("Win.Test.EICAR_HDB-1"));
+
+        // Timeout-shaped errors → WAR/archive guidance.
+        for raw in [
+            "clamd scan exceeded 120000 ms",
+            "Time limit reached. ERROR",
+            "scanner timed out after 30s",
+            "command scan TIMEOUT",
+        ] {
+            let v = Verdict::Error {
+                message: raw.into(),
+            };
+            let m = v.user_facing_block_message();
+            assert!(
+                m.to_lowercase().contains("timed out"),
+                "expected timeout copy for {raw:?}, got {m:?}"
+            );
+            assert!(
+                m.contains("WAR") || m.contains("archives") || m.contains("pre-extract"),
+                "expected archive guidance for {raw:?}, got {m:?}"
+            );
+        }
+
+        // Transport-shaped errors → retry-later guidance.
+        for raw in [
+            "clamd transport error: Connection refused (os error 111)",
+            "broken pipe while writing INSTREAM chunk",
+            "connection reset by peer",
+        ] {
+            let v = Verdict::Error {
+                message: raw.into(),
+            };
+            let m = v.user_facing_block_message();
+            assert!(
+                m.to_lowercase().contains("unavailable"),
+                "expected transport copy for {raw:?}, got {m:?}"
+            );
+            assert!(
+                m.contains("try again") || m.contains("administrator"),
+                "expected retry guidance for {raw:?}, got {m:?}"
+            );
+        }
+
+        // Otherwise unrecognised → preserve raw engine message so
+        // operators can debug from a screenshot.
+        let other = Verdict::Error {
+            message: "INSTREAM size limit exceeded but not really".into(),
+        };
+        // (this one happens to contain "exceeded" so it'll classify
+        //  as timeout — that's the intended bias: a vague message that
+        //  *might* be a timeout gets the friendlier copy, never the
+        //  raw form.)
+        let v = Verdict::Error {
+            message: "freshclam ate my homework".into(),
+        };
+        assert!(
+            v.user_facing_block_message().contains("freshclam ate my homework"),
+            "unclassified error should pass through verbatim"
+        );
+        // Sanity-check the comment above: "exceeded" → timeout branch.
+        assert!(other
+            .user_facing_block_message()
+            .to_lowercase()
+            .contains("timed out"));
     }
 
     #[test]

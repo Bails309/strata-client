@@ -225,18 +225,33 @@ to a different scanner via `STRATA_AV_CMD`.
 Run after any scanner change, container rebuild, or signature
 update.
 
+> **Prerequisites.** The smoke-test user must have **Use Quick
+> Share** enabled on their role (Admin → Roles), or be a
+> super-admin. Otherwise the upload returns
+> `403 {"code":"FORBIDDEN","error":"Forbidden"}` before the
+> scanner is consulted. Log out and back in after changing the
+> role so the new claims land in the cookie.
+>
+> **Copy-paste warning.** The command below uses `\`
+> line-continuations. If your terminal strips them (PowerShell
+> always; some pasters silently do), each line runs as a separate
+> command and you'll see a mix of `curl: (6) Could not resolve
+> host: -H` errors and a single `{"code":"FORBIDDEN"}` from the
+> orphaned first `curl`. Keep the backslashes intact or put it
+> all on one line.
+
 ```bash
 # 1. Write the test string
 printf 'X5O!P%%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar.com
 
-# 2. POST through Strata (replace $TOKEN, $CSRF, $SESSION with valid values
+# 2. POST through Strata (replace $TOKEN and $SESSION with valid values
 #    captured from a logged-in browser via DevTools → Application → Cookies
-#    and a recent /me response)
+#    and a recent /api/sessions response)
 curl -sS -X POST https://strata.example.com/api/files/upload \
   -H "Cookie: access_token=$TOKEN" \
-  -H "X-CSRF-Token: $CSRF" \
-  -F session_id=$SESSION \
-  -F file=@/tmp/eicar.com -o /tmp/scan-resp.json -w '\nHTTP %{http_code}\n'
+  -F "session_id=$SESSION" \
+  -F "file=@/tmp/eicar.com" \
+  -o /tmp/scan-resp.json -w '\nHTTP %{http_code}\n'
 
 # Expected:
 # HTTP 400
@@ -261,6 +276,9 @@ Failure modes:
 | HTTP 200 | `STRATA_AV_BACKEND=off`, or ClamAV first-boot signature pull not complete |
 | HTTP 400 with `scanner error` (no signature) | Daemon unreachable — run procedure A |
 | HTTP 400 with a different signature | Engine is working but detected a different test pattern; check you wrote the canonical EICAR string |
+| HTTP 401 `{"code":"UNAUTHORIZED"}` | `$TOKEN` is empty, expired, or for a different host — re-capture the `access_token` cookie |
+| HTTP 403 `{"code":"FORBIDDEN"}` | Smoke-test user's role lacks **Use Quick Share** (and isn't super-admin) — see prerequisites above |
+| HTTP 400 `Missing session_id field` / `Missing file field` | Multi-line command was split by the shell — keep `\` line-continuations or run on a single line |
 
 ## Procedure E — Capacity / latency check
 

@@ -455,7 +455,45 @@ mainstream AV engine recognises as a test virus. It is NOT
 malware — it's safe to handle and is the canonical "is my AV
 plumbing wired correctly?" probe.
 
+### Prerequisites
+
+Before running the test, make sure your test account satisfies
+all three of the following — otherwise you'll see auth errors
+that look like AV failures but are actually unrelated:
+
+1. **You're logged in** and have captured the `access_token`
+   cookie value (DevTools → Application → Cookies, or the curl
+   `-c` flag during a login round-trip).
+2. **Your role has "Use Quick Share" enabled** (Admin → Roles →
+   *role* → toggle **Use Quick Share** → Save). Super-admins
+   bypass this check via `can_manage_system`. Without one of
+   those flags the upload endpoint returns
+   `403 {"code":"FORBIDDEN","error":"Forbidden"}` long before the
+   AV scanner ever sees the bytes. **Log out / back in after
+   changing the role** so the new claims land in your cookie.
+3. **You have an active session ID** to attach the upload to.
+   The easiest way to grab one is:
+   ```bash
+   curl -ksS https://strata.example.com/api/sessions \
+     -H "Cookie: access_token=$STRATA_TOKEN" | jq -r '.[0].id'
+   ```
+
+> **Heads-up on copy-paste.** The command below uses bash
+> backslash-newline continuations. If you paste it into a shell
+> that strips the `\` (some terminals + Windows PowerShell), each
+> line will run as its own command and you'll see a stream of
+> `curl: (6) Could not resolve host: -H` / `-F` errors mixed in
+> with a single `{"code":"FORBIDDEN"}` from the first orphaned
+> `curl` call. Either keep the backslashes intact or collapse the
+> whole thing onto one line.
+
+### Run the test
+
 ```bash
+# 0. Export the three values from the prerequisites above.
+export STRATA_TOKEN="<your access_token cookie value>"
+export STRATA_SESSION="<an active session id>"
+
 # 1. Write the test string to a file (note the literal backslash escape
 #    and the dollar-sign escapes for shell safety)
 printf 'X5O!P%%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar.com
@@ -463,9 +501,8 @@ printf 'X5O!P%%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' 
 # 2. Submit through Strata as a normal Quick Share upload
 curl -sS -X POST https://strata.example.com/api/files/upload \
   -H "Cookie: access_token=$STRATA_TOKEN" \
-  -H "X-CSRF-Token: $STRATA_CSRF" \
-  -F session_id=$STRATA_SESSION \
-  -F file=@/tmp/eicar.com
+  -F "session_id=$STRATA_SESSION" \
+  -F "file=@/tmp/eicar.com"
 
 # Expected:
 # HTTP 400
@@ -483,14 +520,15 @@ docker compose exec postgres-local \
 rm /tmp/eicar.com
 ```
 
-If step 2 returns `200 OK` and a `download_url`, the scanner is
-not wired correctly. Common causes:
+### Reading the result
 
-- `STRATA_AV_BACKEND` is still `off`.
-- The backend container can't reach `clamav:3310` (check
-  `docker compose exec backend nc -zv clamav 3310`).
-- ClamAV hasn't finished its first signature pull (check
-  `docker compose logs clamav | grep 'database loaded'`).
+| HTTP status & body                                                           | What it means                                                                                                                                         | Next step                                                                                                                                              |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400 {"error":"validation","message":"File rejected by malware scan: ..."}`  | **Success.** Scanner is wired and matched the EICAR signature.                                                                                        | Done — check the audit row in step 3.                                                                                                                  |
+| `200 OK` with a `download_url`                                               | Scanner is **not** running.                                                                                                                            | Check `STRATA_AV_BACKEND` isn't `off`; `docker compose exec backend nc -zv clamav 3310`; `docker compose logs clamav \| grep 'database loaded'`.       |
+| `401 Unauthorized` / `{"code":"UNAUTHORIZED"}`                               | `$STRATA_TOKEN` is missing, empty, expired, or for a different host.                                                                                  | Re-log-in and re-export the cookie value.                                                                                                              |
+| `403 {"code":"FORBIDDEN","error":"Forbidden"}`                               | Cookie is valid but the user's role lacks **Use Quick Share** (and isn't super-admin).                                                                 | Enable the role flag in Admin → Roles, then log out and back in.                                                                                       |
+| `400 {"error":"validation","message":"Missing session_id field"}` (or file)  | The multi-line command got split — only the URL/headers reached curl.                                                                                  | Keep the `\` line-continuations intact or run it all on one line.                                                                                      |
 
 ## Operational considerations
 

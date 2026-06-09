@@ -487,9 +487,13 @@ async fn fetch_upstream_daily_version() -> Option<u32> {
 /// 6 h yields no useful operator signal and wastes bandwidth.
 const UPSTREAM_CACHE_TTL_SECS: i64 = 6 * 60 * 60;
 
-static UPSTREAM_CACHE: OnceLock<TokioRwLock<Option<(u32, DateTime<Utc>)>>> = OnceLock::new();
+/// Cached `(version, fetched_at)` pair from the public ClamAV mirror,
+/// or `None` while the first probe is still in flight.
+type UpstreamCache = Option<(u32, DateTime<Utc>)>;
 
-fn upstream_cache() -> &'static TokioRwLock<Option<(u32, DateTime<Utc>)>> {
+static UPSTREAM_CACHE: OnceLock<TokioRwLock<UpstreamCache>> = OnceLock::new();
+
+fn upstream_cache() -> &'static TokioRwLock<UpstreamCache> {
     UPSTREAM_CACHE.get_or_init(|| TokioRwLock::new(None))
 }
 

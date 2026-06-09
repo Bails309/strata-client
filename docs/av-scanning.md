@@ -181,11 +181,17 @@ the canonical source):
 - Reads the response as a null-terminated byte string and matches
   on the suffix (`FOUND` / `OK` / `ERROR`) rather than the full
   string so trailing whitespace variants don't fool the parser.
-- Files larger than `STRATA_AV_MAX_SCAN_SIZE` (default 100 MiB)
-  are tagged `Skipped { reason: "oversize" }` rather than
-  attempted. The clamd-side `StreamMaxLength` defaults to 25 MiB;
-  the bundled sidecar bumps it to match `STRATA_AV_MAX_SCAN_SIZE`
-  so the two limits agree.
+- Files larger than `STRATA_AV_MAX_SCAN_SIZE` (default 500 MiB,
+  matching the 500 MiB upload cap so every accepted upload is
+  scanned) are tagged `Skipped { reason: "oversize" }` rather than
+  attempted. The clamd-side `StreamMaxLength` defaults to 25 MiB
+  upstream; the bundled sidecar ships
+  [clamav/clamd.conf](../clamav/clamd.conf) which raises it (and
+  `MaxFileSize` / `MaxScanSize`) to 512 MiB / 512 MiB / 1024 MiB
+  so the two limits agree. If you raise the backend ceiling past
+  512 MiB, raise the clamd values too — otherwise clamd returns
+  `INSTREAM size limit exceeded. ERROR` mid-scan and the upload
+  is rejected under `STRATA_AV_FAIL_MODE=block`.
 - Timeout produces `Verdict::Error { message: "scan timeout" }`;
   the fail-mode then decides block vs pass.
 
@@ -282,8 +288,8 @@ esac
 | -------------------------- | --------- | ------------------------ | ------------------------------------------------------------------------------ |
 | `STRATA_AV_BACKEND`        | enum      | `off`                    | `off` \| `clamav` \| `command`                                                 |
 | `STRATA_AV_FAIL_MODE`      | enum      | `block`                  | `block` (reject on scanner error) \| `allow` (degrade open on scanner error)   |
-| `STRATA_AV_MAX_SCAN_SIZE`  | bytes     | `104857600` (100 MiB)    | Files larger than this are `Skipped { reason: "oversize" }`                    |
-| `STRATA_AV_TIMEOUT_MS`     | ms        | `30000`                  | Per-scan wall-clock deadline. Timeout → `Verdict::Error`                       |
+| `STRATA_AV_MAX_SCAN_SIZE`  | bytes     | `524288000` (500 MiB)    | Files larger than this are `Skipped { reason: "oversize" }`. Matches the 500 MiB upload cap so every accepted upload is scanned. |
+| `STRATA_AV_TIMEOUT_MS`     | ms        | `120000` (2 min)         | Per-scan wall-clock deadline. Timeout → `Verdict::Error`. 500 MiB nested archives can comfortably exceed 30 s. |
 | `STRATA_AV_CLAMD_HOST`     | hostname  | `clamav`                 | Matches the compose service name; override for external clamd                  |
 | `STRATA_AV_CLAMD_PORT`     | u16       | `3310`                   | Plain TCP. Wrap in stunnel for untrusted-network hops                          |
 | `STRATA_AV_CMD`            | string    | (none — required)        | Whitespace-split argv template; `{path}` substituted or appended               |
@@ -529,6 +535,8 @@ rm /tmp/eicar.com
 | `401 Unauthorized` / `{"code":"UNAUTHORIZED"}`                               | `$STRATA_TOKEN` is missing, empty, expired, or for a different host.                                                                                  | Re-log-in and re-export the cookie value.                                                                                                              |
 | `403 {"code":"FORBIDDEN","error":"Forbidden"}`                               | Cookie is valid but the user's role lacks **Use Quick Share** (and isn't super-admin).                                                                 | Enable the role flag in Admin → Roles, then log out and back in.                                                                                       |
 | `400 {"error":"validation","message":"Missing session_id field"}` (or file)  | The multi-line command got split — only the URL/headers reached curl.                                                                                  | Keep the `\` line-continuations intact or run it all on one line.                                                                                      |
+| `400 {"error":"validation","message":"Antivirus scan failed: INSTREAM size limit exceeded. ERROR"}` | clamd's `StreamMaxLength` (default 25 MB upstream) tripped on the upload size. The bundled sidecar raises it to 512 MB; this surfaces when running against an external clamd you control. | Mount [clamav/clamd.conf](../clamav/clamd.conf) into your clamd, or raise `StreamMaxLength`, `MaxFileSize`, and `MaxScanSize` directly. Keep them all ≥ `STRATA_AV_MAX_SCAN_SIZE`. |
+| `400 {"error":"validation","message":"Antivirus scan failed: clamd scan exceeded ... ms"}` | Scan didn't finish before `STRATA_AV_TIMEOUT_MS` (default 120000). Common on huge nested archives or undersized clamd.                                | Either raise `STRATA_AV_TIMEOUT_MS`, give clamd more CPU/RAM, or lower `STRATA_AV_MAX_SCAN_SIZE` so the biggest files are oversize-skipped instead.    |
 
 ## Operational considerations
 

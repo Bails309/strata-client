@@ -268,6 +268,7 @@ async fn parse_outbound_multipart(
             filename = %filename,
             av_status = av_verdict.as_str(),
             av_signature = ?av_verdict.signature(),
+            av_message = ?av_verdict.message(),
             av_backend = av_backend,
             "Outbound Quick Share upload blocked by AV scan"
         );

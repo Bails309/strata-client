@@ -508,26 +508,27 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
                   </span>
                 </div>
               )}
-              {health.av.backend === "clamav" && health.av.signatures_version != null && (
-                <div className="flex justify-between">
-                  <span className="text-txt-tertiary">Signatures</span>
-                  <span
-                    className="font-semibold text-txt-primary"
-                    title={
-                      health.av.signatures_built
-                        ? `Built ${new Date(health.av.signatures_built).toLocaleString()}`
-                        : undefined
-                    }
-                  >
-                    {health.av.signatures_version}
-                    {health.av.signatures_built && (
-                      <span className="text-txt-tertiary font-normal ml-1">
-                        ({formatRelativeTime(health.av.signatures_built)})
-                      </span>
-                    )}
-                  </span>
-                </div>
-              )}
+              {health.av.backend === "clamav" &&
+                typeof health.av.signatures_version === "number" && (
+                  <div className="flex justify-between">
+                    <span className="text-txt-tertiary">Signatures</span>
+                    <span
+                      className="font-semibold text-txt-primary"
+                      title={
+                        health.av.signatures_built
+                          ? `Built ${new Date(health.av.signatures_built).toLocaleString()}`
+                          : undefined
+                      }
+                    >
+                      {health.av.signatures_version}
+                      {health.av.signatures_built && (
+                        <span className="text-txt-tertiary font-normal ml-1">
+                          ({formatRelativeTime(health.av.signatures_built)})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
               {health.av.backend === "clamav" && health.av.status && (
                 <div className="flex justify-between">
                   <span className="text-txt-tertiary">Status</span>
@@ -542,7 +543,7 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
                             : "var(--color-txt-secondary)",
                     }}
                     title={
-                      health.av.upstream_version != null
+                      typeof health.av.upstream_version === "number"
                         ? `Latest published daily DB: ${health.av.upstream_version}` +
                           (health.av.upstream_checked_at
                             ? ` (checked ${new Date(
@@ -555,7 +556,8 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
                     {health.av.status === "current"
                       ? "Up to date"
                       : health.av.status === "behind"
-                        ? health.av.upstream_version != null && health.av.signatures_version != null
+                        ? typeof health.av.upstream_version === "number" &&
+                          typeof health.av.signatures_version === "number"
                           ? `Behind by ${health.av.upstream_version - health.av.signatures_version}`
                           : "Behind"
                         : "Unknown"}

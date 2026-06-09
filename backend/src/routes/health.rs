@@ -232,8 +232,8 @@ pub async fn service_health(State(state): State<SharedState>) -> Json<ServiceHea
     };
     let (av_enabled, av_reachable, av_address) = match av_backend {
         "clamav" => {
-            let addr = std::env::var("STRATA_AV_CLAMD_ADDR")
-                .unwrap_or_else(|_| "clamav:3310".to_string());
+            let addr =
+                std::env::var("STRATA_AV_CLAMD_ADDR").unwrap_or_else(|_| "clamav:3310".to_string());
             let (host, port) = parse_host_port(&addr, 3310);
             let reachable = check_tcp(&host, port).await;
             (true, reachable, Some(addr))

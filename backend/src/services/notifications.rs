@@ -240,6 +240,7 @@ pub async fn dispatch(
             r.id,
             r.email.as_deref().unwrap_or(""),
             &subject,
+            "checkout",
             event.checkout_id(),
         )
         .await
@@ -399,20 +400,22 @@ async fn insert_delivery_row(
     recipient_user_id: Uuid,
     recipient_email: &str,
     subject: &str,
-    checkout_id: Uuid,
+    related_entity_type: &str,
+    related_entity_id: Uuid,
 ) -> Result<Uuid, sqlx::Error> {
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO email_deliveries
            (template_key, recipient_user_id, recipient_email, subject,
             related_entity_type, related_entity_id, status, attempts)
-         VALUES ($1, $2, $3, $4, 'checkout', $5, 'queued', 0)
+         VALUES ($1, $2, $3, $4, $5, $6, 'queued', 0)
          RETURNING id",
     )
     .bind(template_key)
     .bind(recipient_user_id)
     .bind(recipient_email)
     .bind(subject)
-    .bind(checkout_id)
+    .bind(related_entity_type)
+    .bind(related_entity_id)
     .fetch_one(pool)
     .await?;
     Ok(id)
@@ -461,6 +464,257 @@ async fn mark_suppressed(pool: &Pool<Postgres>, id: Uuid, reason: &str) -> Resul
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ── Outbound Quick-Share notifications ────────────────────────────────
+//
+// A separate event type / dispatcher because the recipient set comes
+// from `outbound_share_approvers` rather than `approval_role_*`, and
+// the templated context (filename / size / DLP score) has no overlap
+// with the checkout context. The send-side machinery (SMTP loader,
+// `email_deliveries` book-keeping, `mark_*` helpers) is shared via
+// the private helpers above.
+
+/// A domain event tied to an outbound Quick-Share row.
+///
+/// Today only the `Pending` variant is wired — the approve / deny
+/// notifications for the requester are not yet templated. Add new
+/// variants here when those flows ship.
+#[derive(Debug, Clone)]
+pub enum OutboundShareEvent {
+    /// A new outbound share has been staged in status `Pending` and is
+    /// awaiting an approver action. Fans out to every registered
+    /// outbound-share approver. The requester is intentionally NOT
+    /// copied — they get an in-app confirmation when they upload, and
+    /// would otherwise receive an email about their own action.
+    Pending {
+        share_id: Uuid,
+        requester_id: Uuid,
+        requester_display_name: String,
+        requester_username: String,
+        filename: String,
+        size_bytes: i64,
+        justification: Option<String>,
+        approver_user_ids: Vec<Uuid>,
+    },
+}
+
+impl OutboundShareEvent {
+    fn template_key(&self) -> TemplateKey {
+        match self {
+            OutboundShareEvent::Pending { .. } => TemplateKey::OutboundSharePending,
+        }
+    }
+
+    fn share_id(&self) -> Uuid {
+        match self {
+            OutboundShareEvent::Pending { share_id, .. } => *share_id,
+        }
+    }
+}
+
+async fn dispatch_outbound_share_and_log(
+    pool: Pool<Postgres>,
+    vault: Option<VaultConfig>,
+    event: OutboundShareEvent,
+) {
+    if let Err(e) = dispatch_outbound_share(&pool, vault.as_ref(), event).await {
+        tracing::error!("outbound-share notification dispatch failed: {}", e);
+    }
+}
+
+/// Fire-and-forget dispatch for an outbound-share event. Mirrors
+/// [`spawn_dispatch`] for checkout events.
+pub fn spawn_dispatch_outbound_share(
+    pool: Pool<Postgres>,
+    vault: Option<VaultConfig>,
+    event: OutboundShareEvent,
+) {
+    tokio::spawn(dispatch_outbound_share_and_log(pool, vault, event));
+}
+
+/// Synchronous dispatch for outbound-share notifications. Same shape as
+/// [`dispatch`] for checkout events — resolves recipients, filters opt-
+/// outs, inserts `email_deliveries` rows, renders and sends.
+pub async fn dispatch_outbound_share(
+    pool: &Pool<Postgres>,
+    vault: Option<&VaultConfig>,
+    event: OutboundShareEvent,
+) -> Result<(), String> {
+    let template = event.template_key();
+    let share_id = event.share_id();
+
+    let approver_ids: Vec<Uuid> = match &event {
+        OutboundShareEvent::Pending {
+            approver_user_ids, ..
+        } => approver_user_ids.clone(),
+    };
+
+    if approver_ids.is_empty() {
+        tracing::debug!(
+            "no approvers registered for outbound share {share_id} \u{2014} no notification fan-out"
+        );
+        return Ok(());
+    }
+
+    let recipients = fetch_users(pool, &approver_ids)
+        .await
+        .map_err(|e| format!("resolve outbound-share recipients: {e}"))?;
+
+    // Apply opt-out filter (no audit-grade variants here so opt-out
+    // suppresses unconditionally).
+    let mut filtered: Vec<RecipientRow> = Vec::with_capacity(recipients.len());
+    for r in recipients {
+        if r.notifications_opt_out {
+            let _ = audit::log(
+                pool,
+                Some(r.id),
+                "notifications.skipped_opt_out",
+                &json!({
+                    "template": template.as_str(),
+                    "outbound_share_id": share_id,
+                }),
+            )
+            .await;
+            continue;
+        }
+        if r.email.as_deref().map(str::is_empty).unwrap_or(true) {
+            continue;
+        }
+        filtered.push(r);
+    }
+
+    if filtered.is_empty() {
+        return Ok(());
+    }
+
+    let context = build_outbound_share_context(pool, &event).await;
+    let rendered = email::render(template, &context).map_err(|e| format!("render: {e}"))?;
+    let subject = template.default_subject().to_owned();
+
+    let smtp_settings = SmtpTransport::load_settings(pool, vault)
+        .await
+        .map_err(|e| format!("load smtp settings: {e}"))?;
+    let from = if smtp_settings.from_name.is_empty() {
+        EmailAddress::new(smtp_settings.from_address.clone())
+    } else {
+        EmailAddress::with_name(
+            smtp_settings.from_address.clone(),
+            smtp_settings.from_name.clone(),
+        )
+    };
+
+    for r in filtered {
+        let row_id = match insert_delivery_row(
+            pool,
+            template.as_str(),
+            r.id,
+            r.email.as_deref().unwrap_or(""),
+            &subject,
+            "outbound_share",
+            share_id,
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("insert email_deliveries failed: {e}");
+                continue;
+            }
+        };
+
+        let to = match &r.full_name {
+            Some(name) if !name.is_empty() => {
+                EmailAddress::with_name(r.email.clone().unwrap_or_default(), name.clone())
+            }
+            _ => EmailAddress::new(r.email.clone().unwrap_or_default()),
+        };
+
+        let msg = EmailMessage::builder(from.clone(), to, &subject)
+            .html(rendered.html_body.clone())
+            .text(rendered.text_body.clone())
+            .inline(crate::services::email::templates::logo_attachment())
+            .build();
+
+        match SmtpTransport::from_settings(&smtp_settings) {
+            Err(e) => {
+                let _ = mark_suppressed(pool, row_id, &format!("{e}")).await;
+            }
+            Ok(transport) => match transport.send(&msg).await {
+                Ok(()) => {
+                    if let Err(e) = mark_sent(pool, row_id).await {
+                        tracing::warn!("could not mark delivery {row_id} sent: {e}");
+                    }
+                }
+                Err(e) => {
+                    let retryable = e.is_retryable();
+                    if let Err(e2) = mark_failed(pool, row_id, &format!("{e}"), retryable).await {
+                        tracing::warn!("could not mark delivery {row_id} failed: {e2}");
+                    }
+                }
+            },
+        }
+    }
+
+    Ok(())
+}
+
+async fn build_outbound_share_context(
+    pool: &Pool<Postgres>,
+    event: &OutboundShareEvent,
+) -> serde_json::Value {
+    let accent = crate::services::settings::get(pool, "branding_accent_color")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "#2563eb".into());
+    let base_url = crate::services::settings::get(pool, "tenant_base_url")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "https://strata.local".into());
+    let approve_url = format!(
+        "{}/admin/pending-approvals",
+        base_url.trim_end_matches('/')
+    );
+
+    match event {
+        OutboundShareEvent::Pending {
+            requester_display_name,
+            requester_username,
+            filename,
+            size_bytes,
+            justification,
+            ..
+        } => json!({
+            "accent": accent,
+            "approve_url": approve_url,
+            "requester_display_name": requester_display_name,
+            "requester_username": requester_username,
+            "filename": filename,
+            "size_human": format_size_human(*size_bytes),
+            "justification": justification.clone().unwrap_or_else(|| "(none provided)".into()),
+        }),
+    }
+}
+
+/// Compact human-readable size formatter (KB / MB / GB ladder) used by
+/// the outbound-share email body. Mirrors the frontend `formatSize`
+/// helper closely enough for readability in plain prose.
+fn format_size_human(bytes: i64) -> String {
+    if bytes < 0 {
+        return format!("{bytes} B");
+    }
+    let b = bytes as f64;
+    if b < 1024.0 {
+        format!("{bytes} B")
+    } else if b < 1024.0 * 1024.0 {
+        format!("{:.1} KB", b / 1024.0)
+    } else if b < 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1} MB", b / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", b / (1024.0 * 1024.0 * 1024.0))
+    }
 }
 
 #[cfg(test)]

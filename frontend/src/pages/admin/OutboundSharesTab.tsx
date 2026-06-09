@@ -341,11 +341,21 @@ export default function OutboundSharesTab({
                       </td>
                       <td className="py-1.5">{requesterLabel(s)}</td>
                       <td className="py-1.5">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusBadge(s.status)}`}
-                        >
-                          {s.status}
-                        </span>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider ${statusBadge(s.status)}`}
+                          >
+                            {s.status}
+                          </span>
+                          {s.purged_at && s.status !== "purged" && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-white/5 text-txt-tertiary"
+                              title={`Sealed material removed from disk at ${new Date(s.purged_at).toLocaleString()}. Row is kept here for audit until 7 days after purge.`}
+                            >
+                              Cleaned
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-1.5">{s.dlp_score}</td>
                       <td className="py-1.5 text-txt-tertiary">

@@ -78,7 +78,15 @@ pub async fn submit(
 ) -> Result<Json<SubmitResponse>, AppError> {
     check_quick_share_outbound_permission(&user)?;
     let (pool, vault_cfg, av_scanner, av_fail_mode) = load_pool_vault_and_av(&state).await?;
-    let parsed = parse_outbound_multipart(multipart, &av_scanner, av_fail_mode).await?;
+    let parsed = parse_outbound_multipart(
+        multipart,
+        &av_scanner,
+        av_fail_mode,
+        &pool,
+        Some(user.id),
+        "outbound_drive",
+    )
+    .await?;
     finalize_submit(
         &pool,
         &vault_cfg,
@@ -152,6 +160,17 @@ async fn parse_outbound_multipart(
     mut multipart: axum::extract::Multipart,
     av_scanner: &std::sync::Arc<dyn crate::services::av::Scanner>,
     av_fail_mode: crate::services::av::FailMode,
+    // Pool + actor + source tag are used solely to emit a
+    // `file.av_blocked` audit row when the scan blocks the upload.
+    // The `source` field distinguishes outbound paths from inbound
+    // (`inbound` is written by routes/files.rs), and within outbound
+    // distinguishes the drive-channel `outbound_drive` from the
+    // token-auth `outbound_token` ingest. `actor_user_id` is `None`
+    // only on theoretical paths where the caller can't attribute the
+    // upload — in practice both current callers pass `Some(_)`.
+    pool: &sqlx::PgPool,
+    actor_user_id: Option<Uuid>,
+    source: &'static str,
 ) -> Result<ParsedOutboundUpload, AppError> {
     let mut session_id: Option<String> = None;
     let mut connection_id: Option<Uuid> = None;
@@ -264,8 +283,30 @@ async fn parse_outbound_multipart(
                 unreachable!()
             }
         };
+        // Mirror the inbound `file.av_blocked` audit row (see
+        // routes/files.rs) so the admin AV-blocked dashboard sees
+        // both ingest paths through a single action_type filter.
+        let _ = crate::services::audit::log(
+            pool,
+            actor_user_id,
+            "file.av_blocked",
+            &serde_json::json!({
+                "source": source,
+                "filename": filename,
+                "size": temp_path
+                    .metadata()
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+                "av_status": av_verdict.as_str(),
+                "av_signature": av_verdict.signature(),
+                "av_message": av_verdict.message(),
+                "av_backend": av_backend,
+            }),
+        )
+        .await;
         tracing::warn!(
             filename = %filename,
+            source = source,
             av_status = av_verdict.as_str(),
             av_signature = ?av_verdict.signature(),
             av_message = ?av_verdict.message(),
@@ -509,7 +550,15 @@ pub async fn ingest_via_token(
         return Err(AppError::Forbidden);
     }
 
-    let parsed = parse_outbound_multipart(multipart, &av_scanner, av_fail_mode).await?;
+    let parsed = parse_outbound_multipart(
+        multipart,
+        &av_scanner,
+        av_fail_mode,
+        &pool,
+        Some(ctx.user_id),
+        "outbound_token",
+    )
+    .await?;
 
     // Token-supplied context wins over anything the multipart
     // happens to include — the remote shell shouldn't be able to

@@ -327,26 +327,39 @@ that should not block users:
 
 Two structured audit-event surfaces:
 
-### `file.av_blocked` (inbound Quick Share rejection)
+### `file.av_blocked` (rejection — inbound *and* outbound)
 
 ```json
 {
   "action": "file.av_blocked",
   "actor_user_id": "ee5f…",
   "details": {
-    "signature": "Win.Test.EICAR_HDB-1",
-    "filename":  "eicar.com",
-    "byte_len":  68,
-    "session_id":"3b8d…",
-    "av_backend":"clamav"
+    "source":       "inbound",            // inbound | outbound_drive | outbound_token
+    "filename":     "eicar.com",
+    "size":         68,
+    "av_status":    "infected",           // infected | error
+    "av_signature": "Win.Test.EICAR_HDB-1",
+    "av_message":   "Win.Test.EICAR_HDB-1 FOUND",
+    "av_backend":   "clamav",
+    "session_id":   "3b8d…"               // inbound only
   }
 }
 ```
 
-Written from `routes/files.rs::upload` after the temp file is
-unlinked, inside the same hash-chained audit pipeline as every
-other privileged action. Searchable from the admin Audit Logs
-view by `action=file.av_blocked` or by `details->>'signature'`.
+Written from `routes/files.rs::upload` (inbound) and from
+`routes/outbound_shares.rs::parse_outbound_multipart` (outbound,
+both the drive-channel `submit` and the token-auth
+`ingest_via_token` paths) after the temp file is unlinked,
+inside the same hash-chained audit pipeline as every other
+privileged action.
+
+The dedicated **Admin → Secrets & Security → AV-Blocked Files**
+tab is the operator-friendly view: it filters
+`/api/admin/audit-logs?action_type=file.av_blocked` and renders
+each rejection with timestamp, user, source, filename, size,
+status badge, signature, engine message, and backend. The
+underlying audit page (`/audit`) still works for ad-hoc queries
+and hash-chain verification.
 
 ### `outbound_share.requested` (extended)
 

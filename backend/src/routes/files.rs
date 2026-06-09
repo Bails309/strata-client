@@ -204,6 +204,7 @@ pub async fn upload(
                 Some(user.id),
                 "file.av_blocked",
                 &serde_json::json!({
+                    "source": "inbound",
                     "session_id": session_id,
                     "filename": filename,
                     "size": size,

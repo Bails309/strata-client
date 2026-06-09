@@ -411,11 +411,19 @@ services:
           memory: 4G
           cpus: "2"
     healthcheck:
-      # clamd writes a UNIX socket and listens on TCP 3310; the
-      # `clamdcheck.sh` script bundled in the image exits 0 when the
-      # daemon answers PING. Generous start_period because the first
-      # boot does a full DB download.
-      test: ["CMD", "clamdcheck.sh"]
+      # clamd listens on UNIX socket /tmp/clamd.sock and TCP 3310. We
+      # do NOT use the upstream `clamdcheck.sh` because it issues
+      # `nc localhost 3310` and the alpine-based image's resolver
+      # returns `::1` for `localhost` on hosts where /etc/hosts maps
+      # both IPv4 and IPv6 entries; BusyBox `nc` then tries IPv6
+      # first, gets "connection refused" (clamd is bound to
+      # 0.0.0.0:3310, IPv4 only), and the healthcheck flaps for the
+      # life of the container. Pinning to 127.0.0.1 with an explicit
+      # 5 s wait sidesteps the resolver race and produces the same
+      # PING/PONG exchange the backend uses for real INSTREAM scans.
+      # Generous start_period because the first boot does a full DB
+      # download.
+      test: ["CMD-SHELL", "[ \"$(echo PING | nc -w 5 127.0.0.1 3310)\" = PONG ]"]
       interval: 30s
       timeout: 10s
       retries: 3

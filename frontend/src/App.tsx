@@ -108,6 +108,7 @@ export default function App() {
         canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
         canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
         canUseQuickShareOutbound={!!user?.can_manage_system || !!user?.can_use_quick_share_outbound}
+        outboundShareBypass={user?.outbound_share_requires_approval === false}
       >
         {!authenticated ? (
           <Routes>

@@ -95,6 +95,22 @@ pub async fn me(
             .await
             .unwrap_or(false);
 
+    // Per-user outbound Quick-Share approval-bypass flag. `false`
+    // means "this user is exempt from the approval queue"; `true` or
+    // NULL means "this user must wait for an approver (and must
+    // provide a justification on submit)". Surfaced so the SPA can
+    // mark the Quick-Share Outbound justification field as required
+    // and disable submit until it's filled — the chokepoint stays in
+    // routes/outbound_shares.rs::validate_outbound_justification.
+    let outbound_share_requires_approval: Option<bool> = sqlx::query_scalar(
+        "SELECT outbound_share_requires_approval FROM users WHERE id = $1",
+    )
+    .bind(user.id)
+    .fetch_optional(&db.pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -119,6 +135,7 @@ pub async fn me(
         "can_view_sessions": user.can_view_sessions,
         "is_approver": is_approver,
         "is_outbound_approver": is_outbound_approver,
+        "outbound_share_requires_approval": outbound_share_requires_approval,
     })))
 }
 

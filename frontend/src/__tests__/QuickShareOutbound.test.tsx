@@ -34,13 +34,25 @@ const updateSession = vi.fn();
 let mockSessionState: {
   sessions: SessionStub[];
   activeSessionId: string | null;
-} = { sessions: [], activeSessionId: null };
+  // Mirrors `SessionManagerValue.outboundShareBypass`: when `true`
+  // the panel treats justification as optional. Defaults to `true`
+  // here so the pre-existing tests — written before the bypass gate
+  // was added — continue to exercise the bypass-user path (Generate
+  // button enabled, no required asterisk). New tests can flip this
+  // to `false` to exercise the approval-required UX.
+  outboundShareBypass: boolean;
+} = { sessions: [], activeSessionId: null, outboundShareBypass: true };
 
 vi.mock("../components/SessionManager", () => ({
   useSessionManager: () => ({
     sessions: mockSessionState.sessions,
     activeSessionId: mockSessionState.activeSessionId,
     updateSession,
+    // `?? true` keeps pre-existing tests on the bypass-user path
+    // even when they reassign `mockSessionState` without naming the
+    // `outboundShareBypass` field. New bypass-off tests must set it
+    // explicitly to `false`.
+    outboundShareBypass: mockSessionState.outboundShareBypass ?? true,
   }),
 }));
 
@@ -131,7 +143,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   writeTextMock.mockClear();
   updateSession.mockReset();
-  mockSessionState = { sessions: [], activeSessionId: null };
+  mockSessionState = { sessions: [], activeSessionId: null, outboundShareBypass: true };
   vi.mocked(listMyOutboundShares).mockResolvedValue([]);
   vi.mocked(issueOutboundShareIngestToken).mockResolvedValue(makeToken());
 });
@@ -308,6 +320,48 @@ describe("QuickShareOutbound", () => {
     render(<QuickShareOutbound {...baseProps} />);
     await userEvent.click(screen.getByRole("button", { name: /Generate upload command/i }));
     expect(await screen.findByText(/Failed to mint upload token/)).toBeInTheDocument();
+  });
+
+  it("marks the justification field required and gates the mint button when the user lacks the bypass", async () => {
+    // outboundShareBypass = false mirrors a user whose
+    // `outbound_share_requires_approval` is TRUE / NULL in the DB. The
+    // backend rejects any submission shorter than 10 chars of
+    // justification (`validate_outbound_justification`); the panel
+    // mirrors that so the Generate button stays disabled until the
+    // user types enough.
+    mockSessionState = {
+      sessions: [makeSession({ id: "sess-1" })],
+      activeSessionId: "sess-1",
+      outboundShareBypass: false,
+    };
+    render(<QuickShareOutbound {...baseProps} />);
+
+    // The required indicator + new placeholder + helper text all
+    // signal the rule to the user.
+    const textarea = screen.getByPlaceholderText(/Required \u2014 e\.g\./i);
+    expect(textarea).toHaveAttribute("aria-required", "true");
+    expect(screen.getByText(/Required for your account \(minimum 10 characters\)/i)).toBeInTheDocument();
+
+    // Empty \u2192 button disabled.
+    const button = screen.getByRole("button", { name: /Generate upload command/i });
+    expect(button).toBeDisabled();
+
+    // Below the 10-char minimum \u2192 still disabled.
+    await userEvent.type(textarea, "too short");
+    expect(button).toBeDisabled();
+
+    // Reach the minimum \u2192 button enables and the mint call goes
+    // through with the trimmed justification.
+    await userEvent.type(textarea, "!"); // now 10 chars (\"too short!\")
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    await waitFor(() =>
+      expect(issueOutboundShareIngestToken).toHaveBeenCalledWith({
+        session_id: "sess-1",
+        connection_id: "conn-1",
+        justification: "too short!",
+      })
+    );
   });
 
   it("renders the insecure curl-win snippet when 'Skip TLS cert check' is enabled", async () => {

@@ -968,6 +968,20 @@ pub async fn check_auth(
             .await
             .unwrap_or(false);
 
+    // Per-user outbound Quick-Share approval-bypass flag. Mirrors the
+    // computation in routes/user.rs::me so the SPA's bootstrap path
+    // (/auth/check) and refresh path (/user/me) agree on whether the
+    // Quick-Share Outbound justification field should be marked
+    // required.
+    let outbound_share_requires_approval: Option<bool> = sqlx::query_scalar(
+        "SELECT outbound_share_requires_approval FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&db.pool)
+    .await
+    .unwrap_or(None)
+    .flatten();
+
     Json(json!({
         "authenticated": true,
         "user": {
@@ -994,6 +1008,7 @@ pub async fn check_auth(
             "can_view_sessions": user.can_view_sessions,
             "is_approver": is_approver,
             "is_outbound_approver": is_outbound_approver,
+            "outbound_share_requires_approval": outbound_share_requires_approval,
         }
     }))
 }

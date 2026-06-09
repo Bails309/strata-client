@@ -108,10 +108,20 @@ function formatExpiry(secondsLeft: number): string {
  *      approved files.
  */
 export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCollapsed }: Props) {
-  const { sessions, activeSessionId, updateSession } = useSessionManager();
+  const { sessions, activeSessionId, updateSession, outboundShareBypass } = useSessionManager();
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
   const driveName = activeSession?.filesystems[0]?.name ?? null;
   const driveProtocol = activeSession?.protocol?.toLowerCase() ?? "";
+
+  // Backend chokepoint (`validate_outbound_justification`) requires at
+  // least 10 chars of justification on every submission unless the
+  // per-user approval bypass is on. We mirror the rule here so the UI
+  // shows a clear "required" affordance, the snippet-mint button
+  // disables until it's met, and the toast on a drive-redirected file
+  // (raised by SessionManager) matches what the user sees in this
+  // panel.
+  const MIN_JUSTIFICATION_LEN = 10;
+  const justificationRequired = !outboundShareBypass;
 
   const [history, setHistory] = useState<OutboundShare[]>([]);
   const [loading, setLoading] = useState(false);
@@ -466,19 +476,33 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
 
             <label className="block">
               <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
-                Justification for the next file (optional)
+                Justification for the next file{" "}
+                {justificationRequired ? (
+                  <span className="text-danger" aria-hidden="true">
+                    *
+                  </span>
+                ) : (
+                  <span className="normal-case">(optional)</span>
+                )}
               </span>
               <textarea
                 className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
                 rows={2}
-                placeholder="Why does the next exported file need to leave the session?"
+                placeholder={
+                  justificationRequired
+                    ? "Required — e.g. \"Audit ticket INC-1234, exporting redacted log for review\""
+                    : "Why does the next exported file need to leave the session?"
+                }
                 value={justification}
                 onChange={(e) => setJustification(e.target.value)}
                 maxLength={1000}
                 disabled={!activeSession}
+                aria-required={justificationRequired}
               />
               <span className="block mt-1 text-[10px] text-txt-tertiary">
-                Attached to the next file intercepted from this session, then cleared.
+                {justificationRequired
+                  ? `Required for your account (minimum ${MIN_JUSTIFICATION_LEN} characters). Attached to the next file intercepted from this session, then cleared.`
+                  : "Attached to the next file intercepted from this session, then cleared."}
               </span>
             </label>
           </div>
@@ -537,7 +561,16 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
               type="button"
               className="w-full px-3 py-1.5 text-xs rounded bg-accent text-bg-primary font-semibold disabled:opacity-50"
               onClick={issueToken}
-              disabled={!activeSession || issuing}
+              disabled={
+                !activeSession ||
+                issuing ||
+                (justificationRequired && justification.trim().length < MIN_JUSTIFICATION_LEN)
+              }
+              title={
+                justificationRequired && justification.trim().length < MIN_JUSTIFICATION_LEN
+                  ? `Enter at least ${MIN_JUSTIFICATION_LEN} characters of justification above before generating the upload command.`
+                  : undefined
+              }
             >
               {issuing
                 ? "Generating…"

@@ -272,6 +272,17 @@ export interface MeResponse {
    *  `outbound_share_approvers`. Drives visibility of the outbound
    *  shares admin tab. */
   is_outbound_approver: boolean;
+  /** Per-user outbound Quick-Share approval-bypass flag.
+   *  - `false` → user is exempt; submissions are auto-approved and a
+   *    justification is optional.
+   *  - `true` or `null` → user is subject to the approval queue and
+   *    every outbound submission must include a justification
+   *    (\u22655 server-enforced minimum) before it will be accepted.
+   *  The SPA uses this to mark the justification field required and
+   *  refuse to POST drive-redirected files without one; the backend
+   *  re-enforces the same rule in
+   *  `routes/outbound_shares.rs::validate_outbound_justification`. */
+  outbound_share_requires_approval: boolean | null;
 }
 
 export const getMe = () => request<MeResponse>("/user/me");

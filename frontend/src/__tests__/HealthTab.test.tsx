@@ -108,7 +108,7 @@ describe("HealthTab", () => {
           fail_mode: "block",
           address: "clamav:3310",
         },
-      }),
+      })
     );
     render(<HealthTab onNavigateVault={onNavigateVault} />);
     expect(await screen.findByRole("heading", { name: /^Antivirus$/i })).toBeInTheDocument();
@@ -126,7 +126,7 @@ describe("HealthTab", () => {
           fail_mode: "block",
           address: "clamav:3310",
         },
-      }),
+      })
     );
     render(<HealthTab onNavigateVault={onNavigateVault} />);
     await screen.findByRole("heading", { name: /^Antivirus$/i });

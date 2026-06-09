@@ -36,6 +36,7 @@ import VdiTab from "./admin/VdiTab";
 import DmzLinksTab from "./admin/DmzLinksTab";
 import SafeguardTab from "./admin/SafeguardTab";
 import OutboundSharesTab from "./admin/OutboundSharesTab";
+import AvBlockedTab from "./admin/AvBlockedTab";
 
 type Tab =
   | "health"
@@ -56,6 +57,7 @@ type Tab =
   | "dmz-links"
   | "safeguard"
   | "outbound-shares"
+  | "av-blocked"
   | "security";
 
 export default function AdminSettings({ user }: { user: MeResponse }) {
@@ -257,6 +259,9 @@ export default function AdminSettings({ user }: { user: MeResponse }) {
             }}
           />
         )}
+
+        {/* ── AV-Blocked Files ── */}
+        {tab === "av-blocked" && <AvBlockedTab />}
       </AdminNav>
     </div>
   );
@@ -289,6 +294,7 @@ const TAB_LABELS: Record<Tab, string> = {
   "dmz-links": "DMZ Links",
   safeguard: "Safeguard JIT",
   "outbound-shares": "Outbound Share Policy",
+  "av-blocked": "AV-Blocked Files",
   security: "Security",
 };
 
@@ -300,7 +306,7 @@ const ADMIN_NAV_GROUPS: Array<{ title: string; items: Tab[] }> = [
   },
   { title: "Connectivity", items: ["network", "dmz-links", "trusted-cas", "vdi"] },
   { title: "Workspace", items: ["display", "tags", "notifications", "recordings"] },
-  { title: "Secrets & Security", items: ["vault", "security"] },
+  { title: "Secrets & Security", items: ["vault", "av-blocked", "security"] },
 ];
 
 function tabVisible(t: Tab, user: MeResponse): boolean {
@@ -320,6 +326,7 @@ function tabVisible(t: Tab, user: MeResponse): boolean {
   // only. Non-admin designated approvers reach the operational queue
   // via the left-nav "Pending Approvals" item (see Layout.tsx).
   if (t === "outbound-shares") return user.can_manage_system;
+  if (t === "av-blocked") return user.can_manage_system || user.can_view_audit_logs;
   return user.can_manage_system;
 }
 

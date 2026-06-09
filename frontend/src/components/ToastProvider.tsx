@@ -53,7 +53,9 @@ export interface ToastOptions {
   progress?: number | "indeterminate";
 }
 
-interface ToastEntry extends Required<Omit<ToastOptions, "description" | "action" | "duration" | "progress">> {
+interface ToastEntry extends Required<
+  Omit<ToastOptions, "description" | "action" | "duration" | "progress">
+> {
   id: string;
   description?: string;
   action?: ToastAction;
@@ -415,13 +417,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastEntry; onDismiss: () => v
  * `color` matches the parent toast's variant accent so the bar reads as
  * part of the card, not a generic widget.
  */
-function ToastProgressBar({
-  value,
-  color,
-}: {
-  value: number | "indeterminate";
-  color: string;
-}) {
+function ToastProgressBar({ value, color }: { value: number | "indeterminate"; color: string }) {
   const isIndeterminate = value === "indeterminate";
   const pct = isIndeterminate ? 0 : Math.min(1, Math.max(0, value));
   const rounded = Math.round(pct * 100);

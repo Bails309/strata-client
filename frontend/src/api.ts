@@ -878,12 +878,38 @@ export interface SchemaHealth {
   expected_migrations: number;
 }
 
+/**
+ * Antivirus scanner health (v1.12.0+).
+ *
+ * - `backend`: `"off"` | `"clamav"` | `"command"` — the boot-time
+ *   `STRATA_AV_BACKEND` value.
+ * - `enabled`: `true` whenever `backend !== "off"`. Drives whether the
+ *   dashboard renders the Antivirus card at all.
+ * - `reachable`: clamd TCP probe result (clamav backend), or mirrors
+ *   `enabled` for `command` (we cannot liveness-probe an exec-driven
+ *   scanner without side effects).
+ * - `fail_mode`: `"block"` | `"allow"` — what happens on a
+ *   `Verdict::Error`. Infected verdicts are always blocked regardless.
+ * - `address`: clamd `host:port` for the clamav backend, or the
+ *   redacted first token of `STRATA_AV_COMMAND` for the command
+ *   backend (args / `{path}` placeholders are never echoed). `null`
+ *   when the backend is `off`.
+ */
+export interface AvHealth {
+  backend: string;
+  enabled: boolean;
+  reachable: boolean;
+  fail_mode: string;
+  address: string | null;
+}
+
 export interface ServiceHealth {
   version?: string;
   database: DatabaseHealth;
   guacd: GuacdHealth;
   vault: VaultHealth;
   schema: SchemaHealth;
+  av: AvHealth;
   uptime_secs: number;
   environment: string;
 }

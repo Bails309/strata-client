@@ -26,6 +26,7 @@ const health = (over: Partial<ServiceHealth> = {}): ServiceHealth => ({
   guacd: { reachable: true, host: "guacd", port: 4822 },
   vault: { configured: true, mode: "vault", address: "https://vault" },
   schema: { status: "ok", applied_migrations: 44, expected_migrations: 44 },
+  av: { backend: "off", enabled: false, reachable: false, fail_mode: "block", address: null },
   uptime_secs: 3661,
   environment: "production",
   ...over,
@@ -88,5 +89,47 @@ describe("HealthTab", () => {
     render(<HealthTab onNavigateVault={onNavigateVault} />);
     // Header still renders because /admin/health succeeded.
     expect(await screen.findByRole("heading", { name: /System Health/i })).toBeInTheDocument();
+  });
+
+  it("hides the Antivirus card when STRATA_AV_BACKEND=off", async () => {
+    // Default fixture has av.enabled = false.
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    await screen.findByRole("heading", { name: /System Health/i });
+    expect(screen.queryByRole("heading", { name: /^Antivirus$/i })).not.toBeInTheDocument();
+  });
+
+  it("renders the Antivirus card with backend + address when ClamAV is enabled and reachable", async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue(
+      health({
+        av: {
+          backend: "clamav",
+          enabled: true,
+          reachable: true,
+          fail_mode: "block",
+          address: "clamav:3310",
+        },
+      }),
+    );
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    expect(await screen.findByRole("heading", { name: /^Antivirus$/i })).toBeInTheDocument();
+    expect(screen.getByText("ClamAV")).toBeInTheDocument();
+    expect(screen.getByText("clamav:3310")).toBeInTheDocument();
+  });
+
+  it("marks the Antivirus card as Unreachable in fail-block mode when clamd probe fails", async () => {
+    vi.mocked(getServiceHealth).mockResolvedValue(
+      health({
+        av: {
+          backend: "clamav",
+          enabled: true,
+          reachable: false,
+          fail_mode: "block",
+          address: "clamav:3310",
+        },
+      }),
+    );
+    render(<HealthTab onNavigateVault={onNavigateVault} />);
+    await screen.findByRole("heading", { name: /^Antivirus$/i });
+    expect(screen.getByText("Unreachable")).toBeInTheDocument();
   });
 });

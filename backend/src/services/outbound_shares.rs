@@ -669,6 +669,28 @@ pub async fn is_outbound_approver(pool: &Pool<Postgres>, user_id: Uuid) -> Resul
     Ok(exists)
 }
 
+/// User ids that should be notified when a new outbound share lands in
+/// `Pending`. Union of designated approvers (`outbound_share_approvers`)
+/// and implicit super-admin approvers (`users.can_manage_system`) —
+/// mirrors the route-layer policy that lets super-admins decide
+/// outbound shares without being explicitly listed. Soft-deleted users
+/// are filtered out.
+pub async fn approvers_for_notifications(
+    pool: &Pool<Postgres>,
+) -> Result<Vec<Uuid>, AppError> {
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM users
+          WHERE deleted_at IS NULL
+            AND (
+              id IN (SELECT user_id FROM outbound_share_approvers)
+              OR can_manage_system = TRUE
+            )",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// One row from `outbound_share_approvers`, joined with the user table
 /// for display.
 #[derive(serde::Serialize, sqlx::FromRow, Debug, Clone)]

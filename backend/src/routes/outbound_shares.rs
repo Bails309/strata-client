@@ -391,6 +391,60 @@ async fn finalize_submit(
     )
     .await?;
 
+    // Notify outbound-share approvers when the row landed in `Pending`.
+    // Mirrors the checkout pending-approval email flow. Recipient
+    // resolution and SMTP loading are best-effort and run on a spawned
+    // task so we never block the upload response on email delivery.
+    if outcome.status == outbound_shares::OutboundShareStatus::Pending {
+        match outbound_shares::approvers_for_notifications(pool).await {
+            Ok(approver_user_ids) if !approver_user_ids.is_empty() => {
+                // Pull the requester's display + username for the email
+                // body. `users` lookup is cheap and lets the dispatcher
+                // stay generic over event sources.
+                let requester: Option<(Option<String>, String)> = sqlx::query_as(
+                    "SELECT full_name, username FROM users WHERE id = $1",
+                )
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
+                let (full_name, username) = requester
+                    .unwrap_or_else(|| (None, "unknown".to_string()));
+                let requester_display_name = full_name
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| username.clone());
+
+                crate::services::notifications::spawn_dispatch_outbound_share(
+                    pool.clone(),
+                    Some(vault_cfg.clone()),
+                    crate::services::notifications::OutboundShareEvent::Pending {
+                        share_id: outcome.id,
+                        requester_id: user_id,
+                        requester_display_name,
+                        requester_username: username,
+                        filename: filename.to_string(),
+                        size_bytes: plaintext.len() as i64,
+                        justification: justification.map(|s| s.to_string()),
+                        approver_user_ids,
+                    },
+                );
+            }
+            Ok(_) => {
+                tracing::debug!(
+                    "outbound share {} pending but no approvers registered \u{2014} no email fan-out",
+                    outcome.id
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "could not resolve outbound-share approvers for {}: {e}",
+                    outcome.id
+                );
+            }
+        }
+    }
+
     let download_url = outcome
         .download_token
         .as_ref()

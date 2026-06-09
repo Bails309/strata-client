@@ -45,18 +45,18 @@ pub fn logo_attachment() -> InlineAttachment {
     }
 }
 
-/// Identifier for the four supported notification templates.  Maps to
+/// Identifier for the supported notification templates.  Maps to
 /// both the MJML template name and the plaintext companion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// All variants share the `Checkout` prefix because v0.25 only ships
-// checkout-flow templates; keeping the prefix keeps future non-checkout
-// additions (e.g. `PasswordRotated`) readable alongside them.
-#[allow(clippy::enum_variant_names)]
 pub enum TemplateKey {
     CheckoutPending,
     CheckoutApproved,
     CheckoutRejected,
     CheckoutSelfApproved,
+    /// A new outbound Quick-Share file has been uploaded and is awaiting
+    /// approver action. Fans out to every registered outbound-share
+    /// approver (plus implicit super-admin approvers).
+    OutboundSharePending,
 }
 
 impl TemplateKey {
@@ -68,6 +68,7 @@ impl TemplateKey {
             TemplateKey::CheckoutApproved => "checkout_approved",
             TemplateKey::CheckoutRejected => "checkout_rejected",
             TemplateKey::CheckoutSelfApproved => "checkout_self_approved",
+            TemplateKey::OutboundSharePending => "outbound_share_pending",
         }
     }
 
@@ -77,6 +78,7 @@ impl TemplateKey {
             TemplateKey::CheckoutApproved => "checkout_approved.mjml",
             TemplateKey::CheckoutRejected => "checkout_rejected.mjml",
             TemplateKey::CheckoutSelfApproved => "checkout_self_approved.mjml",
+            TemplateKey::OutboundSharePending => "outbound_share_pending.mjml",
         }
     }
 
@@ -86,6 +88,7 @@ impl TemplateKey {
             TemplateKey::CheckoutApproved => "checkout_approved.txt.tera",
             TemplateKey::CheckoutRejected => "checkout_rejected.txt.tera",
             TemplateKey::CheckoutSelfApproved => "checkout_self_approved.txt.tera",
+            TemplateKey::OutboundSharePending => "outbound_share_pending.txt.tera",
         }
     }
 
@@ -97,6 +100,7 @@ impl TemplateKey {
             TemplateKey::CheckoutApproved => "Your checkout was approved",
             TemplateKey::CheckoutRejected => "Your checkout request was declined",
             TemplateKey::CheckoutSelfApproved => "Self-approved checkout — audit notice",
+            TemplateKey::OutboundSharePending => "Outbound file share awaiting your approval",
         }
     }
 }
@@ -112,11 +116,15 @@ const PENDING_MJML: &str = include_str!("templates/checkout_pending.mjml");
 const APPROVED_MJML: &str = include_str!("templates/checkout_approved.mjml");
 const REJECTED_MJML: &str = include_str!("templates/checkout_rejected.mjml");
 const SELF_APPROVED_MJML: &str = include_str!("templates/checkout_self_approved.mjml");
+const OUTBOUND_SHARE_PENDING_MJML: &str =
+    include_str!("templates/outbound_share_pending.mjml");
 
 const PENDING_TXT: &str = include_str!("templates/checkout_pending.txt.tera");
 const APPROVED_TXT: &str = include_str!("templates/checkout_approved.txt.tera");
 const REJECTED_TXT: &str = include_str!("templates/checkout_rejected.txt.tera");
 const SELF_APPROVED_TXT: &str = include_str!("templates/checkout_self_approved.txt.tera");
+const OUTBOUND_SHARE_PENDING_TXT: &str =
+    include_str!("templates/outbound_share_pending.txt.tera");
 
 // ── Engine bootstrap ──────────────────────────────────────────────────
 
@@ -130,10 +138,15 @@ fn engine() -> &'static Tera {
             ("checkout_approved.mjml", APPROVED_MJML),
             ("checkout_rejected.mjml", REJECTED_MJML),
             ("checkout_self_approved.mjml", SELF_APPROVED_MJML),
+            ("outbound_share_pending.mjml", OUTBOUND_SHARE_PENDING_MJML),
             ("checkout_pending.txt.tera", PENDING_TXT),
             ("checkout_approved.txt.tera", APPROVED_TXT),
             ("checkout_rejected.txt.tera", REJECTED_TXT),
             ("checkout_self_approved.txt.tera", SELF_APPROVED_TXT),
+            (
+                "outbound_share_pending.txt.tera",
+                OUTBOUND_SHARE_PENDING_TXT,
+            ),
         ])
         .expect("Tera template registration failed at startup");
         // Disable autoescape on every extension — MJML and plaintext are

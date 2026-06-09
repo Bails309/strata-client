@@ -26,7 +26,7 @@
     </mj-section>
     <mj-section background-color="#111827" padding="16px 24px">
       <mj-column>
-        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="11px" align="center" line-height="1.6">You can opt out of these notifications under Profile then Notifications. Audit-trail messages will continue regardless.</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="11px" align="center" line-height="1.6">Sent automatically by Strata Client.</mj-text>
       </mj-column>
     </mj-section>
   </mj-body>

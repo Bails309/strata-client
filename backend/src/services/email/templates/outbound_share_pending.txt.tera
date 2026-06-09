@@ -1,0 +1,14 @@
+Strata Client - Outbound file share awaiting your approval
+
+{{ requester_display_name }} ({{ requester_username }}) has uploaded a
+file for outbound sharing and it is pending approval.
+
+Filename: {{ filename }}
+Size:     {{ size_human }}
+
+Justification: {{ justification }}
+
+Review in Strata: {{ approve_url }}
+
+-- Strata Client
+Sent because you are a designated outbound-share approver.

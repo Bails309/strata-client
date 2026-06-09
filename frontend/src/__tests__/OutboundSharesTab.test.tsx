@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import OutboundSharesTab from "../pages/admin/OutboundSharesTab";
 import type { OutboundShare, OutboundShareApprover, User } from "../api";
@@ -244,25 +244,28 @@ describe("OutboundSharesTab", () => {
     vi.mocked(listOutboundShares).mockResolvedValue([
       baseShare({ id: "h-1", status: "approved", download_token: "tok-1" }),
     ]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<OutboundSharesTab users={users} isSuperAdmin onSave={onSave} />);
     await screen.findByText("History (1)");
     await userEvent.click(screen.getByRole("button", { name: /Purge/ }));
+    // The Purge button now opens the shared themed ConfirmModal instead of
+    // triggering window.confirm; click the Purge button inside the modal.
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /Purge/ }));
     await waitFor(() => expect(purgeOutboundShare).toHaveBeenCalledWith("h-1"));
     expect(onSave).toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
   it("skips purge when the user cancels the confirm prompt", async () => {
     vi.mocked(listOutboundShares).mockResolvedValue([
       baseShare({ id: "h-1", status: "approved", download_token: "tok-1" }),
     ]);
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<OutboundSharesTab users={users} isSuperAdmin onSave={onSave} />);
     await screen.findByText("History (1)");
     await userEvent.click(screen.getByRole("button", { name: /Purge/ }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /Cancel/ }));
     expect(purgeOutboundShare).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("alerts when purge fails", async () => {
@@ -270,13 +273,13 @@ describe("OutboundSharesTab", () => {
       baseShare({ id: "h-1", status: "approved", download_token: "tok-1" }),
     ]);
     vi.mocked(purgeOutboundShare).mockRejectedValue(new Error("purge-fail"));
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
     render(<OutboundSharesTab users={users} isSuperAdmin onSave={onSave} />);
     await screen.findByText("History (1)");
     await userEvent.click(screen.getByRole("button", { name: /Purge/ }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: /Purge/ }));
     await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("purge-fail"));
-    confirmSpy.mockRestore();
     alertSpy.mockRestore();
   });
 

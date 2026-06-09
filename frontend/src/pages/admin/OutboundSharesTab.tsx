@@ -15,6 +15,7 @@ import {
   User,
 } from "../../api";
 import Select from "../../components/Select";
+import ConfirmModal from "../../components/ConfirmModal";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -87,6 +88,12 @@ export default function OutboundSharesTab({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [denyModal, setDenyModal] = useState<{ share: OutboundShare; reason: string } | null>(null);
+  // Pending in-app purge confirmation. Replaces the previous
+  // `window.confirm()` call so the prompt matches the rest of the
+  // admin UX (themed, focus-trapped, escape-to-cancel via the
+  // shared ConfirmModal component) instead of dropping the user
+  // into the browser-native modal.
+  const [purgeModal, setPurgeModal] = useState<OutboundShare | null>(null);
   const [addingApprover, setAddingApprover] = useState<string>("");
 
   const refresh = useCallback(async () => {
@@ -148,25 +155,24 @@ export default function OutboundSharesTab({
     }
   }, [denyModal, onSave, refresh]);
 
-  const handlePurge = useCallback(
-    async (s: OutboundShare) => {
-      if (
-        !confirm(
-          `Purge "${s.filename}"? This permanently deletes the staged file and the encryption key.`
-        )
-      ) {
-        return;
-      }
-      try {
-        await purgeOutboundShare(s.id);
-        onSave();
-        await refresh();
-      } catch (e: unknown) {
-        alert(e instanceof Error ? e.message : "Purge failed");
-      }
-    },
-    [onSave, refresh]
-  );
+  const handlePurge = useCallback((s: OutboundShare) => {
+    // Open the themed confirmation modal; the actual purge call
+    // runs from `handlePurgeConfirm` once the user clicks through.
+    setPurgeModal(s);
+  }, []);
+
+  const handlePurgeConfirm = useCallback(async () => {
+    if (!purgeModal) return;
+    const target = purgeModal;
+    setPurgeModal(null);
+    try {
+      await purgeOutboundShare(target.id);
+      onSave();
+      await refresh();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "Purge failed");
+    }
+  }, [purgeModal, onSave, refresh]);
 
   const handleAddApprover = useCallback(async () => {
     if (!addingApprover) return;
@@ -491,6 +497,26 @@ export default function OutboundSharesTab({
           </div>
         </div>
       )}
+
+      {/* Purge confirmation modal. Uses the shared ConfirmModal
+          (themed + focus-trapped + escape-to-cancel) instead of
+          the browser-native `window.confirm()` so the prompt fits
+          the rest of the admin UX. `isDangerous` paints the
+          red danger styling + alert glyph on the dialog. */}
+      <ConfirmModal
+        isOpen={purgeModal !== null}
+        title="Purge staged file?"
+        message={
+          purgeModal
+            ? `Purge "${purgeModal.filename}"? This permanently deletes the staged file and the encryption key.`
+            : ""
+        }
+        confirmLabel="Purge"
+        cancelLabel="Cancel"
+        isDangerous
+        onConfirm={handlePurgeConfirm}
+        onCancel={() => setPurgeModal(null)}
+      />
     </div>
   );
 }

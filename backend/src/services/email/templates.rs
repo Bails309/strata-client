@@ -116,15 +116,13 @@ const PENDING_MJML: &str = include_str!("templates/checkout_pending.mjml");
 const APPROVED_MJML: &str = include_str!("templates/checkout_approved.mjml");
 const REJECTED_MJML: &str = include_str!("templates/checkout_rejected.mjml");
 const SELF_APPROVED_MJML: &str = include_str!("templates/checkout_self_approved.mjml");
-const OUTBOUND_SHARE_PENDING_MJML: &str =
-    include_str!("templates/outbound_share_pending.mjml");
+const OUTBOUND_SHARE_PENDING_MJML: &str = include_str!("templates/outbound_share_pending.mjml");
 
 const PENDING_TXT: &str = include_str!("templates/checkout_pending.txt.tera");
 const APPROVED_TXT: &str = include_str!("templates/checkout_approved.txt.tera");
 const REJECTED_TXT: &str = include_str!("templates/checkout_rejected.txt.tera");
 const SELF_APPROVED_TXT: &str = include_str!("templates/checkout_self_approved.txt.tera");
-const OUTBOUND_SHARE_PENDING_TXT: &str =
-    include_str!("templates/outbound_share_pending.txt.tera");
+const OUTBOUND_SHARE_PENDING_TXT: &str = include_str!("templates/outbound_share_pending.txt.tera");
 
 // ── Engine bootstrap ──────────────────────────────────────────────────
 

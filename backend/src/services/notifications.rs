@@ -673,10 +673,7 @@ async fn build_outbound_share_context(
         .ok()
         .flatten()
         .unwrap_or_else(|| "https://strata.local".into());
-    let approve_url = format!(
-        "{}/admin/pending-approvals",
-        base_url.trim_end_matches('/')
-    );
+    let approve_url = format!("{}/admin/pending-approvals", base_url.trim_end_matches('/'));
 
     match event {
         OutboundShareEvent::Pending {

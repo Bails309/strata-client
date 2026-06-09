@@ -675,9 +675,7 @@ pub async fn is_outbound_approver(pool: &Pool<Postgres>, user_id: Uuid) -> Resul
 /// mirrors the route-layer policy that lets super-admins decide
 /// outbound shares without being explicitly listed. Soft-deleted users
 /// are filtered out.
-pub async fn approvers_for_notifications(
-    pool: &Pool<Postgres>,
-) -> Result<Vec<Uuid>, AppError> {
+pub async fn approvers_for_notifications(pool: &Pool<Postgres>) -> Result<Vec<Uuid>, AppError> {
     let rows: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT id FROM users
           WHERE deleted_at IS NULL

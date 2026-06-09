@@ -401,16 +401,15 @@ async fn finalize_submit(
                 // Pull the requester's display + username for the email
                 // body. `users` lookup is cheap and lets the dispatcher
                 // stay generic over event sources.
-                let requester: Option<(Option<String>, String)> = sqlx::query_as(
-                    "SELECT full_name, username FROM users WHERE id = $1",
-                )
-                .bind(user_id)
-                .fetch_optional(pool)
-                .await
-                .ok()
-                .flatten();
-                let (full_name, username) = requester
-                    .unwrap_or_else(|| (None, "unknown".to_string()));
+                let requester: Option<(Option<String>, String)> =
+                    sqlx::query_as("SELECT full_name, username FROM users WHERE id = $1")
+                        .bind(user_id)
+                        .fetch_optional(pool)
+                        .await
+                        .ok()
+                        .flatten();
+                let (full_name, username) =
+                    requester.unwrap_or_else(|| (None, "unknown".to_string()));
                 let requester_display_name = full_name
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| username.clone());

@@ -129,7 +129,9 @@ describe("PendingApprovalWatcher", () => {
   });
 
   it("only polls the queues the user is gated for", async () => {
-    mount({ user: user({ vault_configured: false, is_approver: false, is_outbound_approver: true }) });
+    mount({
+      user: user({ vault_configured: false, is_approver: false, is_outbound_approver: true }),
+    });
     await act(async () => {
       await Promise.resolve();
     });
@@ -174,9 +176,7 @@ describe("PendingApprovalWatcher", () => {
     vi.mocked(getPendingApprovals).mockResolvedValue([]);
     await user_.click(screen.getByRole("button", { name: /^Approve$/ }));
     await waitFor(() => expect(decideCheckout).toHaveBeenCalledWith("co-1", true));
-    await waitFor(() =>
-      expect(screen.queryByText(/Credential checkout requested/)).toBeNull()
-    );
+    await waitFor(() => expect(screen.queryByText(/Credential checkout requested/)).toBeNull());
   });
 
   it("requires a reason before deny is confirmed and sends it through for outbound", async () => {
@@ -209,10 +209,7 @@ describe("PendingApprovalWatcher", () => {
       expect(screen.getByText(/Credential checkout requested/)).toBeInTheDocument()
     );
     await user_.click(screen.getByRole("button", { name: /^Deny$/ }));
-    await user_.type(
-      screen.getByLabelText(/Reason for denial/),
-      "Out of change window"
-    );
+    await user_.type(screen.getByLabelText(/Reason for denial/), "Out of change window");
     vi.mocked(getPendingApprovals).mockResolvedValue([]);
     await user_.click(screen.getByRole("button", { name: /Confirm deny/ }));
     await waitFor(() =>

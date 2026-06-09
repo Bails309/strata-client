@@ -490,7 +490,7 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 rows={2}
                 placeholder={
                   justificationRequired
-                    ? "Required — e.g. \"Audit ticket INC-1234, exporting redacted log for review\""
+                    ? 'Required — e.g. "Audit ticket INC-1234, exporting redacted log for review"'
                     : "Why does the next exported file need to leave the session?"
                 }
                 value={justification}

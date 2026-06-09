@@ -343,7 +343,9 @@ describe("QuickShareOutbound", () => {
     // signal the rule to the user.
     const textarea = screen.getByPlaceholderText(/Required \u2014 e\.g\./i);
     expect(textarea).toHaveAttribute("aria-required", "true");
-    expect(screen.getByText(/Required for your account \(minimum 10 characters\)/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Required for your account \(minimum 10 characters\)/i)
+    ).toBeInTheDocument();
 
     // Empty \u2192 button disabled.
     const button = screen.getByRole("button", { name: /Generate upload command/i });

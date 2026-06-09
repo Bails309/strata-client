@@ -141,8 +141,12 @@ export default function PendingApprovalWatcher({
     if (!watchCheckouts && !watchOutbound) return;
 
     const [checks, outs] = await Promise.all([
-      watchCheckouts ? getPendingApprovals().catch(() => [] as CheckoutRequest[]) : Promise.resolve([]),
-      watchOutbound ? listPendingOutboundShares().catch(() => [] as OutboundShare[]) : Promise.resolve([]),
+      watchCheckouts
+        ? getPendingApprovals().catch(() => [] as CheckoutRequest[])
+        : Promise.resolve([]),
+      watchOutbound
+        ? listPendingOutboundShares().catch(() => [] as OutboundShare[])
+        : Promise.resolve([]),
     ]);
 
     // Build the incoming set and the de-dup key index in one pass.
@@ -235,9 +239,7 @@ export default function PendingApprovalWatcher({
             toast.success({ title: verb === "approved" ? "Approval recorded" : "Denial recorded" });
             await refresh();
           }}
-          onError={(message) =>
-            toast.error({ title: "Decision failed", description: message })
-          }
+          onError={(message) => toast.error({ title: "Decision failed", description: message })}
           onViewAll={() => {
             dismiss(c.uid);
             navigate("/approvals");
@@ -289,8 +291,12 @@ function ApprovalCardView({
     return "Outbound file share requested";
   }, [card.kind]);
 
-  const accent = card.kind === "checkout" ? "var(--color-accent, #8b5cf6)" : "var(--color-warning, #eab308)";
-  const dim = card.kind === "checkout" ? "var(--color-accent-dim, rgba(139, 92, 246, 0.12))" : "var(--color-warning-dim, rgba(234, 179, 8, 0.12))";
+  const accent =
+    card.kind === "checkout" ? "var(--color-accent, #8b5cf6)" : "var(--color-warning, #eab308)";
+  const dim =
+    card.kind === "checkout"
+      ? "var(--color-accent-dim, rgba(139, 92, 246, 0.12))"
+      : "var(--color-warning-dim, rgba(234, 179, 8, 0.12))";
 
   const approve = useCallback(async () => {
     if (busy) return;

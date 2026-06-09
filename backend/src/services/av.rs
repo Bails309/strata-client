@@ -50,8 +50,8 @@
 //! | `STRATA_AV_CLAMD_ADDR`         | `clamav:3310`        | `host:port` of `clamd` |
 //! | `STRATA_AV_COMMAND`            | (none)               | e.g. `/usr/local/bin/scan` |
 //! | `STRATA_AV_FAIL_MODE`          | `block`              | `block` or `allow` on `Error` |
-//! | `STRATA_AV_MAX_SCAN_SIZE`      | `104857600` (100 MB) | bytes; files larger → `Skipped` |
-//! | `STRATA_AV_TIMEOUT_MS`         | `60000`              | per-scan wall-clock cap |
+//! | `STRATA_AV_MAX_SCAN_SIZE`      | `524288000` (500 MB) | bytes; files larger → `Skipped`. Matches the 500 MB upload cap so every accepted upload is scanned. |
+//! | `STRATA_AV_TIMEOUT_MS`         | `120000` (2 min)     | per-scan wall-clock cap. 500 MB nested archives can comfortably exceed 30 s. |
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -62,11 +62,17 @@ use tokio::net::TcpStream;
 
 /// Default `clamd` TCP endpoint (matches the bundled compose sidecar).
 const DEFAULT_CLAMD_ADDR: &str = "clamav:3310";
-/// Default per-scan wall-clock cap (milliseconds).
-const DEFAULT_TIMEOUT_MS: u64 = 60_000;
+/// Default per-scan wall-clock cap (milliseconds). 500 MB nested
+/// archives can comfortably exceed 30 s on modest hardware, so the
+/// default is set well clear of that ceiling.
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Default upper bound on files to scan (bytes). Anything larger is
 /// reported as [`Verdict::Skipped`] with `reason = "oversize"`.
-const DEFAULT_MAX_SCAN_SIZE: u64 = 100 * 1024 * 1024;
+/// Set to 500 MB to match
+/// [`crate::services::file_store::MAX_FILE_SIZE`] — so every upload
+/// the backend accepts is also scanned, with no silent
+/// large-file bypass.
+const DEFAULT_MAX_SCAN_SIZE: u64 = 500 * 1024 * 1024;
 /// Chunk size used when streaming a file into clamd INSTREAM.
 const INSTREAM_CHUNK_SIZE: usize = 64 * 1024;
 /// Hard ceiling clamd will accept for a single INSTREAM chunk (16 MB).
@@ -112,6 +118,21 @@ impl Verdict {
         match self {
             Verdict::Infected { signature } => Some(signature),
             _ => None,
+        }
+    }
+
+    /// Human-readable diagnostic accompanying the verdict, if any:
+    /// the engine-supplied error string for [`Verdict::Error`] (e.g.
+    /// `"INSTREAM size limit exceeded. ERROR"`) or the skip reason
+    /// for [`Verdict::Skipped`] (e.g. `"oversize"`). Used by the
+    /// route handlers so log lines surface *why* a scan failed
+    /// without an operator having to re-run the request with
+    /// response-body capture.
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Verdict::Error { message } => Some(message),
+            Verdict::Skipped { reason } => Some(reason),
+            Verdict::Clean | Verdict::Infected { .. } => None,
         }
     }
 
@@ -753,7 +774,20 @@ mod tests {
     }
 
     #[test]
-    fn default_max_scan_size_is_100mb() {
-        assert_eq!(DEFAULT_MAX_SCAN_SIZE, 100 * 1024 * 1024);
+    fn default_max_scan_size_matches_upload_cap() {
+        // Must equal crate::services::file_store::MAX_FILE_SIZE so every
+        // accepted upload is scanned — no silent oversize bypass.
+        assert_eq!(DEFAULT_MAX_SCAN_SIZE, 500 * 1024 * 1024);
+        assert_eq!(
+            DEFAULT_MAX_SCAN_SIZE,
+            crate::services::file_store::MAX_FILE_SIZE
+        );
+    }
+
+    #[test]
+    fn default_timeout_clear_of_typical_large_scan() {
+        // 500 MB nested archives have been measured at 30–90 s on
+        // modest hardware; a 2-min ceiling leaves comfortable headroom.
+        assert_eq!(DEFAULT_TIMEOUT_MS, 120_000);
     }
 }

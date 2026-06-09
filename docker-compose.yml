@@ -377,6 +377,14 @@ services:
       # on-disk files are current. See clamav/freshclam.conf header
       # comment for full rationale.
       - ./clamav/freshclam.conf:/etc/clamav/freshclam.conf:ro
+      # Override clamd.conf to raise StreamMaxLength / MaxFileSize /
+      # MaxScanSize from the upstream 25 MB / 25 MB / 100 MB defaults
+      # to 512 MB / 512 MB / 1024 MB so INSTREAM scans of large Quick
+      # Share uploads (Java WARs, MSI installers, full-disk images)
+      # don't trip the engine's size guard. Must be >= the backend's
+      # STRATA_AV_MAX_SCAN_SIZE (default 500 MB). See clamav/clamd.conf
+      # header comment for the full rationale.
+      - ./clamav/clamd.conf:/etc/clamav/clamd.conf:ro
     environment:
       # Let freshclam run on startup (the default), and keep clamd
       # running with on-access scanning disabled — we drive scans
@@ -393,10 +401,14 @@ services:
     deploy:
       resources:
         limits:
-          # ClamAV's RAM usage scales with signature DB size — current
-          # mainline DB is ~1.4 GB resident. Headroom prevents OOM
-          # during freshclam reloads.
-          memory: 3G
+          # ClamAV's RAM usage scales with signature DB size + the
+          # bytes it has to hold mid-scan. The signature DB is ~1.4
+          # GB resident; with StreamMaxLength/MaxFileSize raised to
+          # 512 MB (see clamav/clamd.conf) a single scan of a large
+          # nested archive can comfortably add another 1.5–2 GB on
+          # top before clamd releases it. Headroom prevents OOM
+          # during freshclam reloads + concurrent scans.
+          memory: 4G
           cpus: "2"
     healthcheck:
       # clamd writes a UNIX socket and listens on TCP 3310; the

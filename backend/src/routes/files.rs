@@ -209,6 +209,7 @@ pub async fn upload(
                     "size": size,
                     "av_status": verdict.as_str(),
                     "av_signature": verdict.signature(),
+                    "av_message": verdict.message(),
                     "av_backend": av_scanner.backend_tag(),
                 }),
             )
@@ -220,6 +221,7 @@ pub async fn upload(
             filename = %filename,
             av_status = verdict.as_str(),
             av_signature = ?verdict.signature(),
+            av_message = ?verdict.message(),
             av_backend = av_scanner.backend_tag(),
             "Inbound Quick Share upload blocked by AV scan"
         );

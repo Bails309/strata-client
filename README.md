@@ -343,6 +343,10 @@ Open `http://127.0.0.1` (or `https://your-domain` if STRATA_DOMAIN is set). On f
 
 After setup, log in and navigate to **Admin → SSO / OIDC** to configure your identity provider, then add remote desktop connections under **Admin → Access**.
 
+### 5. Add optional components
+
+The core stack is fully functional out of the box. Most production deployments enable one or more **optional components** (ClamAV antivirus, additional `guacd` sidecars, the DMZ edge node, web-kiosk / VDI session containers, the Safeguard JIT integration, etc.) — each ships with its own deployment guide. Jump directly to the relevant one from the [Component & deployment guides](#-component--deployment-guides) table below.
+
 ## 🛠️ Development
 
 ### Backend (Rust)
@@ -375,16 +379,53 @@ See [docs/deployment.md](docs/deployment.md) for production deployment and upgra
 
 ## 📚 Documentation
 
-| Document                                       | Description                                |
-| ---------------------------------------------- | ------------------------------------------ |
-| [docs/architecture.md](docs/architecture.md)   | System design, container layout, data flow |
-| [docs/api-reference.md](docs/api-reference.md) | REST & WebSocket API endpoints             |
-| [docs/deployment.md](docs/deployment.md)       | Production deployment, upgrades, HA        |
-| [docs/security.md](docs/security.md)           | Threat model, encryption, auth details     |
-| [docs/faq.md](docs/faq.md)                     | Frequently asked questions                 |
-| [CHANGELOG.md](CHANGELOG.md)                   | Version history                            |
-| [CONTRIBUTING.md](CONTRIBUTING.md)             | Contribution guidelines                    |
-| [NOTICE](NOTICE)                               | Third-party software notices               |
+### Core docs
+
+| Document                                       | Description                                                                              |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)   | System design, container layout, data flow, every trust boundary, full DB schema         |
+| [docs/api-reference.md](docs/api-reference.md) | Every REST & WebSocket endpoint, request/response shapes, error codes, lifecycle policy  |
+| [docs/deployment.md](docs/deployment.md)       | Production deployment, upgrades, HA, supply-chain verification, all per-component shapes |
+| [docs/security.md](docs/security.md)           | Mitigation register, encryption, auth, audit, OWASP mapping                              |
+| [docs/threat-model.md](docs/threat-model.md)   | Full STRIDE model — every component, asset, and attacker pathway                         |
+| [docs/faq.md](docs/faq.md)                     | Frequently asked questions (security, deployment, day-2 ops)                             |
+| [docs/roadmap.md](docs/roadmap.md)             | Shipped milestones + proposed / in-flight follow-ups                                     |
+| [CHANGELOG.md](CHANGELOG.md)                   | Per-version history (canonical)                                                          |
+| [WHATSNEW.md](WHATSNEW.md)                     | In-app **What's New** carousel cards                                                     |
+
+### 🧩 Component & deployment guides
+
+Each row points at the deep-dive deployment / operator guide for the named component. **Bold = optional component you opt into; plain = always-on subsystem with its own reference doc.**
+
+| Component / deployment shape                                                                                                                | Guide                                                                                                                       | What it covers                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Ubuntu VM production deployment**                                                                                                         | [docs/ubuntu-vm-deployment.md](docs/ubuntu-vm-deployment.md)                                                                | End-to-end Ubuntu Server install, Docker, TLS, firewall, systemd, log rotation                                            |
+| **Kubernetes / Helm deployment**                                                                                                            | [docs/deployment-kubernetes.md](docs/deployment-kubernetes.md)                                                              | Full K8s manifests, Helm chart, NetworkPolicies, PVC sizing, ClamAV sidecar K8s overlay                                   |
+| **DMZ edge deployment** (`strata-dmz` reverse-tunnel edge node)                                                                             | [docs/deployment.md#dmz-deployment-mode](docs/deployment.md#dmz-deployment-mode) · [docs/dmz.md](docs/dmz.md)               | Split-topology, HTTP/2-over-mTLS reverse tunnel, zero-secret-overlap edge, link liveness                                  |
+| DMZ wire protocol & tunnel internals                                                                                                        | [docs/tunnel.md](docs/tunnel.md)                                                                                            | Frame format, multiplexing, backpressure, body streaming, RFC 8441 Extended CONNECT                                       |
+| **Antivirus scanning** (ClamAV sidecar / external clamd / command-driven Defender / Sophos / ESET)                                          | [docs/av-scanning.md](docs/av-scanning.md) · [docs/deployment.md#antivirus-scanning-v1120](docs/deployment.md#antivirus-scanning-v1120) | Three backends, INSTREAM wire protocol, fail-mode truth table, EICAR smoke test, K8s manifests                            |
+| **AV operations runbook**                                                                                                                   | [docs/runbooks/av-operations.md](docs/runbooks/av-operations.md)                                                            | Scanner-down triage, signature-update troubleshooting, false-positive remediation, capacity check                         |
+| **Additional `guacd` sidecars** (round-robin scaling beyond ~10–15 sessions per instance)                                                   | [docs/deployment.md#high-availability](docs/deployment.md#high-availability)                                                | `GUACD_INSTANCES`, `scale` compose profile, sidecar duplication template                                                  |
+| **H.264 GFX passthrough** (end-to-end AVC444 to the browser's WebCodecs decoder)                                                            | [docs/h264-passthrough.md](docs/h264-passthrough.md)                                                                        | Host GPO (`Configure-RdpAvc444.ps1`), client checks, fallback paths, performance tuning                                   |
+| **Web kiosk sessions** (Chromium-in-Xvnc with Trusted CA bundles)                                                                           | [docs/web-sessions.md](docs/web-sessions.md)                                                                                | Image build, NSS DB injection, kiosk lifecycle, profile isolation, Chromium policy file                                   |
+| **VDI desktop containers** (Strata-managed `xrdp` Docker containers per user)                                                               | [docs/vdi.md](docs/vdi.md)                                                                                                  | Container template, per-user home volumes, GPU passthrough, networking, lifecycle                                         |
+| **Safeguard JIT credential checkout** (OneIdentity Safeguard for Privileged Passwords integration)                                          | [docs/safeguard.md](docs/safeguard.md) · [docs/safeguard-user-guide.md](docs/safeguard-user-guide.md)                       | Appliance config, RSTS sign-in, password caching, JIT checkout dance, end-user UX                                         |
+| Grafana / Prometheus dashboards                                                                                                             | [docs/grafana/](docs/grafana/)                                                                                              | Pre-built dashboards for tunnel, audit, recording, DMZ link health                                                        |
+| Operational runbooks (all)                                                                                                                  | [docs/runbooks/](docs/runbooks/)                                                                                            | On-call procedures: DMZ incident, AV operations, future runbooks                                                          |
+
+### Reference & governance
+
+| Document                                                             | Description                                                                                |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| [docs/adr/](docs/adr/)                                               | Architecture Decision Records (ADR-0001 … ADR-0011) — every irreversible design call       |
+| [docs/API-LIFECYCLE.md](docs/API-LIFECYCLE.md)                       | API stability tiers, deprecation policy, version skew rules                                |
+| [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)                   | Version-bump checklist, tagging, signing, CI release flow                                  |
+| [docs/DOCUMENTATION_STANDARDS.md](docs/DOCUMENTATION_STANDARDS.md)   | Doc style, audience tiers, what belongs where                                              |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                                   | Contribution guidelines, PR conventions, local dev setup                                   |
+| [SECURITY.md](SECURITY.md)                                           | Vulnerability disclosure policy                                                            |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)                             | Community standards                                                                        |
+| [SUPPORT.md](SUPPORT.md)                                             | How to get help                                                                            |
+| [NOTICE](NOTICE)                                                     | Third-party software notices                                                               |
 
 ## 📄 License
 

@@ -398,7 +398,7 @@ Password checkouts follow a strict lifecycle:
 
 1. **Request** — user requests a checkout; the request is recorded in `password_checkout_requests` with `status = 'pending'`
 2. **Scheduled (optional)** — if the request specifies `scheduled_start_at` (between now + 30 s and now + 14 days), the row is created with `status = 'Scheduled'`. No password is generated, no LDAP mutation is performed, and no Vault material is written. The row sits idle until the worker's next tick after the scheduled moment
-3. **Approval** — an authorized approver reviews and approves/denies the request. Approvers can only see and act on requests for managed accounts explicitly assigned to their approval role via the `approval_role_accounts` table. The approver's user ID is recorded as `approved_by_user_id` on the request, and the `requester_username` is resolved via JOIN for display. **Every approval-required request must carry a `justification_comment` of at least 10 characters** — the backend rejects approval-required submissions with a shorter or empty comment so approvers always have a written business reason on file
+3. **Approval** — an authorized approver reviews and approves/denies the request. Approvers can only see and act on requests for managed accounts explicitly assigned to their approval role via the `approval_role_accounts` table. The approver's user ID is recorded as `approved_by_user_id` on the request, and the `requester_username` is resolved via JOIN for display. **Every approval-required request must carry a `justification_comment` of at least 10 characters** — the backend rejects approval-required submissions with a shorter or empty comment so approvers always have a written business reason on file. **A free-form "Reason from approver" string is captured on the decision itself (v1.11.1+)** and persisted to `password_checkout_requests.decision_reason` (nullable, added by migration `077_checkout_decision_reason.sql`; trimmed and capped at 1024 chars server-side). The reason is threaded into the `checkout_rejected` email template under a dedicated **Reason from approver** block; legacy `Denied` rows pre-077 stay `NULL` and the template silently omits the block. Both the in-session approval popup (`PendingApprovalWatcher`) and the full `Approvals` page require the reason in their UI before letting the approver hit Deny — the server tolerates omission so existing API consumers stay back-compat
 4. **Emergency Bypass (optional)** — if the AD sync config has `pm_allow_emergency_bypass = true` and no covering approval role has disabled it (`allow_emergency_bypass = false` under Admin Settings > Access), users can set `emergency_bypass = true` on the request along with a justification of at least 10 characters. The approver chain is skipped and the checkout activates immediately. `emergency_bypass` is persisted on the row and a dedicated `checkout.emergency_bypass` audit event is written so break-glass access is reviewable after the fact. Emergency bypass cannot be combined with a scheduled release
 5. **Activation** — on approval, self-approval, emergency bypass, or scheduled-time arrival, a new password is generated, the AD account password is reset via LDAP `unicodePwd` modify, and the new password is sealed in Vault
 6. **Expiry** — a background worker sweeps every 60 seconds and expires checkouts past their TTL (computed from activation time). The same worker also activates due `Scheduled` rows (indexed by a partial index on `scheduled_start_at`). On expiry, the password is rotated again so the checked-out password is no longer valid
@@ -665,6 +665,73 @@ single-use, 10-minute **ingest token**:
    worker that **zeroises the sealed DEK** and deletes the ciphertext
    file so the staging blob cannot be recovered from a forensic disk
    image.
+
+### Mandatory justification for non-bypass accounts (v1.11.1+)
+
+For every user whose
+`users.outbound_share_requires_approval = TRUE` (the default), the
+backend enforces a **minimum 10-character justification** on every
+outbound submission **before** any sealing, DLP scan, or
+approver-queue write occurs. The rule is enforced by a single
+shared helper —
+`routes::outbound_shares::validate_outbound_justification(
+requires_approval, justification) -> Result<(), AppError>` — that
+both outbound HTTP entry points call:
+
+1. **`finalize_submit`** (drag-and-drop / browser upload) — the
+   check runs **after** the per-user `requires_approval` lookup
+   and **before** `staging_root()` / the sealed blob write, so a
+   denied request never leaves a partial sealed blob on disk to
+   be reaped later.
+
+2. **`issue_ingest_token`** (curl / curl.exe / PowerShell 7
+   snippet path) — the check runs **before**
+   `outbound_share_ingest::mint(...)`. This means the user sees
+   the error inside the Outbound Share panel at the moment they
+   click **Generate upload command**, *not* after they have
+   already pasted the snippet into a remote shell and run it
+   (which would have surfaced as an opaque 400 from inside the
+   session, far away from the panel where the textarea lives).
+   The justification is bound to the token at mint time and is
+   what ends up on the resulting share row when the token is
+   consumed.
+
+The minimum is **character count, not byte count** — 10× `é`
+(20 bytes but 10 Unicode scalar values) passes; 9× `é` fails. This
+means non-ASCII reasons (accented Latin, CJK, RTL scripts) are not
+penalised for taking more bytes per glyph. Whitespace is trimmed
+before counting. Bypass users
+(`outbound_share_requires_approval = FALSE`) may continue to
+submit without a justification — auto-approval semantics on the
+bypass path are unchanged.
+
+Validation failures return `AppError::Validation` (HTTP 400) with
+the user-facing message *"A justification of at least 10
+characters is required for outbound shares unless the approval
+bypass is enabled for your account."*
+
+The SPA mirrors the chokepoint so no user ever discovers the rule
+via a 400 response:
+
+- The Outbound Share panel marks the field required (red
+  asterisk, `aria-required="true"`), changes the placeholder to a
+  worked example, renders a helper line beneath the textarea, and
+  disables **Generate upload command** with an explanatory
+  tooltip until the trimmed value reaches the 10-character
+  minimum.
+- The `SessionManager.client.onfile` drive-channel interceptor
+  surfaces a warning toast with remediation copy and
+  short-circuits **before** the `FormData` POST when bypass is
+  off and the pending justification is shorter than 10
+  characters.
+
+The single-helper design means a future change to the rule
+(e.g. raising the minimum, adding a regex constraint) takes effect
+on both paths without code drift — and the helper is unit-tested
+in `backend/src/routes/outbound_shares.rs::tests`
+(`justification_not_required_when_bypass_enabled`,
+`justification_required_when_approval_required`,
+`justification_counts_chars_not_bytes`).
 
 ### Threat model
 

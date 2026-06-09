@@ -70,6 +70,11 @@ pub enum CheckoutEvent {
         approver_display_name: String,
         target_account_dn: String,
         target_account_cn: String,
+        /// Reason the approver supplied. Required by the API since
+        /// migration 077; older deployments may still have legacy rows
+        /// in flight without one, so the field is `Option` to keep the
+        /// template render path tolerant.
+        reason: Option<String>,
     },
 
     /// The requester holds `can_self_approve` on the mapping and bypassed
@@ -359,6 +364,7 @@ async fn build_context(pool: &Pool<Postgres>, event: &CheckoutEvent) -> serde_js
             requester_display_name,
             approver_display_name,
             target_account_cn,
+            reason,
             ..
         } => json!({
             "accent": accent,
@@ -367,6 +373,7 @@ async fn build_context(pool: &Pool<Postgres>, event: &CheckoutEvent) -> serde_js
             "requester_display_name": requester_display_name,
             "approver_display_name": approver_display_name,
             "target_account_cn": target_account_cn,
+            "reason": reason,
         }),
         CheckoutEvent::SelfApproved {
             requester_display_name,

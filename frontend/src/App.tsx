@@ -25,6 +25,7 @@ import DisclaimerModal, { TERMS_VERSION } from "./components/DisclaimerModal";
 import SessionTimeoutWarning from "./components/SessionTimeoutWarning";
 import ToastProvider from "./components/ToastProvider";
 import CredentialProfileExpiryWatcher from "./components/CredentialProfileExpiryWatcher";
+import PendingApprovalWatcher from "./components/PendingApprovalWatcher";
 import VersionWatcher from "./components/VersionWatcher";
 import { checkAuthStatus, logout as apiLogout, MeResponse } from "./api";
 import { SettingsProvider } from "./contexts/SettingsContext";
@@ -107,6 +108,7 @@ export default function App() {
         canShare={!!user?.can_manage_system || !!user?.can_create_sharing_profiles}
         canUseQuickShare={!!user?.can_manage_system || !!user?.can_use_quick_share}
         canUseQuickShareOutbound={!!user?.can_manage_system || !!user?.can_use_quick_share_outbound}
+        outboundShareBypass={user?.outbound_share_requires_approval === false}
       >
         {!authenticated ? (
           <Routes>
@@ -219,6 +221,9 @@ export default function App() {
                   <SessionBar />
                   <SessionTimeoutWarning onExpired={handleLogout} />
                   {user?.vault_configured && <CredentialProfileExpiryWatcher />}
+                  {user && (user.is_approver || user.is_outbound_approver) && (
+                    <PendingApprovalWatcher user={user} />
+                  )}
                   <WhatsNewModal userId={user?.id} />
                   <VersionWatcher />
                 </CommandPaletteProvider>

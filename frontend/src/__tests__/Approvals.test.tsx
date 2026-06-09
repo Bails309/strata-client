@@ -32,6 +32,7 @@ const mockUser: MeResponse = {
   can_view_sessions: true,
   is_approver: true,
   is_outbound_approver: false,
+  outbound_share_requires_approval: true,
 };
 
 const pendingRequests = [
@@ -166,11 +167,20 @@ describe("Approvals", () => {
       expect(screen.getByText("alice")).toBeInTheDocument();
     });
 
+    // First click on Deny opens the inline reason composer instead of
+    // immediately calling decideCheckout — the backend requires a
+    // non-empty reason on every denial.
     const denyButtons = screen.getAllByText("Deny");
     await user.click(denyButtons[0]);
 
+    const reasonField = await screen.findByPlaceholderText(
+      /outside change window, contact owner first/i
+    );
+    await user.type(reasonField, "Out of change window");
+    await user.click(screen.getByRole("button", { name: /Confirm deny/i }));
+
     await waitFor(() => {
-      expect(decideCheckout).toHaveBeenCalledWith("cr1", false);
+      expect(decideCheckout).toHaveBeenCalledWith("cr1", false, "Out of change window");
     });
     expect(screen.getByText("Checkout denied")).toBeInTheDocument();
   });

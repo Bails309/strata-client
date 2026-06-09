@@ -67,6 +67,7 @@ function defaultManagerMock(overrides = {}) {
     canShare: false,
     canUseQuickShare: true,
     canUseQuickShareOutbound: false,
+    outboundShareBypass: false,
     ...overrides,
   };
 }

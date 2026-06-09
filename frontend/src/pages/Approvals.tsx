@@ -46,6 +46,12 @@ export default function Approvals({ user }: { user: MeResponse }) {
   const [pending, setPending] = useState<CheckoutRequest[]>([]);
   const [msg, setMsg] = useState("");
   const [deciding, setDeciding] = useState<string | null>(null);
+  // Per-row deny state. When `denyingId` is set, the row expands an inline
+  // reason textarea and the Confirm button stays disabled until the field
+  // is non-empty — matches the in-session PendingApprovalWatcher popup so
+  // the two surfaces behave consistently.
+  const [denyingId, setDenyingId] = useState<string | null>(null);
+  const [denyReason, setDenyReason] = useState("");
 
   const flash = (text: string) => {
     setMsg(text);
@@ -65,11 +71,30 @@ export default function Approvals({ user }: { user: MeResponse }) {
     loadPending();
   }, [loadPending]);
 
-  const handleDecide = async (id: string, approved: boolean) => {
+  const handleApprove = async (id: string) => {
     setDeciding(id);
     try {
-      await decideCheckout(id, approved);
-      flash(approved ? "Checkout approved" : "Checkout denied");
+      await decideCheckout(id, true);
+      flash("Checkout approved");
+      setDenyingId(null);
+      setDenyReason("");
+      loadPending();
+    } catch (e) {
+      flash(e instanceof Error ? e.message : "Decision failed");
+    } finally {
+      setDeciding(null);
+    }
+  };
+
+  const handleConfirmDeny = async (id: string) => {
+    const trimmed = denyReason.trim();
+    if (trimmed.length === 0) return;
+    setDeciding(id);
+    try {
+      await decideCheckout(id, false, trimmed);
+      flash("Checkout denied");
+      setDenyingId(null);
+      setDenyReason("");
       loadPending();
     } catch (e) {
       flash(e instanceof Error ? e.message : "Decision failed");
@@ -261,50 +286,101 @@ export default function Approvals({ user }: { user: MeResponse }) {
 
                     {/* Actions */}
                     <div
-                      className="flex gap-2 pt-2"
+                      className="flex flex-col gap-2 pt-2"
                       style={{ borderTop: "1px solid var(--color-glass-border)" }}
                     >
-                      <button
-                        className="btn btn-sm btn-success"
-                        disabled={deciding === p.id}
-                        onClick={() => handleDecide(p.id, true)}
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="mr-1.5"
-                        >
-                          <path d="M20 6L9 17l-5-5" />
-                        </svg>
-                        Approve
-                      </button>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        disabled={deciding === p.id}
-                        onClick={() => handleDecide(p.id, false)}
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="mr-1.5"
-                        >
-                          <path d="M18 6L6 18" />
-                          <path d="M6 6l12 12" />
-                        </svg>
-                        Deny
-                      </button>
+                      {denyingId === p.id ? (
+                        <div className="flex flex-col gap-2">
+                          <label
+                            className="text-[11px] font-medium uppercase tracking-wider text-txt-tertiary"
+                            htmlFor={`approvals-deny-reason-${p.id}`}
+                          >
+                            Reason for denial (required)
+                          </label>
+                          <textarea
+                            id={`approvals-deny-reason-${p.id}`}
+                            value={denyReason}
+                            onChange={(e) => setDenyReason(e.target.value)}
+                            rows={2}
+                            placeholder="e.g. Outside change window, contact owner first"
+                            className="w-full text-sm rounded-md p-2"
+                            style={{
+                              background: "var(--color-surface-elevated)",
+                              border: "1px solid var(--color-glass-border)",
+                              color: "var(--color-text-primary, inherit)",
+                              resize: "vertical",
+                            }}
+                            autoFocus
+                            disabled={deciding === p.id}
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              className="btn btn-sm btn-danger"
+                              disabled={deciding === p.id || denyReason.trim().length === 0}
+                              onClick={() => handleConfirmDeny(p.id)}
+                            >
+                              {deciding === p.id ? "Working\u2026" : "Confirm deny"}
+                            </button>
+                            <button
+                              className="btn btn-sm"
+                              disabled={deciding === p.id}
+                              onClick={() => {
+                                setDenyingId(null);
+                                setDenyReason("");
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            className="btn btn-sm btn-success"
+                            disabled={deciding === p.id}
+                            onClick={() => handleApprove(p.id)}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="mr-1.5"
+                            >
+                              <path d="M20 6L9 17l-5-5" />
+                            </svg>
+                            Approve
+                          </button>
+                          <button
+                            className="btn btn-sm btn-danger"
+                            disabled={deciding === p.id}
+                            onClick={() => {
+                              setDenyingId(p.id);
+                              setDenyReason("");
+                            }}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className="mr-1.5"
+                            >
+                              <path d="M18 6L6 18" />
+                              <path d="M6 6l12 12" />
+                            </svg>
+                            Deny
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

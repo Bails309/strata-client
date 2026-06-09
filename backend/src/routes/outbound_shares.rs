@@ -265,6 +265,12 @@ async fn finalize_submit(
     .await?
     .unwrap_or(true);
 
+    // Enforce the justification gate BEFORE we seal the plaintext into
+    // the staging directory: a denied request shouldn't leave a sealed
+    // blob behind for a janitor task to clean up, and the user gets a
+    // crisp error instead of an opaque internal failure.
+    validate_outbound_justification(requires_approval, justification)?;
+
     let staging = staging_root();
 
     let outcome = outbound_shares::submit(
@@ -346,6 +352,23 @@ pub async fn issue_ingest_token(
             ));
         }
     }
+
+    // Enforce the same "justification required when approval is
+    // required" rule as the cookie-auth submit path. We catch it here
+    // — at mint time — so the user gets the error in the SPA instead
+    // of after they've pasted the snippet into the remote session and
+    // the upload comes back denied. `finalize_submit` re-validates as
+    // a defence-in-depth backstop in case the multipart `justification`
+    // field overrides the token-supplied one with garbage.
+    let requires_approval: bool = sqlx::query_scalar(
+        "SELECT COALESCE(outbound_share_requires_approval, TRUE)
+         FROM users WHERE id = $1",
+    )
+    .bind(user.id)
+    .fetch_optional(&pool)
+    .await?
+    .unwrap_or(true);
+    validate_outbound_justification(requires_approval, body.justification.as_deref())?;
 
     let client_ip = crate::routes::auth::extract_client_ip(&headers);
 
@@ -753,6 +776,40 @@ async fn require_pool(state: &SharedState) -> Result<sqlx::Pool<sqlx::Postgres>,
         .ok_or_else(|| AppError::Internal("database not configured".into()))
 }
 
+/// Minimum justification length when approval is required.
+///
+/// Mirrors `MIN_JUSTIFICATION_LEN` in the credential-checkout flow
+/// (`routes/user.rs::checkout`) so users see one consistent rule:
+/// any approval-gated operation needs at least 10 chars of reasoning
+/// that the approver can act on. A handful of words like "audit ticket
+/// INC-1234" easily clears the bar; a stray space or "asdf" does not.
+const MIN_OUTBOUND_JUSTIFICATION_LEN: usize = 10;
+
+/// Enforce the per-user "justification required when approval is
+/// required" rule. Returns `Ok(())` when the user has the
+/// `outbound_share_requires_approval = FALSE` bypass; otherwise the
+/// trimmed justification must be at least
+/// [`MIN_OUTBOUND_JUSTIFICATION_LEN`] characters.
+///
+/// Pulled out as a pure function so both the multipart `submit`
+/// chokepoint and the `issue_ingest_token` mint endpoint share one
+/// implementation, and so it can be unit-tested without a DB.
+fn validate_outbound_justification(
+    requires_approval: bool,
+    justification: Option<&str>,
+) -> Result<(), AppError> {
+    if !requires_approval {
+        return Ok(());
+    }
+    let trimmed = justification.unwrap_or("").trim();
+    if trimmed.chars().count() < MIN_OUTBOUND_JUSTIFICATION_LEN {
+        return Err(AppError::Validation(format!(
+            "A justification of at least {MIN_OUTBOUND_JUSTIFICATION_LEN} characters is required for outbound shares unless the approval bypass is enabled for your account."
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,5 +827,48 @@ mod tests {
         // a specific value because the env can override it.
         let p = staging_root();
         assert!(!p.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn justification_not_required_when_bypass_enabled() {
+        // The bypass user can submit with no justification at all.
+        assert!(validate_outbound_justification(false, None).is_ok());
+        assert!(validate_outbound_justification(false, Some("")).is_ok());
+        assert!(validate_outbound_justification(false, Some("   ")).is_ok());
+        assert!(validate_outbound_justification(false, Some("x")).is_ok());
+    }
+
+    #[test]
+    fn justification_required_when_approval_required() {
+        // Missing / empty / whitespace / too-short all fail with a
+        // Validation error.
+        for input in [None, Some(""), Some("   "), Some("too short")] {
+            let err = validate_outbound_justification(true, input)
+                .expect_err("expected Err for input {input:?}");
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "expected Validation error, got {err:?}"
+            );
+        }
+        // Exactly the minimum length passes.
+        assert!(validate_outbound_justification(true, Some("1234567890")).is_ok());
+        // Well above the minimum passes.
+        assert!(
+            validate_outbound_justification(true, Some("Audit ticket INC-1234, urgent fix."))
+                .is_ok()
+        );
+        // Surrounding whitespace is trimmed before measuring.
+        assert!(validate_outbound_justification(true, Some("   1234567890   ")).is_ok());
+        assert!(validate_outbound_justification(true, Some("   short   ")).is_err());
+    }
+
+    #[test]
+    fn justification_counts_chars_not_bytes() {
+        // 10 multibyte chars (é) = 20 bytes but should still satisfy the
+        // chars().count() check.
+        let ten_e_accent: String = "é".repeat(10);
+        assert!(validate_outbound_justification(true, Some(&ten_e_accent)).is_ok());
+        let nine_e_accent: String = "é".repeat(9);
+        assert!(validate_outbound_justification(true, Some(&nine_e_accent)).is_err());
     }
 }

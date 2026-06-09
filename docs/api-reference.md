@@ -2293,8 +2293,12 @@ Submit a file pulled from the in-session virtual drive. Called by `SessionManage
 | ---------------- | ------ | -------- | ------------------------------------------------------------- |
 | `session_id`     | text   | Yes      | Active session ID                                             |
 | `connection_id`  | text   | Yes      | Connection UUID                                               |
-| `justification`  | text   | No       | Free-text business reason (shown to approver)                 |
+| `justification`  | text   | Conditional | Free-text business reason (shown to approver). **Required when `users.outbound_share_requires_approval = TRUE` for the submitting user (v1.11.1+).** Minimum length **10 characters** (whitespace-trimmed, **character count not byte count**, so non-ASCII reasons such as accented text or CJK are not penalised). Bypass users (`outbound_share_requires_approval = FALSE`) may omit it. Validation runs **before** the staging blob is sealed, so a rejected submission does not leave a partial sealed blob behind. |
 | `file`           | file   | Yes      | Binary payload                                                |
+
+**Validation errors (v1.11.1+):**
+
+- `400 Bad Request` with body `{ "error": "validation", "message": "A justification of at least 10 characters is required for outbound shares unless the approval bypass is enabled for your account." }` — returned when a non-bypass user submits an empty, whitespace-only, or shorter-than-10-character justification.
 
 **Response** `200 OK`
 
@@ -2330,6 +2334,18 @@ Mint a single-use, 10-minute upload token for the snippet-paste path.
   "justification": "Customer requested copy of generated report"
 }
 ```
+
+**Validation (v1.11.1+):** `justification` is required when
+`users.outbound_share_requires_approval = TRUE` for the minting
+user, with the **same 10-character minimum** as
+`POST /api/user/outbound-shares` (whitespace-trimmed, character
+count not byte count). The check runs **before** the token is
+minted, so the user sees the error inside the Outbound Share
+panel at the moment they click **Generate upload command** —
+not after they have already pasted the snippet into a remote
+shell and run it. The justification is bound to the token at
+mint time and is what eventually appears on the resulting share
+row when the token is consumed.
 
 **Response** `200 OK`
 
@@ -3364,7 +3380,22 @@ List pending checkout requests that the current user can approve. Returns only r
 
 #### `POST /api/user/checkouts/:id/decide`
 
-Approve or deny a pending checkout. The approver must have the managed account in their approval role scope. Body: `{ "approved": true }`. Records `approved_by_user_id` on the request.
+Approve or deny a pending checkout. The approver must have the managed account in their approval role scope.
+
+**Request body:**
+
+```json
+{ "approved": false, "reason": "Out of change window, contact owner first" }
+```
+
+| Field      | Type    | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approved` | boolean | Yes      | `true` to approve, `false` to deny.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `reason`   | string  | No       | **Added in v1.11.1.** Free-form "Reason from approver" trimmed and capped at **1024 characters** server-side. Persisted to `password_checkout_requests.decision_reason` (added by migration `077_checkout_decision_reason.sql`; nullable, no default) and rendered in the `checkout_rejected` email template under a dedicated "Reason from approver" block. Optional on both `approved` and `denied`; the UI requires it on Deny but the server does not (back-compat). Omit to keep `decision_reason = NULL`. |
+
+Records `approved_by_user_id` on the request. The rejection email block is silently omitted when `decision_reason IS NULL`, so legacy denials and reason-less new denials never surface an empty block.
+
+**Backwards compatibility:** Clients that omit `reason` continue to work — the field defaults to `NULL`.
 
 #### `GET /api/user/checkouts/:id/reveal`
 

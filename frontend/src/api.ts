@@ -272,6 +272,17 @@ export interface MeResponse {
    *  `outbound_share_approvers`. Drives visibility of the outbound
    *  shares admin tab. */
   is_outbound_approver: boolean;
+  /** Per-user outbound Quick-Share approval-bypass flag.
+   *  - `false` → user is exempt; submissions are auto-approved and a
+   *    justification is optional.
+   *  - `true` or `null` → user is subject to the approval queue and
+   *    every outbound submission must include a justification
+   *    (\u22655 server-enforced minimum) before it will be accepted.
+   *  The SPA uses this to mark the justification field required and
+   *  refuse to POST drive-redirected files without one; the backend
+   *  re-enforces the same rule in
+   *  `routes/outbound_shares.rs::validate_outbound_justification`. */
+  outbound_share_requires_approval: boolean | null;
 }
 
 export const getMe = () => request<MeResponse>("/user/me");
@@ -692,6 +703,10 @@ export interface CheckoutRequest {
   updated_at: string;
   requester_username?: string;
   emergency_bypass?: boolean;
+  /** Free-form reason captured from the approver. Populated on Deny
+   *  (required by the UI) or optionally on Approve. Server-side cap of
+   *  1024 chars. */
+  decision_reason?: string | null;
 }
 
 export interface DiscoveredAccount {
@@ -797,10 +812,10 @@ export const requestCheckout = (data: {
     method: "POST",
     body: JSON.stringify(data),
   });
-export const decideCheckout = (id: string, approved: boolean) =>
+export const decideCheckout = (id: string, approved: boolean, reason?: string) =>
   request<{ status: string }>(`/user/checkouts/${id}/decide`, {
     method: "POST",
-    body: JSON.stringify({ approved }),
+    body: JSON.stringify({ approved, reason }),
   });
 export const revealCheckoutPassword = (id: string) =>
   request<{ password: string; expires_at?: string }>(`/user/checkouts/${id}/reveal`);

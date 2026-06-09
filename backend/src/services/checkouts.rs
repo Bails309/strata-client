@@ -55,6 +55,12 @@ pub struct CheckoutRequest {
     pub emergency_bypass: bool,
     #[sqlx(default)]
     pub scheduled_start_at: Option<DateTime<Utc>>,
+    /// Free-form text captured from the approver on Deny (required by the
+    /// UI) or optionally on Approve. Persisted by migration 077; NULL on
+    /// pre-077 rows. Surfaced back to the requester through the rejection
+    /// email and the audit log payload.
+    #[sqlx(default)]
+    pub decision_reason: Option<String>,
 }
 
 // ── Approval role row ──────────────────────────────────────────────────
@@ -1585,18 +1591,30 @@ pub async fn approvers_for_account(
 }
 
 /// Mark a pending checkout as Approved/Denied by the given approver.
+///
+/// `reason` is the approver's free-form justification. Persisted into
+/// `decision_reason` (migration 077) and forwarded to the rejection
+/// email by the handler. Pass `None` when the approver did not supply
+/// one (typically Approve); the UI requires a non-empty reason on Deny.
 pub async fn set_decision(
     pool: &PgPool,
     checkout_id: Uuid,
     approver_user_id: Uuid,
     approved: bool,
+    reason: Option<&str>,
 ) -> Result<(), crate::error::AppError> {
     let status = if approved { "Approved" } else { "Denied" };
+    // Status is built from a fixed two-value match above so it is not a SQL
+    // injection vector; the format! avoids a bind for a column-equivalent
+    // literal. Reason flows through a real parameter bind.
     let sql = format!(
-        "UPDATE password_checkout_requests SET status = '{status}', approved_by_user_id = $1, updated_at = now() WHERE id = $2"
+        "UPDATE password_checkout_requests \
+         SET status = '{status}', approved_by_user_id = $1, decision_reason = $2, updated_at = now() \
+         WHERE id = $3"
     );
     sqlx::query(&sql)
         .bind(approver_user_id)
+        .bind(reason)
         .bind(checkout_id)
         .execute(pool)
         .await?;

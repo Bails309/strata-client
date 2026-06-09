@@ -95,6 +95,21 @@ pub async fn me(
             .await
             .unwrap_or(false);
 
+    // Per-user outbound Quick-Share approval-bypass flag. `false`
+    // means "this user is exempt from the approval queue"; `true` or
+    // NULL means "this user must wait for an approver (and must
+    // provide a justification on submit)". Surfaced so the SPA can
+    // mark the Quick-Share Outbound justification field as required
+    // and disable submit until it's filled — the chokepoint stays in
+    // routes/outbound_shares.rs::validate_outbound_justification.
+    let outbound_share_requires_approval: Option<bool> =
+        sqlx::query_scalar("SELECT outbound_share_requires_approval FROM users WHERE id = $1")
+            .bind(user.id)
+            .fetch_optional(&db.pool)
+            .await
+            .unwrap_or(None)
+            .flatten();
+
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -119,6 +134,7 @@ pub async fn me(
         "can_view_sessions": user.can_view_sessions,
         "is_approver": is_approver,
         "is_outbound_approver": is_outbound_approver,
+        "outbound_share_requires_approval": outbound_share_requires_approval,
     })))
 }
 
@@ -2837,6 +2853,12 @@ pub async fn pending_approvals(
 #[derive(Deserialize)]
 pub struct ApprovalDecisionBody {
     pub approved: bool,
+    /// Free-form reason captured from the approver. Required by the UI
+    /// on Deny (the inline popup gates the Confirm button on a non-empty
+    /// field); optional on Approve. Trimmed and length-checked here so a
+    /// 50 MB blob can't get persisted into `decision_reason`.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 pub async fn decide_checkout(
@@ -2863,6 +2885,31 @@ pub async fn decide_checkout(
         )));
     }
 
+    // Normalise the reason: trim whitespace, drop empty strings, enforce
+    // a 1024-char cap to match the outbound-share decide endpoint. Done
+    // here (not in set_decision) so the validation error surfaces as a
+    // 400 rather than landing on the DB layer. Denials with an empty
+    // reason are rejected so the audit trail always has context — the UI
+    // already gates Confirm on this but a direct API caller must obey.
+    let reason: Option<String> = body
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    if let Some(ref r) = reason {
+        if r.chars().count() > 1024 {
+            return Err(AppError::Validation(
+                "Decision reason must be 1024 characters or fewer".into(),
+            ));
+        }
+    }
+    if !body.approved && reason.is_none() {
+        return Err(AppError::Validation(
+            "A reason is required when denying a checkout request".into(),
+        ));
+    }
+
     if !crate::services::checkouts::roles_cover_account(
         &db.pool,
         &role_ids,
@@ -2874,13 +2921,20 @@ pub async fn decide_checkout(
     }
 
     if body.approved {
-        crate::services::checkouts::set_decision(&db.pool, checkout_id, user.id, true).await?;
+        crate::services::checkouts::set_decision(
+            &db.pool,
+            checkout_id,
+            user.id,
+            true,
+            reason.as_deref(),
+        )
+        .await?;
 
         crate::services::audit::log(
             &db.pool,
             Some(user.id),
             "checkout.approved",
-            &json!({ "checkout_id": checkout_id }),
+            &json!({ "checkout_id": checkout_id, "reason": reason }),
         )
         .await?;
 
@@ -2939,13 +2993,20 @@ pub async fn decide_checkout(
 
         Ok(Json(json!({ "status": "Approved" })))
     } else {
-        crate::services::checkouts::set_decision(&db.pool, checkout_id, user.id, false).await?;
+        crate::services::checkouts::set_decision(
+            &db.pool,
+            checkout_id,
+            user.id,
+            false,
+            reason.as_deref(),
+        )
+        .await?;
 
         crate::services::audit::log(
             &db.pool,
             Some(user.id),
             "checkout.denied",
-            &json!({ "checkout_id": checkout_id }),
+            &json!({ "checkout_id": checkout_id, "reason": reason }),
         )
         .await?;
 
@@ -2975,6 +3036,7 @@ pub async fn decide_checkout(
                     approver_display_name: approver_display,
                     target_account_dn: checkout.managed_ad_dn.clone(),
                     target_account_cn: target_cn,
+                    reason: reason.clone(),
                 },
             );
         }

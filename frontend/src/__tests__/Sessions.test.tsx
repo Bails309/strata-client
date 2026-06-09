@@ -128,6 +128,7 @@ const adminUser: MeResponse = {
   can_view_sessions: true,
   is_approver: false,
   is_outbound_approver: false,
+  outbound_share_requires_approval: true,
 };
 
 const regularUser: MeResponse = {

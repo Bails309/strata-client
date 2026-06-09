@@ -17,6 +17,14 @@
         <mj-text font-family="Courier, monospace" color="#e5e7eb" font-size="13px">{{ target_account_cn }}</mj-text>
       </mj-column>
     </mj-section>
+    {% if reason %}
+    <mj-section background-color="#1f2937" padding="0 24px 20px">
+      <mj-column>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="13px">Reason</mj-text>
+        <mj-text font-family="Helvetica, Arial, sans-serif" color="#e5e7eb" font-size="13px" font-style="italic">&ldquo;{{ reason }}&rdquo;</mj-text>
+      </mj-column>
+    </mj-section>
+    {% endif %}
     <mj-section background-color="#111827" padding="16px 24px">
       <mj-column>
         <mj-text font-family="Helvetica, Arial, sans-serif" color="#9ca3af" font-size="11px" align="center" line-height="1.6">You can opt out of these notifications under Profile then Notifications.</mj-text>

@@ -104,6 +104,12 @@ interface SessionManagerValue {
   canShare: boolean;
   canUseQuickShare: boolean;
   canUseQuickShareOutbound: boolean;
+  /** Per-user outbound Quick-Share approval-bypass flag.
+   *  `true` → user has the bypass (auto-approved, no justification
+   *  needed). `false` → user must include a justification on every
+   *  outbound submission. Mirrors `MeResponse.outbound_share_requires_approval === false`
+   *  in `App.tsx`. */
+  outboundShareBypass: boolean;
 }
 
 interface CreateSessionOpts {
@@ -142,11 +148,13 @@ export function SessionManagerProvider({
   canShare = false,
   canUseQuickShare = false,
   canUseQuickShareOutbound = false,
+  outboundShareBypass = false,
 }: {
   children: React.ReactNode;
   canShare?: boolean;
   canUseQuickShare?: boolean;
   canUseQuickShareOutbound?: boolean;
+  outboundShareBypass?: boolean;
 }) {
   const [sessions, setSessions] = useState<GuacSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -164,6 +172,16 @@ export function SessionManagerProvider({
   // that was true when the session was opened.
   const canUseQuickShareOutboundRef = useRef<boolean>(canUseQuickShareOutbound);
   canUseQuickShareOutboundRef.current = canUseQuickShareOutbound;
+
+  // Same pattern for the per-user approval bypass: the closure that
+  // intercepts drive-redirected files needs to see today's value, not
+  // the snapshot from when the session was opened. When the bypass is
+  // off, the closure refuses to POST without a justification — the
+  // backend rejects it too (`validate_outbound_justification`), but
+  // catching it client-side gives the user an actionable toast instead
+  // of a generic "upload failed".
+  const outboundShareBypassRef = useRef<boolean>(outboundShareBypass);
+  outboundShareBypassRef.current = outboundShareBypass;
 
   const barWidth = 0; // Floating overlay doesn't reserve space
 
@@ -429,6 +447,23 @@ export function SessionManagerProvider({
         if (canUseQuickShareOutboundRef.current) {
           const live = sessionsRef.current.find((s) => s.id === sessionId);
           const justification = live?.pendingOutboundJustification?.trim() ?? "";
+
+          // When the user is subject to the approval queue (no
+          // per-user bypass), justification is mandatory and the
+          // backend will reject anything shorter than 10 chars. Catch
+          // it here so the user gets a clear, actionable toast that
+          // points them at the panel instead of an opaque server
+          // error — and so we don't burn an audit row or temp file on
+          // a request we already know will fail.
+          if (!outboundShareBypassRef.current && justification.length < 10) {
+            toast?.warning({
+              title: `Justification required: ${filename}`,
+              description:
+                "Open the Outbound Share panel, enter at least 10 characters explaining why this file needs to leave the session, then re-drop the file.",
+            });
+            return;
+          }
+
           const file = new File([blob], filename, { type: mimetype });
           const fd = new FormData();
           fd.append("file", file, filename);
@@ -676,6 +711,7 @@ export function SessionManagerProvider({
         canShare,
         canUseQuickShare,
         canUseQuickShareOutbound,
+        outboundShareBypass,
       }}
     >
       {children}

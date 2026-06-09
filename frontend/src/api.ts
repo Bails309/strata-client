@@ -894,6 +894,19 @@ export interface SchemaHealth {
  *   redacted first token of `STRATA_AV_COMMAND` for the command
  *   backend (args / `{path}` placeholders are never echoed). `null`
  *   when the backend is `off`.
+ * - `engine_version` / `signatures_version` / `signatures_built`:
+ *   populated by a `VERSION` round-trip to clamd when reachable
+ *   (clamav backend only). `signatures_built` is an RFC 3339
+ *   timestamp.
+ * - `upstream_version` / `upstream_checked_at`: latest published
+ *   daily DB version from `database.clamav.net`, cached server-side
+ *   for 6 h. `null` until the first successful upstream fetch
+ *   completes (the backend refreshes in the background so the
+ *   health endpoint never blocks on it).
+ * - `status`: `"current"` when local DB version is at-or-above the
+ *   upstream, `"behind"` when older, `"unknown"` when one side is
+ *   missing. `null` until the upstream check has succeeded at least
+ *   once.
  */
 export interface AvHealth {
   backend: string;
@@ -901,6 +914,12 @@ export interface AvHealth {
   reachable: boolean;
   fail_mode: string;
   address: string | null;
+  engine_version?: string | null;
+  signatures_version?: number | null;
+  signatures_built?: string | null;
+  upstream_version?: number | null;
+  upstream_checked_at?: string | null;
+  status?: "current" | "behind" | "unknown" | null;
 }
 
 export interface ServiceHealth {

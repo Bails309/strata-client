@@ -15,6 +15,25 @@ import {
   getServiceHealth,
 } from "../../api";
 
+/**
+ * Render an ISO 8601 timestamp as a coarse "X ago" string. Used for
+ * the ClamAV signature DB build time on the Antivirus card; precise
+ * to the minute up to an hour, then hour, then day. Falls back to a
+ * locale-formatted absolute timestamp on parse failure.
+ */
+function formatRelativeTime(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return iso;
+  const diff = Date.now() - parsed;
+  if (diff < 0) return "just now";
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => void }) {
   const [health, setHealth] = useState<ServiceHealth | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
@@ -421,18 +440,29 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
               </div>
               <span
                 className={`badge ${
-                  health.av.reachable
-                    ? "badge-success"
-                    : health.av.fail_mode === "block"
+                  !health.av.reachable
+                    ? health.av.fail_mode === "block"
                       ? "badge-error"
                       : "badge-warning"
+                    : health.av.status === "behind"
+                      ? "badge-warning"
+                      : "badge-success"
                 }`}
+                title={
+                  !health.av.reachable
+                    ? "Scanner is not reachable"
+                    : health.av.status === "behind"
+                      ? "Scanner is reachable but its signature database is older than the latest published release"
+                      : undefined
+                }
               >
-                {health.av.reachable
-                  ? "Healthy"
-                  : health.av.fail_mode === "block"
+                {!health.av.reachable
+                  ? health.av.fail_mode === "block"
                     ? "Unreachable"
-                    : "Degraded"}
+                    : "Degraded"
+                  : health.av.status === "behind"
+                    ? "Degraded"
+                    : "Healthy"}
               </span>
             </div>
             <div>
@@ -475,6 +505,60 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
                     title={health.av.address}
                   >
                     {health.av.address}
+                  </span>
+                </div>
+              )}
+              {health.av.backend === "clamav" && health.av.signatures_version != null && (
+                <div className="flex justify-between">
+                  <span className="text-txt-tertiary">Signatures</span>
+                  <span
+                    className="font-semibold text-txt-primary"
+                    title={
+                      health.av.signatures_built
+                        ? `Built ${new Date(health.av.signatures_built).toLocaleString()}`
+                        : undefined
+                    }
+                  >
+                    {health.av.signatures_version}
+                    {health.av.signatures_built && (
+                      <span className="text-txt-tertiary font-normal ml-1">
+                        ({formatRelativeTime(health.av.signatures_built)})
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
+              {health.av.backend === "clamav" && health.av.status && (
+                <div className="flex justify-between">
+                  <span className="text-txt-tertiary">Status</span>
+                  <span
+                    className="font-semibold capitalize"
+                    style={{
+                      color:
+                        health.av.status === "current"
+                          ? "var(--color-success, #22c55e)"
+                          : health.av.status === "behind"
+                            ? "var(--color-warning, #f59e0b)"
+                            : "var(--color-txt-secondary)",
+                    }}
+                    title={
+                      health.av.upstream_version != null
+                        ? `Latest published daily DB: ${health.av.upstream_version}` +
+                          (health.av.upstream_checked_at
+                            ? ` (checked ${new Date(
+                                health.av.upstream_checked_at
+                              ).toLocaleString()})`
+                            : "")
+                        : "Awaiting first upstream check"
+                    }
+                  >
+                    {health.av.status === "current"
+                      ? "Up to date"
+                      : health.av.status === "behind"
+                        ? health.av.upstream_version != null && health.av.signatures_version != null
+                          ? `Behind by ${health.av.upstream_version - health.av.signatures_version}`
+                          : "Behind"
+                        : "Unknown"}
                   </span>
                 </div>
               )}

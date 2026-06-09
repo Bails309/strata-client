@@ -606,6 +606,14 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                   >
                     {h.status}
                   </span>
+                  {h.purged_at && h.status !== "purged" && (
+                    <span
+                      className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-white/5 text-txt-tertiary"
+                      title={`Sealed material removed from disk at ${new Date(h.purged_at).toLocaleString()}.`}
+                    >
+                      Cleaned
+                    </span>
+                  )}
                   <span className="truncate flex-1 font-medium">{h.filename}</span>
                 </div>
                 <div className="text-[10px] text-txt-tertiary">

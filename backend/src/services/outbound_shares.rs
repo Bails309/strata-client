@@ -27,12 +27,20 @@
 //!    returned for the caller to `vault::unseal`, then status flips to
 //!    `Downloaded` and the token is cleared so the link is genuinely
 //!    one-shot.
-//! 4. `purge_expired()` — periodic worker (hourly). Any row past
-//!    `expires_at` that has not been purged has its blob unlinked and is
-//!    marked `Purged`.
+//! 4. `purge_expired()` — periodic worker (hourly). Two-phase sweep:
+//!    (a) **Zeroise**: any row past `expires_at` (default
+//!    [`DEFAULT_TTL_DAYS`] = 1 day from `created_at`) that has not been
+//!    purged has its blob unlinked, sealed DEK/nonce + storage_path +
+//!    download_token NULL'd, and `purged_at` stamped. `Pending`/`Approved`
+//!    rows flip to `Purged`; `Downloaded`/`Denied` keep their status so
+//!    the history still records *how* the row ended.
+//!    (b) **Hard-delete**: any row whose `purged_at` is older than
+//!    [`HISTORY_RETENTION_AFTER_PURGE_DAYS`] = 7 days is removed from
+//!    the table entirely so the admin history doesn't grow without bound.
 //!
 //! Audit events: `outbound_share.requested`, `outbound_share.decided`,
-//! `outbound_share.downloaded`, `outbound_share.purged`.
+//! `outbound_share.downloaded`, `outbound_share.purged`,
+//! `outbound_share.removed` (hard-delete after retention).
 
 use crate::config::VaultConfig;
 use crate::error::AppError;
@@ -46,10 +54,20 @@ use uuid::Uuid;
 /// Maximum staged file size (mirrors inbound Quick Share).
 pub const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024;
 
-/// Default TTL applied to every staged outbound share, in days.
-/// `chrono::Duration::days` is not a `const fn` in chrono 0.4, so we
-/// expose the integer here and build the `Duration` at use sites.
-pub const DEFAULT_TTL_DAYS: i64 = 7;
+/// Default TTL applied to every staged outbound share, in days. Short
+/// by design: outbound shares are an export gate, not an archive — once
+/// the requester (or approver) has had a chance to act, the staged
+/// blob and sealed DEK should be wiped from disk. `chrono::Duration::days`
+/// is not a `const fn` in chrono 0.4, so we expose the integer here
+/// and build the `Duration` at use sites.
+pub const DEFAULT_TTL_DAYS: i64 = 1;
+
+/// How long an `outbound_shares` row remains in the table (visible in
+/// the admin history) after its `purged_at` timestamp before being
+/// hard-deleted by Phase 2 of [`purge_expired`]. The row no longer
+/// carries any secret material once `purged_at` is set — this window
+/// is purely for human-readable audit/history surfacing.
+pub const HISTORY_RETENTION_AFTER_PURGE_DAYS: i64 = 7;
 
 /// Default TTL applied to every staged outbound share.
 #[inline]
@@ -57,9 +75,15 @@ pub fn default_ttl() -> Duration {
     Duration::days(DEFAULT_TTL_DAYS)
 }
 
-/// DLP score at or above which a submission is auto-flagged for approval
-/// even when the requester is on the "no approval needed" allowlist.
+/// Reference threshold representing "this submission would be considered
+/// high-risk by the heuristic DLP scorer." No longer used as a runtime
+/// gate — the per-user `outbound_share_requires_approval = FALSE` bypass
+/// is an unconditional admin override and submissions from non-bypassed
+/// users are always queued regardless of score (see [`submit`]). Kept as
+/// a `pub` constant because the tests and the [`compute_dlp_score`]
+/// docstring reference it as the documented "would-be-flagged" boundary.
 /// Pure heuristic — designed to be loud, not airtight.
+#[allow(dead_code)]
 pub const DLP_AUTO_FLAG_SCORE: i32 = 50;
 
 /// Status of an outbound share row.
@@ -687,9 +711,25 @@ pub async fn remove_approver(pool: &Pool<Postgres>, user_id: Uuid) -> Result<boo
 
 // ── Periodic purge worker ────────────────────────────────────────────
 
-/// Sweep expired or denied rows whose blobs are still on disk. Returns
-/// the number of rows purged. Errors on individual rows are logged but
-/// do not abort the sweep.
+/// Two-phase sweep run on a schedule by [`spawn_purge_worker`].
+///
+/// Phase 1 — zeroise: rows past `expires_at` that have not been purged
+/// yet have their on-disk blob unlinked and their sealed DEK / nonce /
+/// storage path / download token NULL'd. `Pending`/`Approved` rows
+/// flip to `Purged`; `Downloaded`/`Denied` rows keep their status so
+/// the history still records *how* the row ended (the new `purged_at`
+/// timestamp tells the UI that the material on disk is gone).
+///
+/// Phase 2 — hard-delete: rows whose `purged_at` is older than
+/// [`HISTORY_RETENTION_AFTER_PURGE_DAYS`] are removed from the table
+/// entirely so the admin history view does not grow without bound.
+/// These rows carry no secret material by this point so deletion is
+/// safe; an `outbound_share.removed` audit event records each removal
+/// for the compliance trail.
+///
+/// Returns the number of rows zeroised in Phase 1 (Phase 2 deletions
+/// are logged separately via tracing + audit). Errors on individual
+/// rows are logged but do not abort the sweep.
 pub async fn purge_expired(pool: &Pool<Postgres>) -> Result<u64, AppError> {
     let candidates: Vec<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT id, storage_path
@@ -736,6 +776,50 @@ pub async fn purge_expired(pool: &Pool<Postgres>) -> Result<u64, AppError> {
                 tracing::warn!("outbound_shares purge_expired: {id}: {e}");
             }
         }
+    }
+
+    // ── Phase 2: hard-delete history rows past their retention window ──
+    // Rows reach this branch only after Phase 1 has already zeroised
+    // their secret material (sealed DEK / nonce / storage_path /
+    // download_token are all NULL), so deletion does not lose anything
+    // a `Purge` admin button could still act on. We list the ids before
+    // deleting so each removal can be audited individually.
+    let to_remove: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT id
+         FROM outbound_shares
+         WHERE purged_at IS NOT NULL
+           AND purged_at <= NOW() - make_interval(days => $1)
+         LIMIT 500",
+    )
+    .bind(HISTORY_RETENTION_AFTER_PURGE_DAYS as i32)
+    .fetch_all(pool)
+    .await?;
+
+    let mut removed = 0u64;
+    for (id,) in to_remove {
+        let res = sqlx::query("DELETE FROM outbound_shares WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await;
+        match res {
+            Ok(r) if r.rows_affected() > 0 => {
+                removed += 1;
+                let _ = audit::log(
+                    pool,
+                    None,
+                    "outbound_share.removed",
+                    &serde_json::json!({ "share_id": id }),
+                )
+                .await;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("outbound_shares purge_expired (hard-delete): {id}: {e}");
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::info!("outbound_shares: hard-deleted {removed} history row(s) past retention");
     }
 
     Ok(purged)

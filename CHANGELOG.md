@@ -5,6 +5,220 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.0] — 2026-06-09
+
+### Minor Release — Pluggable antivirus scanning for Quick Share uploads
+
+v1.12.0 lands the first malware-scanning hook in the Quick Share
+upload pipeline. Both directions of the file mover — **inbound**
+(`POST /api/user/files/upload`, where a Strata user pushes a file
+*to* the remote session) and **outbound** (`POST
+/api/user/outbound-shares/submit` plus the token-auth shell-side
+`POST /api/outbound-shares/ingest/{token}`) — now stream the upload
+through a configurable antivirus scanner *before* the file lands in
+the session file store / before it is sealed via Vault Transit. The
+scanner is pluggable via the `Scanner` trait in
+`backend/src/services/av.rs`; three backends ship:
+
+- **`off`** (default) — no-op, returns
+  `Verdict::Skipped { reason: "scanning disabled" }`. Existing
+  deployments behave exactly as before until they opt in.
+- **`clamav`** — talks to a ClamAV `clamd` daemon over TCP using
+  the **INSTREAM** wire protocol (full implementation in
+  `ClamAvScanner`: `zINSTREAM\0` opener, length-prefixed 64 KB
+  chunks, `0u32` terminator, null-terminated response parsing for
+  `stream: OK` / `stream: <SIG> FOUND` / `<error> ERROR`). The
+  bundled sidecar in `docker-compose.yml` listens on the internal
+  `guac-internal` network as `clamav:3310` — no host port mapping,
+  no public exposure.
+- **`command`** — shell-out to any scanner whose exit codes follow
+  `0 = clean`, `1 = infected`, anything else = error. Signature is
+  parsed from the last non-empty stdout (then stderr) line,
+  stripping `Threat: ` and `Found: ` prefixes. The command is
+  invoked via `tokio::process::Command` with a configurable timeout
+  and `{path}` placeholder substitution.
+
+**Fail-closed by design.** When the scanner itself errors
+(timeout, daemon down, connection refused) the upload is rejected
+under the default `STRATA_AV_FAIL_MODE=block`. Operators who prefer
+degraded-open behaviour can set `STRATA_AV_FAIL_MODE=allow` — the
+audit row still records the error and the engine that produced it,
+so forensics is preserved either way. **Infected verdicts are
+always rejected regardless of fail-mode.**
+
+### Added
+
+- **`backend/src/services/av.rs` (new, ~759 LoC).** Defines the
+  `Verdict { Clean | Infected{signature} | Skipped{reason} |
+  Error{message} }` enum (with `as_str()` matching the new DB
+  column vocabulary and `blocks(fail_mode)` semantics), the
+  `Scanner` trait (async, `Send + Sync + Debug`), and three
+  concrete implementations:
+  - `OffScanner` — always returns `Skipped`.
+  - `ClamAvScanner` — full `clamd` INSTREAM TCP protocol. Files
+    larger than `STRATA_AV_MAX_SCAN_SIZE` (default 100 MiB) are
+    tagged `Skipped { reason: "oversize" }` rather than attempted.
+    Scan is bounded by `STRATA_AV_TIMEOUT_MS` (default 30 000 ms);
+    timeout produces an `Error` verdict.
+  - `CommandScanner` — exec-driven contract. `{path}` placeholder
+    is substituted into the command line, or the path is appended
+    as the final argv element if no placeholder is present. The
+    full argv is split on whitespace (no shell parsing — wrap
+    complex pipelines in a script).
+
+  Configuration is fully env-driven via `Config::from_env`, with
+  defaults that keep the feature off until explicitly opted in.
+  Includes 15 unit tests covering verdict tagging, fail-mode
+  semantics, argv building, signature extraction, oversize-skip,
+  and the three command-scanner exit-code paths.
+
+- **`backend/migrations/078_av_scanning.sql` (new).** Adds four
+  nullable columns to `outbound_shares`:
+  - `av_scan_status TEXT` — one of `clean | infected | skipped |
+    error` matching `Verdict::as_str()`.
+  - `av_signature TEXT` — for `infected` rows, the signature name
+    returned by the engine (e.g. `Win.Test.EICAR_HDB-1`).
+  - `av_scanned_at TIMESTAMPTZ` — when the verdict was issued.
+  - `av_scanner_backend TEXT` — which backend spoke (`off` |
+    `clamav` | `command`).
+
+  Also creates a partial index
+  `idx_outbound_shares_av_attention` over `av_scan_status WHERE
+  status IN ('infected','error')` to keep the operator dashboard
+  query cheap as the table grows. All columns are nullable, so the
+  migration is backwards-compatible with the v1.11.x row shape.
+
+- **Audit events.** Every blocked upload emits a structured audit
+  event with the signature, file metadata, session context, and
+  the backend tag that spoke:
+  - `file.av_blocked` — inbound Quick Share rejection.
+  - `outbound_share.requested` — extended with `av_status`,
+    `av_signature`, `av_backend` keys on every outbound submission
+    (success or rejection) so the audit trail records *which*
+    engine cleared the file as well as *what* it said.
+
+- **`docker-compose.yml` ClamAV sidecar.** A new `clamav` service
+  behind the opt-in `av` compose profile
+  (`docker compose --profile av up -d`). Internal-only network
+  (`guac-internal`), no host port mapping. `freshclam` runs on
+  startup; first boot pulls ~250 MB of signatures from the public
+  ClamAV CDN — `start_period` is set to 300 s to absorb this
+  before the healthcheck reports unhealthy. A new named volume
+  `clamav-db` persists `/var/lib/clamav` across restarts so
+  signature downloads aren't repeated on every `up`. Resource
+  limits set at 3 GB RAM / 2 CPUs (clamd resident-set scales with
+  signature DB size).
+
+- **AppState plumbing.** `services::app_state::AppState` gains two
+  new fields (`av_scanner: Arc<dyn Scanner>`, `av_fail_mode:
+  FailMode`) wired at backend boot in `main.rs`. The scanner is
+  built once from environment via `services::av::build(&cfg)` and
+  shared across every request handler — no per-request scanner
+  construction overhead.
+
+- **Seven new env vars** (full reference in `.env.example`):
+  - `STRATA_AV_BACKEND` — `off` | `clamav` | `command`. Default `off`.
+  - `STRATA_AV_FAIL_MODE` — `block` | `allow`. Default `block`.
+  - `STRATA_AV_MAX_SCAN_SIZE` — bytes. Default `104857600` (100 MiB).
+  - `STRATA_AV_TIMEOUT_MS` — milliseconds. Default `30000`.
+  - `STRATA_AV_CLAMD_HOST` — hostname. Default `clamav`.
+  - `STRATA_AV_CLAMD_PORT` — port. Default `3310`.
+  - `STRATA_AV_CMD` — full command line with optional `{path}`
+    placeholder. No default (required when `STRATA_AV_BACKEND=command`).
+
+- **Operator documentation:**
+  - New deep-dive guide `docs/av-scanning.md` covering the wire
+    protocol, the three backends, fail-mode semantics, signature
+    DB management, EICAR test procedure, and troubleshooting.
+  - New ADR `docs/adr/ADR-0011-av-scanning.md` recording the
+    decision rationale (pluggable trait vs hard-coded ClamAV,
+    fail-closed default, sidecar-optional deployment, no
+    inline ClamAV crate dependency).
+  - New runbook `docs/runbooks/av-operations.md` covering "scanner
+    is down", "signatures not updating", "false positive
+    triage", and the EICAR smoke test.
+  - `docs/deployment.md` and `docs/deployment-kubernetes.md` gain
+    AV deployment sections (compose profile + Helm sidecar).
+  - `docs/security.md` §"Outbound Quick-Share" extended with AV
+    as a mitigation control.
+  - `docs/threat-model.md` Quick Share STRIDE table gains a
+    "malicious file upload" row with AV scanning as the mitigation.
+  - `docs/api-reference.md` documents the new `Validation` error
+    shape returned on blocked uploads and the four new
+    `outbound_shares.av_*` fields visible in admin responses.
+
+### Changed
+
+- **`routes/files.rs::upload`** now performs AV scanning after MIME
+  sniffing and before `file_store.store_from_path`. The temp file
+  is deleted on blocking verdict so the session file store never
+  sees infected content.
+- **`routes/outbound_shares.rs::parse_outbound_multipart`** now
+  takes the scanner + fail-mode and scans on disk *before*
+  reading the plaintext into memory and *before* sealing via Vault
+  Transit. Sealing is destructive from the scanner's perspective
+  (Vault doesn't expose the plaintext), so the only correct place
+  to scan is between the stream-to-disk step and the seal step.
+- **`services::outbound_shares::SubmitInput`** gains
+  `av_verdict: &Verdict` and `av_backend: &str` fields, which are
+  persisted into the four new columns on the INSERT.
+- **Test fixtures** — 10 backend test fixtures across
+  `routes/{auth, mod, health, user, admin}.rs` updated to seed
+  `av_scanner: Arc::new(OffScanner)` and
+  `av_fail_mode: FailMode::Block` on AppState construction.
+- **`.env.example`** gains a 60-line section documenting all seven
+  AV env vars with operator-grade comments and examples for both
+  the ClamAV and command backends.
+- **`docker-compose.yml`** — opt-in `clamav` service entry plus a
+  `clamav-db` named volume.
+
+### Security
+
+- **Malicious file blocking on upload.** Before v1.12.0, an
+  operator who Quick-Shared an `.exe` containing malware would
+  push it onto the remote session host with no in-product check.
+  With the bundled ClamAV sidecar enabled, the same upload is
+  rejected at the gateway with a structured audit event recording
+  the signature name. This closes a long-standing residual on the
+  Quick Share threat model (previously: "scanner is out of scope —
+  bring your own external proxy").
+- **Outbound DLP defence-in-depth.** Outbound Quick Share already
+  ran a built-in keyword-matching DLP heuristic; AV scanning adds
+  a second, orthogonal control. A file can now be auto-cleared by
+  the DLP scorer **and** blocked by the AV engine — both checks
+  must clear before the row reaches the approver queue.
+- **Fail-closed default.** `STRATA_AV_FAIL_MODE=block` is the
+  default for the same reason `SameSite=Strict` is the default in
+  [ADR-0002](docs/adr/ADR-0002-csrf-samesite-strict.md): a
+  silently-degraded security control is worse than no control,
+  because operators assume it's working.
+- **No new attack surface.** ClamAV runs in its own container on
+  the internal Docker network. The backend talks to it over
+  `clamav:3310` (TCP) — no shell exec, no `LD_PRELOAD`, no
+  shared filesystem mount that would let a malicious file
+  escape through filesystem APIs (the temp file is read-only
+  from the scanner's perspective via the INSTREAM wire protocol;
+  it never moves between the two containers).
+
+### Operator notes
+
+- **Existing v1.11.x deployments upgrade cleanly** — the migration
+  is purely additive (four nullable columns + one partial index)
+  and the default `STRATA_AV_BACKEND=off` preserves prior
+  behaviour. Opting in is a `docker compose --profile av up -d`
+  + three env-var changes away.
+- **First ClamAV boot pulls ~250 MB** of signature definitions
+  from clamav.net. Plan for the start-up delay; subsequent boots
+  reuse the `clamav-db` volume and converge in seconds.
+- **No new Cargo dependencies.** The ClamAV INSTREAM protocol is
+  implemented directly against `tokio::net::TcpStream` (the wire
+  format is a 9-line state machine). The `command` backend uses
+  `tokio::process::Command`. Both are stdlib + existing tokio.
+
+### Migrations
+
+- `078_av_scanning.sql` — additive, backwards-compatible.
+
 ## [1.11.1] — 2026-06-09
 
 ### Patch Release — Approver workflow polish: in-session popup, persisted deny reason, mandatory outbound-share justification

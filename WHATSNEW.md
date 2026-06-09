@@ -1,4 +1,223 @@
 
+# What's New in v1.12.0
+
+> **Minor release — pluggable antivirus scanning on every Quick
+> Share upload path.** v1.12.0 plugs a long-standing gap in the
+> file-mover pipeline: both **inbound** Quick Share (operator → remote
+> session) and **outbound** Quick Share (remote session → operator,
+> the v1.11.0 approval-gated path) now stream every upload through a
+> configurable antivirus scanner *before* the file lands in the
+> session file store / before it is sealed via Vault Transit.
+> Three backends ship — `off` (default, no-op), `clamav` (full
+> `clamd` INSTREAM TCP wire protocol), and `command` (exit-code
+> contract for ESET / Defender / Sophos / Trend / anything that
+> matches `0=clean, 1=infected`). Default is **fail-closed**: a
+> scanner error blocks the upload and writes a structured audit
+> row recording which engine spoke and why. The ClamAV sidecar
+> is opt-in via the new `av` compose profile and lives entirely
+> on the internal Docker network — no host port mapping, no
+> public exposure.
+
+## Why this exists
+
+Through v1.11.x the Quick Share file mover had no built-in
+malware check. Operators were expected to wire their own DLP /
+AV proxy in front of the backend, or to trust that the source
+machine (operator's workstation or remote target) had endpoint
+protection enabled. That worked for tightly-controlled internal
+deployments but failed two of our larger sites:
+
+1. **Compliance auditors** flagged the missing scan because the
+   audit trail recorded `outbound_share.requested` rows without
+   any explicit "this file was scanned" attestation. Adding one
+   in v1.11.x meant either side-loading a transparent proxy or
+   modifying the backend at every site.
+2. **A real-world EICAR test by one of our customers** in May
+   surfaced a Quick Share upload of a known-bad sample that
+   completed cleanly. The file never touched a scanner on the
+   way through Strata because Strata never asked one.
+
+v1.12.0 closes both gaps with one feature: an in-process scanner
+hook, three swappable backends, and a fail-closed default.
+
+## The three backends
+
+The scanner is wired through a trait in
+`backend/src/services/av.rs`:
+
+```rust
+#[async_trait]
+pub trait Scanner: Send + Sync + std::fmt::Debug {
+    async fn scan(&self, path: &Path, file_size_bytes: u64) -> Verdict;
+    fn backend_name(&self) -> &'static str;
+}
+```
+
+with `Verdict` carrying `Clean | Infected { signature } |
+Skipped { reason } | Error { message }`. The `blocks(fail_mode)`
+helper turns a verdict into a block / pass decision at the
+upload-handler call site.
+
+### `off` (default)
+
+Returns `Skipped { reason: "scanning disabled" }` on every call.
+The handler treats `Skipped` as a pass regardless of fail-mode,
+so deployments that don't opt in behave exactly as they did in
+v1.11.x.
+
+### `clamav`
+
+Talks to a ClamAV `clamd` daemon over plain TCP using the
+**INSTREAM** wire protocol — no `clamdscan` shell-out, no file
+copy across the FS boundary. The Rust implementation is a
+direct `tokio::net::TcpStream` state machine: open with
+`zINSTREAM\0`, write the file in 64 KB chunks each prefixed by
+a 4-byte big-endian length, terminate with `0u32`, then read
+the null-terminated response and parse `stream: OK` /
+`stream: <SIG> FOUND` / `<error> ERROR`. Files larger than
+`STRATA_AV_MAX_SCAN_SIZE` (default 100 MiB) are tagged
+`Skipped { reason: "oversize" }` rather than attempted — clamd
+itself rejects anything over the daemon-side `StreamMaxLength`
+(default 25 MiB out of the box; Strata's sidecar bumps it to
+match `STRATA_AV_MAX_SCAN_SIZE` so the two limits agree).
+
+### `command`
+
+Shell-out to any scanner that follows the exit-code contract
+`0 = clean, 1 = infected, other = error`. The command line is
+parsed from `STRATA_AV_CMD` (whitespace-split — wrap pipelines
+in a small script), with optional `{path}` placeholder
+substitution. Signature is extracted from the last non-empty
+line of stdout (falling back to stderr), with `Threat: ` /
+`Found: ` prefixes stripped. Invoked via
+`tokio::process::Command` so the timeout, working directory,
+and process group are all owned by the backend. No shell, no
+PTY allocation, no environment leak.
+
+```bash
+# Microsoft Defender for Endpoint (Linux ATP)
+STRATA_AV_BACKEND=command
+STRATA_AV_CMD=/opt/microsoft/mdatp/sbin/mdatp scan custom --path {path}
+
+# Sophos
+STRATA_AV_BACKEND=command
+STRATA_AV_CMD=/opt/sophos-av/bin/savscan -ss -nb {path}
+
+# A bash wrapper for anything fancier
+STRATA_AV_BACKEND=command
+STRATA_AV_CMD=/usr/local/bin/strata-scan.sh {path}
+```
+
+## Fail-closed by design
+
+`STRATA_AV_FAIL_MODE=block` (the default) means a scanner error
+— socket refused, command not found, timeout, daemon panic —
+**rejects the upload**. The audit row records the error message
+verbatim. `allow` flips the behaviour for environments where
+intermittent scanner outages are worse than the
+admit-on-failure risk; the audit row still records the error
+and the engine that produced it, so an operator can
+reconstruct exactly which uploads degraded-passed during the
+outage window.
+
+**Infected verdicts are always rejected regardless of fail-mode.**
+There is no override knob, by design — a `command` backend that
+returns exit code 1 is treated as an unambiguous "infected"
+signal whether the file is huge, the scanner is slow, or the
+day is Sunday.
+
+## The four new outbound_shares columns
+
+Migration `078_av_scanning.sql` adds:
+
+| Column                | Type            | Notes                                                       |
+| --------------------- | --------------- | ----------------------------------------------------------- |
+| `av_scan_status`      | `TEXT` (NULL)   | One of `clean | infected | skipped | error`                 |
+| `av_signature`        | `TEXT` (NULL)   | Engine-reported signature for `infected` rows               |
+| `av_scanned_at`       | `TIMESTAMPTZ`   | When the verdict was issued                                 |
+| `av_scanner_backend`  | `TEXT` (NULL)   | Which backend spoke (`off`, `clamav`, `command`)            |
+
+Plus a partial index:
+
+```sql
+CREATE INDEX idx_outbound_shares_av_attention
+  ON outbound_shares (av_scan_status)
+  WHERE status IN ('infected','error');
+```
+
+The partial index keeps the admin dashboard query —
+"show me every outbound share that needs eyeballing" — cheap
+as the table grows. Rows that scanned `clean` or `skipped` are
+excluded from the index entirely.
+
+All four columns are nullable so the migration is backwards-
+compatible: rows created under v1.11.x stay `NULL` and the
+admin UI renders them as "Pre-AV (v1.11.x)" with a neutral grey
+badge instead of an alarming red one.
+
+## Opt-in ClamAV sidecar
+
+The new `clamav` service in `docker-compose.yml` lives behind
+the opt-in `av` compose profile:
+
+```bash
+# Enable ClamAV and reload
+echo 'STRATA_AV_BACKEND=clamav' >> .env
+docker compose --profile av up -d
+```
+
+Topology:
+
+- Image: `clamav/clamav:stable` (official upstream).
+- Network: `guac-internal` only — no host port mapping, no
+  public exposure.
+- Volume: `clamav-db` (named) persists `/var/lib/clamav` so
+  signature downloads aren't repeated on every `up`.
+- Healthcheck: `clamdcheck.sh` with `start_period: 300s` to
+  absorb the first-boot ~250 MB freshclam pull.
+- Limits: 3 GB RAM / 2 CPUs (clamd's resident set scales with
+  the signature DB; 1.4 GB resident is typical once loaded).
+
+The backend tolerates an absent sidecar because `STRATA_AV_BACKEND=off`
+is the default — operators who never want AV scanning never
+need to opt into the profile.
+
+## Audit events
+
+Every blocked upload writes a structured audit event:
+
+- **`file.av_blocked`** — inbound Quick Share rejection. Body
+  includes `signature`, `filename`, `byte_len`, `session_id`,
+  and `av_backend`.
+- **`outbound_share.requested`** — extended with `av_status`,
+  `av_signature`, `av_backend` keys on every outbound submission
+  (success *or* rejection) so the audit trail records which
+  engine cleared the file as well as what it said. This makes
+  the outbound flow self-attesting for compliance review.
+
+## Migration & upgrade path
+
+- **No breaking changes.** Migration `078_av_scanning.sql` is
+  purely additive (four nullable columns + one partial index).
+  Default `STRATA_AV_BACKEND=off` keeps v1.11.x behaviour bit-
+  for-bit until the operator opts in.
+- **No new Cargo dependencies.** The ClamAV INSTREAM wire
+  protocol is implemented directly against `tokio::net::TcpStream`
+  (the format is small enough to live in one file). The command
+  backend uses `tokio::process::Command`. Both are stdlib +
+  existing tokio.
+- **EICAR smoke test** is documented in
+  [docs/runbooks/av-operations.md](docs/runbooks/av-operations.md);
+  the short version is `curl -F file=@eicar.com -F session_id=…`
+  and expect a 400 with `signature=Win.Test.EICAR_HDB-1`.
+
+See [docs/av-scanning.md](docs/av-scanning.md) for the full
+operator guide and
+[docs/adr/ADR-0011-av-scanning.md](docs/adr/ADR-0011-av-scanning.md)
+for the design rationale.
+
+---
+
 # What's New in v1.11.1
 
 > **Patch release — approver workflow polish.** v1.11.1 closes

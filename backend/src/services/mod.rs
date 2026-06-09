@@ -5,6 +5,7 @@ pub mod admin_tags;
 pub mod app_state;
 pub mod audit;
 pub mod auth;
+pub mod av;
 pub mod checkouts;
 pub mod circuit_breaker;
 pub mod co_pilot;

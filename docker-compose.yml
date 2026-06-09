@@ -328,6 +328,56 @@ services:
       retries: 5
       start_period: 10s
 
+  # ── 5. ClamAV antivirus (optional, profile-gated) ────────────────────
+  # Opt-in malware scanner for inbound Quick Share uploads and outbound
+  # share requests. Enable by running:
+  #   docker compose --profile av up -d
+  # and setting these env vars on the backend service (already wired
+  # below — they're no-ops unless this sidecar is up):
+  #   STRATA_AV_BACKEND=clamav
+  #   STRATA_AV_CLAMD_HOST=clamav
+  #   STRATA_AV_CLAMD_PORT=3310
+  #   STRATA_AV_FAIL_MODE=block   # or "allow" if you want degraded ops
+  # The container ships with an empty signature DB and runs freshclam
+  # on startup to pull the latest definitions from clamav.net (~250 MB
+  # on first launch, then incremental). It does NOT expose port 3310
+  # to the host — it's reachable only over the internal compose network.
+  clamav:
+    image: clamav/clamav:stable
+    profiles:
+      - av
+    restart: unless-stopped
+    networks:
+      - guac-internal
+    volumes:
+      - clamav-db:/var/lib/clamav
+    environment:
+      # Let freshclam run on startup (the default), and keep clamd
+      # running with on-access scanning disabled — we drive scans
+      # explicitly via the INSTREAM TCP protocol from the backend.
+      - CLAMAV_NO_FRESHCLAMD=false
+      - CLAMD_STARTUP_DELAY=5
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          # ClamAV's RAM usage scales with signature DB size — current
+          # mainline DB is ~1.4 GB resident. Headroom prevents OOM
+          # during freshclam reloads.
+          memory: 3G
+          cpus: "2"
+    healthcheck:
+      # clamd writes a UNIX socket and listens on TCP 3310; the
+      # `clamdcheck.sh` script bundled in the image exits 0 when the
+      # daemon answers PING. Generous start_period because the first
+      # boot does a full DB download.
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+
 volumes:
   postgres-data:
     driver: local
@@ -340,6 +390,8 @@ volumes:
   backend-config:
     driver: local
   vault-data:
+    driver: local
+  clamav-db:
     driver: local
 
 networks:

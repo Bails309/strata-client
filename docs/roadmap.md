@@ -78,6 +78,58 @@ an audit trail of every rule change.
 
 ## Security & Zero Trust Access
 
+### Antivirus scanning on Quick Share uploads
+
+**Status:** Shipped — v1.12.0
+**Area:** File Transfer · DLP
+
+Pluggable AV scanner runs against both Quick Share upload paths
+(inbound `POST /api/files/upload` and outbound
+`POST /api/user/outbound-shares/submit` plus its token-auth shell
+variant `POST /api/outbound-shares/ingest/{token}`). Three backends
+ship: `off` (default no-op, preserves v1.11.x behaviour), `clamav`
+(full `clamd` INSTREAM TCP wire protocol against the opt-in
+bundled sidecar), and `command` (exit-code contract for Microsoft
+Defender, Sophos, ESET, or any wrapper script). Fail-closed by
+default (`STRATA_AV_FAIL_MODE=block`); infected verdicts are
+always rejected. Migration 078 persists the verdict on each
+`outbound_shares` row in four new columns (`av_scan_status`,
+`av_signature`, `av_scanned_at`, `av_scanner_backend`) with a
+partial index keeping the operator-attention dashboard query
+cheap. See [av-scanning.md](av-scanning.md),
+[ADR-0011](adr/ADR-0011-av-scanning.md), and the
+[av-operations runbook](runbooks/av-operations.md).
+
+Future iterations on the trail of this feature live below as
+separate proposals.
+
+### Per-role AV scan-policy editor
+
+**Status:** Proposed (v1.12.0 builds the substrate)
+**Area:** File Transfer · DLP
+
+The v1.12.0 scanner is a single global engine selected by env var.
+A future admin UI would let operators define per-role or
+per-connection policies — e.g. "Tier-3 SOC roles bypass the
+oversize-skip ceiling because they handle disk images", or
+"Customer-facing connections always reject any `application/x-msdownload`
+regardless of scan verdict". The four-column verdict shape on
+`outbound_shares` already supports per-row policy correlation
+without a new migration; the missing piece is the policy
+authoring UI and a `policy_id` column on the audit row.
+
+### Multi-engine AV with majority verdict
+
+**Status:** Proposed
+**Area:** File Transfer · DLP
+
+Some compliance regimes require two independent engines to clear
+a file before egress. The `Scanner` trait already supports this
+shape — a `MultiScanner { engines: Vec<Arc<dyn Scanner>>, mode:
+{ All, Majority, Any } }` would be a thin wrapper. Surface the
+per-engine verdicts as an array on the audit row rather than a
+single `av_signature` field.
+
 ### Color-Coded Security Tiers ("Red" Servers)
 
 **Status:** Proposed  

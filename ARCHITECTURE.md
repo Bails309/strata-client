@@ -35,6 +35,7 @@ flowchart LR
 | `guacd` (pool)  | Custom Alpine image, FreeRDP 3    | Apache Guacamole protocol daemon. Round-robin pool for horizontal scale.                            |
 | `postgres-local`| PostgreSQL 16                     | Optional bundled DB; can be swapped for an external Postgres at any time.                           |
 | `vault`         | HashiCorp Vault 1.19              | Optional bundled Vault, auto-initialised, auto-unsealed; Transit engine for envelope encryption.    |
+| `clamav`        | ClamAV `clamd` (opt-in)           | Opt-in via the `av` Docker compose profile; scans every Quick Share upload over `clamav:3310` INSTREAM. Internal-only network exposure. See [docs/av-scanning.md](docs/av-scanning.md). |
 
 ## Trust boundaries (top-down)
 

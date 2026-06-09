@@ -2228,6 +2228,17 @@ Upload a file via multipart form data. Requires authentication **and** the `can_
 }
 ```
 
+**Response** `400 Bad Request` — when the antivirus scanner (v1.12.0+) blocks the upload. Body shape:
+
+```json
+{
+  "error": "validation",
+  "message": "File rejected by malware scan: Win.Test.EICAR_HDB-1"
+}
+```
+
+The reject path runs when `STRATA_AV_BACKEND` is set to `clamav` or `command` and the scanner returns `Verdict::Infected{signature}`, **or** when the scanner returns `Verdict::Error{message}` and `STRATA_AV_FAIL_MODE=block` (the default). The temp file is deleted on the spot — the session file store never sees the rejected bytes. A `file.av_blocked` audit event is written with `signature`, `filename`, `byte_len`, `session_id`, and `av_backend` keys. See [av-scanning.md](av-scanning.md) for full operator detail.
+
 ### `GET /api/files/:token`
 
 Download a file. **This endpoint is intentionally unauthenticated** — the random UUID token serves as a capability. This allows the remote desktop (which has no Strata auth) to fetch the file.
@@ -2278,6 +2289,41 @@ Delete a file. Requires authentication and ownership (only the uploader can dele
 Pipeline for files **leaving** a remote session: Vault-sealed at rest, scanned by a built-in DLP heuristic, and either auto-approved (low score + per-user opt-in) or queued for an approver. Two ingest paths feed the same backend service.
 
 All authenticated endpoints below require the `can_use_quick_share_outbound` role permission. **`can_manage_system` does NOT bypass this check** — outbound file export is deliberately separable from general administration.
+
+### v1.12.0+ antivirus pre-check
+
+Every outbound submission (drive-channel and token-auth ingest paths
+alike) is streamed through the configured AV scanner **before** the
+plaintext is read into memory for Vault-Transit sealing. The
+verdict persists on the resulting row in four columns:
+
+| Field                | Type            | Notes                                                                |
+| -------------------- | --------------- | -------------------------------------------------------------------- |
+| `av_scan_status`     | `string`        | `clean` \| `infected` \| `skipped` \| `error`, or `null` for v1.11.x rows |
+| `av_signature`       | `string`        | Engine-reported signature on infected rows                            |
+| `av_scanned_at`      | `string` (RFC 3339) | When the verdict was issued                                         |
+| `av_scanner_backend` | `string`        | `off` \| `clamav` \| `command`                                       |
+
+Admin responses on `GET /api/admin/outbound-shares` and `GET
+/api/admin/outbound-shares/pending` include these four fields on
+every row.
+
+When the scanner returns `Verdict::Infected`, **or** returns
+`Verdict::Error` and `STRATA_AV_FAIL_MODE=block` (the default),
+the submission is rejected with `400 Bad Request`:
+
+```json
+{
+  "error": "validation",
+  "message": "File rejected by malware scan: Win.Test.EICAR_HDB-1"
+}
+```
+
+No `outbound_shares` row is written, no DEK is generated, no
+ciphertext is staged. The standard `outbound_share.requested`
+audit event is still written with `av_status=infected`,
+`av_signature=<sig>`, `av_backend=<engine>` so the rejection is
+self-attesting for compliance.
 
 ### Drive-channel ingest (transparent)
 

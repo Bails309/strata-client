@@ -289,6 +289,18 @@ async fn main() -> anyhow::Result<()> {
         .as_ref()
         .map(|_| services::dmz_link::LinkRegistry::new());
 
+    // ── Antivirus scanner ──
+    //
+    // Read `STRATA_AV_BACKEND` (and friends) from the environment and
+    // construct the concrete [`Scanner`] once at boot. The handle is
+    // stored in `AppState` and shared across every upload-handling
+    // request task. Defaults to [`OffScanner`] when unset, so this is
+    // a no-op upgrade for existing deployments — operators opt in by
+    // setting `STRATA_AV_BACKEND=clamav` (or `command`).
+    let av_cfg = services::av::Config::from_env();
+    let av_fail_mode = av_cfg.fail_mode;
+    let av_scanner = services::av::build(&av_cfg);
+
     // ── Build state – always starts in Running ──
     let state = Arc::new(RwLock::new(AppState {
         phase: BootPhase::Running,
@@ -306,6 +318,8 @@ async fn main() -> anyhow::Result<()> {
         )),
         vdi_driver,
         dmz_link_registry: dmz_link_registry.clone(),
+        av_scanner: av_scanner.clone(),
+        av_fail_mode,
         started_at: std::time::Instant::now(),
     }));
 

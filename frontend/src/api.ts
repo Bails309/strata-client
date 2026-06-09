@@ -909,7 +909,13 @@ export interface ServiceHealth {
   guacd: GuacdHealth;
   vault: VaultHealth;
   schema: SchemaHealth;
-  av: AvHealth;
+  /**
+   * Antivirus scanner status. Optional in the type so legacy test fixtures
+   * and older API responses (pre-v1.12) remain assignable; the field is
+   * always present in live responses from this version onward. UI code
+   * must use optional chaining (`health.av?.enabled`) when reading it.
+   */
+  av?: AvHealth;
   uptime_secs: number;
   environment: string;
 }

@@ -29,6 +29,43 @@ export interface ReleaseCard {
  */
 export const RELEASE_CARDS: ReleaseCard[] = [
   {
+    version: "1.12.0",
+    subtitle:
+      "Minor release — pluggable antivirus scanning on every Quick Share upload path. Both inbound (operator → remote session) and outbound (remote session → operator, the v1.11.0 approval-gated path) now stream every upload through a configurable AV scanner before the file lands on disk or is sealed via Vault Transit. Three backends ship — off (default, no-op), clamav (full clamd INSTREAM TCP wire protocol against an opt-in sidecar), and command (exit-code contract for Defender / Sophos / ESET / any scanner that maps 0=clean, 1=infected). Default is fail-closed: a scanner error blocks the upload and writes a structured audit row identifying the engine.",
+    sections: [
+      {
+        title: "Three swappable backends behind one trait",
+        description:
+          "All upload paths now call into the new Scanner trait in backend/src/services/av.rs. OffScanner is the default and treats every call as Skipped { reason: 'scanning disabled' }, preserving v1.11.x behaviour for sites that don't opt in. ClamAvScanner speaks the clamd INSTREAM protocol directly over tokio::net::TcpStream — no clamdscan shell-out, no temp-file copy — opening with zINSTREAM\\0, streaming 64 KB length-prefixed chunks, terminating with 0u32, then parsing the null-terminated stream: OK / stream: <SIG> FOUND response. CommandScanner exec's any binary that follows the standard 0=clean / 1=infected / other=error contract via tokio::process::Command (no shell, {path} substituted into argv). No new Cargo dependencies were added.",
+      },
+      {
+        title: "Fail-closed by default with full audit trail",
+        description:
+          "STRATA_AV_FAIL_MODE defaults to block: a scanner timeout, connection refused, or unparseable response rejects the upload. Set fail-mode to allow if you'd rather log-and-pass on errors — infected verdicts are always rejected regardless. Every block writes a structured file.av_blocked audit event with the engine name, file size, filename, and detected signature (or error reason). The existing outbound_share.requested audit event gained three new keys — av_status, av_signature, av_backend — so the row that records the share request also records what the scanner said about the file.",
+      },
+      {
+        title: "Opt-in ClamAV sidecar via the new 'av' compose profile",
+        description:
+          "docker-compose.yml gains a clamav service guarded by the av profile (docker compose --profile av up -d). It lives on guac-internal only — no host port mapping, no public exposure — and persists its signature DB in a named volume. Bring-up takes ~60 s on first boot while freshclam pulls the initial signature set; subsequent restarts are immediate. STRATA_AV_BACKEND=clamav with STRATA_AV_CLAMD_HOST=clamav and STRATA_AV_CLAMD_PORT=3310 in .env wires the backend to the sidecar. Sites that prefer an external clamd or Defender / Sophos / ESET on the host can choose those shapes instead — see docs/av-scanning.md.",
+      },
+      {
+        title: "Per-row outbound scan state (migration 078)",
+        description:
+          "Migration 078 adds four nullable columns to outbound_shares — av_scan_status, av_signature, av_scanned_at, av_scanner_backend — populated on every submission so the operator dashboard can show 'clean by clamav at 14:02:11' next to the row. A partial index over (av_scan_status) WHERE status IN ('infected','error') keeps the 'needs attention' query cheap even on busy installations. Legacy rows stay NULL and render as 'not scanned' in the Admin → Outbound Shares history. The Admin tab gains a visible verdict column.",
+      },
+      {
+        title: "EICAR smoke test built into the docs",
+        description:
+          "docs/av-scanning.md ships a reproducible end-to-end verification you can run after enabling the scanner: drop an EICAR test file into a Quick Share upload, expect HTTP 400 with code av_blocked and a file.av_blocked audit row carrying signature: Eicar-Test-Signature and backend: clamav. The deployment guide (docs/deployment.md), Kubernetes guide (docs/deployment-kubernetes.md, with full sidecar Deployment / Service / PVC / NetworkPolicy manifests), and on-call runbook (docs/runbooks/av-operations.md) all reference the same test.",
+      },
+      {
+        title: "Operator impact",
+        description:
+          "Migration 078 applies automatically. The default (STRATA_AV_BACKEND=off) is byte-identical to v1.11.x behaviour — sites that don't opt in see no behavioural change beyond four new nullable columns and a new audit-event kind that will never fire. To enable: set STRATA_AV_BACKEND=clamav in .env, run docker compose --profile av up -d, drop an EICAR file through Quick Share, and confirm the 400. To disable temporarily: set STRATA_AV_BACKEND=off (existing scan history on rows is preserved). New env vars: STRATA_AV_BACKEND, STRATA_AV_FAIL_MODE, STRATA_AV_MAX_SCAN_SIZE, STRATA_AV_TIMEOUT_MS, STRATA_AV_CLAMD_HOST, STRATA_AV_CLAMD_PORT, STRATA_AV_CMD. Recommended deploy: rebuild and recreate the backend container; bring up the clamav profile if using the sidecar.",
+      },
+    ],
+  },
+  {
     version: "1.11.1",
     subtitle:
       "Patch release — approver workflow polish. Approvers can now action pending work without leaving their current page via a new in-session popup, credential-checkout denials carry a free-form 'Reason from approver' through to the rejection email and the row itself (migration 077), and outbound shares from accounts without the approval bypass now require a ≥ 10-character justification before the file ever reaches the DLP / approval pipeline.",

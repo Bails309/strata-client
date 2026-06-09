@@ -1,0 +1,4 @@
+# Files bind-mounted into Linux containers must use LF line endings,
+# otherwise the in-container parsers (freshclam, nginx, etc.) read
+# trailing \r as part of the value and reject the config.
+clamav/*.conf text eol=lf

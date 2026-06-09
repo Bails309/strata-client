@@ -440,18 +440,29 @@ export default function HealthTab({ onNavigateVault }: { onNavigateVault: () => 
               </div>
               <span
                 className={`badge ${
-                  health.av.reachable
-                    ? "badge-success"
-                    : health.av.fail_mode === "block"
+                  !health.av.reachable
+                    ? health.av.fail_mode === "block"
                       ? "badge-error"
                       : "badge-warning"
+                    : health.av.status === "behind"
+                      ? "badge-warning"
+                      : "badge-success"
                 }`}
+                title={
+                  !health.av.reachable
+                    ? "Scanner is not reachable"
+                    : health.av.status === "behind"
+                      ? "Scanner is reachable but its signature database is older than the latest published release"
+                      : undefined
+                }
               >
-                {health.av.reachable
-                  ? "Healthy"
-                  : health.av.fail_mode === "block"
+                {!health.av.reachable
+                  ? health.av.fail_mode === "block"
                     ? "Unreachable"
-                    : "Degraded"}
+                    : "Degraded"
+                  : health.av.status === "behind"
+                    ? "Degraded"
+                    : "Healthy"}
               </span>
             </div>
             <div>

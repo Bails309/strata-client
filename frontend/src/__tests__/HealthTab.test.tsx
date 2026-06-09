@@ -156,6 +156,13 @@ describe("HealthTab", () => {
     expect(screen.getByText("27500")).toBeInTheDocument();
     expect(screen.getByText(/3h ago/)).toBeInTheDocument();
     expect(screen.getByText("Up to date")).toBeInTheDocument();
+    // Reachable + signatures current → headline badge on the
+    // Antivirus card is Healthy (other cards also say Healthy, so
+    // we scope the check to the AV card itself).
+    const avCard = screen.getByText("Up to date").closest("div.rounded-xl");
+    expect(avCard).not.toBeNull();
+    expect(avCard).toHaveTextContent("Healthy");
+    expect(avCard).not.toHaveTextContent("Degraded");
   });
 
   it("shows 'Behind by N' when the local signature DB is older than upstream", async () => {
@@ -179,5 +186,13 @@ describe("HealthTab", () => {
     render(<HealthTab onNavigateVault={onNavigateVault} />);
     await screen.findByRole("heading", { name: /^Antivirus$/i });
     expect(screen.getByText("Behind by 50")).toBeInTheDocument();
+    // Reachable but signatures behind upstream → headline badge for
+    // the Antivirus card is Degraded (not Healthy). Other cards
+    // unrelated to AV may also say "Healthy" so we scope the check
+    // to the Antivirus card itself.
+    const avCard = screen.getByText("Behind by 50").closest("div.rounded-xl");
+    expect(avCard).not.toBeNull();
+    expect(avCard).toHaveTextContent("Degraded");
+    expect(avCard).not.toHaveTextContent("Healthy");
   });
 });

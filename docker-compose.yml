@@ -355,8 +355,11 @@ services:
   #   STRATA_AV_FAIL_MODE=block          # or "allow" if you want degraded ops
   # The container ships with an empty signature DB and runs freshclam
   # on startup to pull the latest definitions from clamav.net (~250 MB
-  # on first launch, then incremental). It does NOT expose port 3310
-  # to the host — it's reachable only over the internal compose network.
+  # on first launch, then incremental). Update cadence is hourly
+  # (`FRESHCLAM_CHECKS=24`) and clamd is reloaded via clamdscan after
+  # every successful update (see clamav/freshclam.conf). The service
+  # does NOT expose port 3310 to the host — it's reachable only over
+  # the internal compose network.
   clamav:
     image: clamav/clamav:stable
     profiles:
@@ -366,12 +369,25 @@ services:
       - guac-internal
     volumes:
       - clamav-db:/var/lib/clamav
+      # Override the auto-generated freshclam.conf so updates trigger
+      # `clamdscan --reload` (over TCP 3310) after every successful
+      # signature download. The upstream image relies on NotifyClamd
+      # via /tmp/clamd.sock, which races on startup and silently
+      # fails — leaving clamd serving a stale in-memory DB while the
+      # on-disk files are current. See clamav/freshclam.conf header
+      # comment for full rationale.
+      - ./clamav/freshclam.conf:/etc/clamav/freshclam.conf:ro
     environment:
       # Let freshclam run on startup (the default), and keep clamd
       # running with on-access scanning disabled — we drive scans
       # explicitly via the INSTREAM TCP protocol from the backend.
       - CLAMAV_NO_FRESHCLAMD=false
       - CLAMD_STARTUP_DELAY=5
+      # 24 update checks per 24h = hourly (matches ClamAV's
+      # recommended cadence). Image default is 1 (once per day),
+      # which lets signatures drift up to 24h behind the public
+      # mirror before the next attempt.
+      - FRESHCLAM_CHECKS=24
     security_opt:
       - no-new-privileges:true
     deploy:

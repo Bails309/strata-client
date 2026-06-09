@@ -780,7 +780,8 @@ mod tests {
             message: "freshclam ate my homework".into(),
         };
         assert!(
-            v.user_facing_block_message().contains("freshclam ate my homework"),
+            v.user_facing_block_message()
+                .contains("freshclam ate my homework"),
             "unclassified error should pass through verbatim"
         );
         // Sanity-check the comment above: "exceeded" → timeout branch.

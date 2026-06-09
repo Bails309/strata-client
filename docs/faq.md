@@ -172,6 +172,26 @@ The bundled Vault auto-initialises and auto-unseals using a key kept in a Docker
 
 No. There is no telemetry, no analytics, no auto-update beacon. All outbound traffic is initiated by your operators or end users.
 
+### Does Strata scan uploaded files for malware? (v1.12.0+)
+
+Yes — opt-in. v1.12.0 added a pluggable AV scanner that runs on both Quick Share upload paths (inbound *to* the remote session and outbound approval-gated *from* the remote session). The default backend is `off` so v1.11.x deployments upgrade with no behaviour change; flip to `clamav` (with the bundled sidecar via the `av` compose profile) or `command` (Microsoft Defender, Sophos, ESET, any scanner with the `0=clean, 1=infected` exit-code contract) to enable scanning. See [av-scanning.md](av-scanning.md) for the full operator guide and [ADR-0011](adr/ADR-0011-av-scanning.md) for the design rationale.
+
+### What happens if the AV scanner is down?
+
+Fail-closed by default. `STRATA_AV_FAIL_MODE=block` (the shipped default) treats every scanner error — TCP refused, daemon timeout, command not found, `clamd` panic — as a block, with the audit row recording the error message verbatim. Operators who prefer degraded-open behaviour set `STRATA_AV_FAIL_MODE=allow`; even then, **infected** verdicts are still rejected unconditionally (the fail-mode knob only controls **error** verdicts, never **infected** verdicts).
+
+### Can I use Microsoft Defender / Sophos / ESET instead of ClamAV?
+
+Yes — that's what the `command` backend is for. Set `STRATA_AV_BACKEND=command` and point `STRATA_AV_CMD` at your scanner with the `{path}` placeholder where the file path goes. Any scanner that returns exit code `0` on clean and `1` on infected works. Examples in [av-scanning.md](av-scanning.md) cover Defender for Endpoint, Sophos SAVScan, and ESET ODScan; for anything fancier wrap the invocation in a small bash script and point `STRATA_AV_CMD` at the script.
+
+### Where do I see blocked / infected files?
+
+Three places: (1) the `file.av_blocked` audit-log row for inbound rejections (carries `signature`, `filename`, `byte_len`, `session_id`, `av_backend`), (2) the new `av_*` columns on `outbound_shares` for outbound rejections (queryable directly or via the admin outbound-share endpoints), and (3) the partial index `idx_outbound_shares_av_attention` keeps the operator dashboard query "show me every outbound row that needs eyeballing" cheap as the table grows.
+
+### How big is the ClamAV signature DB?
+
+About 250 MB on first download and 1.4 GB resident in memory once `clamd` loads it. The bundled sidecar caps memory at 3 GB. Plan for ~5 minutes of `start_period` on first boot while `freshclam` pulls signatures from clamav.net; subsequent boots reuse the persisted `clamav-db` volume and converge in seconds.
+
 ---
 
 ## Development & contribution

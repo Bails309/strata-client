@@ -309,3 +309,184 @@ runbook against a staging environment first.
 * **NFS for recordings without `noatime`.** Causes spurious metadata
   writes that block recording finalisation. Mount with
   `noatime,nodiratime`.
+
+## Antivirus scanning sidecar (v1.12.0+)
+
+> Reference: [ADR-0011](adr/ADR-0011-av-scanning.md), [av-scanning.md](av-scanning.md), [runbooks/av-operations.md](runbooks/av-operations.md).
+
+Strata's antivirus scanner trait supports three backends. On
+Kubernetes the recommended shape is a dedicated `clamav`
+Deployment + ClusterIP Service, with a PVC for the signature
+database so freshclam pulls survive pod restarts.
+
+### Deployment + Service + PVC
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: strata-clamav-db
+  namespace: strata
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 4Gi
+  storageClassName: fast-ssd
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strata-clamav
+  namespace: strata
+spec:
+  replicas: 1                       # clamd is single-writer to the DB volume
+  strategy:
+    type: Recreate                  # avoid two pods racing the PVC
+  selector:
+    matchLabels: { app: strata-clamav }
+  template:
+    metadata:
+      labels: { app: strata-clamav }
+    spec:
+      securityContext:
+        runAsNonRoot: false         # upstream clamav/clamav:stable runs as clamav uid 100
+        fsGroup: 100
+      containers:
+        - name: clamav
+          image: clamav/clamav:stable
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: clamd, containerPort: 3310, protocol: TCP }
+          env:
+            - { name: CLAMAV_NO_FRESHCLAMD, value: "false" }   # daily signature pull
+            - { name: CLAMAV_NO_CLAMD,      value: "false" }
+            - { name: CLAMAV_NO_MILTERD,    value: "true" }    # not needed
+          readinessProbe:
+            exec:
+              command: [clamdcheck.sh]
+            initialDelaySeconds: 300   # absorb first-boot freshclam pull (~250 MB)
+            periodSeconds: 30
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: [clamdcheck.sh]
+            initialDelaySeconds: 600
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: { cpu: "500m", memory: "1.5Gi" }
+            limits:   { cpu: "2",    memory: "3Gi"   }
+          volumeMounts:
+            - { name: clamav-db, mountPath: /var/lib/clamav }
+      volumes:
+        - name: clamav-db
+          persistentVolumeClaim:
+            claimName: strata-clamav-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: strata-clamav
+  namespace: strata
+spec:
+  type: ClusterIP                   # internal-only — never expose to ingress
+  selector: { app: strata-clamav }
+  ports:
+    - { name: clamd, port: 3310, targetPort: 3310, protocol: TCP }
+```
+
+### Backend env wiring
+
+Add the AV variables to the backend Deployment's `env:`:
+
+```yaml
+- { name: STRATA_AV_BACKEND,        value: clamav }
+- { name: STRATA_AV_FAIL_MODE,      value: block }      # default; reject on scanner error
+- { name: STRATA_AV_CLAMD_HOST,     value: strata-clamav }     # the Service DNS name above
+- { name: STRATA_AV_CLAMD_PORT,     value: "3310" }
+- { name: STRATA_AV_MAX_SCAN_SIZE,  value: "104857600" }  # 100 MiB
+- { name: STRATA_AV_TIMEOUT_MS,     value: "30000" }
+```
+
+### NetworkPolicy — restrict clamd access to backend pods only
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: strata-clamav-ingress
+  namespace: strata
+spec:
+  podSelector:
+    matchLabels: { app: strata-clamav }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: strata-backend }
+      ports:
+        - { protocol: TCP, port: 3310 }
+```
+
+This ensures the public ingress, the frontend nginx pods, and any
+unrelated workloads in the namespace cannot reach `clamd:3310` —
+only the backend can. Combined with the ClusterIP Service type,
+clamd has no path to the outside world.
+
+### Verification
+
+```bash
+# 1. Pod is Running and Ready (signature pull may take ~3-5 min on first boot)
+kubectl -n strata wait --for=condition=Ready pod -l app=strata-clamav --timeout=10m
+
+# 2. Backend logs report the scanner is wired
+kubectl -n strata logs -l app=strata-backend | grep 'av scanner ready'
+
+# 3. EICAR smoke test
+kubectl -n strata exec deploy/strata-backend -- \
+  sh -c 'printf "X5O!P%%@AP[4\\PZX54(P^)7CC)7}\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\$H+H*" > /tmp/eicar.com \
+         && curl -sS -o /dev/null -w "%{http_code}\n" \
+              -X POST http://localhost:8080/api/files/upload \
+              -H "Cookie: access_token=$STRATA_AV_SMOKE_TOKEN" \
+              -F session_id=$STRATA_AV_SMOKE_SESSION \
+              -F file=@/tmp/eicar.com'
+# Expected: 400
+```
+
+### Resource sizing notes
+
+- **PVC size:** 4 Gi is generous. The signature DB is ~1.4 GB
+  resident; clamav writes update files alongside, peaking around
+  3 Gi during freshclam runs.
+- **Memory:** budget 1.5 Gi requests / 3 Gi limit. Below 1.5 Gi
+  clamd will OOM-kill mid-load and freshclam will fail to refresh.
+- **CPU:** 500m requests / 2 limit. clamd is largely IO-bound on
+  scan operations; the CPU ceiling matters most during freshclam.
+- **High-availability note:** clamd is single-writer to the PVC.
+  Run a single replica with `strategy: Recreate`. If your Quick
+  Share throughput justifies horizontal scale, deploy multiple
+  independent `strata-clamav-N` Deployments each backed by its own
+  PVC and front them with a Service whose selector spans all
+  replicas — the backend hashes the file independently per scan so
+  any healthy replica suffices.
+
+### Command-driven alternative
+
+The `command` backend (Microsoft Defender, Sophos, ESET, etc.)
+requires the scanner binary to be reachable inside the backend
+container. Two patterns:
+
+1. **Re-base the backend image** with the scanner installed at
+   build time, then set `STRATA_AV_BACKEND=command` and
+   `STRATA_AV_CMD=...`. Recommended for Defender for Endpoint
+   which already publishes a Linux installer.
+2. **Sidecar pattern with shared `emptyDir`** — run the scanner
+   in its own container in the same pod, mount a shared
+   `emptyDir` volume at the path Strata writes temp files to,
+   and have the scanner read from the same mount. This loses
+   the network-isolation benefit of the ClamAV Service /
+   NetworkPolicy pattern above, so prefer pattern (1) where
+   feasible.
+

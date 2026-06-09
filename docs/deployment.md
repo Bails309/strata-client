@@ -1064,6 +1064,139 @@ For the bundled Vault, HA is not applicable — it runs as a single-node file-st
 
 ---
 
+## Antivirus scanning (v1.12.0+)
+
+> Reference: [ADR-0011](adr/ADR-0011-av-scanning.md), [av-scanning.md](av-scanning.md), [av-operations runbook](runbooks/av-operations.md).
+
+> Optional — `STRATA_AV_BACKEND=off` (the default) preserves
+> v1.11.x upload behaviour bit-for-bit. Opting in adds a malware
+> check on every Quick Share upload path.
+
+Three deployment shapes:
+
+### Shape 1 — Bundled ClamAV sidecar (recommended)
+
+The new `clamav` service in `docker-compose.yml` lives behind the
+opt-in `av` compose profile. Internal-only network exposure (no
+host port mapping). First boot pulls ~250 MB of signatures from
+clamav.net into the persisted `clamav-db` volume; subsequent boots
+converge in seconds.
+
+```bash
+# 1. Opt in via .env
+cat >> .env <<'EOF'
+STRATA_AV_BACKEND=clamav
+STRATA_AV_FAIL_MODE=block         # default; reject on scanner error
+STRATA_AV_MAX_SCAN_SIZE=104857600 # 100 MiB
+STRATA_AV_TIMEOUT_MS=30000        # 30s
+STRATA_AV_CLAMD_HOST=clamav
+STRATA_AV_CLAMD_PORT=3310
+EOF
+
+# 2. Start the AV profile alongside the existing stack
+docker compose --profile av up -d
+
+# 3. Wait for signature download to complete (first boot only)
+docker compose logs -f clamav | grep -i 'database loaded'
+# Expected: "main.cvd database loaded ... daily.cvd database loaded ..."
+
+# 4. Verify with EICAR test string
+printf 'X5O!P%%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar.com
+curl -sS -X POST https://strata.example.com/api/files/upload \
+  -H "Cookie: access_token=$TOKEN" \
+  -F session_id=$SESSION \
+  -F file=@/tmp/eicar.com
+# Expected: 400 {"error":"validation","message":"File rejected by malware scan: Win.Test.EICAR_HDB-1"}
+rm /tmp/eicar.com
+```
+
+**Resource sizing:** clamd's resident set scales with the signature
+DB; budget 1.4 GB RSS once loaded. The compose service caps at
+3 GB / 2 CPUs which is comfortable for typical privileged-access
+workloads (Quick Share is a low-QPS code path — typically << 1
+upload per second per backend node).
+
+**Signature freshness:** the container runs `freshclam` on startup
+and once per day. Operators in air-gapped environments mirror
+`https://database.clamav.net/main.cvd` etc. into a private repo
+and override `freshclam.conf` via a bind mount — see
+[av-operations runbook](runbooks/av-operations.md).
+
+### Shape 2 — External `clamd` daemon
+
+If you already operate ClamAV on a dedicated VM or container
+shared across the estate:
+
+```env
+STRATA_AV_BACKEND=clamav
+STRATA_AV_CLAMD_HOST=clamav.internal.example.com
+STRATA_AV_CLAMD_PORT=3310
+```
+
+The backend speaks plain TCP — wrap it in mTLS via a sidecar
+proxy (envoy / stunnel) if the path traverses an untrusted
+network. Strata does not currently offer in-process TLS to clamd.
+
+### Shape 3 — Command-driven (Microsoft Defender, Sophos, ESET, …)
+
+For environments standardised on a commercial scanner:
+
+```env
+STRATA_AV_BACKEND=command
+STRATA_AV_FAIL_MODE=block
+
+# Microsoft Defender for Endpoint on Linux
+STRATA_AV_CMD=/opt/microsoft/mdatp/sbin/mdatp scan custom --path {path}
+
+# Sophos
+# STRATA_AV_CMD=/opt/sophos-av/bin/savscan -ss -nb {path}
+
+# ESET
+# STRATA_AV_CMD=/opt/eset/efs/sbin/odscan --readonly {path}
+
+# Wrapper script for anything fancier (cuckoo, custom MIME gating, etc.)
+# STRATA_AV_CMD=/usr/local/bin/strata-scan.sh {path}
+```
+
+Contract: exit code `0 = clean`, `1 = infected`, anything else
+treated as `error`. Signature is parsed from the last non-empty
+stdout line (then stderr), stripping `Threat: ` / `Found: `
+prefixes. The command must be reachable inside the backend
+container — mount the scanner binary + its data dir, or
+re-base the backend image with the scanner installed.
+
+### Verification post-enable
+
+```bash
+# 1. Backend reports the scanner came up
+docker compose logs backend | grep 'av scanner ready'
+# Expected: "av scanner ready: backend=clamav fail_mode=block max_scan_size=104857600"
+
+# 2. EICAR upload is blocked
+curl -sS -X POST .../api/files/upload -F file=@eicar.com -F session_id=...
+# Expected: 400 with signature in body
+
+# 3. Audit log captured the rejection
+docker compose exec postgres-local \
+  psql -U guacuser -d guacclient -c \
+  "SELECT action, details->>'signature', details->>'av_backend'
+   FROM audit_logs WHERE action='file.av_blocked' ORDER BY created_at DESC LIMIT 5;"
+```
+
+### Switching off
+
+```bash
+echo 'STRATA_AV_BACKEND=off' >> .env
+docker compose --profile av down
+docker compose up -d
+```
+
+The four `outbound_shares.av_*` columns remain populated from prior
+scans; new submissions land with `av_scan_status=skipped`,
+`av_scanner_backend=off`.
+
+---
+
 ## DMZ deployment mode
 
 > Reference: [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md), [DMZ implementation plan](dmz-implementation-plan.md), [DMZ incident runbook](runbooks/dmz-incident.md).

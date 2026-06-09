@@ -277,10 +277,13 @@ describe("QuickShareOutbound", () => {
     );
     await screen.findByText(/Expires in/);
     // The snippet for curl format. New since the progress-bar work:
-    // the snippet includes `--progress-bar` so the user gets a clean
-    // one-line upload meter in the terminal.
+    // the snippet includes `--progress-bar` for a clean one-line
+    // upload meter, plus `-H 'Expect:'` to disable Expect/100-continue
+    // (so the body is sent immediately and the meter renders even
+    // when the server eventually rejects, instead of silently
+    // skipping the upload on a stale token).
     expect(
-      screen.getByText(/curl -fL --progress-bar -F 'file=@\.\/<your-file>'/)
+      screen.getByText(/curl -fL --progress-bar -H 'Expect:' -F 'file=@\.\/<your-file>'/)
     ).toBeInTheDocument();
     // Button label flips to Regenerate
     expect(screen.getByRole("button", { name: /Regenerate upload command/i })).toBeInTheDocument();
@@ -394,10 +397,13 @@ describe("QuickShareOutbound", () => {
     await userEvent.click(screen.getByRole("button", { name: /Generate upload command/i }));
     // The PS snippet was rewritten to use a streaming HttpClient +
     // Write-Progress loop because `Invoke-WebRequest -Form` has no
-    // file-upload progress. Sanity-check both anchors so we'd catch
-    // an accidental revert to the silent variant.
+    // file-upload progress. We also disable ExpectContinue so the
+    // body is sent immediately (same rationale as the curl `-H
+    // 'Expect:'` flag). Sanity-check all three anchors so we'd
+    // catch an accidental revert to the silent variant.
     await screen.findByText(/HttpClient/);
     expect(screen.getByText(/Write-Progress/)).toBeInTheDocument();
+    expect(screen.getByText(/ExpectContinue = \$false/)).toBeInTheDocument();
   });
 
   it("renders the insecure PowerShell snippet variant", async () => {

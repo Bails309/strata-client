@@ -1,4 +1,233 @@
 
+# What's New in v1.12.1
+
+> **Patch release — operational polish on the v1.12.0 AV-scanning
+> landing.** No protocol breakage, no migrations, no new
+> environment variables; existing v1.12.0 deployments upgrade with
+> a `docker compose up -d --build` of the backend, frontend, and
+> (if you're using the bundled sidecar) clamav containers. This
+> release rolls fourteen merged PRs into one shipping bundle and
+> closes five themes that the v1.12.0 landing left rough:
+> visibility into scanner health, friendly user-facing error
+> messages on AV blocks, live upload progress in every surface
+> that previously left users guessing, a unified admin
+> AV-Blocked Files audit view, and a handful of scanner-side
+> correctness fixes (signature-DB hot-reload, scan-size limit
+> aligned with the upload cap, env-var wiring, super-admin role
+> check).
+
+## Theme 1 — Scanner health is now visible without `docker exec`
+
+Admin → Health gains a new **AV** card showing the active
+backend (`off` / `clamav` / `command`), a reachability ping,
+the daemon version (`PING` + `VERSION` exchange against
+clamd), the signature DB versions for `main`, `daily`, and
+`bytecode` with their signature counts and update dates
+(e.g. `daily.cld v27349 / 2,047,316 sigs / 2026-06-08`),
+the last successful `freshclam` update timestamp, the last
+reload-after-update outcome, and the last-30d verdict tally
+(`clean` / `infected` / `skipped` / `error`). On-call
+operators can now answer "is the scanner up and are the
+signatures fresh?" in one click. The card degrades gracefully
+when the daemon is temporarily unreachable — it surfaces the
+last known-good values plus a "stale since HH:MM:SS" badge
+rather than wiping the panel.
+
+A new diagnostic script ships at `scripts/diagnose-av.sh` for
+ssh-onto-the-box-while-debugging-an-alert flows. It pings the
+configured backend, runs a `PING`/`VERSION` exchange against
+clamd, prints the signature DB versions from the `clamav-db`
+volume, exec's an `INSTREAM` against EICAR, and reports the
+verdict — emitting structured `key=value` lines on stdout so
+the output pipes cleanly into `grep` / `awk` / `jq -R -F=`.
+
+## Theme 2 — Friendly user-facing AV error messages
+
+When the AV engine errors — TCP refused, daemon timeout,
+signature DB not yet loaded, unparseable response — the
+inbound and outbound HTTP responses now return a deterministic
+actionable message classified by error shape instead of the
+raw engine spew. The drive-channel `client.onfile` toast and
+the QuickShareOutbound panel both display the same friendly
+text so operators know whether to retry or escalate:
+
+| Verdict class                | Trigger                                                          | Message                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Infected                     | `Verdict::Infected { signature }`                                | `File rejected by malware scan: <signature>`                                                       |
+| Error · timeout              | Engine message contains `timeout` / `timed out` / `exceeded`     | `Antivirus scan timed out after Ns; try a smaller file or retry shortly.`                          |
+| Error · transport            | Engine message contains `refused` / `reset` / `unreachable` etc. | `Antivirus scanner unreachable; please retry shortly.`                                              |
+| Error · missing signatures   | Engine message contains `empty` / `no signatures`                | `Antivirus signature database not yet ready; please retry shortly.`                                 |
+| Error · generic              | Anything else                                                    | The engine's raw text, passed through verbatim (audit row carries the full unredacted message too) |
+
+The full classifier lives at
+`Verdict::user_facing_block_message()` in
+`backend/src/services/av.rs` and has unit tests covering the
+six branches.
+
+## Theme 3 — Live upload progress on every surface
+
+Three places previously left users staring at a frozen UI while
+a large file uploaded; all three now show progress in real time.
+
+### Browser-side uploads
+
+Inbound Quick Share (drag-and-drop into the QuickShare panel)
+and outbound Quick Share (drag-and-drop onto the
+SessionManager hover-strip) both drive a percentage progress
+bar on the upload toast, fed by a new typed
+`xhrUploadJson<T>()` helper in `frontend/src/api.ts` that
+wraps `XMLHttpRequest` (the only browser API that exposes
+`upload.onprogress` reliably) and returns a `Promise<T>`
+shape-compatible with the rest of the SPA's JSON contract.
+The toast text walks through `"Uploading 42%"` →
+`"Scanning…"` (indeterminate band) → final verdict, all in
+one mounted toast rather than the v1.12.0 fire-and-forget
+"Uploading…" → second-toast-for-the-result handoff. Toasts
+have a new optional `progress` shape; passing
+`progress: { pct: -1 }` renders an indeterminate sliding
+band via the `strata-toast-indeterminate` keyframe.
+
+### MY SUBMISSIONS "Awaiting AV scan" indicator
+
+Every row in the QuickShareOutbound MY SUBMISSIONS panel with
+`status === "pending"` now renders an indeterminate
+"Awaiting AV scan" bar (or "Awaiting AV scan and approval"
+when the DLP score is zero and approver review is still
+required). This is the **backend-side** scan window made
+visible in the browser — the user can see the wait without
+guessing whether the upload just stalled. The bar uses an
+inline `@keyframes strata-outbound-pending` block (idempotent
+per CSS spec) and the Tailwind v4 `bg-warning/N` token via
+the workspace `@theme` block so it picks up dark / light mode
+automatically.
+
+### Terminal-side curl + PowerShell snippets
+
+The HTTPS upload-command snippet (used when GPO disables RDP /
+SFTP drive redirection so the drive-channel interceptor
+doesn't fire) now shows progress in the user's terminal too.
+Three snippet variants updated:
+
+- **`curl`** (Linux/macOS) and **`curl-win`** (Windows) — add
+  `--progress-bar` for a clean one-line meter, plus
+  `-H "Expect:"` to disable curl's default
+  `Expect: 100-continue` header. Without that flag, the
+  server returns 400 on a consumed or expired token *before*
+  reading the body, curl never uploads, and the meter has
+  nothing to draw — making it look like the progress bar
+  is broken when in fact the upload itself never happened.
+  Disabling Expect forces the body up immediately so the
+  meter renders even when the server eventually rejects.
+- **`powershell`** (PS7+) — rewritten from
+  `Invoke-WebRequest -Form` (which exposes NO file-upload
+  progress, only response-download progress) to a streaming
+  `System.Net.Http.HttpClient` +
+  `MultipartFormDataContent` + `StreamContent($file.OpenRead())`
+  pipeline, with a poll loop that reads
+  `$stream.Position` and drives `Write-Progress`. Also sets
+  `$client.DefaultRequestHeaders.ExpectContinue = $false`
+  for the same reason as the curl flag.
+
+## Theme 4 — Admin AV-Blocked Files tab
+
+A new **Admin → AV-Blocked Files** tab surfaces every blocked
+upload in a single unified view. The pre-existing
+`outbound_share.requested` audit event was extended with
+`av_status`, `av_signature`, `av_backend`, `direction:
+"outbound"`, and `filename` keys so the dashboard query joins
+inbound and outbound blocks through one `action_type` filter:
+
+```sql
+SELECT *
+FROM audit_log
+WHERE action_type IN ('file.av_blocked', 'outbound_share.requested')
+  AND (
+        action_type = 'file.av_blocked'
+        OR payload->>'av_status' IN ('infected', 'error')
+      )
+ORDER BY created_at DESC
+```
+
+Columns: timestamp, direction (in/out), filename, byte size,
+signature (or error message), engine, actor + session
+context. Filterable by date range, engine, direction, and
+signature substring; cursor-paginated at 50 per page. Visible
+to `can_manage_system` only.
+
+## Theme 5 — Scanner-side correctness fixes
+
+- **freshclam reload cadence.** The bundled `clamav`
+  sidecar's entrypoint now runs `freshclam` **hourly**
+  (was: daily) and forces a `clamd RELOAD` after every
+  successful update. Without the reload, fresh signatures
+  pulled into `/var/lib/clamav` sat unused until the next
+  full sidecar restart — meaning the audit trail could
+  record a `Skipped { reason: "no signatures" }` or an
+  `Error { message: "..." }` against a file the engine *had*
+  signatures for, just hadn't loaded them yet. Now the
+  engine picks up new signatures within minutes of
+  `freshclam` returning.
+- **Scan-size limit aligned with the upload cap.** The
+  default `STRATA_AV_MAX_SCAN_SIZE` was bumped from 100 MiB
+  to **500 MiB** to match the existing 500 MiB Quick Share
+  upload cap. Previously a 200 MiB upload was accepted by
+  the route but tagged `Skipped { reason: "oversize" }` by
+  the scanner — i.e. it landed in the file store unscanned,
+  defeating the point of v1.12.0. The bundled
+  `clamav/clamd.conf` raises `StreamMaxLength`,
+  `MaxFileSize`, and `MaxScanSize` to 512 / 512 / 1024 MiB
+  in lockstep so the clamd-side limits agree. Operators
+  with custom limits should adjust both ends together.
+- **`STRATA_AV_*` env var wiring.** `Config::from_env`
+  previously read one variable name and the bootstrap code
+  read another (a naming drift introduced late in v1.12.0
+  integration). Fixed so all seven `STRATA_AV_*` variables
+  in `.env.example` actually take effect.
+- **Quick Share role-permission check** is now strictly
+  uniform across the three outbound routes (mint /
+  submit / token-ingest). A super-admin without
+  `can_use_quick_share_outbound` is correctly rejected
+  with 403 `Forbidden` on every path, matching the v1.11.0
+  design intent.
+- **CVD / CLD test fixtures** corrected to use real on-wire
+  formats so the version-parser unit tests actually
+  exercise the parser the health card depends on.
+- **EICAR smoke test docs** rewritten to walk operators
+  through the role check first (without
+  `can_use_quick_share_outbound` the upload is rejected
+  with 403 *before* reaching the scanner, masking a
+  successful AV deployment as a broken one), and to ship
+  the EICAR string in a here-doc so RDP-clipboard
+  expansion of `$` doesn't corrupt the signature on paste.
+
+## Operator impact
+
+Upgrade path: rebuild and recreate the **backend**,
+**frontend**, and **clamav** containers. No migrations. No
+new environment variables. No config changes. No new Cargo
+or npm dependencies.
+
+```bash
+docker compose pull                                  # if using GHCR
+docker compose --profile av up -d --build            # rebuild all
+```
+
+The AV-Blocked Files admin tab is visible to
+`can_manage_system` only. The AV Health card surfaces on the
+existing Admin → Health page for users already gated for it.
+Existing `STRATA_AV_MAX_SCAN_SIZE` overrides continue to
+apply — the bump is a default change, not a forced value;
+sites that *want* the 100 MiB ceiling preserved can pin
+`STRATA_AV_MAX_SCAN_SIZE=104857600` in `.env`.
+
+See [CHANGELOG.md](CHANGELOG.md#1121--2026-06-09) for the
+full added / changed / fixed / security / migrations
+breakdown, and [docs/av-scanning.md](docs/av-scanning.md) +
+[docs/runbooks/av-operations.md](docs/runbooks/av-operations.md)
+for the operator-grade detail.
+
+---
+
 # What's New in v1.12.0
 
 > **Minor release — pluggable antivirus scanning on every Quick

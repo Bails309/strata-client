@@ -4,6 +4,21 @@
 > [CHANGELOG.md](../CHANGELOG.md#1120--2026-06-09),
 > [WHATSNEW.md](../WHATSNEW.md), and
 > [ADR-0011](adr/ADR-0011-av-scanning.md) for the design rationale.
+>
+> **v1.12.1 polish:** friendly user-facing block messages via
+> `Verdict::user_facing_block_message()` (no more raw `stderr` or
+> `clamd` panic strings reaching end users); hourly `freshclam` +
+> forced `clamd` reload after every signature update so the engine
+> never serves with stale definitions; 500 MiB default
+> `STRATA_AV_MAX_BYTES` aligned with the Quick Share upload cap; real
+> on-wire `clamd` INSTREAM / `freshclam` CVD fixtures in the unit
+> suite (the v1.12.0 fixtures used the wrong byte order on the
+> response framing); and two new admin surfaces —
+> `GET /api/admin/health/av` (AV Health card) and
+> `GET /api/admin/files/av-blocked` (unified inbound + outbound
+> blocked-files audit grid). See
+> [CHANGELOG.md](../CHANGELOG.md#1121--2026-06-09) for the full
+> 1.12.1 entry.
 
 This document is the canonical operator reference for the
 antivirus (AV) scanning hook that Strata applies to every Quick

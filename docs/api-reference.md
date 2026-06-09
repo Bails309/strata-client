@@ -580,6 +580,138 @@ Detailed service health status.
 }
 ```
 
+#### `GET /api/admin/health/av` (v1.12.1+)
+
+Antivirus engine health and signature-database freshness.
+Backs the new **Admin → Health → AV** card. Cached for 30 s
+inside `services::av_health` so the route is cheap to poll;
+on transport errors against `clamd`, returns the last
+known-good values plus a `stale_since` timestamp instead of
+wiping the response.
+
+**Required permission:** `can_manage_system` (same as the
+parent Health page).
+
+**Response** `200 OK` (backend `clamav`, healthy)
+
+```json
+{
+  "backend": "clamav",
+  "reachable": true,
+  "stale_since": null,
+  "daemon": {
+    "version": "ClamAV 1.4.2",
+    "host": "clamav",
+    "port": 3310
+  },
+  "signatures": {
+    "main":     { "version": 62, "sig_count": 6985073, "built_at": "2024-09-29T08:00:00Z", "format": "cvd" },
+    "daily":    { "version": 27349, "sig_count": 2047316, "built_at": "2026-06-08T07:14:11Z", "format": "cld" },
+    "bytecode": { "version": 334, "sig_count": 91, "built_at": "2024-12-12T10:33:00Z", "format": "cvd" }
+  },
+  "freshclam": {
+    "last_run_at": "2026-06-09T13:00:11Z",
+    "last_run_ok": true,
+    "last_reload_at": "2026-06-09T13:00:14Z",
+    "last_reload_ok": true,
+    "cadence_seconds": 3600
+  },
+  "verdicts_last_30d": {
+    "clean": 4218,
+    "infected": 3,
+    "skipped": 14,
+    "error": 0
+  }
+}
+```
+
+**Response** `200 OK` (backend `off`)
+
+```json
+{
+  "backend": "off",
+  "reachable": true,
+  "stale_since": null,
+  "daemon": null,
+  "signatures": null,
+  "freshclam": null,
+  "verdicts_last_30d": { "clean": 0, "infected": 0, "skipped": 0, "error": 0 }
+}
+```
+
+**Response** `200 OK` (transport error, last-known-good fallback)
+
+```json
+{
+  "backend": "clamav",
+  "reachable": false,
+  "stale_since": "2026-06-09T13:32:04Z",
+  "daemon":     { "version": "ClamAV 1.4.2", "host": "clamav", "port": 3310 },
+  "signatures": { "main": { "version": 62, "...": "..." }, "daily": { "...": "..." }, "bytecode": { "...": "..." } },
+  "freshclam":  { "last_run_at": "2026-06-09T13:00:11Z", "...": "..." },
+  "verdicts_last_30d": { "clean": 4218, "infected": 3, "skipped": 14, "error": 0 }
+}
+```
+
+`reachable: false` + a non-null `stale_since` is the
+operator's signal that the values being shown are cached.
+The card's UI surfaces this as a `Stale since HH:MM:SS`
+badge over the daemon row.
+
+#### `GET /api/admin/files/av-blocked` (v1.12.1+)
+
+Unified audit feed for AV-blocked uploads — joins the inbound
+`file.av_blocked` events and the outbound
+`outbound_share.requested` events whose
+`payload->>'av_status'` is `infected` or `error`. Backs the
+new **Admin → AV-Blocked Files** tab.
+
+**Required permission:** `can_manage_system`.
+
+**Query parameters** (all optional):
+
+| Param        | Type             | Default  | Description                                                                 |
+| ------------ | ---------------- | -------- | --------------------------------------------------------------------------- |
+| `from`       | RFC 3339         | `-30d`   | Inclusive lower bound on `created_at`.                                      |
+| `to`         | RFC 3339         | `now`    | Exclusive upper bound on `created_at`.                                      |
+| `engine`     | string           | (any)    | Filter by `av_backend` (`clamav` / `command`).                              |
+| `direction`  | string           | (any)    | `inbound` / `outbound`.                                                     |
+| `signature`  | string substring | (any)    | Case-insensitive substring match on `av_signature` (e.g. `eicar`).          |
+| `cursor`     | opaque string    | —        | Returned by a previous response; passes through as `WHERE id < $cursor`.    |
+| `limit`      | int              | 50       | Page size, capped at 200.                                                   |
+
+**Response** `200 OK`
+
+```json
+{
+  "rows": [
+    {
+      "id": "8f1c…",
+      "created_at": "2026-06-09T13:14:02Z",
+      "direction": "outbound",
+      "filename": "report-final.docx",
+      "byte_len": 18204,
+      "av_status": "infected",
+      "av_signature": "Win.Test.EICAR_HDB-1",
+      "av_backend": "clamav",
+      "av_message": "stream: Win.Test.EICAR_HDB-1 FOUND",
+      "actor": { "user_id": "u…", "username": "alice" },
+      "session_id": "s…",
+      "connection_id": "c…"
+    }
+  ],
+  "next_cursor": "8f1b…"
+}
+```
+
+`av_message` is the **unredacted** engine output preserved
+on the audit row, even though the HTTP response on the
+original blocked upload is normalised by
+`Verdict::user_facing_block_message()` (see [Files
+endpoints](#post-apiuserfilesupload)).
+
+`next_cursor` is `null` when no further pages exist.
+
 ### Roles
 
 #### `GET /api/admin/roles`
@@ -2238,6 +2370,26 @@ Upload a file via multipart form data. Requires authentication **and** the `can_
 ```
 
 The reject path runs when `STRATA_AV_BACKEND` is set to `clamav` or `command` and the scanner returns `Verdict::Infected{signature}`, **or** when the scanner returns `Verdict::Error{message}` and `STRATA_AV_FAIL_MODE=block` (the default). The temp file is deleted on the spot — the session file store never sees the rejected bytes. A `file.av_blocked` audit event is written with `signature`, `filename`, `byte_len`, `session_id`, and `av_backend` keys. See [av-scanning.md](av-scanning.md) for full operator detail.
+
+#### v1.12.1+ friendly error classification
+
+The `message` field on AV-block responses is now classified by
+`Verdict::user_facing_block_message()` so the user-facing text is
+deterministic and actionable even when the engine returns
+free-form spew. The audit row always carries the unredacted
+original message; only the HTTP response body is normalised:
+
+| Verdict shape                                                                       | Response `message`                                                          |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `Verdict::Infected { signature }`                                                   | `File rejected by malware scan: {signature}`                                |
+| `Verdict::Error { message }` containing `timeout` / `timed out` / `exceeded`        | `Antivirus scan timed out after Ns; try a smaller file or retry shortly.`   |
+| `Verdict::Error { message }` containing `refused` / `reset` / `unreachable` / `no route` / `broken pipe` | `Antivirus scanner unreachable; please retry shortly.`                      |
+| `Verdict::Error { message }` containing `empty` / `no signatures`                   | `Antivirus signature database not yet ready; please retry shortly.`         |
+| `Verdict::Error { message }` (anything else)                                        | The engine's raw `message`, passed through verbatim.                        |
+
+The frontend toast presenter applies the same classification so
+the in-browser drag-drop UX, the QuickShareOutbound MY
+SUBMISSIONS row UX, and the HTTP response shape all match.
 
 ### `GET /api/files/:token`
 

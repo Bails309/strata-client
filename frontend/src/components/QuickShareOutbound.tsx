@@ -61,15 +61,25 @@ function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolea
   // `--progress-bar` (curl) replaces the verbose default meter with
   // a clean one-line bar — works on multipart uploads (-F), unlike
   // some -X POST permutations that disable progress.
+  //
+  // `-H "Expect:"` disables curl's default `Expect: 100-continue`
+  // header. Without this, curl waits for the server to send `100
+  // Continue` before uploading the body. Our ingest endpoint
+  // validates the one-shot token BEFORE reading the multipart, so
+  // a stale/consumed token gets a 400 instantly and curl never
+  // uploads the body — meaning the progress bar has nothing to
+  // render. Forcing the body up immediately makes progress visible
+  // for any non-trivial file even when the server eventually
+  // rejects (e.g. AV block).
   switch (format) {
     case "curl":
       return insecure
-        ? `curl -kfL --progress-bar -F 'file=@./<your-file>' '${url}'`
-        : `curl -fL --progress-bar -F 'file=@./<your-file>' '${url}'`;
+        ? `curl -kfL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' '${url}'`
+        : `curl -fL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' '${url}'`;
     case "curl-win":
       return insecure
-        ? `curl.exe -kfL --progress-bar -F "file=@<your-file>" "${url}"`
-        : `curl.exe -fL --progress-bar -F "file=@<your-file>" "${url}"`;
+        ? `curl.exe -kfL --progress-bar -H "Expect:" -F "file=@<your-file>" "${url}"`
+        : `curl.exe -fL --progress-bar -H "Expect:" -F "file=@<your-file>" "${url}"`;
     case "powershell": {
       // PowerShell 7+. Built around a streaming HttpClient + a
       // background-task poll loop so we can paint a Write-Progress
@@ -92,6 +102,7 @@ function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolea
           `$total = $file.Length`,
           `$client = [System.Net.Http.HttpClient]::new()`,
           `$client.Timeout = [TimeSpan]::FromHours(1)`,
+          `$client.DefaultRequestHeaders.ExpectContinue = $false`,
           `$form = [System.Net.Http.MultipartFormDataContent]::new()`,
           `$stream = $file.OpenRead()`,
           `$content = [System.Net.Http.StreamContent]::new($stream)`,

@@ -546,8 +546,14 @@ pub async fn dispatch_outbound_share(
 
     let approver_ids: Vec<Uuid> = match &event {
         OutboundShareEvent::Pending {
-            approver_user_ids, ..
-        } => approver_user_ids.clone(),
+            approver_user_ids,
+            requester_id,
+            ..
+        } => approver_user_ids
+            .iter()
+            .copied()
+            .filter(|id| id != requester_id)
+            .collect(),
     };
 
     if approver_ids.is_empty() {

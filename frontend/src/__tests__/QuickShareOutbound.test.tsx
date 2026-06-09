@@ -197,19 +197,25 @@ describe("QuickShareOutbound", () => {
     expect(screen.getByText("This PC")).toBeInTheDocument();
   });
 
-  it("hides the how-to + justification block when the active connection has file transfer disabled", async () => {
+  it("hides the how-to banner but KEEPS the justification field when the active connection has file transfer disabled", async () => {
     mockSessionState = {
       sessions: [makeSession({ id: "sess-1", fileTransferEnabled: false })],
       activeSessionId: "sess-1",
     };
     render(<QuickShareOutbound {...baseProps} />);
     // The drive-redirection how-to is hidden in this state — the HTTPS
-    // upload box below now carries the entire workflow, so the how-to
-    // and per-file justification field become noise.
+    // upload box below carries the entire workflow, so the
+    // drive-channel instructions become noise.
     expect(screen.queryByText(/How to export a file from this session/i)).not.toBeInTheDocument();
+    // BUT the justification textarea MUST remain — the HTTPS upload
+    // snippet below honours the same 10-char justification rule, so
+    // hiding the field along with the how-to (the v1.12.1 behaviour)
+    // left users staring at a "justification required" error with no
+    // field to type into. The fix in v1.12.2 pulls the textarea out
+    // into its own always-rendered block.
     expect(
-      screen.queryByPlaceholderText(/Why does the next exported file/i)
-    ).not.toBeInTheDocument();
+      screen.getByPlaceholderText(/Why does the next exported file|Audit ticket INC-1234/i)
+    ).toBeInTheDocument();
     // The legacy "File transfer is not configured" warning is no longer
     // needed: the HTTPS upload section's "Drive redirection blocked?"
     // heading conveys the same information without the duplicate copy.

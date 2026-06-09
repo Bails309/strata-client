@@ -490,13 +490,21 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
           way to reach the submissions history, no matter how tall
           the panel content gets. */}
       <div className="flex-1 overflow-y-auto">
-        {/* How-to banner + justification field.
+        {/* How-to banner.
             Hidden when the active connection has file transfer disabled
-            (drive redirection is the subject of this whole box, so it's
+            (drive redirection is the subject of this banner, so it's
             noise on connections where the user must fall back to the
-            HTTPS upload below). Still shown when no session is active so
-            the informational copy and the "open or focus a session" hint
-            remain discoverable. */}
+            HTTPS upload below). Still shown when no session is active
+            so the informational copy and the "open or focus a session"
+            hint remain discoverable.
+
+            The justification textarea was originally nested here too,
+            which meant it disappeared on connections with file
+            transfer disabled — exactly the case where the HTTPS upload
+            card below NEEDS a justification to mint a token. v1.12.2
+            pulled the textarea out into its own always-rendered block
+            below so both surfaces (drive-channel interception AND the
+            HTTPS snippet) share a single source of truth. */}
         {!(activeSession && !activeSession.fileTransferEnabled) && (
           <div className="p-4 border-b border-white/5 space-y-3 text-xs">
             <div className="rounded bg-accent/10 border border-accent/20 p-3 space-y-2">
@@ -532,40 +540,51 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 </div>
               )}
             </div>
-
-            <label className="block">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
-                Justification for the next file{" "}
-                {justificationRequired ? (
-                  <span className="text-danger" aria-hidden="true">
-                    *
-                  </span>
-                ) : (
-                  <span className="normal-case">(optional)</span>
-                )}
-              </span>
-              <textarea
-                className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
-                rows={2}
-                placeholder={
-                  justificationRequired
-                    ? 'Required — e.g. "Audit ticket INC-1234, exporting redacted log for review"'
-                    : "Why does the next exported file need to leave the session?"
-                }
-                value={justification}
-                onChange={(e) => setJustification(e.target.value)}
-                maxLength={1000}
-                disabled={!activeSession}
-                aria-required={justificationRequired}
-              />
-              <span className="block mt-1 text-[10px] text-txt-tertiary">
-                {justificationRequired
-                  ? `Required for your account (minimum ${MIN_JUSTIFICATION_LEN} characters). Attached to the next file intercepted from this session, then cleared.`
-                  : "Attached to the next file intercepted from this session, then cleared."}
-              </span>
-            </label>
           </div>
         )}
+
+        {/* Justification textarea — always rendered (when a session is
+            active OR even when not, so the user can see the rule).
+            Both the drive-channel interception path AND the HTTPS
+            upload-snippet path below feed the same backend pipeline,
+            and both honour the same 10-char justification rule unless
+            the user has approval-bypass. Keeping the field outside the
+            how-to conditional above ensures it stays reachable when
+            file transfer (drive redirection) is disabled and the
+            HTTPS snippet is the user's ONLY way to export a file. */}
+        <div className="p-4 border-b border-white/5 text-xs">
+          <label className="block">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-txt-tertiary">
+              Justification for the next file{" "}
+              {justificationRequired ? (
+                <span className="text-danger" aria-hidden="true">
+                  *
+                </span>
+              ) : (
+                <span className="normal-case">(optional)</span>
+              )}
+            </span>
+            <textarea
+              className="w-full mt-1 px-2 py-1 text-xs bg-black/20 border border-white/10 rounded resize-none"
+              rows={2}
+              placeholder={
+                justificationRequired
+                  ? 'Required — e.g. "Audit ticket INC-1234, exporting redacted log for review"'
+                  : "Why does the next exported file need to leave the session?"
+              }
+              value={justification}
+              onChange={(e) => setJustification(e.target.value)}
+              maxLength={1000}
+              disabled={!activeSession}
+              aria-required={justificationRequired}
+            />
+            <span className="block mt-1 text-[10px] text-txt-tertiary">
+              {justificationRequired
+                ? `Required for your account (minimum ${MIN_JUSTIFICATION_LEN} characters). Attached to the next file intercepted from this session OR to the next HTTPS-snippet upload, then cleared.`
+                : "Attached to the next file intercepted from this session OR to the next HTTPS-snippet upload, then cleared."}
+            </span>
+          </label>
+        </div>
 
         {/* HTTPS upload snippet (fallback when drive redirection is blocked) */}
         <div className="p-4 border-b border-white/5 space-y-3 text-xs">

@@ -21,6 +21,4 @@ ALTER TABLE password_checkout_requests
     ADD COLUMN IF NOT EXISTS decision_reason TEXT;
 
 COMMENT ON COLUMN password_checkout_requests.decision_reason IS
-    'Free-form reason captured from the approver when they decide a checkout. ' ||
-    'Required by the UI on Deny; optional on Approve. Maximum 1024 chars enforced ' ||
-    'by the handler before INSERT. NULL for legacy rows that predate migration 077.';
+    'Free-form reason captured from the approver when they decide a checkout. Required by the UI on Deny; optional on Approve. Maximum 1024 chars enforced by the handler before INSERT. NULL for legacy rows that predate migration 077.';

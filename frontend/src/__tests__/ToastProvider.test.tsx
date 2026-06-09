@@ -297,4 +297,3 @@ describe("ToastProvider — progress bar", () => {
     expect(screen.queryByRole("progressbar")).toBeNull();
   });
 });
-

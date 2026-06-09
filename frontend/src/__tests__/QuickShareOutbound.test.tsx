@@ -276,8 +276,12 @@ describe("QuickShareOutbound", () => {
       })
     );
     await screen.findByText(/Expires in/);
-    // The snippet for curl format
-    expect(screen.getByText(/curl -fL -F 'file=@\.\/<your-file>'/)).toBeInTheDocument();
+    // The snippet for curl format. New since the progress-bar work:
+    // the snippet includes `--progress-bar` so the user gets a clean
+    // one-line upload meter in the terminal.
+    expect(
+      screen.getByText(/curl -fL --progress-bar -F 'file=@\.\/<your-file>'/)
+    ).toBeInTheDocument();
     // Button label flips to Regenerate
     expect(screen.getByRole("button", { name: /Regenerate upload command/i })).toBeInTheDocument();
   });
@@ -388,7 +392,12 @@ describe("QuickShareOutbound", () => {
     render(<QuickShareOutbound {...baseProps} />);
     await userEvent.selectOptions(screen.getByTestId("select"), "powershell");
     await userEvent.click(screen.getByRole("button", { name: /Generate upload command/i }));
-    await screen.findByText(/Invoke-WebRequest -Uri/);
+    // The PS snippet was rewritten to use a streaming HttpClient +
+    // Write-Progress loop because `Invoke-WebRequest -Form` has no
+    // file-upload progress. Sanity-check both anchors so we'd catch
+    // an accidental revert to the silent variant.
+    await screen.findByText(/HttpClient/);
+    expect(screen.getByText(/Write-Progress/)).toBeInTheDocument();
   });
 
   it("renders the insecure PowerShell snippet variant", async () => {
@@ -501,5 +510,36 @@ describe("QuickShareOutbound", () => {
     expect(screen.getByText(/2\.0 KB/)).toBeInTheDocument();
     expect(screen.getByText(/3\.0 MB/)).toBeInTheDocument();
     expect(screen.getByText(/2\.0 GB/)).toBeInTheDocument();
+  });
+
+  it("renders an indeterminate 'Awaiting AV scan' indicator on pending rows", async () => {
+    // Two rows: one pending (must show the indicator), one approved
+    // (must not). Guards against a regression that would either drop
+    // the indicator entirely or paint it on every row.
+    vi.mocked(listMyOutboundShares).mockResolvedValue([
+      makeShare({ id: "h-pending", filename: "scanning.bin", status: "pending" }),
+      makeShare({
+        id: "h-approved",
+        filename: "done.txt",
+        status: "approved",
+        download_token: "tok-done",
+      }),
+    ]);
+    render(<QuickShareOutbound {...baseProps} />);
+    await screen.findByText("scanning.bin");
+
+    const pendingBar = screen.getByRole("progressbar", {
+      name: /Awaiting scan and approval: scanning\.bin/i,
+    });
+    expect(pendingBar).toBeInTheDocument();
+    // Indeterminate: no aria-valuenow attribute is set (an
+    // unannounced determinate value would be misleading here).
+    expect(pendingBar.getAttribute("aria-valuenow")).toBeNull();
+    // The user-visible caption confirms the AV-scan wording.
+    expect(screen.getByText(/Awaiting AV scan/i)).toBeInTheDocument();
+
+    // Only one progressbar in the panel — the approved row must not
+    // sprout one.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(1);
   });
 });

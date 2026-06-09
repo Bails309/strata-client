@@ -2055,10 +2055,20 @@ describe("submitOutboundShare progress opt-in", () => {
     try {
       const fetchMock = vi.fn(
         async () =>
-          new Response(JSON.stringify({ id: "2", status: "approved", dlp_score: 0, dlp_reasons: [], download_url: null, expires_at: null }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          })
+          new Response(
+            JSON.stringify({
+              id: "2",
+              status: "approved",
+              dlp_score: 0,
+              dlp_reasons: [],
+              download_url: null,
+              expires_at: null,
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }
+          )
       );
       globalThis.fetch = fetchMock as unknown as typeof fetch;
       const fd = new FormData();
@@ -2070,4 +2080,3 @@ describe("submitOutboundShare progress opt-in", () => {
     }
   });
 });
-

@@ -172,6 +172,22 @@ services:
       # VDI (docker-spawned desktops) — DISABLED at this layer; flip
       # to true via docker-compose.vdi.yml which also mounts docker.sock.
       - STRATA_VDI_ENABLED=${STRATA_VDI_ENABLED:-false}
+      # ── Antivirus (v1.12.0+) ──
+      # All optional. Defaults are inert (off) so the backend behaves
+      # identically to v1.11.x unless you opt in. To enable the bundled
+      # clamav sidecar (started via `docker compose --profile av up -d`)
+      # set in your .env file:
+      #   STRATA_AV_BACKEND=clamav
+      #   STRATA_AV_FAIL_MODE=block   # or `allow` for fail-open
+      # The default STRATA_AV_CLAMD_ADDR matches the sidecar's service
+      # name on the internal compose network; override only if you
+      # point at an external clamd.
+      - STRATA_AV_BACKEND=${STRATA_AV_BACKEND:-off}
+      - STRATA_AV_FAIL_MODE=${STRATA_AV_FAIL_MODE:-block}
+      - STRATA_AV_CLAMD_ADDR=${STRATA_AV_CLAMD_ADDR:-clamav:3310}
+      - STRATA_AV_MAX_SCAN_SIZE=${STRATA_AV_MAX_SCAN_SIZE:-104857600}
+      - STRATA_AV_TIMEOUT_MS=${STRATA_AV_TIMEOUT_MS:-60000}
+      - STRATA_AV_COMMAND=${STRATA_AV_COMMAND:-}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"]
       interval: 10s
@@ -332,12 +348,11 @@ services:
   # Opt-in malware scanner for inbound Quick Share uploads and outbound
   # share requests. Enable by running:
   #   docker compose --profile av up -d
-  # and setting these env vars on the backend service (already wired
-  # below — they're no-ops unless this sidecar is up):
+  # and setting these env vars in your .env file (they're already
+  # passed through to the backend service above, but default to off):
   #   STRATA_AV_BACKEND=clamav
-  #   STRATA_AV_CLAMD_HOST=clamav
-  #   STRATA_AV_CLAMD_PORT=3310
-  #   STRATA_AV_FAIL_MODE=block   # or "allow" if you want degraded ops
+  #   STRATA_AV_CLAMD_ADDR=clamav:3310   # default — only override for external clamd
+  #   STRATA_AV_FAIL_MODE=block          # or "allow" if you want degraded ops
   # The container ships with an empty signature DB and runs freshclam
   # on startup to pull the latest definitions from clamav.net (~250 MB
   # on first launch, then incremental). It does NOT expose port 3310

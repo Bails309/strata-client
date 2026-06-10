@@ -263,23 +263,17 @@ fn parse_template_key(raw: &str) -> Result<TemplateKey, AppError> {
 /// any of the four MJML/text templates is populated with a clearly-
 /// fake but realistic sample value so admins can eyeball each variant.
 ///
-/// `base_url` is pulled from the live `tenant_base_url` setting so previews
-/// reflect the operator's actual branding / routing, and `accent` is pulled
-/// from `branding_accent_color`. This keeps the preview truthful — admins
-/// see the same links recipients will see in production mail.
+/// `base_url` is resolved via `settings::tenant_base_url`, which falls
+/// back to the `BASE_URL` env var and finally to `https://strata.local`,
+/// so previews reflect the operator's actual branding / routing and
+/// admins see the same links recipients will see in production mail.
 async fn sample_context(pool: &sqlx::PgPool) -> Result<serde_json::Value, AppError> {
     let accent = settings::get(pool, "branding_accent_color")
         .await
         .ok()
         .flatten()
         .unwrap_or_else(|| "#2563eb".into());
-    let base_url = settings::get(pool, "tenant_base_url")
-        .await
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "https://strata.example.com".into());
-    let base_url = base_url.trim_end_matches('/').to_string();
+    let base_url = settings::tenant_base_url(pool).await;
     Ok(json!({
         "accent": accent,
         "approve_url": format!("{base_url}/admin/checkouts"),

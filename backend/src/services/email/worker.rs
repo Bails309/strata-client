@@ -167,11 +167,7 @@ async fn retry_one(
         .ok()
         .flatten()
         .unwrap_or_else(|| "#2563eb".into());
-    let base_url = crate::services::settings::get(pool, "tenant_base_url")
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "https://strata.local".into());
+    let base_url = crate::services::settings::tenant_base_url(pool).await;
 
     let expiry_human = match checkout.expires_at {
         Some(t) => crate::services::display::format_datetime_for_display(pool, t).await,
@@ -180,8 +176,8 @@ async fn retry_one(
 
     let ctx = serde_json::json!({
         "accent": accent,
-        "approve_url": format!("{}/admin/checkouts", base_url.trim_end_matches('/')),
-        "profile_url": format!("{}/profile", base_url.trim_end_matches('/')),
+        "approve_url": format!("{}/admin/checkouts", base_url),
+        "profile_url": format!("{}/profile", base_url),
         "requester_display_name": checkout.requester_username.clone().unwrap_or_default(),
         "requester_username": checkout.requester_username.clone().unwrap_or_default(),
         "approver_display_name": "the approver",

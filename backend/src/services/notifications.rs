@@ -320,13 +320,9 @@ async fn build_context(pool: &Pool<Postgres>, event: &CheckoutEvent) -> serde_js
         .ok()
         .flatten()
         .unwrap_or_else(|| "#2563eb".into());
-    let base_url = crate::services::settings::get(pool, "tenant_base_url")
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "https://strata.local".into());
-    let approve_url = format!("{}/admin/checkouts", base_url.trim_end_matches('/'));
-    let profile_url = format!("{}/profile", base_url.trim_end_matches('/'));
+    let base_url = crate::services::settings::tenant_base_url(pool).await;
+    let approve_url = format!("{}/admin/checkouts", base_url);
+    let profile_url = format!("{}/profile", base_url);
 
     match event {
         CheckoutEvent::Pending {
@@ -674,12 +670,8 @@ async fn build_outbound_share_context(
         .ok()
         .flatten()
         .unwrap_or_else(|| "#2563eb".into());
-    let base_url = crate::services::settings::get(pool, "tenant_base_url")
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "https://strata.local".into());
-    let approve_url = format!("{}/admin/pending-approvals", base_url.trim_end_matches('/'));
+    let base_url = crate::services::settings::tenant_base_url(pool).await;
+    let approve_url = format!("{}/admin/pending-approvals", base_url);
 
     match event {
         OutboundShareEvent::Pending {

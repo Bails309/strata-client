@@ -82,6 +82,34 @@ pub async fn set(pool: &Pool<Postgres>, key: &str, value: &str) -> anyhow::Resul
     Ok(())
 }
 
+/// Resolve the tenant-facing base URL used in user-visible links
+/// (notification email "Review request in Strata" buttons, etc.).
+///
+/// Resolution order:
+/// 1. `tenant_base_url` system setting (set from the admin UI).
+/// 2. `BASE_URL` env var — the same one consumed by the SSO callback
+///    builder in `routes/auth.rs`, so a single `.env` line covers both.
+/// 3. Hard-coded `https://strata.local` last-resort default (kept so
+///    isolated dev databases still render something parseable).
+///
+/// The returned URL has any trailing slash stripped so callers can
+/// append `/path` directly.
+pub async fn tenant_base_url(pool: &Pool<Postgres>) -> String {
+    if let Ok(Some(v)) = get(pool, "tenant_base_url").await {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.trim_end_matches('/').to_string();
+        }
+    }
+    if let Ok(v) = std::env::var("BASE_URL") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.trim_end_matches('/').to_string();
+        }
+    }
+    "https://strata.local".to_string()
+}
+
 /// Read all settings as key-value pairs.
 pub async fn get_all(pool: &Pool<Postgres>) -> anyhow::Result<Vec<(String, String)>> {
     let rows: Vec<(String, String)> =

@@ -554,4 +554,36 @@ describe("QuickShareOutbound", () => {
     // sprout one.
     expect(screen.getAllByRole("progressbar")).toHaveLength(1);
   });
+
+  it("substitutes the File path input into the curl snippet with shell-safe quoting", async () => {
+    // The File path input is optional; when filled, the pasted path
+    // should replace the `<your-file>` placeholder so the snippet is
+    // paste-and-run. Quotes in the path must be escaped so they
+    // don't terminate the surrounding single-quoted string.
+    mockSessionState = {
+      sessions: [makeSession({ id: "sess-1", protocol: "ssh" })],
+      activeSessionId: "sess-1",
+    };
+    render(<QuickShareOutbound {...baseProps} />);
+    await userEvent.click(screen.getByRole("button", { name: /Generate upload command/i }));
+    await screen.findByText(/Expires in/);
+
+    // Before any input, the placeholder is intact.
+    expect(
+      screen.getByText(/curl -fL --progress-bar -H 'Expect:' -F 'file=@\.\/<your-file>'/)
+    ).toBeInTheDocument();
+
+    // Type a path with an embedded single quote.
+    const pathInput = screen.getByLabelText(/File path \(optional\)/i);
+    await userEvent.type(pathInput, "/home/o'brien/report.pdf");
+
+    // The substituted snippet contains the escaped path (`'\''`
+    // sequence so the single quote doesn't terminate the surrounding
+    // bash single-quoted string) and drops the `./` prefix.
+    expect(
+      screen.getByText(
+        /curl -fL --progress-bar -H 'Expect:' -F 'file=@\/home\/o'\\''brien\/report\.pdf'/
+      )
+    ).toBeInTheDocument();
+  });
 });

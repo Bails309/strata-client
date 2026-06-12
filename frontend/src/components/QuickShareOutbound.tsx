@@ -43,9 +43,12 @@ function statusClasses(status: string): string {
 //
 // Mirrors the inbound QuickShare snippet formats, but adapted for an
 // upload: each one POSTs a multipart `file` field at the tokenised
-// ingest URL. `<your-file>` is a placeholder the user must replace
-// with the actual path inside the remote session. `wget` is omitted
-// because GNU wget does not construct multipart bodies natively.
+// ingest URL. `<your-file>` is a placeholder the user can either
+// replace by hand inside the session shell, or fill in via the
+// "File path" input on this panel — when supplied, it's substituted
+// (with per-format quoting) at render time so the snippet is
+// genuinely paste-and-run. `wget` is omitted because GNU wget does
+// not construct multipart bodies natively.
 
 type SnippetFormat = "curl" | "curl-win" | "powershell";
 
@@ -57,7 +60,50 @@ function defaultSnippetFormat(protocol: string): SnippetFormat {
   return "curl-win";
 }
 
-function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolean): string {
+// ── Per-format path escaping ─────────────────────────────────────────
+//
+// The path the user pastes is plain text — we don't validate it (we
+// can't, the path exists inside the remote session, not the browser),
+// but we DO need to make sure characters that have meaning inside the
+// quoting style each snippet uses get neutralised, so a path like
+// `O'Brien\report.txt` doesn't accidentally close the surrounding
+// quote and break the command.
+function escapeShellSingleQuoted(path: string): string {
+  // bash/zsh single-quoted strings can't contain `'` at all; the
+  // canonical escape is `'\''` — close, escaped quote, reopen.
+  return path.replace(/'/g, "'\\''");
+}
+function escapeWinDoubleQuoted(path: string): string {
+  // curl.exe on Windows is parsed by CommandLineToArgvW (MSVCRT
+  // argv rules). Inside a double-quoted argument:
+  //   - `"` must be escaped as `\"`.
+  //   - A run of N backslashes immediately before a `"` is itself
+  //     halved by the parser (so `\\"` becomes `\` + closing quote,
+  //     terminating the string prematurely). To keep both N literal
+  //     backslashes AND the literal `"`, the input run must be
+  //     doubled to 2N before the `\"`.
+  //   - Trailing backslashes before the closing `"` we're going to
+  //     add at the call site have the same problem and must also be
+  //     doubled.
+  //   - Backslashes NOT followed by `"` are literal — no change.
+  // Windows paths very rarely contain `"` so this almost always
+  // round-trips byte-identical, but the full rule keeps pathological
+  // inputs like `C:\foo\"bar.txt` safe.
+  return path
+    .replace(/(\\*)"/g, (_, slashes: string) => `${slashes}${slashes}\\"`)
+    .replace(/(\\+)$/, (_, slashes: string) => `${slashes}${slashes}`);
+}
+function escapePowerShellSingleQuoted(path: string): string {
+  // PowerShell single-quoted (literal) strings escape `'` by doubling it.
+  return path.replace(/'/g, "''");
+}
+
+function snippetForOutbound(
+  format: SnippetFormat,
+  url: string,
+  insecure: boolean,
+  filePath: string
+): string {
   // `--progress-bar` (curl) replaces the verbose default meter with
   // a clean one-line bar — works on multipart uploads (-F), unlike
   // some -X POST permutations that disable progress.
@@ -86,15 +132,28 @@ function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolea
   // wall-clock seconds from process start to last byte received;
   // `%{http_code}` is the final HTTP status — 200 on accept, 400
   // on stale-token / AV-block / payload-too-large, etc.
+  // Substitute the `<your-file>` placeholder when the user has filled
+  // in the path input. Each format has a slightly different anchor
+  // string so the prefix (`./` for the *nix curl form) drops cleanly
+  // when the user pastes an absolute path.
+  const trimmedPath = filePath.trim();
   switch (format) {
     case "curl":
       return insecure
-        ? `curl -kfL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' -w '\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n' '${url}'`
-        : `curl -fL --progress-bar -H 'Expect:' -F 'file=@./<your-file>' -w '\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n' '${url}'`;
+        ? `curl -kfL --progress-bar -H 'Expect:' -F 'file=@${
+            trimmedPath ? escapeShellSingleQuoted(trimmedPath) : "./<your-file>"
+          }' -w '\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n' '${url}'`
+        : `curl -fL --progress-bar -H 'Expect:' -F 'file=@${
+            trimmedPath ? escapeShellSingleQuoted(trimmedPath) : "./<your-file>"
+          }' -w '\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n' '${url}'`;
     case "curl-win":
       return insecure
-        ? `curl.exe -kfL --progress-bar -H "Expect:" -F "file=@<your-file>" -w "\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n" "${url}"`
-        : `curl.exe -fL --progress-bar -H "Expect:" -F "file=@<your-file>" -w "\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n" "${url}"`;
+        ? `curl.exe -kfL --progress-bar -H "Expect:" -F "file=@${
+            trimmedPath ? escapeWinDoubleQuoted(trimmedPath) : "<your-file>"
+          }" -w "\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n" "${url}"`
+        : `curl.exe -fL --progress-bar -H "Expect:" -F "file=@${
+            trimmedPath ? escapeWinDoubleQuoted(trimmedPath) : "<your-file>"
+          }" -w "\\nDone: %{size_upload} bytes in %{time_total}s (HTTP %{http_code})\\n" "${url}"`;
     case "powershell": {
       // PowerShell 7+. Built around a streaming HttpClient + a
       // background-task poll loop so we can paint a Write-Progress
@@ -113,7 +172,9 @@ function snippetForOutbound(format: SnippetFormat, url: string, insecure: boolea
       return (
         tlsBypass +
         [
-          `$file = Get-Item '<your-file>'`,
+          `$file = Get-Item '${
+            trimmedPath ? escapePowerShellSingleQuoted(trimmedPath) : "<your-file>"
+          }'`,
           `$total = $file.Length`,
           `$client = [System.Net.Http.HttpClient]::new()`,
           `$client.Timeout = [TimeSpan]::FromHours(1)`,
@@ -320,6 +381,11 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
     defaultSnippetFormat(driveProtocol)
   );
   const [insecureTls, setInsecureTls] = useState(false);
+  // Optional file-path input. When non-empty it's substituted into the
+  // snippet with per-format quoting so the user can paste a fully
+  // run-ready command into the remote session shell without having to
+  // hand-edit `<your-file>`.
+  const [filePath, setFilePath] = useState("");
   const [ingestToken, setIngestToken] = useState<OutboundShareIngestToken | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
@@ -364,8 +430,8 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
     [ingestToken]
   );
   const snippet = useMemo(
-    () => (ingestToken ? snippetForOutbound(snippetFormat, uploadUrl, insecureTls) : ""),
-    [ingestToken, snippetFormat, uploadUrl, insecureTls]
+    () => (ingestToken ? snippetForOutbound(snippetFormat, uploadUrl, insecureTls, filePath) : ""),
+    [ingestToken, snippetFormat, uploadUrl, insecureTls, filePath]
   );
   const expiresInSec = ingestToken
     ? Math.max(0, Math.floor((new Date(ingestToken.expires_at).getTime() - nowMs) / 1000))
@@ -633,6 +699,30 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 ]}
               />
               <label
+                htmlFor="outbound-file-path"
+                className="block text-[10px] font-bold uppercase tracking-wider text-txt-tertiary pt-1"
+              >
+                File path (optional)
+              </label>
+              <input
+                id="outbound-file-path"
+                type="text"
+                value={filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                placeholder={
+                  snippetFormat === "curl" ? "/home/user/report.pdf" : "C:\\Users\\you\\report.pdf"
+                }
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                className="w-full px-2 py-1 text-xs font-mono rounded bg-black/40 border border-white/10 text-txt-primary placeholder:text-txt-tertiary focus:outline-none focus:border-accent"
+              />
+              <p className="text-[10px] text-txt-tertiary leading-snug">
+                Paste the path of the file you want to export from inside the remote session and the
+                snippet below becomes paste-and-run. Leave blank to keep the
+                <span className="font-mono"> &lt;your-file&gt;</span> placeholder.
+              </p>
+              <label
                 htmlFor="outbound-insecure-tls"
                 className="flex items-center gap-2.5 cursor-pointer select-none group pt-1"
                 title="Adds -k / ServicePointManager bypass so the snippet works against a Strata server with a self-signed or internal-CA TLS cert."
@@ -695,9 +785,19 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                   {snippet}
                 </pre>
                 <p className="text-[10px] text-txt-tertiary leading-snug">
-                  Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of the
-                  file you want to export. The command is single-use — it stops working as soon as
-                  one upload completes or the timer hits zero.
+                  {filePath.trim() ? (
+                    <>
+                      The command is single-use — it stops working as soon as one upload completes
+                      or the timer hits zero.
+                    </>
+                  ) : (
+                    <>
+                      Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of
+                      the file you want to export, or fill in the <em>File path</em> input above to
+                      have it substituted automatically. The command is single-use — it stops
+                      working as soon as one upload completes or the timer hits zero.
+                    </>
+                  )}
                 </p>
               </div>
             )}

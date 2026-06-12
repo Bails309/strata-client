@@ -119,6 +119,47 @@ export default function OutboundSharesTab({
     refresh();
   }, [refresh]);
 
+  // Auto-refresh so background events (the hourly outbound-shares
+  // purge sweeper flipping rows to `purged` / dropping rows past the
+  // 7-day history-retention window, or another approver acting on
+  // the queue) become visible without forcing the operator to click
+  // Refresh. Visibility-gated so a forgotten tab in the background
+  // doesn't keep polling — we also do an immediate refresh on tab
+  // re-focus so the first thing the operator sees after switching
+  // back is fresh state.
+  useEffect(() => {
+    const POLL_MS = 60_000;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const start = () => {
+      if (timer !== null) return;
+      timer = setInterval(refresh, POLL_MS);
+    };
+    const stop = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    if (document.visibilityState === "visible") {
+      start();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      stop();
+    };
+  }, [refresh]);
+
   const userById = useMemo(() => {
     const m = new Map<string, User>();
     for (const u of users) m.set(u.id, u);

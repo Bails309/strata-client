@@ -74,9 +74,24 @@ function escapeShellSingleQuoted(path: string): string {
   return path.replace(/'/g, "'\\''");
 }
 function escapeWinDoubleQuoted(path: string): string {
-  // curl.exe on Windows uses MSVCRT-style argv parsing — escape `"`
-  // with `\"`. Backslashes are otherwise literal in paths.
-  return path.replace(/"/g, '\\"');
+  // curl.exe on Windows is parsed by CommandLineToArgvW (MSVCRT
+  // argv rules). Inside a double-quoted argument:
+  //   - `"` must be escaped as `\"`.
+  //   - A run of N backslashes immediately before a `"` is itself
+  //     halved by the parser (so `\\"` becomes `\` + closing quote,
+  //     terminating the string prematurely). To keep both N literal
+  //     backslashes AND the literal `"`, the input run must be
+  //     doubled to 2N before the `\"`.
+  //   - Trailing backslashes before the closing `"` we're going to
+  //     add at the call site have the same problem and must also be
+  //     doubled.
+  //   - Backslashes NOT followed by `"` are literal — no change.
+  // Windows paths very rarely contain `"` so this almost always
+  // round-trips byte-identical, but the full rule keeps pathological
+  // inputs like `C:\foo\"bar.txt` safe.
+  return path
+    .replace(/(\\*)"/g, (_, slashes: string) => `${slashes}${slashes}\\"`)
+    .replace(/(\\+)$/, (_, slashes: string) => `${slashes}${slashes}`);
 }
 function escapePowerShellSingleQuoted(path: string): string {
   // PowerShell single-quoted (literal) strings escape `'` by doubling it.

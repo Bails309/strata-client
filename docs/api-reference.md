@@ -605,9 +605,24 @@ parent Health page).
     "port": 3310
   },
   "signatures": {
-    "main":     { "version": 62, "sig_count": 6985073, "built_at": "2024-09-29T08:00:00Z", "format": "cvd" },
-    "daily":    { "version": 27349, "sig_count": 2047316, "built_at": "2026-06-08T07:14:11Z", "format": "cld" },
-    "bytecode": { "version": 334, "sig_count": 91, "built_at": "2024-12-12T10:33:00Z", "format": "cvd" }
+    "main": {
+      "version": 62,
+      "sig_count": 6985073,
+      "built_at": "2024-09-29T08:00:00Z",
+      "format": "cvd"
+    },
+    "daily": {
+      "version": 27349,
+      "sig_count": 2047316,
+      "built_at": "2026-06-08T07:14:11Z",
+      "format": "cld"
+    },
+    "bytecode": {
+      "version": 334,
+      "sig_count": 91,
+      "built_at": "2024-12-12T10:33:00Z",
+      "format": "cvd"
+    }
   },
   "freshclam": {
     "last_run_at": "2026-06-09T13:00:11Z",
@@ -646,10 +661,19 @@ parent Health page).
   "backend": "clamav",
   "reachable": false,
   "stale_since": "2026-06-09T13:32:04Z",
-  "daemon":     { "version": "ClamAV 1.4.2", "host": "clamav", "port": 3310 },
-  "signatures": { "main": { "version": 62, "...": "..." }, "daily": { "...": "..." }, "bytecode": { "...": "..." } },
-  "freshclam":  { "last_run_at": "2026-06-09T13:00:11Z", "...": "..." },
-  "verdicts_last_30d": { "clean": 4218, "infected": 3, "skipped": 14, "error": 0 }
+  "daemon": { "version": "ClamAV 1.4.2", "host": "clamav", "port": 3310 },
+  "signatures": {
+    "main": { "version": 62, "...": "..." },
+    "daily": { "...": "..." },
+    "bytecode": { "...": "..." }
+  },
+  "freshclam": { "last_run_at": "2026-06-09T13:00:11Z", "...": "..." },
+  "verdicts_last_30d": {
+    "clean": 4218,
+    "infected": 3,
+    "skipped": 14,
+    "error": 0
+  }
 }
 ```
 
@@ -670,15 +694,15 @@ new **Admin → AV-Blocked Files** tab.
 
 **Query parameters** (all optional):
 
-| Param        | Type             | Default  | Description                                                                 |
-| ------------ | ---------------- | -------- | --------------------------------------------------------------------------- |
-| `from`       | RFC 3339         | `-30d`   | Inclusive lower bound on `created_at`.                                      |
-| `to`         | RFC 3339         | `now`    | Exclusive upper bound on `created_at`.                                      |
-| `engine`     | string           | (any)    | Filter by `av_backend` (`clamav` / `command`).                              |
-| `direction`  | string           | (any)    | `inbound` / `outbound`.                                                     |
-| `signature`  | string substring | (any)    | Case-insensitive substring match on `av_signature` (e.g. `eicar`).          |
-| `cursor`     | opaque string    | —        | Returned by a previous response; passes through as `WHERE id < $cursor`.    |
-| `limit`      | int              | 50       | Page size, capped at 200.                                                   |
+| Param       | Type             | Default | Description                                                              |
+| ----------- | ---------------- | ------- | ------------------------------------------------------------------------ |
+| `from`      | RFC 3339         | `-30d`  | Inclusive lower bound on `created_at`.                                   |
+| `to`        | RFC 3339         | `now`   | Exclusive upper bound on `created_at`.                                   |
+| `engine`    | string           | (any)   | Filter by `av_backend` (`clamav` / `command`).                           |
+| `direction` | string           | (any)   | `inbound` / `outbound`.                                                  |
+| `signature` | string substring | (any)   | Case-insensitive substring match on `av_signature` (e.g. `eicar`).       |
+| `cursor`    | opaque string    | —       | Returned by a previous response; passes through as `WHERE id < $cursor`. |
+| `limit`     | int              | 50      | Page size, capped at 200.                                                |
 
 **Response** `200 OK`
 
@@ -740,19 +764,19 @@ List all roles with their full permission matrix.
 ]
 ```
 
-| Field                         | Type    | Description                                                                              |
-| ----------------------------- | ------- | ---------------------------------------------------------------------------------------- |
-| `can_manage_system`           | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks                    |
-| `can_manage_users`            | boolean | User CRUD, role assignment, password resets                                              |
-| `can_manage_connections`      | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos                            |
-| `can_view_audit_logs`         | boolean | Audit log listing and export                                                             |
-| `can_create_users`            | boolean | Provision new user accounts                                                              |
-| `can_create_user_groups`      | boolean | Role CRUD                                                                                |
-| `can_create_connections`      | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0)         |
-| `can_use_quick_share`         | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin) |
+| Field                          | Type    | Description                                                                                                                                                                                             |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `can_manage_system`            | boolean | Super-admin: system settings, Vault, SSO, bypass for all other checks                                                                                                                                   |
+| `can_manage_users`             | boolean | User CRUD, role assignment, password resets                                                                                                                                                             |
+| `can_manage_connections`       | boolean | Connection CRUD, folders, sharing profiles, AD sync, Kerberos                                                                                                                                           |
+| `can_view_audit_logs`          | boolean | Audit log listing and export                                                                                                                                                                            |
+| `can_create_users`             | boolean | Provision new user accounts                                                                                                                                                                             |
+| `can_create_user_groups`       | boolean | Role CRUD                                                                                                                                                                                               |
+| `can_create_connections`       | boolean | Create and manage connections **and** connection folders (unified as of v0.24.0)                                                                                                                        |
+| `can_use_quick_share`          | boolean | Upload files via the in-session Quick Share endpoint (user-facing permission, not admin)                                                                                                                |
 | `can_use_quick_share_outbound` | boolean | **(v1.11.0+)** Submit files **out of** a remote session via the Outbound Quick-Share pipeline (drive-channel ingest and HTTPS upload-command mint). **`can_manage_system` does NOT bypass this check.** |
-| `can_create_sharing_profiles` | boolean | Generate live session share links                                                        |
-| `can_view_sessions`           | boolean | NVR observation, active session listing, kill session                                    |
+| `can_create_sharing_profiles`  | boolean | Generate live session share links                                                                                                                                                                       |
+| `can_view_sessions`            | boolean | NVR observation, active session listing, kill session                                                                                                                                                   |
 
 #### `POST /api/admin/roles`
 
@@ -2264,9 +2288,9 @@ Force-grant the co-pilot input token to a specific participant. The session owne
 
 **Path Parameters**
 
-| Param         | Type   | Description                                                                    |
-| ------------- | ------ | ------------------------------------------------------------------------------ |
-| `share_token` | string | The multiplayer share token.                                                   |
+| Param         | Type   | Description                                                                     |
+| ------------- | ------ | ------------------------------------------------------------------------------- |
+| `share_token` | string | The multiplayer share token.                                                    |
 | `target_pid`  | UUID   | The participant id (issued by `welcome`) of the participant to receive control. |
 
 **Response** `204 No Content` on success. The room broadcasts `input_grant` (with `by` populated from the owner's pid if one is in the room) and `roster` to all participants.
@@ -2379,13 +2403,13 @@ deterministic and actionable even when the engine returns
 free-form spew. The audit row always carries the unredacted
 original message; only the HTTP response body is normalised:
 
-| Verdict shape                                                                       | Response `message`                                                          |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `Verdict::Infected { signature }`                                                   | `File rejected by malware scan: {signature}`                                |
-| `Verdict::Error { message }` containing `timeout` / `timed out` / `exceeded`        | `Antivirus scan timed out after Ns; try a smaller file or retry shortly.`   |
-| `Verdict::Error { message }` containing `refused` / `reset` / `unreachable` / `no route` / `broken pipe` | `Antivirus scanner unreachable; please retry shortly.`                      |
-| `Verdict::Error { message }` containing `empty` / `no signatures`                   | `Antivirus signature database not yet ready; please retry shortly.`         |
-| `Verdict::Error { message }` (anything else)                                        | The engine's raw `message`, passed through verbatim.                        |
+| Verdict shape                                                                                            | Response `message`                                                        |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `Verdict::Infected { signature }`                                                                        | `File rejected by malware scan: {signature}`                              |
+| `Verdict::Error { message }` containing `timeout` / `timed out` / `exceeded`                             | `Antivirus scan timed out after Ns; try a smaller file or retry shortly.` |
+| `Verdict::Error { message }` containing `refused` / `reset` / `unreachable` / `no route` / `broken pipe` | `Antivirus scanner unreachable; please retry shortly.`                    |
+| `Verdict::Error { message }` containing `empty` / `no signatures`                                        | `Antivirus signature database not yet ready; please retry shortly.`       |
+| `Verdict::Error { message }` (anything else)                                                             | The engine's raw `message`, passed through verbatim.                      |
 
 The frontend toast presenter applies the same classification so
 the in-browser drag-drop UX, the QuickShareOutbound MY
@@ -2449,12 +2473,12 @@ alike) is streamed through the configured AV scanner **before** the
 plaintext is read into memory for Vault-Transit sealing. The
 verdict persists on the resulting row in four columns:
 
-| Field                | Type            | Notes                                                                |
-| -------------------- | --------------- | -------------------------------------------------------------------- |
-| `av_scan_status`     | `string`        | `clean` \| `infected` \| `skipped` \| `error`, or `null` for v1.11.x rows |
-| `av_signature`       | `string`        | Engine-reported signature on infected rows                            |
-| `av_scanned_at`      | `string` (RFC 3339) | When the verdict was issued                                         |
-| `av_scanner_backend` | `string`        | `off` \| `clamav` \| `command`                                       |
+| Field                | Type                | Notes                                                                     |
+| -------------------- | ------------------- | ------------------------------------------------------------------------- |
+| `av_scan_status`     | `string`            | `clean` \| `infected` \| `skipped` \| `error`, or `null` for v1.11.x rows |
+| `av_signature`       | `string`            | Engine-reported signature on infected rows                                |
+| `av_scanned_at`      | `string` (RFC 3339) | When the verdict was issued                                               |
+| `av_scanner_backend` | `string`            | `off` \| `clamav` \| `command`                                            |
 
 Admin responses on `GET /api/admin/outbound-shares` and `GET
 /api/admin/outbound-shares/pending` include these four fields on
@@ -2477,6 +2501,46 @@ audit event is still written with `av_status=infected`,
 `av_signature=<sig>`, `av_backend=<engine>` so the rejection is
 self-attesting for compliance.
 
+### v1.12.2+ approver email fan-out
+
+When a non-bypass outbound submission lands in the approval
+queue (status `pending`), the backend now spawns a transactional
+email through the same Tera + mrml + Outlook dark-mode VML
+pipeline as the existing four `CheckoutEvent` templates. The
+new event is `OutboundShareEvent::Pending` and the template pair
+is `backend/src/services/email/templates/outbound_share_pending.{mjml,txt.tera}`.
+
+**Recipient set** is computed by `notifications::approver_recipients_for_outbound`:
+
+```sql
+SELECT DISTINCT u.id, u.email
+FROM users u
+LEFT JOIN user_roles ur ON ur.user_id = u.id
+LEFT JOIN roles      r  ON r.id      = ur.role_id
+LEFT JOIN outbound_share_approvers osa ON osa.user_id = u.id
+WHERE u.email IS NOT NULL
+  AND u.notifications_opt_out = FALSE
+  AND (r.can_manage_system = TRUE OR osa.user_id IS NOT NULL)
+  AND u.id <> $1  -- $1 = requester_id (self-exclusion, v1.12.2)
+```
+
+The recipient resolution rule has not changed since v1.11.0
+(super-admins ∪ explicit approver-delegation list, minus the
+submitter); only the **email** fan-out is new. The in-app
+`PendingApprovalWatcher` popup continues to fire on the same
+event and is unchanged.
+
+**No new endpoints** — this is a side-effect of the existing
+`POST /api/user/outbound-shares` and
+`POST /api/outbound-shares/ingest/{token}` calls; no client
+behaviour needs to change. The per-user
+`users.notifications_opt_out` flag and the
+`notifications.skipped_opt_out` audit event apply identically
+to checkout-pending events. Recipients who opt out write a
+`status='suppressed'` row to `email_deliveries` and the
+`notifications.skipped_opt_out` audit row; the in-app popup
+still fires for them so the approval surface is unchanged.
+
 ### Drive-channel ingest (transparent)
 
 #### `POST /api/user/outbound-shares`
@@ -2487,12 +2551,12 @@ Submit a file pulled from the in-session virtual drive. Called by `SessionManage
 
 **Content-Type**: `multipart/form-data`
 
-| Field            | Type   | Required | Description                                                   |
-| ---------------- | ------ | -------- | ------------------------------------------------------------- |
-| `session_id`     | text   | Yes      | Active session ID                                             |
-| `connection_id`  | text   | Yes      | Connection UUID                                               |
-| `justification`  | text   | Conditional | Free-text business reason (shown to approver). **Required when `users.outbound_share_requires_approval = TRUE` for the submitting user (v1.11.1+).** Minimum length **10 characters** (whitespace-trimmed, **character count not byte count**, so non-ASCII reasons such as accented text or CJK are not penalised). Bypass users (`outbound_share_requires_approval = FALSE`) may omit it. Validation runs **before** the staging blob is sealed, so a rejected submission does not leave a partial sealed blob behind. |
-| `file`           | file   | Yes      | Binary payload                                                |
+| Field           | Type | Required    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ---- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `session_id`    | text | Yes         | Active session ID                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `connection_id` | text | Yes         | Connection UUID                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `justification` | text | Conditional | Free-text business reason (shown to approver). **Required when `users.outbound_share_requires_approval = TRUE` for the submitting user (v1.11.1+).** Minimum length **10 characters** (whitespace-trimmed, **character count not byte count**, so non-ASCII reasons such as accented text or CJK are not penalised). Bypass users (`outbound_share_requires_approval = FALSE`) may omit it. Validation runs **before** the staging blob is sealed, so a rejected submission does not leave a partial sealed blob behind. |
+| `file`          | file | Yes         | Binary payload                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 **Validation errors (v1.11.1+):**
 
@@ -2571,9 +2635,9 @@ The remote-session shell POSTs the file back to Strata over HTTPS using the toke
 
 **Content-Type**: `multipart/form-data`
 
-| Field  | Type | Required | Description     |
-| ------ | ---- | -------- | --------------- |
-| `file` | file | Yes      | Binary payload  |
+| Field  | Type | Required | Description    |
+| ------ | ---- | -------- | -------------- |
+| `file` | file | Yes      | Binary payload |
 
 **Body limit**: 500 MiB.
 
@@ -2658,9 +2722,9 @@ List delegated approvers (super-admins are implicit and not enumerated here).
 
 ### Environment
 
-| Variable                       | Default                          | Description                                                                                |
-| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------ |
-| `STRATA_OUTBOUND_SHARES_DIR`   | `/tmp/strata-outbound-shares`    | Filesystem directory for sealed staging ciphertexts. Falls back to the platform temp dir.  |
+| Variable                     | Default                       | Description                                                                               |
+| ---------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------- |
+| `STRATA_OUTBOUND_SHARES_DIR` | `/tmp/strata-outbound-shares` | Filesystem directory for sealed staging ciphertexts. Falls back to the platform temp dir. |
 
 ### Audit events
 
@@ -3586,9 +3650,9 @@ Approve or deny a pending checkout. The approver must have the managed account i
 { "approved": false, "reason": "Out of change window, contact owner first" }
 ```
 
-| Field      | Type    | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `approved` | boolean | Yes      | `true` to approve, `false` to deny.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Field      | Type    | Required | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------- | ------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approved` | boolean | Yes      | `true` to approve, `false` to deny.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `reason`   | string  | No       | **Added in v1.11.1.** Free-form "Reason from approver" trimmed and capped at **1024 characters** server-side. Persisted to `password_checkout_requests.decision_reason` (added by migration `077_checkout_decision_reason.sql`; nullable, no default) and rendered in the `checkout_rejected` email template under a dedicated "Reason from approver" block. Optional on both `approved` and `denied`; the UI requires it on Deny but the server does not (back-compat). Omit to keep `decision_reason = NULL`. |
 
 Records `approved_by_user_id` on the request. The rejection email block is silently omitted when `decision_reason IS NULL`, so legacy denials and reason-less new denials never surface an empty block.

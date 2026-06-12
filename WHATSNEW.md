@@ -1,3 +1,374 @@
+# What's New in v1.12.2
+
+> **Patch release — Outbound Quick Share polish, approver email
+> fan-out, BASE_URL fallback for email links, ClamAV healthcheck
+> IPv6 dodge, recordings-volume write fix, Kali Linux VDI image.**
+> No protocol breakage, no migrations, no new environment
+> variables; existing v1.12.x deployments upgrade with
+> `docker compose pull && docker compose up -d --build`. This
+> release rolls thirteen merged PRs (#268–#280) into one shipping
+> bundle and closes six themes that the v1.11.0 outbound-share
+> landing and the v1.12.0 AV-scanning landing left rough:
+> day-to-day UX polish on the outbound-share surfaces, a
+> long-overdue email fan-out for outbound approvers, a tenant-URL
+> resolution chain that no longer hardcodes `https://strata.local`
+> for unconfigured installs, a clamav sidecar that stops lying
+> about being unhealthy on dual-stack hosts, a recordings-volume
+> permission fix that lets the sweeper actually sweep, and a
+> Kali Rolling VDI image for security teams who want a
+> tunnel-routed jump-box for authorised engagements.
+
+## Theme 1 — Outbound Quick Share UX polish
+
+Five small fixes that take the v1.11.0 outbound flow from
+"functional" to "comfortable" for the operators who actually
+live in it day-to-day. Each fix is independently
+unremarkable; together they materially smooth the every-share
+flow.
+
+### 1.1 Paste-and-run snippets via the File-path input
+
+The snippet builder under **Outbound Share → Generate upload
+command** gains a new **File path** text input between the
+snippet-format dropdown and the **Skip TLS verification**
+checkbox. The user pastes the path of the file they intend to
+upload (e.g. `C:\Users\analyst\Desktop\report.pdf` for the
+PowerShell snippet, or `/home/analyst/report.pdf` for the
+curl snippet) and the snippet body is regenerated with the
+path substituted in place of the `<your-file>` placeholder,
+using format-aware quoting so the resulting snippet is
+paste-and-run instead of paste-edit-run:
+
+| Snippet format        | Quoting rule                                                                                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `curl` (POSIX)        | Single-quoted; embedded `'` escaped as `'\''`                                                                                                                                                                                                    |
+| `curl --insecure`     | Same as curl                                                                                                                                                                                                                                     |
+| `curl.exe` (Windows)  | Double-quoted via the full [`CommandLineToArgvW`](https://learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw) rule — backslash runs before a `"` doubled, backslash runs at end-of-string doubled, then `"…"` wrapped |
+| `curl.exe --insecure` | Same as `curl.exe`                                                                                                                                                                                                                               |
+| PowerShell 7          | Single-quoted; embedded `'` doubled (`''`)                                                                                                                                                                                                       |
+
+Empty input keeps the literal `<your-file>` placeholder so the
+snippet stays self-documenting and copyable as a template; the
+helper text below the snippet flips between **"Paste this into
+a shell inside the session"** (empty) and **"This snippet
+uploads `<the supplied path>`"** (non-empty) so the intent is
+unambiguous either way. The CommandLineToArgvW handler was
+designed specifically to close a CodeQL
+`js/incomplete-sanitization` alert that a single-pass
+`.replace(/"/g, '\\"')` would have tripped — see the
+`escapeWinDoubleQuoted` unit test in
+[QuickShareOutbound.test.tsx](frontend/src/__tests__/QuickShareOutbound.test.tsx)
+that asserts `C:\foo\"bar.txt` round-trips correctly through
+the helper (#280).
+
+### 1.2 Admin → Outbound Shares auto-refresh while visible
+
+The admin Outbound Shares tab now refreshes the pending queue
+and the history list every 60 s while the browser tab is
+visible. The poll is suspended on
+`document.visibilitychange → hidden` so a parked tab on a
+laptop does not keep the backend warm overnight, and resumed
+(with one immediate refresh) on `visibilitychange → visible`
+so the tab is up-to-date the instant the operator returns to
+it. There is no change to the underlying admin API contract
+— the polling effect simply re-fires the existing
+`loadPending()` and `loadHistory()` calls that the initial
+mount already runs (#279).
+
+### 1.3 Curl snippets always print a completion summary
+
+Every shipped `curl` / `curl.exe` snippet variant now ends with
+a `printf`-style summary block that echoes the HTTP status,
+the response body, and a one-line interpretation
+(`Upload succeeded` / `Token rejected (probably expired or
+already used)` / `Backend rejected the file — see body
+above`). Before this fix, a stale ingest token returned `400
+Bad Request` with a JSON error body and `curl` exited `0`
+(HTTP-error responses are still "successful HTTP transactions"
+by `curl` semantics), so the user saw nothing on the terminal
+and had no way to tell the snippet had been rejected. The
+summary block runs unconditionally whether the upload
+succeeded or failed (#269).
+
+### 1.4 Justification textarea stays visible without drive redirection
+
+The conditional render on **Outbound Share** previously hid
+the justification textarea (and the whole "I'd like to share
+a file" form section) whenever the SPA had detected that drive
+redirection was disabled by group policy, on the theory that
+there was no drive-channel ingest path to write a justification
+for. But the HTTPS upload-command flow needs a justification
+too — the user has to type the reason **before** clicking
+**Generate upload command**, because the justification is
+part of the bound state on the minted token. The textarea is
+now always rendered; only the "Drop a file here" upload
+affordance is conditional on drive redirection being
+available (#268).
+
+### 1.5 ConfirmModal backdrop covers the full viewport
+
+The ConfirmModal was previously rendered as a sibling of the
+trigger button rather than as a top-level portal, so when the
+modal was opened from inside a scrollable container (e.g. the
+admin → Outbound Shares row-action menu, the Approvals page
+table, the Health tab history pane), the fixed-position
+backdrop was clipped to the scrollable ancestor's
+`overflow:hidden` instead of the viewport. The modal body
+itself still rendered, but the dim-out shading stopped at
+the parent boundary, which made it look like the modal could
+be dismissed by clicking on a "non-darkened" area that was
+in fact part of the modal's own backdrop. The modal now
+renders into a `document.body`-anchored React portal — the
+backdrop covers the full viewport regardless of where in the
+tree the modal was triggered from (#270).
+
+## Theme 2 — Outbound-share approver email fan-out
+
+Until v1.12.2, outbound submissions that landed in the
+approval queue had no email notification path. The v1.11.0
+landing wired up an in-app **Pending Approvals** popup
+(`PendingApprovalWatcher`) that polled the queue every 45 s
+and surfaced new pending items as a top-left card, which is
+fine for operators who keep the SPA open all day, but
+unhelpful for approvers who only check Strata when an email
+prompts them to. The credential-checkout flow has had
+transactional-email notifications since v1.7.0 — outbound
+shares now gain the symmetric capability.
+
+A new transactional email event (`OutboundShareEvent::Pending`)
+fires the moment a non-bypass outbound submission lands in
+the approval queue. The new
+`outbound_share_pending.mjml` / `.txt.tera` template pair
+joins the existing four `CheckoutEvent` templates under the
+same Tera + mrml + Outlook dark-mode VML wrapper pipeline
+([architecture.md](docs/architecture.md#transactional-email-pipeline)
+documents the rendering chain in detail), and the same opt-out
+/ audit rules apply: per-user `users.notifications_opt_out`
+suppresses delivery and writes a `notifications.skipped_opt_out`
+audit row, the retry-after-failure worker re-renders and
+re-sends transient failures up to three times, and the
+`PII boundary` rule that keeps the rendered body out of the
+`email_deliveries` table (only `template_key`,
+`related_entity_type`, `related_entity_id` are persisted)
+applies identically (#271).
+
+Two follow-up fixes hardened the fan-out before the release
+cut:
+
+- **`roles.can_manage_system`, not `users.can_manage_system`**
+  (#273). The approver-discovery SQL was joining the wrong
+  table for the super-admin check —
+  `users.can_manage_system` is not a column;
+  `can_manage_system` lives on the `roles` table and reaches
+  the user through `user_roles`. The query happened to return
+  zero rows rather than erroring out (the column-not-found
+  was swallowed in a diagnostic-suppressed branch), so
+  super-admins were silently excluded from the approver fan-out
+  on early dogfood deployments of the new template.
+  The corrected query reads
+  `user_roles → roles WHERE roles.can_manage_system = true
+UNION outbound_share_approvers`, matching the
+  approval-resolution rule that both super-admins and
+  explicit approver-delegation list members get the email.
+
+- **Self-exclusion via `OutboundShareEvent::Pending.requester_id`**
+  (#275). The pending-event fan-out was reading the requester
+  ID from the wrong field of the event struct (an unused
+  legacy `submitter_id` that was always `None` on the new
+  event), so submitters who themselves held the approver bit
+  emailed themselves about their own pending request. The fix
+  reads `requester_id` directly off the
+  `OutboundShareEvent::Pending` payload and excludes it from
+  the recipient list before the row-per-recipient `INSERT`
+  fan-out.
+
+## Theme 3 — `BASE_URL` fallback for email links
+
+Every transactional email template that includes a link back
+into the SPA — checkout request / approval / rejection /
+outbound-share pending — needs a tenant URL to build absolute
+hrefs. Until now the templates rendered `https://strata.local`
+as the link target whenever the
+`system_settings.tenant_base_url` admin setting was empty —
+broken even on perfectly-healthy installs that simply hadn't
+filled in the optional admin field. Operators who deployed
+through `docker compose` (where the tenant URL is generally
+the value already passed in as the `BASE_URL` environment
+variable on the frontend's nginx wrapper) had no way to
+forward that value to the backend without manually entering
+it through the admin UI on every install.
+
+A new `services::settings::tenant_base_url(pool)` helper
+resolves the tenant URL in three tiers, deterministically:
+
+1. **`system_settings.tenant_base_url`** — admin-set, takes
+   precedence when non-empty. Highest precedence so manual
+   overrides win.
+2. **`BASE_URL` environment variable** — deployment-set,
+   picked up on every dispatch. No restart required if the
+   admin setting is later cleared.
+3. **`https://strata.local`** — build-in last-resort that
+   at least produces a syntactically valid URL the recipient
+   client can render as a link without flagging it as a
+   broken href.
+
+All four email-render call sites
+(`notifications::build_context`,
+`notifications::build_outbound_share_context`,
+`email::worker` rebuild path,
+`routes/notifications::sample_context` preview) now share
+the helper, so the resolution order is identical regardless
+of whether the email was rendered on the originating
+dispatch, on a retry from the worker, or in the admin
+preview panel (#278).
+
+| Tier | Source                            | Picked when                                       |
+| ---- | --------------------------------- | ------------------------------------------------- |
+| 1    | `system_settings.tenant_base_url` | Admin entered a value (non-empty after trim)      |
+| 2    | `BASE_URL` env var                | Tier 1 is empty and `BASE_URL` is set + non-empty |
+| 3    | `https://strata.local`            | Tiers 1 and 2 both empty                          |
+
+## Theme 4 — ClamAV healthcheck IPv6 dodge
+
+The Docker `HEALTHCHECK` on the `clamav` sidecar previously
+ran `clamdscan --ping localhost`, which resolved to `::1` on
+hosts with dual-stack `/etc/hosts` (most modern Linux
+distributions, including Ubuntu 22.04+ and Debian Bookworm)
+and immediately failed because `clamd` only binds IPv4
+(TCP `0.0.0.0:3310`) inside the container. The sidecar was
+perfectly healthy and serving scans from the adjacent backend
+container, but Docker reported `unhealthy` every minute,
+which in turn poisoned every health-aware orchestrator that
+read the container status (`docker-compose ps`,
+`docker events`, Kubernetes liveness, anything that polled
+`/v1.41/containers/{id}/json`).
+
+Pinning the healthcheck to `127.0.0.1` explicitly avoids the
+resolver ambiguity — `clamdscan --ping 127.0.0.1` now
+reaches the IPv4 listener directly without traversing the
+host's name-resolution stack, and the sidecar reports
+`healthy` from boot (#274).
+
+Operators on the `av` profile pick up the fix with
+`docker compose --profile av up -d --build clamav`. The
+named volume that holds the signature DB (`clamav-db`) and
+the scan history (rooted in the backend's `system_settings`)
+is preserved across the rebuild.
+
+## Theme 5 — Recordings volume write permission
+
+The `strata` user inside the backend container could not
+delete expired `.guac` recordings from
+`/var/lib/strata/guac-recordings` on hosts where the volume
+was bind-mounted from a directory owned by `root:root` (the
+default when docker-compose creates the directory on first
+bring-up). The session-recording sweeper that runs every
+hour (see `services::recordings::sweep_expired`) would log
+`Permission denied` per-file and silently fail to delete
+expired recordings, growing the recordings directory
+indefinitely until the operator noticed (typically after
+the host disk filled) and `chown`'d it by hand.
+
+Two complementary fixes ship together:
+
+- The backend `Dockerfile` now `mkdir`s
+  `/var/lib/strata/guac-recordings` with the correct UID:GID
+  baked into the image, so a fresh `docker compose up` (no
+  bind mount, named volume only) lands on a correctly-owned
+  directory.
+- The backend `entrypoint.sh` now `chown -R strata:strata
+/var/lib/strata/guac-recordings` on startup when the
+  directory is writable by the entrypoint UID (typically
+  `root` on bind-mounted setups, where `chown` is allowed),
+  so bind-mount deployments also reach correct ownership on
+  first boot without operator intervention.
+
+The sweeper now successfully prunes expired recordings on
+every tick (#277).
+
+## Theme 6 — Kali Linux VDI image
+
+A new `contrib/vdi-kali/` profile ships a Kali
+Rolling-based VDI desktop with the `kali-linux-large`
+metapackage preinstalled, targeted at security teams who want
+a clean, audited, tunnel-routed jump-box for authorised
+offensive engagements. Built the same way as
+`contrib/vdi-sample/` —
+
+```bash
+docker build contrib/vdi-kali -t strata-vdi-kali:latest
+```
+
+— and tunnel-in via the existing VDI flow. The image follows
+the same per-user-home volume pattern (`/home/$USER` from a
+named volume) as the sample image so user work persists
+across container restarts.
+
+The `kali-linux-large` metapackage installs the full
+`kali-tools-{web,wireless,information-gathering,exploitation-tools,…}`
+line — Nmap, Metasploit Framework, Burp Suite Community
+Edition, Wireshark, the Aircrack-NG suite, Hashcat, John the
+Ripper, sqlmap, Hydra, and the rest of the standard Kali
+toolkit. See the new
+[`contrib/vdi-kali/README.md`](contrib/vdi-kali/README.md)
+for the full toolset, the intended use case (authorised
+offensive engagements routed through Strata's per-session
+tunnel), and the security considerations (the image runs
+with the same per-session network isolation as every other
+VDI image — Kali tooling does not bypass the tunnel or the
+session-recording boundary) (#276).
+
+## Operator notes
+
+- **No migrations.** No schema changes; no new tables,
+  columns, or indexes. `cargo run --bin migrate` is a no-op
+  on top of v1.12.1.
+- **No new environment variables.** `BASE_URL` is read by the
+  new `tenant_base_url()` helper, but it is an existing
+  variable documented in
+  [docs/deployment.md](docs/deployment.md) (used by several
+  other helpers since v1.7.0). Sites that already export it
+  pick up the email-link fix on first restart with no further
+  action required.
+- **No new Cargo or npm dependencies.** The thirteen PRs net
+  zero supply-chain churn — `cargo deny check` and
+  `npm audit` output are unchanged from v1.12.1.
+- **Recommended deploy:**
+  ```bash
+  docker compose pull
+  docker compose up -d --build
+  # Sites using the bundled AV sidecar:
+  docker compose --profile av up -d --build clamav
+  # Sites adopting Kali VDI:
+  docker build contrib/vdi-kali -t strata-vdi-kali:latest
+  ```
+- **No DMZ-side change.** The `strata-dmz` relay binary
+  bumps version cosmetically (it shares the workspace
+  `[workspace.package].version` field) but its wire protocol
+  and behaviour are byte-identical to v1.12.1. Mixed
+  v1.12.1 / v1.12.2 deployments handshake cleanly; the
+  Admin → DMZ Links tab will show a `Mixed` indicator until
+  every link is upgraded.
+
+## PRs in this release
+
+| PR   | Theme          | Title                                                                                 |
+| ---- | -------------- | ------------------------------------------------------------------------------------- |
+| #268 | UX polish      | fix(outbound): keep justification textarea visible when drive redirection is disabled |
+| #269 | UX polish      | fix(outbound): always print a completion summary on curl snippets                     |
+| #270 | UX polish      | fix(ConfirmModal): render via portal so backdrop covers full viewport                 |
+| #271 | Approver email | feat(notifications): outbound share pending approver emails                           |
+| #272 | Hygiene        | style: cargo fmt                                                                      |
+| #273 | Approver email | fix(outbound): query roles.can_manage_system, not users.can_manage_system             |
+| #274 | ClamAV         | fix(clamav): pin healthcheck to 127.0.0.1 to dodge IPv6 localhost resolution          |
+| #275 | Approver email | fix(notifications): use OutboundShareEvent::Pending.requester_id to exclude self      |
+| #276 | VDI catalog    | feat(vdi): add Kali Linux VDI image with kali-linux-large toolset                     |
+| #277 | Recordings     | fix(backend): grant strata write access on guac-recordings dir                        |
+| #278 | Email links    | fix(notifications): fall back to BASE_URL env for email links                         |
+| #279 | UX polish      | feat(outbound-shares): visibility-gated auto-refresh on admin tab                     |
+| #280 | UX polish      | feat(outbound-share): paste-and-run snippet via File path input                       |
+
+---
 
 # What's New in v1.12.1
 
@@ -51,13 +422,13 @@ raw engine spew. The drive-channel `client.onfile` toast and
 the QuickShareOutbound panel both display the same friendly
 text so operators know whether to retry or escalate:
 
-| Verdict class                | Trigger                                                          | Message                                                                                            |
-| ---------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Infected                     | `Verdict::Infected { signature }`                                | `File rejected by malware scan: <signature>`                                                       |
-| Error · timeout              | Engine message contains `timeout` / `timed out` / `exceeded`     | `Antivirus scan timed out after Ns; try a smaller file or retry shortly.`                          |
-| Error · transport            | Engine message contains `refused` / `reset` / `unreachable` etc. | `Antivirus scanner unreachable; please retry shortly.`                                              |
-| Error · missing signatures   | Engine message contains `empty` / `no signatures`                | `Antivirus signature database not yet ready; please retry shortly.`                                 |
-| Error · generic              | Anything else                                                    | The engine's raw text, passed through verbatim (audit row carries the full unredacted message too) |
+| Verdict class              | Trigger                                                          | Message                                                                                            |
+| -------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Infected                   | `Verdict::Infected { signature }`                                | `File rejected by malware scan: <signature>`                                                       |
+| Error · timeout            | Engine message contains `timeout` / `timed out` / `exceeded`     | `Antivirus scan timed out after Ns; try a smaller file or retry shortly.`                          |
+| Error · transport          | Engine message contains `refused` / `reset` / `unreachable` etc. | `Antivirus scanner unreachable; please retry shortly.`                                             |
+| Error · missing signatures | Engine message contains `empty` / `no signatures`                | `Antivirus signature database not yet ready; please retry shortly.`                                |
+| Error · generic            | Anything else                                                    | The engine's raw text, passed through verbatim (audit row carries the full unredacted message too) |
 
 The full classifier lives at
 `Verdict::user_facing_block_message()` in
@@ -112,7 +483,7 @@ Three snippet variants updated:
   `--progress-bar` for a clean one-line meter, plus
   `-H "Expect:"` to disable curl's default
   `Expect: 100-continue` header. Without that flag, the
-  server returns 400 on a consumed or expired token *before*
+  server returns 400 on a consumed or expired token _before_
   reading the body, curl never uploads, and the meter has
   nothing to draw — making it look like the progress bar
   is broken when in fact the upload itself never happened.
@@ -163,7 +534,7 @@ to `can_manage_system` only.
   pulled into `/var/lib/clamav` sat unused until the next
   full sidecar restart — meaning the audit trail could
   record a `Skipped { reason: "no signatures" }` or an
-  `Error { message: "..." }` against a file the engine *had*
+  `Error { message: "..." }` against a file the engine _had_
   signatures for, just hadn't loaded them yet. Now the
   engine picks up new signatures within minutes of
   `freshclam` returning.
@@ -195,7 +566,7 @@ to `can_manage_system` only.
 - **EICAR smoke test docs** rewritten to walk operators
   through the role check first (without
   `can_use_quick_share_outbound` the upload is rejected
-  with 403 *before* reaching the scanner, masking a
+  with 403 _before_ reaching the scanner, masking a
   successful AV deployment as a broken one), and to ship
   the EICAR string in a here-doc so RDP-clipboard
   expansion of `$` doesn't corrupt the signature on paste.
@@ -217,7 +588,7 @@ The AV-Blocked Files admin tab is visible to
 existing Admin → Health page for users already gated for it.
 Existing `STRATA_AV_MAX_SCAN_SIZE` overrides continue to
 apply — the bump is a default change, not a forced value;
-sites that *want* the 100 MiB ceiling preserved can pin
+sites that _want_ the 100 MiB ceiling preserved can pin
 `STRATA_AV_MAX_SCAN_SIZE=104857600` in `.env`.
 
 See [CHANGELOG.md](CHANGELOG.md#1121--2026-06-09) for the
@@ -235,7 +606,7 @@ for the operator-grade detail.
 > file-mover pipeline: both **inbound** Quick Share (operator → remote
 > session) and **outbound** Quick Share (remote session → operator,
 > the v1.11.0 approval-gated path) now stream every upload through a
-> configurable antivirus scanner *before* the file lands in the
+> configurable antivirus scanner _before_ the file lands in the
 > session file store / before it is sealed via Vault Transit.
 > Three backends ship — `off` (default, no-op), `clamav` (full
 > `clamd` INSTREAM TCP wire protocol), and `command` (exit-code
@@ -359,12 +730,12 @@ day is Sunday.
 
 Migration `078_av_scanning.sql` adds:
 
-| Column                | Type            | Notes                                                       |
-| --------------------- | --------------- | ----------------------------------------------------------- |
-| `av_scan_status`      | `TEXT` (NULL)   | One of `clean | infected | skipped | error`                 |
-| `av_signature`        | `TEXT` (NULL)   | Engine-reported signature for `infected` rows               |
-| `av_scanned_at`       | `TIMESTAMPTZ`   | When the verdict was issued                                 |
-| `av_scanner_backend`  | `TEXT` (NULL)   | Which backend spoke (`off`, `clamav`, `command`)            |
+| Column               | Type          | Notes                                            |
+| -------------------- | ------------- | ------------------------------------------------ | -------- | ------- | ------ |
+| `av_scan_status`     | `TEXT` (NULL) | One of `clean                                    | infected | skipped | error` |
+| `av_signature`       | `TEXT` (NULL) | Engine-reported signature for `infected` rows    |
+| `av_scanned_at`      | `TIMESTAMPTZ` | When the verdict was issued                      |
+| `av_scanner_backend` | `TEXT` (NULL) | Which backend spoke (`off`, `clamav`, `command`) |
 
 Plus a partial index:
 
@@ -420,7 +791,7 @@ Every blocked upload writes a structured audit event:
   and `av_backend`.
 - **`outbound_share.requested`** — extended with `av_status`,
   `av_signature`, `av_backend` keys on every outbound submission
-  (success *or* rejection) so the audit trail records which
+  (success _or_ rejection) so the audit trail records which
   engine cleared the file as well as what it said. This makes
   the outbound flow self-attesting for compliance review.
 
@@ -505,7 +876,7 @@ no explanation, so a requester reading the audit trail saw only
 "Grace declined your request" with no further context. The
 outbound-share queue already persisted a `decision_reason` per
 row (v1.11.0 / migration 073), and the new in-session popup
-*requires* a reason before letting an approver hit Deny — so the
+_requires_ a reason before letting an approver hit Deny — so the
 absence of the column on the credential side was the only thing
 keeping the two queues asymmetric. v1.11.1 closes that gap:
 
@@ -567,13 +938,13 @@ justification)`):
    `outbound_share_ingest::mint(...)`. This means the user sees
    the "justification too short" error inside the Outbound
    Share panel at the moment they click **Generate upload
-   command**, *not* after they have already pasted the snippet
+   command**, _not_ after they have already pasted the snippet
    into a remote shell and run it.
 
-Validation failures return HTTP 400 with the message *"A
+Validation failures return HTTP 400 with the message _"A
 justification of at least 10 characters is required for
 outbound shares unless the approval bypass is enabled for your
-account."*
+account."_
 
 ### SPA UX mirrors the rule
 
@@ -584,22 +955,22 @@ rule via a 400 response:
   returned on both `/me` and `/auth/check` (the v1.11.0
   `MeResponse` drift rule applied). The SPA derives a single
   boolean `outboundShareBypass = user?.
-  outbound_share_requires_approval === false` and threads it
+outbound_share_requires_approval === false` and threads it
   into the `SessionManagerProvider`.
 
 - **Outbound Share panel** — when bypass is off the
   justification label gains a red asterisk and
   `aria-required="true"`, the placeholder changes to a worked
-  example (*"Required — e.g. Audit ticket INC-1234, exporting
-  redacted log for review"*), a helper line reads *"Required
-  for your account (minimum 10 characters)"*, and the **Generate
+  example (_"Required — e.g. Audit ticket INC-1234, exporting
+  redacted log for review"_), a helper line reads _"Required
+  for your account (minimum 10 characters)"_, and the **Generate
   upload command** button stays disabled until the trimmed value
   reaches 10 chars (with a tooltip explaining why).
 
 - **Drive-channel `onfile` interceptor** — when bypass is off
   and the active session's pending justification is shorter
   than 10 chars, the interceptor surfaces a warning toast
-  (*"Justification required: <filename>"*) with remediation
+  (_"Justification required: <filename>"_) with remediation
   copy and short-circuits before the `FormData` POST. This
   avoids a confusing toast-on-400 flow where the user has
   already let go of the file.
@@ -632,13 +1003,13 @@ rule via a 400 response:
 > leaving** a remote session: a Vault-sealed staging area, a built-in
 > DLP heuristic, an approver workflow, and two complementary ingest
 > paths so the feature works in environments that allow RDP drive
-> redirection *and* in ones that don't.
+> redirection _and_ in ones that don't.
 
 ## What outbound Quick-Share solves
 
-Inbound Quick-Share has always handled files *going into* a session
+Inbound Quick-Share has always handled files _going into_ a session
 (drag-and-drop upload from the Session Bar, single-use token URL the
-user pastes inside the remote shell). The inverse — files *leaving*
+user pastes inside the remote shell). The inverse — files _leaving_
 the session — was historically either implicit (drive-channel
 auto-downloads via guacd's `client.onfile`) or impossible (when GPO
 blocked drive redirection). Either way there was no audit trail, no
@@ -719,7 +1090,7 @@ The token IS the auth:
 - 32-byte URL-safe base64 (~192 bits of entropy).
 - 10-minute TTL.
 - Single-use: the consume `UPDATE … SET used_at = now() WHERE
-  token = $1 AND used_at IS NULL AND expires_at > now()` is
+token = $1 AND used_at IS NULL AND expires_at > now()` is
   atomic; a token that has been used or expired is rejected with
   the same opaque error as an unknown token.
 - Re-checks the minter's `can_use_quick_share_outbound` role

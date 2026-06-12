@@ -132,7 +132,7 @@ The central orchestrator. Responsibilities:
 
   **v1.11.1 additions:** (1) The submitter side now enforces a
   shared `validate_outbound_justification(requires_approval,
-  justification)` helper at **both** outbound entry points
+justification)` helper at **both** outbound entry points
   (`finalize_submit` and `issue_ingest_token`) — when the
   submitter's `users.outbound_share_requires_approval = TRUE`,
   the justification must be at least 10 characters
@@ -145,7 +145,7 @@ The central orchestrator. Responsibilities:
   shell (`App.tsx`) and polls the two approval queues the
   active user is gated for — `GET /api/user/pending-approvals`
   (credential checkouts) and `GET
-  /api/admin/outbound-shares/pending` (outbound shares, only
+/api/admin/outbound-shares/pending` (outbound shares, only
   when the user has `can_manage_system` or
   `is_outbound_approver`) — surfacing each new item as a
   top-left popup card with Approve / Deny (with inline reason
@@ -154,6 +154,7 @@ The central orchestrator. Responsibilities:
   visibilitychange; 30 s auto-dismiss; cross-tab de-dup via
   `localStorage`. Architecturally mirrors the existing
   `CredentialProfileExpiryWatcher`.
+
 - **Audit** — SHA-256 hash-chained append-only log
 
 ### 3. Frontend SPA
@@ -605,19 +606,43 @@ credentials when Vault is sealed or running in stub mode — a
 half-configured install should fail loudly rather than silently leak the
 password to disk in plaintext.
 
-**Dispatcher hooks.** Four call sites in `routes/user.rs` invoke
+**Dispatcher hooks.** Five call sites invoke
 `notifications::spawn_dispatch`:
 
-| Call site                                | Event                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------- |
-| `request_checkout` (Pending branch)      | `CheckoutEvent::Pending` → all approvers for the target account     |
-| `request_checkout` (SelfApproved branch) | `CheckoutEvent::SelfApproved` → audit recipients (bypasses opt-out) |
-| `decide_checkout` (Approved branch)      | `CheckoutEvent::Approved` → original requester                      |
-| `decide_checkout` (Rejected branch)      | `CheckoutEvent::Rejected` → original requester                      |
+| Call site                                                                 | Event                                                                                                                         |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `routes/user.rs::request_checkout` (Pending branch)                       | `CheckoutEvent::Pending` → all approvers for the target account                                                               |
+| `routes/user.rs::request_checkout` (SelfApproved branch)                  | `CheckoutEvent::SelfApproved` → audit recipients (bypasses opt-out)                                                           |
+| `routes/user.rs::decide_checkout` (Approved branch)                       | `CheckoutEvent::Approved` → original requester                                                                                |
+| `routes/user.rs::decide_checkout` (Rejected branch)                       | `CheckoutEvent::Rejected` → original requester                                                                                |
+| `routes/outbound_shares.rs::submit` (non-bypass, queued branch, v1.12.2+) | `OutboundShareEvent::Pending` → approvers (`roles.can_manage_system = true` ∪ `outbound_share_approvers`) minus the requester |
 
 `spawn_dispatch` is fire-and-forget — it returns immediately so the
 user-facing checkout request is never blocked by mail delivery. All
 errors are logged via `tracing` and visible in `email_deliveries`.
+
+**Tenant base URL resolution (v1.12.2+).** Every template that renders
+a link back into the SPA (`approval_url` / `share_url` / etc.) reads
+the tenant URL through `services::settings::tenant_base_url(pool)`,
+which resolves in three deterministic tiers:
+
+| Tier | Source                            | Picked when                                       |
+| ---- | --------------------------------- | ------------------------------------------------- |
+| 1    | `system_settings.tenant_base_url` | Admin entered a value (non-empty after trim)      |
+| 2    | `BASE_URL` env var                | Tier 1 is empty and `BASE_URL` is set + non-empty |
+| 3    | `https://strata.local`            | Tiers 1 and 2 both empty (last-resort)            |
+
+All four email-render entry points
+(`notifications::build_context`,
+`notifications::build_outbound_share_context`, `email::worker`
+rebuild path, `routes/notifications::sample_context` preview) share
+the helper, so the resolution order is identical regardless of
+whether the email was rendered on the originating dispatch, on a
+retry from the worker, or in the admin preview panel. The previous
+behaviour (hardcoded `https://strata.local` fallback) is preserved
+only as Tier 3 — deployments that export `BASE_URL` in `.env`
+automatically get a working email-link target without touching the
+admin UI.
 
 ## Command Palette (v0.31.0)
 
@@ -874,7 +899,7 @@ The two carve-outs above are now closed:
   `/api/shared/copilot/{share_token}` endpoint is unchanged for
   invited viewers.
 - **Owner force-grant route.** `POST
-  /api/user/shared/copilot/{share_token}/grant/{target_pid}` exposes
+/api/user/shared/copilot/{share_token}/grant/{target_pid}` exposes
   the room's existing `force_grant` FSM transition over HTTP. The
   handler verifies share ownership, looks up an owner pid in the
   room for the `InputGrant.by` attribution, broadcasts
@@ -1392,22 +1417,22 @@ numbered ADRs under [adr/](adr/):
 | [ADR-0007](adr/ADR-0007-emergency-bypass-checkouts.md) | Emergency approval bypass and scheduled-start checkouts                                                        |
 | [ADR-0008](adr/ADR-0008-notification-pipeline.md)      | Transactional-email subsystem: MJML/mrml renderer, Vault-sealed SMTP password, opt-out semantics, retry worker |
 | [ADR-0009](adr/ADR-0009-dmz-deployment-mode.md)        | DMZ deployment mode: public-facing dumb-proxy, reverse-tunnel link, signed edge headers                        |
-| [ADR-0011](adr/ADR-0011-av-scanning.md)                | Antivirus scanning trait: pluggable backends (`off`/`clamav`/`command`), fail-closed default, opt-in sidecar    |
+| [ADR-0011](adr/ADR-0011-av-scanning.md)                | Antivirus scanning trait: pluggable backends (`off`/`clamav`/`command`), fail-closed default, opt-in sidecar   |
 
 ## Operational Runbooks
 
 Step-by-step procedures for on-call engineers live under
 [runbooks/](runbooks/):
 
-| Runbook                                                     | When to use                                                                                       |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| [disaster-recovery.md](runbooks/disaster-recovery.md)       | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h)                                              |
-| [security-incident.md](runbooks/security-incident.md)       | Credential exposure, token replay, unauthorised config change                                     |
-| [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA)                                           |
-| [vault-operations.md](runbooks/vault-operations.md)         | Vault unseal, Transit key rotate + rewrap, Shamir rekey                                           |
-| [database-operations.md](runbooks/database-operations.md)   | Replica promotion, migration rollback, panic-boot recovery                                        |
-| [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config |
-| [dmz-incident.md](runbooks/dmz-incident.md)                 | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                  |
+| Runbook                                                     | When to use                                                                                          |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [disaster-recovery.md](runbooks/disaster-recovery.md)       | Host loss or corrupted volumes (RTO ≤ 4h, RPO ≤ 24h)                                                 |
+| [security-incident.md](runbooks/security-incident.md)       | Credential exposure, token replay, unauthorised config change                                        |
+| [certificate-rotation.md](runbooks/certificate-rotation.md) | Scheduled rotation or expiry alert (ACME + internal CA)                                              |
+| [vault-operations.md](runbooks/vault-operations.md)         | Vault unseal, Transit key rotate + rewrap, Shamir rekey                                              |
+| [database-operations.md](runbooks/database-operations.md)   | Replica promotion, migration rollback, panic-boot recovery                                           |
+| [smtp-troubleshooting.md](runbooks/smtp-troubleshooting.md) | Notification emails not arriving, SMTP failures, retry-worker stalls, Vault sealing during config    |
+| [dmz-incident.md](runbooks/dmz-incident.md)                 | DMZ link flap, links-up:0, edge-HMAC/PSK rotation, suspected DMZ host compromise                     |
 | [av-operations.md](runbooks/av-operations.md)               | AV scanner outage, signature update failure, false-positive triage, EICAR smoke test, capacity check |
 
 ## Session-activity bus and proactive token refresh (v1.6.1)

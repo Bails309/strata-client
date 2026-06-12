@@ -5,6 +5,337 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.2] — 2026-06-12
+
+### Patch Release — Outbound Quick Share polish, approver-email fan-out, BASE_URL fallback, ClamAV health, Kali VDI
+
+v1.12.2 is a thirteen-PR follow-up to the v1.12.1 AV-polish bundle.
+None of the v1.11.0 outbound-share protocol contracts change — the
+two ingest paths (`POST /api/user/outbound-shares` for drive-channel,
+`POST /api/outbound-shares/ingest/{token}` for HTTPS upload-command),
+the four `av_*` columns on `outbound_shares`, the
+`outbound_share.requested` / `outbound_share.decided` audit events,
+and the `can_use_quick_share_outbound` role permission are all
+byte-identical to v1.12.1. No new migrations, no new environment
+variables, and no new Cargo or npm dependencies. Existing v1.12.x
+installations upgrade with `docker compose up -d --build` (or the
+ghcr / k8s equivalent) and nothing else.
+
+The release rolls thirteen merged PRs (#268–#280) into one shipping
+bundle. The threads collected here break into six operator-visible
+themes:
+
+1. **Outbound Quick Share UX polish.** Five fixes that take the
+   v1.11.0 outbound flow from "functional" to "comfortable" for
+   the operators who actually live in it day-to-day. The
+   justification textarea now stays visible when drive
+   redirection is disabled by group policy (so the user can
+   write a reason without first generating a snippet), the curl
+   one-liners always print a completion summary at the end (so a
+   stale token is distinguishable from a transport error), the
+   ConfirmModal renders via a React portal (so the backdrop
+   covers the full viewport instead of being clipped by an
+   ancestor `overflow:hidden`), the admin → Outbound Shares tab
+   auto-refreshes every 60 s while the tab is visible (pausing
+   on `visibilitychange → hidden` to avoid waking idle laptops),
+   and the snippet copy-box gained a File-path input that
+   substitutes the user-supplied path into the snippet with
+   per-shell quoting (so the snippet is paste-and-run instead of
+   paste-edit-run) (#268, #269, #270, #279, #280).
+
+2. **Outbound-share approver email fan-out.** A new transactional
+   email event (`OutboundShareEvent::Pending`) fires the moment a
+   non-bypass outbound submission lands in the approval queue,
+   so the people who need to act on it get the same email
+   surface the credential-checkout approvers already do.
+   `OutboundSharePending` joins the existing four
+   `CheckoutEvent` templates under the same Tera + mrml + Outlook
+   dark-mode VML wrapper pipeline, and the same opt-out / audit
+   rules apply. Two follow-up fixes hardened the fan-out: the
+   approver-discovery SQL was joining the wrong table for the
+   super-admin check (`users.can_manage_system` does not exist —
+   the flag lives on `roles.can_manage_system`), and the
+   self-notify exclusion was reading the requester ID from the
+   wrong field of the event payload, so submitters with the
+   approver bit themselves were emailing themselves about their
+   own request (#271, #273, #275).
+
+3. **`BASE_URL` fallback for notification email links.** Every
+   transactional email template that includes a link back into
+   the SPA (checkout request / approval / rejection / outbound
+   share pending) needs a tenant URL to build absolute hrefs.
+   Until now the templates rendered `https://strata.local` as
+   the link target whenever the `tenant_base_url` system setting
+   was empty — broken even on perfectly-healthy installs that
+   simply hadn't filled in the optional admin field. A new
+   `services::settings::tenant_base_url(pool)` helper resolves
+   in three tiers: `system_settings.tenant_base_url` (admin-set)
+   → `BASE_URL` environment variable (deployment-set) →
+   `https://strata.local` (build-in last-resort). All four
+   email-render call sites (`notifications::build_context`,
+   `build_outbound_share_context`, `email::worker` rebuild path,
+   `routes/notifications::sample_context` preview) now share the
+   helper, so the resolution order is identical regardless of
+   whether the email was rendered on the originating dispatch,
+   on a retry, or in the admin preview panel (#278).
+
+4. **ClamAV healthcheck IPv6 dodge.** The Docker `HEALTHCHECK`
+   on the `clamav` sidecar previously ran `clamdscan --ping
+localhost`, which resolved to `::1` on hosts with dual-stack
+   `/etc/hosts` and immediately failed because `clamd` only
+   binds IPv4 (TCP `0.0.0.0:3310`) inside the container. The
+   sidecar was perfectly healthy and serving scans from the
+   adjacent backend container, but Docker reported `unhealthy`
+   every minute, which in turn poisoned every health-aware
+   orchestrator that read the container status. Pinning the
+   healthcheck to `127.0.0.1` explicitly avoids the resolver
+   ambiguity and the sidecar now reports `healthy` from boot
+   (#274).
+
+5. **Recordings volume write permission.** The `strata` user
+   inside the backend container could not write into
+   `/var/lib/strata/guac-recordings` on hosts where the volume
+   was bind-mounted from a directory owned by `root:root` (the
+   default when docker-compose creates the directory on first
+   bring-up). The session-recording sweeper would silently fail
+   to delete expired `.guac` files, growing the recordings
+   directory until the operator noticed and `chown`'d it by
+   hand. The backend Dockerfile now ensures the recordings
+   directory exists with the correct UID:GID baked into the
+   image, and the entrypoint script `chown`s the bind-mount
+   contents on startup if writable (#277).
+
+6. **Kali Linux VDI image.** A new `contrib/vdi-kali/` profile
+   ships a Kali Rolling-based VDI desktop with the
+   `kali-linux-large` metapackage preinstalled (Nmap, Metasploit
+   Framework, Burp Suite, Wireshark, the full `kali-tools-*`
+   line), targeted at security teams who want a clean, audited,
+   tunnel-routed jump-box for authorised offensive engagements.
+   Builds the same way as `contrib/vdi-sample` — `docker build
+contrib/vdi-kali` then tunnel-in via the existing VDI flow —
+   and follows the same per-user-home volume pattern so user
+   work persists across container restarts (#276).
+
+PR #272 (`style: cargo fmt`) is a no-op formatter pass and is not
+called out further.
+
+### Added
+
+- **Outbound Quick Share — File path input on the snippet builder**
+  (`frontend/src/components/QuickShareOutbound.tsx`). A new text
+  input between the snippet-format dropdown and the **Skip TLS**
+  checkbox accepts the path of the file the user intends to
+  upload from inside the remote session. The path is substituted
+  into the snippet with format-aware quoting so the snippet is
+  paste-and-run:
+  - **POSIX shells (curl / curl --insecure):** single-quoted with
+    embedded `'` escaped as `'\''` per shell-quoting tradition.
+  - **`curl.exe` on Windows (cmd / PowerShell host):** double-
+    quoted using the full
+    [`CommandLineToArgvW`](https://learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw)
+    rule — backslash runs before a `"` are doubled, backslash
+    runs at end-of-string are doubled, then the whole string is
+    wrapped in `"..."`. The CodeQL `js/incomplete-sanitization`
+    regression that an earlier draft tripped (a single
+    `.replace(/"/g, '\\"')` left `\"` re-escapable by a second
+    pass) is closed in the shipping helper — see the
+    `escapeWinDoubleQuoted` unit test that asserts
+    `C:\foo\"bar.txt` round-trips correctly.
+  - **PowerShell 7 (`pwsh`-only flow):** single-quoted with
+    embedded `'` doubled (`''`), since the snippet body itself
+    is wrapped in single quotes for the shell-host invocation.
+  - When the path input is empty the snippet keeps the literal
+    `<your-file>` placeholder so the snippet stays self-documenting
+    and the helper text below the snippet flips between **"Paste
+    this into a shell inside the session"** (empty) and **"This
+    snippet uploads `<the supplied path>`"** (non-empty) so the
+    intent is unambiguous (#280).
+
+- **Admin → Outbound Shares — visibility-gated auto-refresh**
+  (`frontend/src/pages/admin/OutboundSharesTab.tsx`). A 60 s
+  polling effect calls the existing `loadPending()` +
+  `loadHistory()` pair so the queue and history stay live without
+  the operator having to F5 between approvals. The poll is
+  suspended on `document.visibilitychange → hidden` so a parked
+  tab on a laptop does not keep the backend warm overnight, and
+  resumed (with one immediate refresh) on
+  `visibilitychange → visible` so the tab is up-to-date the
+  instant the operator returns to it. Added on top of the
+  existing initial-mount refresh — there is no change to the
+  underlying admin API contract (#279).
+
+- **Curl snippet completion summary**
+  (`frontend/src/components/QuickShareOutbound.tsx`). Every shipped
+  `curl` / `curl.exe` variant now ends with a printf-style summary
+  block that echoes the HTTP status, the response body, and a
+  one-line interpretation (`Upload succeeded` / `Token rejected
+(probably expired or already used)` / `Backend rejected the
+file — see body above`). Before this change a stale ingest
+  token returned `400 Bad Request` with a JSON error body and
+  curl exited 0 (HTTP error responses are still "successful HTTP
+  transactions" by curl semantics), so the user saw nothing on
+  the terminal and had no way to tell the snippet had been
+  rejected. The summary block runs unconditionally whether the
+  upload succeeded or failed (#269).
+
+- **Outbound-share approver pending email**
+  (`backend/src/services/email/templates/outbound_share_pending.mjml`
+  - `.txt.tera`). A new transactional email fires when a
+    non-bypass outbound submission lands in the approval queue,
+    threading through the same Tera context shape as the existing
+    `checkout_pending` template (`{requester}`, `{justification}`,
+    `{filename}`, `{byte_len}`, `{tenant_base_url}`,
+    `{approval_url}`). Recipients are computed by the existing
+    `notifications::approver_recipients_for_outbound` query, the
+    per-user `users.notifications_opt_out` flag is honoured, and
+    the existing retry / abandonment worker handles the delivery
+    exactly as it does the four `CheckoutEvent` templates (#271).
+
+- **`services::settings::tenant_base_url()` helper**
+  (`backend/src/services/settings.rs`). Single resolver for the
+  tenant URL used in every transactional-email link. Resolves
+  `system_settings.tenant_base_url` (admin-set, takes precedence
+  if non-empty) → `BASE_URL` environment variable
+  (deployment-set, picked up on every dispatch — no restart
+  required if the system setting is later cleared) →
+  `https://strata.local` (build-in last-resort that at least
+  produces a syntactically valid URL). Returns `String` not
+  `Result<String>` so call sites can use the value directly in
+  a Tera context insert (#278).
+
+- **`contrib/vdi-kali/` — Kali Rolling VDI image**. New
+  contributor profile alongside `contrib/vdi-sample/` and
+  `contrib/vdi-debian/`. Bases on
+  `kalilinux/kali-rolling:latest`, installs the
+  `kali-linux-large` metapackage, and ships the same XFCE +
+  XRDP entrypoint as the sample image so the existing
+  per-user-home volume pattern and the existing tunnel flow
+  work without changes. README documents the toolset (Nmap,
+  Metasploit Framework, Burp Suite Community, Wireshark, the
+  full `kali-tools-{web,wireless,information-gathering,…}` line)
+  and the intended use case (authorised offensive engagements
+  through a tunnel-routed jump-box) (#276).
+
+### Changed
+
+- **`clamav` sidecar healthcheck pinned to `127.0.0.1`**
+  (`docker-compose.yml`, `clamav/Dockerfile`). The image
+  previously ran `clamdscan --ping localhost`, which on hosts
+  with dual-stack `/etc/hosts` resolved to `::1` and failed
+  because `clamd` only binds IPv4 inside the container. The
+  healthcheck now uses an explicit `127.0.0.1` address (matching
+  the bind-address that `clamd.conf` actually listens on) so
+  Docker reports the sidecar `healthy` from boot. Operators
+  using the bundled `av` profile: `docker compose --profile av
+up -d --build clamav` to pick up the new image; existing
+  signature DB and scan history in the named volume is
+  preserved (#274).
+
+- **Approver-discovery query — read `roles.can_manage_system`,
+  not `users.can_manage_system`**
+  (`backend/src/services/notifications.rs`,
+  `approver_recipients_for_outbound`). The previous SQL referenced
+  `users.can_manage_system`, which is not a column — `can_manage_system`
+  lives on the `roles` table and reaches the user through
+  `user_roles`. The query happened to return zero rows rather
+  than erroring out (the column-not-found was swallowed in a
+  diagnostic-suppressed branch), so super-admins were silently
+  excluded from the approver fan-out. The corrected query joins
+  `user_roles → roles WHERE roles.can_manage_system = true UNION
+outbound_share_approvers`, matching the rule that both
+  super-admins and explicit approver-delegation list members get
+  the email (#273).
+
+- **Self-notify exclusion uses
+  `OutboundShareEvent::Pending.requester_id`**
+  (`backend/src/services/notifications.rs`). The pending-event
+  fan-out was reading the requester ID from the wrong field of
+  the event struct (an unused legacy `submitter_id` that was
+  always `None` on the new event), so submitters who themselves
+  held the approver bit emailed themselves about their own
+  pending request. The fix reads `requester_id` directly off
+  the `OutboundShareEvent::Pending` payload and excludes it
+  from the recipient list before the row-per-recipient `INSERT`
+  fan-out (#275).
+
+### Fixed
+
+- **Justification textarea hidden when drive redirection is
+  disabled** (`frontend/src/components/QuickShareOutbound.tsx`).
+  The conditional render previously hid the textarea (and the
+  whole "I'd like to share a file" form section) whenever
+  `driveRedirectionAvailable` was false, on the theory that
+  there was no drive-channel ingest path to write a
+  justification for. But the HTTPS upload-command flow needs a
+  justification too — the user has to type the reason **before**
+  clicking **Generate upload command**, because the
+  justification is part of the bound state on the minted token.
+  The textarea is now always rendered; only the
+  "Drop a file here" upload affordance is conditional on drive
+  redirection being available (#268).
+
+- **`ConfirmModal` backdrop clipped by ancestor overflow**
+  (`frontend/src/components/ConfirmModal.tsx`). The modal was
+  rendered as a sibling of the trigger button rather than as a
+  top-level portal, so when the modal was opened from inside a
+  scrollable container (e.g. the admin → Outbound Shares row
+  action menu, the Approvals page table, the Health tab
+  history pane), the fixed-position backdrop was clipped to
+  the scrollable ancestor instead of the viewport. The modal
+  body itself still rendered, but the dim-out shading stopped
+  at the parent boundary, which made it look like the modal
+  could be dismissed by clicking on a "non-darkened" area that
+  was in fact part of the modal's own backdrop. The modal now
+  renders into a `document.body`-anchored React portal — the
+  backdrop covers the full viewport regardless of where in the
+  tree the modal was triggered from (#270).
+
+- **Email links pointing at `https://strata.local` on
+  unconfigured installs** (see **Added** above — the new
+  `tenant_base_url()` helper closes the loop) (#278).
+
+- **`outbound_share.pending` approver emails not reaching
+  super-admins** (see **Changed** above — `users.can_manage_system`
+  → `roles.can_manage_system`) (#273).
+
+- **Submitter receiving their own approval notification when
+  they happen to hold the approver bit** (see **Changed** above
+  — `requester_id` self-exclusion) (#275).
+
+- **Backend cannot write into bind-mounted recordings volume**
+  (`backend/Dockerfile`, `backend/entrypoint.sh`). The
+  `strata` user inside the container could not delete expired
+  `.guac` recordings from `/var/lib/strata/guac-recordings`
+  when the bind-mount target on the host was owned by
+  `root:root` (the default when docker-compose creates the
+  directory on first boot). The Dockerfile now `mkdir`s the
+  directory with the correct UID:GID at build time and the
+  entrypoint script `chown`s the bind-mount contents on
+  startup when writable, so the session-recording sweeper can
+  prune expired files without operator intervention (#277).
+
+- **`clamav` sidecar reported `unhealthy` despite serving scans**
+  (see **Changed** above — `127.0.0.1` healthcheck pin) (#274).
+
+### Operator notes
+
+- **No migrations.** No schema changes; no new tables,
+  columns, or indexes.
+- **No new environment variables.** `BASE_URL` is read by the
+  new `tenant_base_url()` helper, but it is an existing variable
+  documented in `docs/deployment.md` (used by several other
+  helpers since v1.7.0). Sites that already export it pick up
+  the email-link fix on first restart with no further action.
+- **No new Cargo or npm dependencies.** The thirteen PRs net
+  zero supply-chain churn — `cargo deny check` and `npm audit`
+  output are unchanged from v1.12.1.
+- **Recommended deploy:** `docker compose pull && docker compose
+up -d --build`. Sites using the bundled `av` profile should
+  add `--profile av` to pick up the rebuilt clamav sidecar with
+  the healthcheck fix. Sites using `contrib/vdi-kali/` should
+  `docker build contrib/vdi-kali/ -t strata-vdi-kali:latest`
+  separately before bringing the new VDI online.
+
 ## [1.12.1] — 2026-06-09
 
 ### Patch Release — AV-scanning polish, admin visibility, live upload progress, and friendly engine errors
@@ -72,34 +403,34 @@ break into five operator-visible themes:
 ### Added
 
 - **In-app AV health card** (`frontend/src/pages/admin/HealthTab.tsx`
-  + new `GET /api/admin/health/av`). Surfaces:
-  - Active backend (`off` / `clamav` / `command`).
-  - Reachability ping (TCP connect to `clamav:3310` for the
+  - new `GET /api/admin/health/av`). Surfaces:
+  * Active backend (`off` / `clamav` / `command`).
+  * Reachability ping (TCP connect to `clamav:3310` for the
     `clamav` backend; spawnable-check for the `command` backend).
-  - clamd daemon version (`PING\nVERSION\n` exchange).
-  - Signature DB versions — `main.cvd`, `daily.cvd`/`daily.cld`,
+  * clamd daemon version (`PING\nVERSION\n` exchange).
+  * Signature DB versions — `main.cvd`, `daily.cvd`/`daily.cld`,
     and `bytecode.cvd`/`bytecode.cld` — with the engine signature
     count (e.g. `daily.cld v27349 / 2,047,316 sigs / 2026-06-08`)
     so on-call can confirm signatures aren't stale.
-  - Last freshclam update timestamp + last reload-after-update
+  * Last freshclam update timestamp + last reload-after-update
     success/failure.
-  - Last-30d verdict tally (clean / infected / skipped / error)
+  * Last-30d verdict tally (clean / infected / skipped / error)
     so a sudden flood of `error` rows is visible without going
     to the audit log.
-  - Backed by a tiny `services::av_health` module that caches the
+  * Backed by a tiny `services::av_health` module that caches the
     handshake for 30 s and survives `clamd` being temporarily
     unreachable (degrades to "last known good" + a "stale since
     HH:MM:SS" badge rather than wiping the card).
 
 - **Admin → AV-Blocked Files tab** (`frontend/src/pages/admin/AvBlockedTab.tsx`
-  + new `GET /api/admin/files/av-blocked` route serving a unified
-  view over inbound `file.av_blocked` audit rows and outbound
-  rows with `av_scan_status IN ('infected','error')`). Columns:
-  timestamp, direction (in/out), filename, byte size, signature
-  (or error message), engine, actor, session context. Filters by
-  date range, engine, direction, and signature substring. Page
-  size 50 with cursor pagination. Visible to
-  `can_manage_system` only.
+  - new `GET /api/admin/files/av-blocked` route serving a unified
+    view over inbound `file.av_blocked` audit rows and outbound
+    rows with `av_scan_status IN ('infected','error')`). Columns:
+    timestamp, direction (in/out), filename, byte size, signature
+    (or error message), engine, actor, session context. Filters by
+    date range, engine, direction, and signature substring. Page
+    size 50 with cursor pagination. Visible to
+    `can_manage_system` only.
 
 - **Friendly AV error mapping**
   (`Verdict::user_facing_block_message()` in
@@ -118,8 +449,8 @@ break into five operator-visible themes:
   `upload.onprogress` reliably) and returns a `Promise<T>` shape-
   compatible with the existing `apiCall<T>()` JSON contract.
   Opt-in via a new `UploadProgressOptions { onProgress?: (pct,
-  bytes, total) => void; onAbort?: () => void; signal?:
-  AbortSignal }` parameter on `submitOutboundShare()`,
+bytes, total) => void; onAbort?: () => void; signal?:
+AbortSignal }` parameter on `submitOutboundShare()`,
   `uploadQuickShareFile()`, and the drive-channel
   `submitOutboundShareFromDrive()` helper. Existing callers that
   pass no `UploadProgressOptions` are byte-identical to v1.12.0.
@@ -127,7 +458,7 @@ break into five operator-visible themes:
 - **ToastProvider progress bar**
   (`frontend/src/components/ToastProvider.tsx`). The `Toast`
   shape gains an optional `progress?: { pct: number; status?:
-  string }` field; toasts with a `progress` prop render a slim
+string }` field; toasts with a `progress` prop render a slim
   bar under the title that updates in place. An indeterminate
   variant (`progress: { pct: -1 }`) renders a sliding 33%-width
   band using a new `strata-toast-indeterminate` keyframe
@@ -170,11 +501,11 @@ break into five operator-visible themes:
   (`backend/src/routes/admin.rs`). The pre-existing
   `outbound_share.requested` audit-event payload was extended
   with `av_status`, `av_signature`, `av_backend`, `direction:
-  "outbound"`, and `filename` keys so the new AV-Blocked Files
+"outbound"`, and `filename` keys so the new AV-Blocked Files
   tab can `WHERE action_type IN ('file.av_blocked',
-  'outbound_share.requested') AND (action_type =
-  'file.av_blocked' OR payload->>'av_status' IN
-  ('infected','error'))` and get a single coherent feed.
+'outbound_share.requested') AND (action_type =
+'file.av_blocked' OR payload->>'av_status' IN
+('infected','error'))` and get a single coherent feed.
 
 - **Inline diagnostic script** `scripts/diagnose-av.sh` — a
   one-shot AV health probe for on-call. Pings the configured
@@ -214,7 +545,7 @@ break into five operator-visible themes:
   pulled into `/var/lib/clamav` sat unused until the next full
   sidecar restart; this meant the audit trail could record a
   `Skipped { reason: "no signatures" }` or
-  `Error { message: "..." }` against a file the engine *had*
+  `Error { message: "..." }` against a file the engine _had_
   signatures for, just hadn't loaded them yet. Now the engine
   picks up new signatures within minutes of `freshclam` returning.
   (#259)
@@ -233,7 +564,7 @@ break into five operator-visible themes:
 
 - **Quick Share role-permission check made explicit on outbound
   routes.** `check_quick_share_outbound_permission()` now
-  *strictly* requires `can_use_quick_share_outbound` — a
+  _strictly_ requires `can_use_quick_share_outbound` — a
   super-admin without that permission is rejected with 403
   `Forbidden`, matching the v1.11.0 design intent. Previously a
   subtle short-circuit in one of the routes (mint vs submit vs
@@ -256,7 +587,7 @@ break into five operator-visible themes:
   unit tests in `services::av` were exercising the version-
   parsing path with synthetic strings that didn't match the
   actual `clamd` `VERSION` response shape (`ClamAV
-  1.4.2/27349/Sat Jun  7 12:00:00 2026`) or the real `.cvd`
+1.4.2/27349/Sat Jun  7 12:00:00 2026`) or the real `.cvd`
   header layout. The fixtures now use captured bytes from a
   live clamd, so test coverage actually exercises the parser the
   health card depends on. No production behaviour change. (#261)
@@ -271,9 +602,9 @@ break into five operator-visible themes:
   - `av_status` (`clean` / `infected` / `skipped` / `error`)
   - `av_signature` (when present)
   - `av_backend`
-  Backwards-compatible — the v1.12.0 keys (`share_id`,
-  `byte_len`, `dlp_score`, etc.) are preserved.
-  (#264)
+    Backwards-compatible — the v1.12.0 keys (`share_id`,
+    `byte_len`, `dlp_score`, etc.) are preserved.
+    (#264)
 
 - **`docs/av-scanning.md` EICAR smoke test rewritten.** The
   reproducible end-to-end verification was tripping operators on
@@ -281,7 +612,7 @@ break into five operator-visible themes:
   clipboards corrupt the EICAR signature on paste (the literal
   string contains a `$` that some shells expand), and (2) the
   test requires the user to have `can_use_quick_share_outbound`
-  — without it, the upload is rejected with a 403 *before*
+  — without it, the upload is rejected with a 403 _before_
   reaching the scanner, masking a successful AV deployment as a
   broken one. The docs now: ship the EICAR string in a
   here-doc, walk operators through the role check first, and
@@ -297,7 +628,7 @@ break into five operator-visible themes:
   (indeterminate) → "Awaiting approval" or final verdict.
 
 - **PowerShell ingest snippet rewritten.** `Invoke-WebRequest
-  -Form` does not emit any upload progress (only response-
+-Form` does not emit any upload progress (only response-
   download progress), so the v1.11.0 snippet was silent
   regardless of file size. The new snippet uses
   `System.Net.Http.HttpClient` with a poll-loop driving
@@ -309,7 +640,7 @@ break into five operator-visible themes:
 
 - **`curl --progress-bar` rendered nothing when the server
   rejected an expired/consumed token.** Caused by curl's default
-  `Expect: 100-continue` header: the server returns 400 *before*
+  `Expect: 100-continue` header: the server returns 400 _before_
   reading the body, so curl never uploads and the progress meter
   has nothing to draw. Fixed by adding `-H "Expect:"` to both
   curl snippet variants (and the equivalent
@@ -335,19 +666,19 @@ break into five operator-visible themes:
 - **Inbound and outbound CI lint/format failures**
   (`prettier --check` on `api.test.ts`,
   `ToastProvider.test.tsx`, `ToastProvider.tsx`; `cargo fmt
-  --check` on `services/av.rs`) cleared by re-running the
+--check` on `services/av.rs`) cleared by re-running the
   formatters. No behaviour change.
 
 ### Security
 
 - **No new threats and no new mitigations** — the security
   surface area of v1.12.1 is identical to v1.12.0. The fixes
-  here close *implementation* gaps in the protections v1.12.0
+  here close _implementation_ gaps in the protections v1.12.0
   documented:
   - Aligning the scan-size default with the upload cap means
-    every file v1.12.0 *said* was scanned now actually is.
+    every file v1.12.0 _said_ was scanned now actually is.
   - Forcing `clamd RELOAD` after `freshclam` means signatures
-    v1.12.0 *said* were fresh now actually are.
+    v1.12.0 _said_ were fresh now actually are.
   - The super-admin role-check fix closes the
     "super-admin silently exfiltrates files" threat model row
     that v1.11.0 had already documented as closed.
@@ -371,7 +702,7 @@ break into five operator-visible themes:
   any user already gated for that page (i.e. `can_manage_system`).
 - **Existing `STRATA_AV_MAX_SCAN_SIZE` overrides** that set a
   value below 500 MiB will continue to apply — the bump is a
-  default change, not a forced value. Sites that *want* the
+  default change, not a forced value. Sites that _want_ the
   100 MiB ceiling preserved can pin
   `STRATA_AV_MAX_SCAN_SIZE=104857600` in `.env`.
 - **The `clamav-db` named volume** is unchanged. Signatures
@@ -393,10 +724,10 @@ break into five operator-visible themes:
 v1.12.0 lands the first malware-scanning hook in the Quick Share
 upload pipeline. Both directions of the file mover — **inbound**
 (`POST /api/user/files/upload`, where a Strata user pushes a file
-*to* the remote session) and **outbound** (`POST
+_to_ the remote session) and **outbound** (`POST
 /api/user/outbound-shares/submit` plus the token-auth shell-side
 `POST /api/outbound-shares/ingest/{token}`) — now stream the upload
-through a configurable antivirus scanner *before* the file lands in
+through a configurable antivirus scanner _before_ the file lands in
 the session file store / before it is sealed via Vault Transit. The
 scanner is pluggable via the `Scanner` trait in
 `backend/src/services/av.rs`; three backends ship:
@@ -431,7 +762,7 @@ always rejected regardless of fail-mode.**
 
 - **`backend/src/services/av.rs` (new, ~759 LoC).** Defines the
   `Verdict { Clean | Infected{signature} | Skipped{reason} |
-  Error{message} }` enum (with `as_str()` matching the new DB
+Error{message} }` enum (with `as_str()` matching the new DB
   column vocabulary and `blocks(fail_mode)` semantics), the
   `Scanner` trait (async, `Send + Sync + Debug`), and three
   concrete implementations:
@@ -456,7 +787,7 @@ always rejected regardless of fail-mode.**
 - **`backend/migrations/078_av_scanning.sql` (new).** Adds four
   nullable columns to `outbound_shares`:
   - `av_scan_status TEXT` — one of `clean | infected | skipped |
-    error` matching `Verdict::as_str()`.
+error` matching `Verdict::as_str()`.
   - `av_signature TEXT` — for `infected` rows, the signature name
     returned by the engine (e.g. `Win.Test.EICAR_HDB-1`).
   - `av_scanned_at TIMESTAMPTZ` — when the verdict was issued.
@@ -465,7 +796,7 @@ always rejected regardless of fail-mode.**
 
   Also creates a partial index
   `idx_outbound_shares_av_attention` over `av_scan_status WHERE
-  status IN ('infected','error')` to keep the operator dashboard
+status IN ('infected','error')` to keep the operator dashboard
   query cheap as the table grows. All columns are nullable, so the
   migration is backwards-compatible with the v1.11.x row shape.
 
@@ -475,8 +806,8 @@ always rejected regardless of fail-mode.**
   - `file.av_blocked` — inbound Quick Share rejection.
   - `outbound_share.requested` — extended with `av_status`,
     `av_signature`, `av_backend` keys on every outbound submission
-    (success or rejection) so the audit trail records *which*
-    engine cleared the file as well as *what* it said.
+    (success or rejection) so the audit trail records _which_
+    engine cleared the file as well as _what_ it said.
 
 - **`docker-compose.yml` ClamAV sidecar.** A new `clamav` service
   behind the opt-in `av` compose profile
@@ -492,7 +823,7 @@ always rejected regardless of fail-mode.**
 
 - **AppState plumbing.** `services::app_state::AppState` gains two
   new fields (`av_scanner: Arc<dyn Scanner>`, `av_fail_mode:
-  FailMode`) wired at backend boot in `main.rs`. The scanner is
+FailMode`) wired at backend boot in `main.rs`. The scanner is
   built once from environment via `services::av::build(&cfg)` and
   shared across every request handler — no per-request scanner
   construction overhead.
@@ -535,8 +866,8 @@ always rejected regardless of fail-mode.**
   is deleted on blocking verdict so the session file store never
   sees infected content.
 - **`routes/outbound_shares.rs::parse_outbound_multipart`** now
-  takes the scanner + fail-mode and scans on disk *before*
-  reading the plaintext into memory and *before* sealing via Vault
+  takes the scanner + fail-mode and scans on disk _before_
+  reading the plaintext into memory and _before_ sealing via Vault
   Transit. Sealing is destructive from the scanner's perspective
   (Vault doesn't expose the plaintext), so the only correct place
   to scan is between the stream-to-disk step and the seal step.
@@ -587,7 +918,7 @@ always rejected regardless of fail-mode.**
   is purely additive (four nullable columns + one partial index)
   and the default `STRATA_AV_BACKEND=off` preserves prior
   behaviour. Opting in is a `docker compose --profile av up -d`
-  + three env-var changes away.
+  - three env-var changes away.
 - **First ClamAV boot pulls ~250 MB** of signature definitions
   from clamav.net. Plan for the start-up delay; subsequent boots
   reuse the `clamav-db` volume and converge in seconds.
@@ -614,7 +945,7 @@ to end: how an approver becomes aware of work (in-session popup),
 what they can communicate back to the requester on a denial
 (persisted reason on the credential-checkout side, matching the
 already-persisted reason on the outbound-share side), and what a
-requester *must* supply to a non-bypass account before an outbound
+requester _must_ supply to a non-bypass account before an outbound
 share even reaches the approver queue (a ≥ 10-character
 justification, enforced at both backend HTTP entry points).
 
@@ -648,7 +979,6 @@ justification, enforced at both backend HTTP entry points).
   `localStorage`-backed cross-tab de-dup and the polite
   `Promise.allSettled`-style fanout that survives one endpoint
   being temporarily 500.
-
   - 2 new SPA API helpers in `frontend/src/api.ts`:
     `decideCheckout(id, approved, reason?)` (the `reason`
     parameter is the new addition — see below) and
@@ -665,14 +995,13 @@ justification, enforced at both backend HTTP entry points).
   saw only "Grace declined your request" with no further context.
   The outbound-share queue already persisted a `decision_reason`
   per row (see v1.11.0 / migration 073) and the new in-session
-  approval popup *requires* a reason before letting an approver
+  approval popup _requires_ a reason before letting an approver
   hit Deny, so the absence of the column on the credential side
   was the only thing keeping the two queues asymmetric. This
   release closes that gap:
-
   - **Migration `077_checkout_decision_reason.sql`** —
     `ALTER TABLE password_checkout_requests ADD COLUMN IF NOT
-    EXISTS decision_reason TEXT` (nullable; pre-077 rows stay
+EXISTS decision_reason TEXT` (nullable; pre-077 rows stay
     NULL rather than being backfilled to an empty string, so the
     UI can distinguish "no reason supplied" from "legacy denial
     that predates this field"). No length constraint at the DB
@@ -710,7 +1039,7 @@ justification, enforced at both backend HTTP entry points).
     rewritten in this release to use an inline deny composer
     (textarea + Confirm / Cancel) that mirrors the popup's
     composer; both call the same `decideCheckout(id, false,
-    reason)` helper. The composer placeholder text
+reason)` helper. The composer placeholder text
     (`e.g. Outside change window, contact owner first`) gives
     the approver a worked example. Coverage:
     `frontend/src/__tests__/Approvals.test.tsx` now drives the
@@ -726,17 +1055,15 @@ justification, enforced at both backend HTTP entry points).
   text or CJK are not penalised). Bypass users continue to
   submit without one — auto-approval semantics are unchanged for
   the bypass path.
-
   - **Helper:**
     `routes::outbound_shares::validate_outbound_justification(
-    requires_approval, justification) -> Result<(), AppError>` is
+requires_approval, justification) -> Result<(), AppError>` is
     the single source of truth for the rule. It exists as a
     free-standing function so both HTTP entry points share one
     rule **and** so the rule is unit-testable without a database
     fixture.
 
   - **Backend chokepoint at BOTH outbound entry points:**
-
     1. `finalize_submit` (the drag-and-drop / browser upload
        path) — validation runs **after** the user-row lookup
        (which gives the helper the `requires_approval` boolean
@@ -756,9 +1083,9 @@ justification, enforced at both backend HTTP entry points).
 
   - **Error contract:** validation failures return
     `AppError::Validation` (HTTP 400) with the user-facing
-    message *"A justification of at least 10 characters is
+    message _"A justification of at least 10 characters is
     required for outbound shares unless the approval bypass is
-    enabled for your account."*
+    enabled for your account."_
 
   - **4 new unit tests in
     `backend/src/routes/outbound_shares.rs`:**
@@ -790,7 +1117,7 @@ justification, enforced at both backend HTTP entry points).
     `outbound_share_requires_approval: boolean | null` on the
     `MeResponse` interface in `frontend/src/api.ts`. `App.tsx`
     derives a single boolean `outboundShareBypass = user?.
-    outbound_share_requires_approval === false` and threads it
+outbound_share_requires_approval === false` and threads it
     through to the existing `SessionManagerProvider` so the
     drive-channel `onfile` interceptor and the
     `QuickShareOutbound` panel both share the same source of
@@ -803,17 +1130,17 @@ justification, enforced at both backend HTTP entry points).
   - The justification `<label>` renders a red asterisk
     (`<span className="text-danger">*</span>`) and the field
     is marked `aria-required="true"`.
-  - The placeholder text changes from the generic *"Why does the
-    next exported file need to leave the session?"* to a worked
-    example: *"Required — e.g. Audit ticket INC-1234, exporting
-    redacted log for review"*.
-  - A small helper line — *"Required for your account (minimum
-    10 characters)"* — appears beneath the textarea so the
+  - The placeholder text changes from the generic _"Why does the
+    next exported file need to leave the session?"_ to a worked
+    example: _"Required — e.g. Audit ticket INC-1234, exporting
+    redacted log for review"_.
+  - A small helper line — _"Required for your account (minimum
+    10 characters)"_ — appears beneath the textarea so the
     requirement is visible before the user clicks anything.
   - The **Generate upload command** button stays disabled until
     the trimmed justification reaches the 10-character minimum,
-    and renders a tooltip *"Enter at least 10 characters of
-    justification above before generating the upload command."*
+    and renders a tooltip _"Enter at least 10 characters of
+    justification above before generating the upload command."_
     while disabled so the user can self-diagnose without
     clicking through to a 400.
 
@@ -822,10 +1149,10 @@ justification, enforced at both backend HTTP entry points).
   panel-level gate: if `outboundShareBypass` is `false` and the
   active session's `pendingOutboundJustification` is shorter
   than 10 characters (after trim), the interceptor surfaces a
-  warning toast (*"Justification required: <filename>"*) with
-  remediation copy (*"Open the Outbound Share panel, enter at
+  warning toast (_"Justification required: <filename>"_) with
+  remediation copy (_"Open the Outbound Share panel, enter at
   least 10 characters explaining why this file needs to leave
-  the session, then re-drop the file."*) and short-circuits
+  the session, then re-drop the file."_) and short-circuits
   **before** the `FormData` POST. This avoids a confusing
   toast-on-400 flow where the user has already let go of the
   file and now has to guess why it was rejected.
@@ -845,7 +1172,7 @@ justification, enforced at both backend HTTP entry points).
   after the composer rewrite (it still expected the immediate
   `decideCheckout(id, false)` call). Rewritten in this release
   to drive the composer end-to-end: click Deny → wait for the
-  textarea → type *"Out of change window"* → click "Confirm
+  textarea → type _"Out of change window"_ → click "Confirm
   deny" → assert `decideCheckout` was called with
   `("cr1", false, "Out of change window")`.
 
@@ -907,7 +1234,6 @@ justification, enforced at both backend HTTP entry points).
   single-use download; denied or expired shares are purged and the
   sealed DEK is zeroised by a periodic worker so the staging blob
   cannot be recovered after TTL.
-
   - **Drive-channel ingest path.** `SessionManager`'s
     `Guacamole.Client.onfile` handler is rewired: when the active
     role grants `can_use_quick_share_outbound`, files that guacd
@@ -1225,7 +1551,6 @@ Operators: run migrations on upgrade; the new column defaults to
 `FALSE` so no existing user gains Safeguard access until you tick the
 box.
 
-
 ### Patch Release — Recordings reliability and Azure offload
 
 v1.10.5 is a small reliability patch that addresses session-recording delivery
@@ -1233,7 +1558,7 @@ and retention in Azure-backed deployments. Key fixes:
 
 - Ensure guacd can create recording files on the shared recordings volume
   (fixes failures where `Creation of recording failed: Exhausted all possible
-  unique suffixes` was logged) by correcting runtime ownership and entrypoint
+unique suffixes` was logged) by correcting runtime ownership and entrypoint
   behaviour so the recorder runs with appropriate write access.
 - Background sync worker now reliably uploads completed recordings to Azure
   Blob Storage and flips the database `storage_type` to `azure` so the UI
@@ -1324,7 +1649,7 @@ breaking change.
   exhaust the server.
 - **TLS 1.3 pin on the DMZ public listener.** Replaces the previous
   `ServerConfig::builder()` with `builder_with_protocol_versions(&[
-  &rustls::version::TLS13])`, dropping TLS 1.2 from the internet-
+&rustls::version::TLS13])`, dropping TLS 1.2 from the internet-
   facing surface. Internal-link mTLS (which is consumed by both
   halves of the deployment, not the public) is unchanged.
 - **Edge-header strip widened.** `edge_signer` now strips
@@ -1352,15 +1677,15 @@ breaking change.
 - **Docker-compose default-credential startup banner.** A new
   `log_security_config_warnings()` runs at boot and emits
   `error!`-level entries when:
-    - `DATABASE_URL` contains the well-known dev password
-      `strata_default`,
-    - `VAULT_TOKEN=root`,
-    - `VAULT_ADDR` starts with `http://`,
-    - `JWT_SECRET` is unset, shorter than 32 bytes, or matches a
-      known placeholder,
-    - `STRATA_TRUST_XFF=1` is set without `STRATA_TRUSTED_PROXIES`.
-  Dev/compose flows continue to work; production deployments now
-  get a loud reminder if any of the above are still in place.
+  - `DATABASE_URL` contains the well-known dev password
+    `strata_default`,
+  - `VAULT_TOKEN=root`,
+  - `VAULT_ADDR` starts with `http://`,
+  - `JWT_SECRET` is unset, shorter than 32 bytes, or matches a
+    known placeholder,
+  - `STRATA_TRUST_XFF=1` is set without `STRATA_TRUSTED_PROXIES`.
+    Dev/compose flows continue to work; production deployments now
+    get a loud reminder if any of the above are still in place.
 - **Frontend `api.ts` no longer logs CSRF cookie presence.** Two
   `console.log` statements in the refresh path that leaked the
   presence of the CSRF cookie to devtools have been removed. The
@@ -1382,32 +1707,32 @@ breaking change.
   requests the resident set could grow by `2 × 8 × N` MiB and the
   proxy was a built-in DoS amplifier for upload/download bombs.
   Both directions are now streamed:
-    - **Request body.** A spawned `pump_request_body_upstream` task
-      reads chunks from the axum `Body` and writes them to the h2
-      `SendStream` honouring flow control via `reserve_capacity` /
-      `poll_capacity`. The total-byte cap is enforced byte-by-byte;
-      mid-stream overshoot triggers `send_reset(h2::Reason::CANCEL)`.
-      A pre-flight `Content-Length` check still rejects honest
-      oversized requests with `413` before any link is touched.
-    - **Response body.** A new `RecvStreamBody` adapter implements
-      `futures::Stream` over `h2::RecvStream`, releases the
-      flow-control window per chunk, and enforces the cap as data
-      flows. `axum::body::Body::from_stream` wires it into the
-      public response. A pre-flight `Content-Length` check returns
-      `507` before any byte reaches the public client; mid-stream
-      overshoot truncates the response and closes the public
-      connection by returning an error from the stream.
-  Per-request memory dropped from up to ~16 MiB to roughly one h2
-  flow-control window (~64 KiB). The retry-after-pick semantics
-  narrowed: the two-attempt retry now happens at
-  `SendRequest::ready()` time **before** the body is consumed.
-  After `send_request` is called the body cannot be replayed, so
-  any subsequent failure is fatal to that request and the public
-  client must retry (idempotent methods in browsers do this
-  automatically). The trade is acceptable because (a) the failure
-  window is small, (b) the new memory ceiling is the real win, and
-  (c) the prior "retry after buffering 8 MiB twice" path was itself
-  an amplifier.
+  - **Request body.** A spawned `pump_request_body_upstream` task
+    reads chunks from the axum `Body` and writes them to the h2
+    `SendStream` honouring flow control via `reserve_capacity` /
+    `poll_capacity`. The total-byte cap is enforced byte-by-byte;
+    mid-stream overshoot triggers `send_reset(h2::Reason::CANCEL)`.
+    A pre-flight `Content-Length` check still rejects honest
+    oversized requests with `413` before any link is touched.
+  - **Response body.** A new `RecvStreamBody` adapter implements
+    `futures::Stream` over `h2::RecvStream`, releases the
+    flow-control window per chunk, and enforces the cap as data
+    flows. `axum::body::Body::from_stream` wires it into the
+    public response. A pre-flight `Content-Length` check returns
+    `507` before any byte reaches the public client; mid-stream
+    overshoot truncates the response and closes the public
+    connection by returning an error from the stream.
+    Per-request memory dropped from up to ~16 MiB to roughly one h2
+    flow-control window (~64 KiB). The retry-after-pick semantics
+    narrowed: the two-attempt retry now happens at
+    `SendRequest::ready()` time **before** the body is consumed.
+    After `send_request` is called the body cannot be replayed, so
+    any subsequent failure is fatal to that request and the public
+    client must retry (idempotent methods in browsers do this
+    automatically). The trade is acceptable because (a) the failure
+    window is small, (b) the new memory ceiling is the real win, and
+    (c) the prior "retry after buffering 8 MiB twice" path was itself
+    an amplifier.
 
 ### Removed
 
@@ -1435,20 +1760,20 @@ breaking change.
 
 - **Four new streaming-mode tests** in
   `crates/strata-dmz/src/proxy.rs::tests`:
-    - `request_oversized_content_length_returns_413_before_pick` —
-      empty registry + over-cap CL header returns `413`, never
-      reaches `NoLinkUp`.
-    - `request_body_streams_intact_to_upstream` — 1 MiB body
-      delivered as 1024 × 1 KiB chunks (no `Content-Length`)
-      arrives at the upstream byte-for-byte, including chunk-index
-      marker bytes.
-    - `request_body_oversize_without_cl_is_capped_and_request_fails`
-      — 9 MiB body in 9 × 1 MiB chunks (no `Content-Length`) is
-      reset mid-stream by the pump; public response is not `200`.
-    - `upstream_response_oversize_content_length_returns_507` —
-      upstream advertises an over-cap `Content-Length` on the
-      response headers; proxy returns `UpstreamTooLarge` (→ `507`)
-      before forwarding any body bytes.
+  - `request_oversized_content_length_returns_413_before_pick` —
+    empty registry + over-cap CL header returns `413`, never
+    reaches `NoLinkUp`.
+  - `request_body_streams_intact_to_upstream` — 1 MiB body
+    delivered as 1024 × 1 KiB chunks (no `Content-Length`)
+    arrives at the upstream byte-for-byte, including chunk-index
+    marker bytes.
+  - `request_body_oversize_without_cl_is_capped_and_request_fails`
+    — 9 MiB body in 9 × 1 MiB chunks (no `Content-Length`) is
+    reset mid-stream by the pump; public response is not `200`.
+  - `upstream_response_oversize_content_length_returns_507` —
+    upstream advertises an over-cap `Content-Length` on the
+    response headers; proxy returns `UpstreamTooLarge` (→ `507`)
+    before forwarding any body bytes.
 - `parse_xff_rightmost` helper extracted from
   `try_extract_client_ip` so its parsing is unit-testable without
   having to spin up an HTTP request context.
@@ -1495,7 +1820,7 @@ implementation behind them. All three are addressed in this release.
   existing public `/api/shared/copilot/:share_token` endpoint is
   unchanged for invited viewers.
 - **Force-grant route** — `POST
-  /api/user/shared/copilot/:share_token/grant/:target_pid` lets the
+/api/user/shared/copilot/:share_token/grant/:target_pid` lets the
   owner transfer the input token to any participant in the room.
   Verifies share ownership, broadcasts `InputGrant` + `Roster`, and
   writes a `connection.copilot_force_grant` audit row.
@@ -1515,7 +1840,7 @@ implementation behind them. All three are addressed in this release.
 ### Changed
 
 - **Modern checkboxes** across the app — every native `<input
-  type="checkbox">` now renders with a unified Tailwind-styled
+type="checkbox">` now renders with a unified Tailwind-styled
   appearance that matches the existing button/toggle palette
   (`d5bd26f`).
 - `CoPilotRoom::force_grant` is no longer dead code (the new HTTP

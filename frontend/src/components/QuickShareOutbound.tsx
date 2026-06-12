@@ -695,9 +695,7 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 value={filePath}
                 onChange={(e) => setFilePath(e.target.value)}
                 placeholder={
-                  snippetFormat === "curl"
-                    ? "/home/user/report.pdf"
-                    : "C:\\Users\\you\\report.pdf"
+                  snippetFormat === "curl" ? "/home/user/report.pdf" : "C:\\Users\\you\\report.pdf"
                 }
                 spellCheck={false}
                 autoCapitalize="off"
@@ -705,8 +703,8 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 className="w-full px-2 py-1 text-xs font-mono rounded bg-black/40 border border-white/10 text-txt-primary placeholder:text-txt-tertiary focus:outline-none focus:border-accent"
               />
               <p className="text-[10px] text-txt-tertiary leading-snug">
-                Paste the path of the file you want to export from inside the remote session and
-                the snippet below becomes paste-and-run. Leave blank to keep the
+                Paste the path of the file you want to export from inside the remote session and the
+                snippet below becomes paste-and-run. Leave blank to keep the
                 <span className="font-mono"> &lt;your-file&gt;</span> placeholder.
               </p>
               <label
@@ -773,13 +771,16 @@ export default function QuickShareOutbound({ onClose, sidebarWidth, sessionBarCo
                 </pre>
                 <p className="text-[10px] text-txt-tertiary leading-snug">
                   {filePath.trim() ? (
-                    <>The command is single-use — it stops working as soon as one upload completes or the timer hits zero.</>
+                    <>
+                      The command is single-use — it stops working as soon as one upload completes
+                      or the timer hits zero.
+                    </>
                   ) : (
                     <>
-                      Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of the
-                      file you want to export, or fill in the <em>File path</em> input above to have
-                      it substituted automatically. The command is single-use — it stops working as
-                      soon as one upload completes or the timer hits zero.
+                      Replace <span className="font-mono">&lt;your-file&gt;</span> with the path of
+                      the file you want to export, or fill in the <em>File path</em> input above to
+                      have it substituted automatically. The command is single-use — it stops
+                      working as soon as one upload completes or the timer hits zero.
                     </>
                   )}
                 </p>

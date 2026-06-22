@@ -5,6 +5,142 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.4] — 2026-06-22
+
+### Patch Release — Command Palette open-session prioritisation
+
+v1.12.4 is a single-issue UX patch focused on the in-session
+**Command Palette** (`Ctrl+K`). Operators who keep multiple sessions
+open and use the palette as their primary session switcher reported
+that the connection list rendered in raw API order — a long list of
+connections in the order the user's authoring activity happened to
+produce them — with no preferential placement for the connections
+that were _already open_. The fastest possible session switch
+(`Ctrl+K → Enter` to jump to the **other** open session) was
+impossible without first scrolling, arrow-keying through a dozen
+inactive rows, or typing a disambiguating substring of the target's
+name. v1.12.4 reorders the list with a stable three-bucket sort so
+open sessions float to the top, the session you are currently
+looking at sits just below them, and inactive connections continue
+in their original API order beneath that.
+
+No backend changes, no API surface changes, no migrations, no new
+environment variables, no new Cargo or npm dependencies — the
+change is entirely scoped to one component
+([`frontend/src/components/CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx))
+plus one matching test. Sites that do not use the Command Palette
+are unaffected. Sites that opted into v1.12.3 can defer indefinitely
+without functional impact; the fix is purely an interaction-time
+improvement.
+
+### Changed
+
+- **`Ctrl+K` palette — open sessions float to the top of the
+  connection list, with the currently-displayed session as the
+  second bucket.** The `filtered` array in
+  [`CommandPalette.tsx`](frontend/src/components/CommandPalette.tsx)
+  is now sorted into three stable rank buckets after the existing
+  query filter runs:
+
+  | Rank | Bucket                                            |
+  | :--: | :------------------------------------------------ |
+  |  0   | Open session you are **not** currently looking at |
+  |  1   | Open session you **are** currently looking at     |
+  |  2   | Connection that is not open                       |
+
+  The ranks are derived from
+  `activeConnectionIds = new Set(sessions.map((s) => s.connectionId))`
+  (an existing pre-computed set already used to render the green
+  **Active** pill on each row) and a newly-introduced
+  `activeConnectionId = sessions.find((s) => s.id === activeSessionId)?.connectionId ?? null`
+  resolution to identify the session the user is currently focused
+  on. ECMAScript 2019+ `Array.prototype.sort` is specified as
+  stable, so the **relative order within each bucket is preserved**
+  — open sessions don't reshuffle every time another connection
+  opens or closes, and inactive connections continue to appear in
+  the same API order they always did. The existing green **Active**
+  pill on open rows visually reinforces the new ordering without
+  needing a section header.
+
+  **User-visible effect.** With two open sessions (say `prod-db` and
+  `dev-rdp`) and the user currently focused on `prod-db`, pressing
+  `Ctrl+K` then `Enter` now jumps straight to `dev-rdp` — the
+  fastest possible "switch to the other open session" interaction.
+  A single `↓ Enter` returns the user to `prod-db`. Everything else
+  (the rest of the connection list) follows in its original API
+  order with the query filter applied as before.
+
+  **Why this ordering.** Putting open-but-not-displayed sessions at
+  rank 0 makes the `Enter`-on-default behaviour useful (a re-launch
+  of the session already on screen is rarely what the operator
+  wants — the SessionManager already brings an existing session to
+  the foreground in that case, so the keystroke does nothing
+  visible). Putting the currently-displayed session at rank 1 keeps
+  it one keystroke away for the rare case the operator actually
+  does want to re-focus or reconnect it. Putting inactive
+  connections at rank 2 in their original order preserves muscle
+  memory for everyone who has internalised the existing
+  presentation order over the last six minor versions.
+
+- **No behavioural change to `:command` mode.** The colon-prefixed
+  command surface (`:reload`, `:disconnect`, `:close`, `:fullscreen`,
+  `:commands`, `:explorer`, plus user-defined mappings from
+  `user_preferences.preferences.commandMappings`) renders the same
+  fixed-order registry as before, with the same ghost-text
+  autocomplete and the same audit-row emission. The new sort is
+  applied only to the connection-list path (typed text **without**
+  a leading colon).
+
+### Tests
+
+- New `__tests__/CommandPalette.test.tsx` case
+  `"sorts open sessions to the top, with the currently-displayed
+one second"` asserts the DOM order with two open sessions, one of
+  which is currently displayed, and asserts `Ctrl+K → Enter`
+  navigates to the **other** open session (the rank-0 row).
+- All 15 pre-existing palette tests continue to pass without
+  modification — the test mocks happened to put the active session
+  first in API order already, so the new sort is a no-op for those
+  fixtures and the assertion targets remain valid.
+
+### Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — added a
+  `### Open-session prioritisation (v1.12.4)` subsection inside
+  the **Command Palette** section explaining the three-bucket sort
+  and its rationale. The top-of-file summary line in the SPA
+  feature list (line ~183) is unchanged because the `Ctrl+K`
+  one-liner there is intentionally generic.
+- [`README.md`](README.md) — prepended a 1.12.4 row to the
+  **What's new** table.
+- [`WHATSNEW.md`](WHATSNEW.md) — prepended a `# What's New in
+v1.12.4` section with themed subsections.
+- [`frontend/src/components/WhatsNewModal.tsx`](frontend/src/components/WhatsNewModal.tsx)
+  — prepended a `RELEASE_CARDS[0]` entry so the in-app carousel
+  shows the new card on first sign-in after upgrade.
+
+### Operator impact
+
+None in the operational sense — no migrations, no new env vars, no
+config file changes, no new Cargo or npm dependencies, no new
+images or containers. The recommended deploy is
+`docker compose pull && docker compose up -d --build` (or the
+ghcr/k8s equivalent) and nothing else. The backend container image
+is byte-identical to v1.12.3 in everything except the
+`[workspace.package].version` field embedded into the binary; the
+frontend container image differs only in the rebuilt JS bundle
+(new sort logic + new test, with `__APP_VERSION__` bumped so the
+What's New carousel surfaces on first sign-in). Mixed v1.12.3 /
+v1.12.4 deployments handshake cleanly; the `strata-dmz` relay
+binary cosmetically bumps version (shared workspace
+`[workspace.package].version`) but its wire protocol is
+byte-identical, so the **Admin → DMZ Links** tab will show a
+_Mixed_ indicator until every relay is upgraded.
+
+Sites that do not use the Command Palette feature (configured
+out via `commandPaletteBinding = ""` in user preferences, or
+simply unused) see zero behavioural change.
+
 ## [1.12.3] — 2026-06-22
 
 ### Patch Release — Safeguard JIT post-approval username regression fix
@@ -30,7 +166,7 @@ ghcr / k8s equivalent) and nothing else.
   the SPA flip the row to `Released` — but every subsequent
   attempt to actually open a tunnel against the protected target
   failed instantly with `Authentication failure (invalid
-  credentials?)` from the RDP / SSH front-end. Manually copying the
+credentials?)` from the RDP / SSH front-end. Manually copying the
   same password from the Safeguard portal and typing it into the
   in-band auth prompt always worked, the AD account was never
   locked out, and the cached row's `expires_at` and `request_id`
@@ -146,7 +282,7 @@ ghcr / k8s equivalent) and nothing else.
   Renamed and extended in
   [`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs)
   to return `AccessRequestStatus { state: Option<String>,
-  account_name: Option<String> }` instead of `Option<String>`.
+account_name: Option<String> }` instead of `Option<String>`.
   The only existing call site was internal to
   `backend/src/services/safeguard/mod.rs` and was updated in the
   same commit. No public route, no external integration, no

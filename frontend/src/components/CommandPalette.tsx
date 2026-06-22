@@ -223,8 +223,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   // with the already-displayed one just below them — so `Ctrl+K → Enter`
   // jumps you to a different open session instead of re-navigating to
   // the one already on screen.
-  const activeConnectionId =
-    sessions.find((s) => s.id === activeSessionId)?.connectionId ?? null;
+  const activeConnectionId = sessions.find((s) => s.id === activeSessionId)?.connectionId ?? null;
 
   // Pre-resolve tag id → tag for O(1) lookup during the per-row render.
   const tagById = new Map(tags.map((t) => [t.id, t]));

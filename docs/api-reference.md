@@ -2005,39 +2005,162 @@ Run JIT checkout for the supplied profile ids serially.
 ```json
 {
   "profile_ids": ["c1b3e4f0-…", "9b0a-…"],
-  "reason_comment": "Quarterly patch window — change CHG12345"
+  "comment": "Quarterly patch window — change CHG12345"
 }
 ```
 
-`reason_comment` is required and non-empty (sent verbatim as
-Safeguard's `ReasonComment`). `profile_ids` must be a non-empty
-array of profile UUIDs owned by the caller. The backend iterates
-one row at a time (so Safeguard never sees an overlapping request
-for the same `(user, account)` pair) and returns per-row results
-even when some succeed and some fail.
+`comment` is required and non-empty (sent verbatim as
+Safeguard's `ReasonComment`); the field is optional in the
+schema for backwards compatibility with older SPAs but the
+handler rejects empty/whitespace values with `400`.
+`profile_ids` must be a non-empty array of profile UUIDs owned
+by the caller. The backend iterates one row at a time (so
+Safeguard never sees an overlapping request for the same
+`(user, account)` pair) and returns per-row results even when
+some succeed and some fail.
 
-**Response** `200 OK`
+**Response** `200 OK` — bare JSON array
+
+```json
+[
+  {
+    "profile_id": "c1b3e4f0-…",
+    "label": "PROD-DC-01 (sa1)",
+    "ok": true,
+    "state": "ok",
+    "expires_at": "2026-05-22T21:00:00Z",
+    "username": "CAPITA\\sa1",
+    "replaced_existing": false,
+    "request_id": "AR-12345",
+    "account_id": "42",
+    "asset": "PROD-DC-01"
+  },
+  {
+    "profile_id": "9b0a-…",
+    "label": "DC02 (priv)",
+    "ok": false,
+    "state": "pending",
+    "error": "Awaiting approver — request AR-12346 is queued in Safeguard.",
+    "replaced_existing": false,
+    "request_id": "AR-12346",
+    "account_id": "57",
+    "asset": "DC02"
+  },
+  {
+    "profile_id": "47e8-…",
+    "label": "broken",
+    "ok": false,
+    "state": "failed",
+    "error": "Code 90114: Cannot CheckIn this request in its current state",
+    "replaced_existing": false
+  }
+]
+```
+
+`state` is one of:
+
+| `state`     | Meaning                                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`        | `CheckoutPassword` succeeded; password sealed into `safeguard_cached_passwords`. `ok = true`.                                    |
+| `pending`   | Appliance returned Code `90117` (awaiting approval). The `request_id` is **still valid**; the caller polls `/safeguard/release` to retry once an approver acts. No cache row is written. `ok = false`. |
+| `failed`    | Any other terminal error (denied, cancelled, transport, kill-switch). Audit row `outcome = 'failed'`. `ok = false`.              |
+
+The `state` field is a discriminator added for the bulk-checkout
+UI so it can render a third "pending approval" badge; old
+clients that only look at `ok` continue to render pending rows
+as failed, matching pre-feature behaviour.
+
+When `state = "ok"`, the row writes the sealed plaintext into
+`safeguard_cached_passwords` (including the appliance-reported
+`username = AccountName`) and bumps the matching
+`credential_profiles.expires_at` forward to the cache row's
+`expires_at`. `replaced_existing = true` indicates a prior cache
+row for the same `(user, profile)` pair was checked back in
+before the new request was opened.
+
+> **Note.** `password_cache_enabled = true` is a **prerequisite**
+> for bulk-checkout — the route returns `400 Validation` ("Bulk
+> checkout requires the admin to enable Safeguard password
+> caching") when caching is off, because without it the
+> released password would be discarded the moment the user
+> disconnects, defeating the point of pre-fetching.
+
+#### `POST /api/user/safeguard/release` (v1.10.0+)
+
+Poll a previously-issued `pending` request to see whether the
+approver has acted. The caller passes both the `profile_id`
+and the `request_id` from the `pending` row returned by
+bulk-checkout; the backend re-resolves the profile, confirms
+the caller owns it, and retries `CheckoutPassword` against the
+existing request (no new `AccessRequest` is created — repeated
+polls are safe and audit-clean).
+
+**Body**
 
 ```json
 {
-  "results": [
-    {
-      "profile_id": "c1b3e4f0-…",
-      "status": "success",
-      "expires_at": "2026-05-22T21:00:00Z"
-    },
-    {
-      "profile_id": "9b0a-…",
-      "status": "failed",
-      "error": "Code 90114: Cannot CheckIn this request in its current state"
-    }
-  ]
+  "profile_id": "9b0a-…",
+  "request_id": "AR-12346"
 }
 ```
 
-When `password_cache_enabled = true`, a successful row also writes
-the sealed plaintext into `safeguard_cached_passwords` and bumps
-the matching `credential_profiles.expires_at` forward.
+Both fields are required. The request id is independently
+validated against the user's owned profiles to prevent a
+signed-in user from resolving an arbitrary pending approval
+they happen to know the id of.
+
+**Response** `200 OK` — single `BulkSafeguardCheckoutResult` row
+(same shape as the array elements above)
+
+```json
+{
+  "profile_id": "9b0a-…",
+  "label": "DC02 (priv)",
+  "ok": true,
+  "state": "ok",
+  "expires_at": "2026-05-22T21:00:00Z",
+  "username": "CAPITA\\dc02-priv",
+  "replaced_existing": false,
+  "request_id": "AR-12346",
+  "account_id": "57",
+  "asset": "DC02"
+}
+```
+
+Or, when the approver has not yet acted:
+
+```json
+{
+  "profile_id": "9b0a-…",
+  "label": "DC02 (priv)",
+  "ok": false,
+  "state": "pending",
+  "error": "Awaiting approver — request AR-12346 is queued in Safeguard (state: PendingApproval).",
+  "replaced_existing": false,
+  "request_id": "AR-12346",
+  "account_id": "57",
+  "asset": "DC02"
+}
+```
+
+> [!NOTE]
+> **v1.12.3 — AccountName refetch on `released`.** The
+> handler delegates to
+> `services::safeguard::release_pending(...)`, which now
+> issues a `GET /service/core/v4/AccessRequests/{id}` after
+> a successful `CheckoutPassword` to recover the appliance's
+> `AccountName` and thread it through into
+> `CheckoutResult.username` (and from there into
+> `safeguard_cached_passwords.username`). Before v1.12.3
+> this field was always `null` on the release path because
+> `CheckoutPassword` does not echo `AccountName` back —
+> which surfaced at tunnel-open time as an empty NLA
+> username and an `Authentication failure (invalid
+> credentials?)` rejection from the target server. Refetch
+> failure is non-fatal: the password is still returned and
+> cached; only the `username` field falls back to `null`,
+> logged at `warn`. See [docs/safeguard.md →
+> Approval-required workflow (`release_pending`)](safeguard.md#approval-required-workflow-release_pending).
 
 #### `GET /api/user/safeguard/cached`
 

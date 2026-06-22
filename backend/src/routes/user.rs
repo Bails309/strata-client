@@ -1443,10 +1443,14 @@ pub async fn release_safeguard_pending(
         crate::services::safeguard::JitOutcome::Released(outcome) => {
             let expires_at =
                 chrono::Utc::now() + chrono::Duration::hours(profile.ttl_hours.max(1) as i64);
-            // `outcome.username` is None on the release path (the
-            // appliance only echoes the account name at request
-            // creation time). The frontend already has the profile
-            // label and can show "—" if needed.
+            // `outcome.username` carries the appliance's
+            // `AccountName`, refetched inside `release_pending` via
+            // `GET /service/core/v4/AccessRequests/{id}` after the
+            // successful `CheckoutPassword` (see v1.12.3 fix in
+            // services/safeguard/mod.rs::release_pending). It can
+            // still be `None` if that refetch itself failed —
+            // logged at warn by the service layer and treated as
+            // non-fatal here so the user still gets the password.
             let cached_username = outcome.username.clone();
             crate::services::safeguard::password_cache::store(
                 &db.pool,

@@ -5,6 +5,165 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [1.12.3] — 2026-06-22
+
+### Patch Release — Safeguard JIT post-approval username regression fix
+
+v1.12.3 is a single-issue hotfix for a Safeguard JIT regression that
+prevented users from signing in to target servers when their
+Safeguard account required approver action before the password
+could be checked out. The non-approval (auto-released) path was
+unaffected; sites running only auto-release entitlements can defer
+the upgrade without functional impact. No protocol changes, no
+migrations, no new environment variables, no new Cargo or npm
+dependencies — existing v1.12.x installations upgrade with
+`docker compose pull && docker compose up -d --build` (or the
+ghcr / k8s equivalent) and nothing else.
+
+### Fixed
+
+- **Safeguard JIT — approved-after-pending checkouts now succeed at
+  tunnel-open time.** When a Safeguard credential profile was
+  backed by an account whose policy required approver action
+  (`Approver`/`Reviewer` workflow), the user submitted a request
+  via the bulk-checkout UI, waited for the approver, and watched
+  the SPA flip the row to `Released` — but every subsequent
+  attempt to actually open a tunnel against the protected target
+  failed instantly with `Authentication failure (invalid
+  credentials?)` from the RDP / SSH front-end. Manually copying the
+  same password from the Safeguard portal and typing it into the
+  in-band auth prompt always worked, the AD account was never
+  locked out, and the cached row's `expires_at` and `request_id`
+  were both correct — so the failure mode was puzzling.
+
+  **Root cause.** Safeguard's REST surface only echoes the target
+  account's `AccountName` back at request-creation time
+  (`POST /service/core/v4/AccessRequests` response, parsed into
+  `CreatedAccessRequest::account_name` in
+  [`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs)).
+  Subsequent calls to `POST /AccessRequests/{id}/CheckoutPassword`
+  return _only_ the JSON-encoded plaintext string — no
+  `AccountName`, no `AccountDomainName`, no enrichment. The
+  initial `jit_checkout` orchestrator captures `account_name`
+  from the creation response and carries it into
+  `CheckoutResult.username`, so the auto-released path (which
+  posts an AccessRequest, immediately checks out the password,
+  and returns in one tick) correctly populates the
+  `safeguard_cached_passwords.username` column with the real
+  AccountName.
+
+  But the **post-approval release path** is structurally
+  different: the bulk-checkout call comes back with
+  `JitOutcome::PendingApproval { request_id, … }` and the SPA
+  polls `POST /api/user/safeguard/release` until the approver
+  acts. That polling endpoint dispatches through
+  `services::safeguard::release_pending(...)`, which only has the
+  `request_id` to work with — there is no fresh creation
+  response. Until this fix, `release_pending` hard-coded
+  `username: None` on the `Released` arm of its match (with an
+  in-code TODO comment acknowledging "the caller is expected to
+  use the profile's stored username or refetch the request
+  details" — neither happened). The route handler
+  `release_safeguard_pending` in
+  [`backend/src/routes/user.rs`](backend/src/routes/user.rs)
+  faithfully forwarded that `None` into
+  `password_cache::store(...)`, persisting the cache row with
+  `username = NULL`. The credential-profile table does **not**
+  carry a `username` column for `kind = 'safeguard'` rows (the
+  username is always sourced from Safeguard's `AccountName`), so
+  there was no fallback.
+
+  At tunnel-open time, the JIT path in
+  [`backend/src/routes/tunnel.rs`](backend/src/routes/tunnel.rs)
+  loaded the cache row and assigned
+  `safeguard_username = cached.username` — which was `None` — and
+  the tunnel handler propagated that into the
+  `(vault_username, vault_password)` tuple as
+  `(None, Some(<correct-password>))`. guacd / FreeRDP / OpenSSH
+  then attempted authentication with an **empty username** and
+  the correct password, which the target server rejected
+  pre-lockout as "invalid credentials". The user's perception of
+  the bug was an absolute, repeatable, post-approval auth failure
+  for which the only workaround was manually pasting the password
+  into the in-band auth prompt of the protocol client. There was
+  even an explicit comment at the relevant call site in
+  `tunnel.rs` flagging exactly this failure mode ("Falling back
+  to None means the protocol prompts in-band, … but for RDP that
+  surfaces as 'invalid credentials' the moment the target
+  rejects the empty NLA username. Always prefer the resolved
+  name when the appliance gave us one.") — the comment was right;
+  the post-approval path was the one site that never got the
+  resolved name.
+
+  **Fix.** A new `client::get_access_request_status(...)`
+  function (renamed and extended from the v1.12.x-era
+  `get_access_request_state(...)` helper) issues a
+  `GET /service/core/v4/AccessRequests/{id}` and now returns a
+  small `AccessRequestStatus { state, account_name }` struct
+  instead of just the workflow state. The state field is what
+  the existing `password_cache::check_request_validity(...)`
+  validator was already using to decide whether a cached row was
+  still live on the appliance; the new `account_name` field is
+  consumed by `release_pending`'s `Released` arm to recover the
+  `AccountName` that `CheckoutPassword` does not echo back, and
+  is plumbed through into `CheckoutResult.username`. The route
+  handler `release_safeguard_pending` is unchanged — it already
+  forwarded `outcome.username` into `password_cache::store(...)`
+  — so the cache row now carries the real username for both the
+  auto-released path and the post-approval path. Refetch failure
+  is non-fatal and logged at warn so a transient appliance hiccup
+  during the refetch does not block the user from connecting
+  (the password is still returned and cached; the only
+  consequence of a failed refetch is the pre-fix behaviour).
+
+  The single existing caller of the old
+  `get_access_request_state` (`check_request_validity` in
+  [`backend/src/services/safeguard/mod.rs`](backend/src/services/safeguard/mod.rs))
+  was updated to read `status.state` and to map the 404 case
+  (`Ok(None)`, request purged from the appliance) onto
+  `CacheValidity::Inactive` explicitly — preserving the
+  pre-existing implicit behaviour where `None` failed to match
+  `Some("PasswordCheckedOut")` and therefore returned
+  `Inactive`. Backwards compatible: no API shape changes, no
+  database schema changes, no audit-event additions, and no
+  changes to the bulk-checkout / `release_safeguard_pending`
+  HTTP contracts. Cache rows persisted by v1.12.2 against
+  approval-required accounts will continue to carry
+  `username = NULL` until they expire (default TTL: the
+  profile's own `ttl_hours`); operators who want to evict them
+  immediately can click **Check in all** in the bulk-checkout
+  card or call `POST /api/user/safeguard/checkin` with
+  `{"profile_ids": []}`.
+
+  Verified: `docker compose build backend` clean; rust-analyzer
+  reports no errors; the existing `parse_awaiting_approval_*`
+  unit tests in `client.rs` still pass; no compile or runtime
+  changes are required on the frontend.
+
+### Changed
+
+- **`client::get_access_request_state` → `get_access_request_status`.**
+  Renamed and extended in
+  [`backend/src/services/safeguard/client.rs`](backend/src/services/safeguard/client.rs)
+  to return `AccessRequestStatus { state: Option<String>,
+  account_name: Option<String> }` instead of `Option<String>`.
+  The only existing call site was internal to
+  `backend/src/services/safeguard/mod.rs` and was updated in the
+  same commit. No public route, no external integration, no
+  capability-token consumer is affected.
+
+### Operator notes
+
+No migrations. No new environment variables. No config changes.
+No new Cargo or npm dependencies. Recommended deploy: `docker
+compose pull && docker compose up -d --build` (backend only;
+frontend image is unchanged byte-for-byte against v1.12.2 but
+ships with the bumped `__APP_VERSION__` so the in-app **What's
+New** modal will surface this card on first sign-in after the
+upgrade). Sites that do not use Safeguard JIT credential
+profiles can defer indefinitely — the fix is entirely scoped to
+the `services::safeguard::*` module tree.
+
 ## [1.12.2] — 2026-06-12
 
 ### Patch Release — Outbound Quick Share polish, approver-email fan-out, BASE_URL fallback, ClamAV health, Kali VDI

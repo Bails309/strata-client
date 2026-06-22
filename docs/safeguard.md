@@ -266,6 +266,138 @@ account id — so RDP / SSH receives the correct logon name.
 
 ---
 
+## Approval-required workflow (`release_pending`)
+
+Some Safeguard accounts — typically tier-0 / privileged or
+break-glass accounts — are bound to policies that require an
+**Approver** or **Reviewer** to act on every access request
+before the password is released. Strata surfaces this through
+the bulk-checkout UI:
+
+1. The operator clicks **Credentials → Bulk Checkout → New**
+   for one or more profiles and supplies a justification
+   comment.
+2. The backend's
+   [`bulk_safeguard_checkout`](../backend/src/routes/user.rs)
+   route iterates one profile at a time and calls
+   [`jit_checkout`](../backend/src/services/safeguard/mod.rs)
+   serially (so the appliance never sees an overlapping
+   request for the same `(user, account)` pair).
+3. For each approval-required profile, the appliance returns
+   the request id immediately but answers the subsequent
+   `CheckoutPassword` call with `Code 90117` "the access
+   request … is awaiting approval and the request cannot be
+   used at this time". The orchestrator surfaces this as
+   `JitOutcome::PendingApproval { request_id, username,
+appliance_state }` and the route returns a `pending` row to
+   the SPA carrying the `request_id` (so the UI can poll for
+   release without re-creating the request).
+4. The SPA polls
+   `POST /api/user/safeguard/release { profile_id }` on a
+   30-second cadence while the row stays in the pending state.
+   The handler is
+   [`release_safeguard_pending`](../backend/src/routes/user.rs)
+   and it calls
+   [`services::safeguard::release_pending`](../backend/src/services/safeguard/mod.rs)
+   with the previously-returned request id.
+5. `release_pending` retries `CheckoutPassword` against the
+   existing request. Three terminal outcomes:
+
+   | Appliance response                         | Mapping                                                                                            |
+   | ------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+   | `200 OK` with the plaintext password       | `JitOutcome::Released(CheckoutResult { request_id, password, username })`                          |
+   | `400 Bad Request` Code `90117` (still queued) | `JitOutcome::PendingApproval { request_id, username: None, appliance_state }`                   |
+   | Any other non-2xx (denied, cancelled, etc.) | `Err(AppError::*)` and a `failed` row in `safeguard_checkout_audit`                                |
+
+### AccountName refetch on `Released` (v1.12.3)
+
+`POST /AccessRequests/{id}/CheckoutPassword` returns **only** a
+JSON-encoded plaintext string — no `AccountName`, no
+`AccountDomainName`, no enrichment. The auto-released path
+(`jit_checkout → Released` in one tick) captures `AccountName`
+from the **creation** response, so its
+`CheckoutResult.username` is always populated.
+
+The post-approval `release_pending` path does **not** have a
+creation response to draw on — only the existing `request_id`.
+Until v1.12.3, this manifested as `username: None` in
+`CheckoutResult`, which `release_safeguard_pending` then
+faithfully forwarded into `password_cache::store(...)`,
+persisting the cache row with `safeguard_cached_passwords.username
+IS NULL`. The credential-profile table has no fallback
+`username` column for `kind = 'safeguard'` rows (the username
+is sourced from Safeguard's `AccountName` because Safeguard can
+rotate it under policy at any time). When the tunnel later
+opened against the protected target,
+[`routes/tunnel.rs`](../backend/src/routes/tunnel.rs) sent an
+empty NLA username with the (correct) password and the target
+rejected the handshake as "Authentication failure (invalid
+credentials?)".
+
+The v1.12.3 fix refetches the request status from the
+appliance after a successful release and threads the recovered
+`AccountName` into `CheckoutResult.username`:
+
+```rust
+// services/safeguard/mod.rs::release_pending — Released arm
+client::CheckoutOutcome::Released(password) => {
+    insert_audit(...).await;
+    let username = match client::get_access_request_status(
+        &http, &base, &bearer, request_id,
+    ).await {
+        Ok(Some(status)) => status.account_name,
+        Ok(None)         => None,   // 404 — request purged
+        Err(_)           => None,   // logged at warn, non-fatal
+    };
+    Ok(JitOutcome::Released(CheckoutResult {
+        request_id: request_id.to_string(),
+        password,
+        username,
+    }))
+}
+```
+
+`get_access_request_status` is the v1.12.3 rename of
+`get_access_request_state` and now returns a small struct:
+
+```rust
+pub struct AccessRequestStatus {
+    pub state:        Option<String>,
+    pub account_name: Option<String>,
+}
+```
+
+The `state` field is read by the existing
+`password_cache::check_request_validity(...)` validator (which
+also picked up the rename); the `account_name` field is the
+new datum the post-approval path needs. The 404 case
+(`Ok(None)`) maps to `CacheValidity::Inactive` explicitly so
+the cache row gets evicted when the appliance has purged the
+request — same effective behaviour as v1.12.2 (where `None`
+also returned `Inactive` because it failed to match
+`Some("PasswordCheckedOut")`), but the intent is now stated
+in code rather than relying on the absence of a match.
+
+Refetch failure is non-fatal because the password itself is
+already in hand and the audit `success` row has already been
+written. A transient appliance hiccup during the refetch is
+logged at `warn` and the username falls back to `None` for
+this one release cycle — which reproduces the pre-fix
+behaviour for the duration of that single cache row. Operators
+who want to evict a cache row that landed with
+`username = NULL` can click **Check in all** in the
+bulk-checkout card or call
+`POST /api/user/safeguard/checkin { "profile_ids": [] }`; a
+subsequent approve-and-release cycle will write a complete
+row.
+
+The audit trail is unaffected by refetch outcome: the
+`safeguard_checkout_audit` row records `success` against the
+`CheckoutPassword` call, not against the `GET /AccessRequests/{id}`
+refetch.
+
+---
+
 ## Preflight and stale-request release
 
 Safeguard rejects a second simultaneous request for the same account
